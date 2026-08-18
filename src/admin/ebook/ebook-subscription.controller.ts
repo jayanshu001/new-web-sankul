@@ -153,17 +153,27 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
 
     const numId = adminEbook.parseEbookId(subscriptionId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
+    // Revoke path (status:false) changes isPurchased across the catalog; resolve the
+    // owner before mutating so the flush below mirrors the delete handler.
+    const customerId = await adminEbook.getSubscriptionCustomerId(numId);
     const result = await adminEbook.updateSubscription(numId, {
       razorpayOrderId: validatedData.razorpayOrderId,
       razorpayPaymentId: validatedData.razorpayPaymentId,
       remarks: validatedData.remarks,
       status: validatedData.status,
+      startAt: validatedData.startAt,
+      endAt: validatedData.endAt,
       // Audit: acting admin from the JWT stamps updated_by.
       actingAdminId: adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null,
     });
     if (result === "not_found") return res.status(404).json({ success: false, message: "Subscription not found" });
     if (result === "order_not_found") return res.status(404).json({ success: false, message: "Order not found" });
     if (result === "already_active") return res.status(400).json({ success: false, message: "Subscription is already active" });
+    if (result === "bad_start") return res.status(400).json({ success: false, message: "startAt must be a valid date" });
+    if (result === "bad_end") return res.status(400).json({ success: false, message: "endAt must be a valid date" });
+    // Drop the owner's cached per-user reads so ebook listings/details stop
+    // reporting isPurchased:true immediately (24h TTL otherwise).
+    if (customerId) await flushUserRouteCache(customerId);
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
@@ -176,8 +186,11 @@ export const deleteEbookSubscription = async (req: Request, res: Response) => {
     const subscriptionId = req.params.subscriptionId as string;
     const numId = adminEbook.parseEbookId(subscriptionId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
+    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    const customerId = await adminEbook.getSubscriptionCustomerId(numId);
     const ok = await adminEbook.deleteSubscription(numId);
     if (!ok) return res.status(404).json({ success: false, message: "Subscription not found" });
+    if (customerId) await flushUserRouteCache(customerId);
     return res.status(200).json({ success: true, message: "Subscription deleted successfully" });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

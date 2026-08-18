@@ -562,6 +562,10 @@ model Book {
   author           String?
   image            String?
   description      String?
+  // Per-book T&C, mirroring `ws_ebook.terms_and_conditions`. Nullable here because
+  // it was added to an existing table (2026-08-18); the DTO coerces null → "" so the
+  // client shape matches the ebook's non-null string.
+  termsAndConditions String?       @map("terms_and_conditions") @db.Text
   demo_url         String?
   demoFileName     String?         @map("demo_file_name")
   weight           Int?

@@ -6,6 +6,7 @@ import { matchesAllTokens } from "../../utils/searchFilter";
 import { omit } from "../../utils/pick";
 import * as mySubSql from "../../modules/client-my-subscriptions/client-my-subscriptions.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
+import { syncEntitlementCache } from "../../utils/entitlementWatch";
 
 // `type` selects which subscription library to return. Defaults to "course",
 // which preserves the original behaviour (course + package together) for
@@ -86,6 +87,21 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       cards = [...courseAndPackage, ...liveCourse].sort(
         (a, b) => (a.endAt ? a.endAt.getTime() : Infinity) - (b.endAt ? b.endAt.getTime() : Infinity)
       ) as unknown as Card[];
+    }
+
+    // Entitlement change-detector. `cards` is the user's FULL live entitlement set
+    // for this tab, recomputed at most every 30s (this route's TTL). If it differs
+    // from the last one seen, sweep this customer's other cached reads so their
+    // 24h-cached catalog overlay (isPurchased/daysLeft) can't disagree with what
+    // this screen shows. Catches natural expiry and direct DB edits, which no
+    // write-triggered flush can. Deliberately NOT awaited-on-failure — see
+    // utils/entitlementWatch.ts.
+    if (numericCid != null) {
+      await syncEntitlementCache(
+        numericCid,
+        type,
+        cards.map((c) => ({ kind: c.action.kind, id: c.action.courseId ?? c.action.packageId ?? c.action.testSeriesId ?? c.action.ebookId ?? c.action.liveCourseId, endAt: c.endAt })),
+      );
     }
 
     // `?search=` filters the built cards on their display title (case-insensitive)

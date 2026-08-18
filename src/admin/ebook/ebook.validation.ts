@@ -105,6 +105,13 @@ export const updateEbookSubscriptionSchema = z.object({
   razorpayPaymentId: z.string().min(1, "razorpayPaymentId is required").optional(),
   remarks: z.string().optional().nullable(),
   status: zBool.optional(),
+  // Dates were MISSING here until 2026-08-18. Because a bare z.object() STRIPS unknown
+  // keys instead of rejecting them, an admin "end this subscription on <date>" was
+  // silently discarded and the endpoint still answered 200/success — the row never
+  // changed. Course/package (subscription.validation.ts) and test-series both accept
+  // these; ebook was the only one that did not.
+  startAt: z.string().optional(),
+  endAt: z.string().optional(),
 });
 
 export const reorderEbooksSchema = z.object({
@@ -156,5 +163,8 @@ export const createEbookSubscriptionSqlSchema = z
     durationInDays: d.durationInDays ?? d.durationDays,
     transactionId: d.transactionId ?? d.bankTransactionId ?? null,
   }))
-  .refine((d) => d.orderPrice != null, { message: "amount is required", path: ["amount"] })
+  // A free "Add Days" extend sends no amount on purpose: 0 would zero the
+  // subscription's stored price and the original price would fabricate revenue.
+  // Still required for a fresh grant, where the row's price has no prior value.
+  .refine((d) => d.extend === true || d.orderPrice != null, { message: "amount is required", path: ["amount"] })
   .refine((d) => d.planId || d.durationInDays, { message: "Either planId or durationInDays is required", path: ["planId"] });

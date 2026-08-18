@@ -1114,7 +1114,14 @@ export const grantSubscription = async (
         data: {
           orderId: order.id,
           planId: data.planId ?? existing.planId,
-          price,
+          // `price` is deliberately NOT written on extend. It records what the
+          // customer paid for this subscription; a free "Add Days" would zero it
+          // (₹699 → ₹0, unrecoverable — updateSubscriptionSchema cannot set it
+          // back). Note the admin panel sends an explicit `price: 0` on extend, so
+          // a `?? existing.price` guard would NOT be enough — 0 is not nullish.
+          // Ignoring it outright is what lets the shipped frontend stay unchanged.
+          // The ORDER row still records the request amount (0 for a free extend),
+          // which is what distinguishes an admin grant from a paid renewal.
           endAt: base,
           ...(data.remarks !== undefined ? { remarks: data.remarks } : {}),
           // Extend = admin edit of an existing row → stamp updated_by only.
@@ -1170,6 +1177,22 @@ export const updateSubscription = async (id: number, data: UpdateSubWrite) => {
 };
 
 /** Returns false when missing. */
+
+/**
+ * The customer owning this subscription, or null if it doesn't exist.
+ *
+ * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
+ * can flush that customer's per-user route cache. On delete the row is gone
+ * afterwards, so the id cannot be resolved after the mutation.
+ */
+export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
+  (
+    await prisma.testSeriesSubscription.findUnique({
+      where: { id },
+      select: { customerId: true },
+    })
+  )?.customerId ?? null;
+
 export const deleteSubscription = async (id: number): Promise<boolean> => {
   const exists = await prisma.testSeriesSubscription.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return false;

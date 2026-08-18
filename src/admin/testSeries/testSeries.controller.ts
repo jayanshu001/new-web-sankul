@@ -4,6 +4,7 @@ import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderTy
 import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as tsSql from "../../modules/admin-testseries/admin-testseries.service";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { parseListQuery } from "../../utils/listQuery";
 import { assertReportStatus } from "../../utils/reportFilters";
 import {
@@ -658,9 +659,15 @@ export const updateSubscription = async (req: Request, res: Response) => {
     }
     const nid = tsSql.parseAtsId(id);
     if (nid == null) { logger.warn("updateSubscription invalid id", { traceId, id }); return failure(res, "Invalid id.", 422); }
+    // Revoke path (status:false / endAt pulled back) — resolve the owner before
+    // mutating so the cache flush below mirrors the delete handler.
+    const customerId = await tsSql.getSubscriptionCustomerId(nid);
     // Audit: acting admin from the JWT stamps updated_by.
     const r = await tsSql.updateSubscription(nid, { ...data, actingAdminId: tsSql.parseAtsId(String(req.user?.id ?? "")) ?? null } as any);
     if (!r) { logger.warn("updateSubscription not found", { traceId, id }); return failure(res, "Subscription not found.", 404); }
+    // Test-series listings/details cache isPurchased per user for 24h; drop those
+    // keys so the revoke is visible on the next request.
+    if (customerId) await flushUserRouteCache(customerId);
     logger.info("updateSubscription success", { traceId, id });
     return success(res, r, "Updated.");
   } catch (err) {
@@ -678,8 +685,11 @@ export const deleteSubscription = async (req: Request, res: Response) => {
   try {
     const nid = tsSql.parseAtsId(id);
     if (nid == null) { logger.warn("deleteSubscription invalid id", { traceId, id }); return failure(res, "Invalid id.", 422); }
+    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    const customerId = await tsSql.getSubscriptionCustomerId(nid);
     const ok = await tsSql.deleteSubscription(nid);
     if (!ok) { logger.warn("deleteSubscription not found", { traceId, id }); return failure(res, "Subscription not found.", 404); }
+    if (customerId) await flushUserRouteCache(customerId);
     logger.info("deleteSubscription success", { traceId, id });
     return success(res, { id }, "Deleted.");
   } catch (err) {

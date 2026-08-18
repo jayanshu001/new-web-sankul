@@ -51,6 +51,14 @@ export const adminSubscriptionRepository = {
     prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } }),
   findCourseSubById: (id: number) => prisma.packageCourseSubscription.findUnique({ where: { id } }),
 
+  /**
+   * The customer who owns this subscription. Read BEFORE an admin revoke so the
+   * caller can flush that customer's per-user route cache — on delete the row is
+   * gone afterwards, so this cannot be resolved after the fact.
+   */
+  findSubscriptionCustomerId: (id: number) =>
+    prisma.packageCourseSubscription.findUnique({ where: { id }, select: { customerId: true } }),
+
   // ── write (admin manual grant) ──────────────────────────────────────────────
   // Full plan row for create-time validation + pricing/duration.
   findPlanById: (id: number) =>

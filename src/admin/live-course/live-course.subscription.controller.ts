@@ -194,10 +194,16 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
     try { v = updateSubscriptionSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
     // Audit: acting admin from the JWT stamps updated_by.
     const actingAdminId = liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
+    // Revoking here (status:false) is the documented way to cut a customer's access,
+    // so resolve the owner before mutating and drop their cached catalog reads after.
+    const customerId = await liveSql.getSubscriptionCustomerId(sid);
     const r = await liveSql.updateSubscription(sid, { ...v, actingAdminId });
     if (r === "not_found") return failure(res, "Subscription not found.", 404);
     if (r === "bad_start") return failure(res, "startAt must be a valid date.", 422);
     if (r === "bad_end") return failure(res, "endAt must be a valid date.", 422);
+    // Without this, live listings/detail keep returning subscribed:true for up to
+    // 24h (per-user route cache TTL).
+    if (customerId) await flushUserRouteCache(customerId);
     return success(res, { subscription: r }, "Subscription updated.");
   } catch (err) {
     logger.error("updateLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -216,7 +222,10 @@ export const deleteLiveCourseSubscription = async (req: Request, res: Response) 
   try {
     const sid = liveSql.parseLiveId(id);
     if (!sid) return failure(res, "Invalid subscription id.", 422);
+    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    const customerId = await liveSql.getSubscriptionCustomerId(sid);
     if (!(await liveSql.deleteSubscription(sid))) return failure(res, "Subscription not found.", 404);
+    if (customerId) await flushUserRouteCache(customerId);
     return success(res, { id }, "Subscription deleted.");
   } catch (err) {
     logger.error("deleteLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });

@@ -302,6 +302,11 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
         ? null
         : subSql.parseSubId(String(data.customerShippingId)) ?? null;
 
+    // Entitlement may be revoked here (status:false / endAt pulled back), so the
+    // owning customer's cached catalog reads must be dropped — resolved BEFORE the
+    // mutation to mirror the delete path (see deleteCourseSubscription).
+    const customerId = await subSql.getSubscriptionCustomerId(numId);
+
     const result = await subSql.updateCourseSubscription(numId, {
       startAt: data.startAt ? new Date(data.startAt) : undefined,
       endAt: data.endAt ? new Date(data.endAt) : undefined,
@@ -314,6 +319,10 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
     });
     if (result === "not_found")
       return res.status(404).json({ success: false, message: "Subscription not found." });
+    // Admin revoke/extend changes isPurchased + daysLeft on every catalog surface;
+    // those reads are cached per-user for 24h, so without this the app keeps showing
+    // the product as owned until the TTL lapses.
+    if (customerId) await flushUserRouteCache(customerId);
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
@@ -326,8 +335,11 @@ export const deleteCourseSubscription = async (req: Request, res: Response) => {
     const numId = subSql.parseSubId(req.params.id as string);
     if (!numId)
       return res.status(400).json({ success: false, message: "Invalid subscription id." });
+    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    const customerId = await subSql.getSubscriptionCustomerId(numId);
     const deleted = await subSql.deleteCourseSubscription(numId);
     if (!deleted) return res.status(404).json({ success: false, message: "Subscription not found." });
+    if (customerId) await flushUserRouteCache(customerId);
     return res.status(200).json({ success: true, message: "Subscription deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

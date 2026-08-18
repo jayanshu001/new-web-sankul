@@ -22,9 +22,11 @@
  * SCHEMA / FIELD NOTES (verified against the live DDL 2026-06-12):
  *  - Schema fix: `order_by` nullable in the DDL but Prisma typed non-null →
  *    relaxed to `Int?` (no NULLs today).
+ *  - `termsAndConditions` NOW persists (ws_book.terms_and_conditions, added
+ *    2026-08-18) and is emitted as a string, matching the ebook DTO.
  *  - Mongo-only fields ABSENT from `ws_book`: `packageIds[]` (embedded M:N for
  *    the package-detail "material(Book)" tab — appliesTo-style, not reproducible
- *    from SQL), `examCountdownCategoryId`, `termsAndConditions`, `bookUrl`,
+ *    from SQL), `examCountdownCategoryId`, `bookUrl`,
  *    `publication`, `deliveryEta`, `isTrending`. `isTrending` synthesized false;
  *    `publication`/`deliveryEta` synthesized to the Mongo defaults so the
  *    response shape stays stable.
@@ -46,6 +48,14 @@ export interface BookDto {
   author: string | null;
   image: string | null;
   description: string | null;
+  /**
+   * Per-book T&C. Same key AND type as the e-book DTO
+   * (`catalog-ebook.types.ts` → `termsAndConditions: string`), so the client
+   * renders both products with one code path. Empty string — never null — when
+   * the book has no terms set, because the column is nullable while the e-book's
+   * is NOT NULL.
+   */
+  termsAndConditions: string;
   // Encrypted, short-lived media token for the free demo PDF (exchanged at
   // POST /client/media/resolve) — replaces the raw demo URL, mirroring the ebook
   // demo. Null when there is no demo PDF or no issuing customer.

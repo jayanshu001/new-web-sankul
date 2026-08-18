@@ -26,6 +26,8 @@ export const toBookDto = (row: Book, opts: { customerId?: number | null } = {}):
   author: row.author ?? null,
   image: row.image ?? null,
   description: row.description ?? null,
+  // null → "" so the client always gets a string, matching the ebook contract.
+  termsAndConditions: row.termsAndConditions ?? "",
   demoMediaToken,
   weight: row.weight ?? null,
   pages: row.pages ?? 0,

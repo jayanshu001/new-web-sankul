@@ -460,6 +460,17 @@ export const updateCourseSubscription = async (
   return getCourseSubscriptionById(id);
 };
 
+
+/**
+ * The customer owning this subscription, or null if it doesn't exist.
+ *
+ * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
+ * can flush that customer's per-user route cache. On delete the row is gone
+ * afterwards, so the id cannot be resolved after the mutation.
+ */
+export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
+  (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;
+
 export const deleteCourseSubscription = async (id: number): Promise<boolean> => {
   if (!(await repo.findCourseSubById(id))) return false;
   await repo.deleteSub(id);

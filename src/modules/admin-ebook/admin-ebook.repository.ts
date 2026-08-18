@@ -129,6 +129,14 @@ export const adminEbookRepository = {
       },
     }),
   findSubscriptionBare: (id: number) => prisma.eBookSubscription.findUnique({ where: { id } }),
+
+  /**
+   * The customer who owns this subscription. Read BEFORE an admin revoke so the
+   * caller can flush that customer's per-user route cache — on delete the row is
+   * gone afterwards, so this cannot be resolved after the fact.
+   */
+  findSubscriptionCustomerId: (id: number) =>
+    prisma.eBookSubscription.findUnique({ where: { id }, select: { customerId: true } }),
   findOrderById: (id: number) => prisma.eBookOrder.findUnique({ where: { id } }),
 
   /** Backend grant: create the COMPLETE order + its subscription in one txn. */
@@ -242,7 +250,9 @@ export const adminEbookRepository = {
         where: { id: subscriptionId },
         data: {
           orderId: order.id,
-          price: input.price,
+          // `price` deliberately NOT written here — see the matching note in
+          // admin-testseries.service.ts. A free "Add Days" extend sends amount 0,
+          // which would wipe what the customer actually paid.
           endAt: input.endAt,
           ...(input.remarks !== null ? { remarks: input.remarks } : {}),
           // Extend = admin edit of an existing row → stamp updated_by only.

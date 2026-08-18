@@ -125,6 +125,14 @@ export const adminLiveCourseRepository = {
   customerIdsByText: async (q: string) =>
     (await prisma.customer.findMany({ where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
   findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
+
+  /**
+   * The customer who owns this subscription. Read BEFORE an admin revoke so the
+   * caller can flush that customer's per-user route cache — on delete the row is
+   * gone afterwards, so this cannot be resolved after the fact.
+   */
+  findSubscriptionCustomerId: (id: number) =>
+    prisma.liveCourseSubscription.findUnique({ where: { id }, select: { customerId: true } }),
   createSubscription: (data: Prisma.LiveCourseSubscriptionUncheckedCreateInput) => prisma.liveCourseSubscription.create({ data }),
   updateSubscription: (id: number, data: Prisma.LiveCourseSubscriptionUncheckedUpdateInput) => prisma.liveCourseSubscription.update({ where: { id }, data }),
   deleteSubscription: (id: number) => prisma.liveCourseSubscription.delete({ where: { id } }),

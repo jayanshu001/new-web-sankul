@@ -40,9 +40,10 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
  * `ws_book` row → admin Book DTO, shape-compatible with the Mongo `Book`
  * document. isTrending is read from ws_book.is_trending (settable on
  * create/update + the trending toggle). Other SQL-absent fields are synthesized:
- * publication/deliveryEta defaults, termsAndConditions=null, demoFileName/
- * bookFileName=null, bookUrl=null (only demo_url exists), and packageIds = []
- * (no SQL column/table).
+ * publication/deliveryEta defaults, demoFileName/bookFileName=null, bookUrl=null
+ * (only demo_url exists), and packageIds = [] (no SQL column/table).
+ * termsAndConditions is NO LONGER synthesized — it persists to
+ * ws_book.terms_and_conditions (added 2026-08-18), the same way the ebook stores it.
  *
  * examCountdownIds / examCountdownCategoryIds are stored as JSON int-arrays on
  * ws_book (C6). This base DTO returns the raw ID ARRAYS — the columns are already
@@ -73,7 +74,7 @@ export const toBookDto = (row: Book) => {
     author: row.author ?? null,
     image: row.image ?? null,
     description: row.description ?? null,
-    termsAndConditions: null,
+    termsAndConditions: row.termsAndConditions ?? null,
     demoUrl: row.demo_url ?? null,
     bookUrl: null,
     // Original demo-PDF upload name (books have no full-book PDF, so bookFileName
@@ -182,6 +183,9 @@ export interface BookWriteInput {
   author?: string;
   image?: string;
   description?: string;
+  // Per-book T&C → ws_book.terms_and_conditions. The admin form has always sent
+  // this; before 2026-08-18 there was no column, so it was silently discarded.
+  termsAndConditions?: string | null;
   demoUrl?: string;
   demoFileName?: string | null;
   weight?: number;
@@ -213,6 +217,7 @@ export const createBook = async (d: BookWriteInput) => {
     author: d.author ?? null,
     image: d.image ?? null,
     description: d.description ?? null,
+    termsAndConditions: d.termsAndConditions ?? null,
     demo_url: d.demoUrl ?? null,
     demoFileName: d.demoFileName ?? null,
     weight: d.weight ?? SENTINEL.weight,
@@ -244,6 +249,7 @@ export const updateBook = async (id: number, d: BookWriteInput): Promise<ReturnT
   if (d.author !== undefined) data.author = d.author;
   if (d.image !== undefined) data.image = d.image;
   if (d.description !== undefined) data.description = d.description;
+  if (d.termsAndConditions !== undefined) data.termsAndConditions = d.termsAndConditions ?? null;
   if (d.demoUrl !== undefined) {
     data.demo_url = d.demoUrl;
     // Clearing the demo PDF clears its original name too (unless one is set explicitly).

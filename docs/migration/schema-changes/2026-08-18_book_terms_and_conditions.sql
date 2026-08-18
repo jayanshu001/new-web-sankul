@@ -1,0 +1,31 @@
+-- 2026-08-18 — Per-book Terms & Conditions on ws_book.
+--
+-- WHY: `GET /client/books/:id` had no `termsAndConditions`, while the e-book detail
+-- has always returned one (`ws_ebook.terms_and_conditions`). The admin book form
+-- ALREADY sends `termsAndConditions` on create/update — the SQL path silently
+-- dropped it because the column did not exist (see the "Still dropped on SQL"
+-- note that used to sit in admin/book/book.controller.ts). This column closes
+-- both gaps: the admin field now persists, and the client detail returns it under
+-- the SAME key and type as the e-book DTO (`termsAndConditions: string`).
+--
+-- NOT the same thing as `ws_book_setting.terms_and_conditions`, which is a GLOBAL
+-- store-wide array (shipping/returns policy) surfaced on the admin Book Settings
+-- screen. That row is unrelated and untouched — this is per-book copy.
+--
+-- NULLABLE + no default: additive and safe on a live table. Existing rows read as
+-- NULL and the transformer coerces NULL → "" so the client contract stays a plain
+-- string (never null), matching the e-book shape exactly. No backfill required.
+--
+-- TEXT (not VARCHAR): mirrors ws_ebook.terms_and_conditions, which holds long
+-- multi-paragraph copy.
+--
+-- ORDERING: safe to apply BEFORE or AFTER the code deploy. Prisma only selects
+-- columns it knows about, so an early apply is inert; a late apply means the
+-- client returns "" for every book until it lands (no error, since the field is
+-- optional in the model).
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-18_book_terms_and_conditions.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_book
+  ADD COLUMN terms_and_conditions TEXT NULL AFTER description;

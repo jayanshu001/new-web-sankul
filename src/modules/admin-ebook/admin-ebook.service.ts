@@ -566,11 +566,15 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     ebookId: resolvedEbookId,
     planId: d.planId ?? null,
     paymentMethod: d.paymentMethod,
-    orderPrice: d.orderPrice,
+    // Order row always carries a number (0 for a free extend) — it is the
+    // purchase record. The subscription's own price is left alone below.
+    orderPrice: d.orderPrice ?? 0,
     razorpayOrderId: d.razorpayOrderId ?? null,
     razorpayPaymentId: d.razorpayPaymentId ?? null,
     transactionId: d.transactionId ?? null,
     ipAddress: d.ipAddress ?? null,
+    // undefined ⇒ "caller sent no amount" ⇒ repository omits the column and the
+    // existing subscription price survives the extend.
     price: d.orderPrice,
     startAt,
     endAt,
@@ -597,8 +601,8 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
 
 export const updateSubscription = async (
   id: number,
-  d: { razorpayOrderId?: string; razorpayPaymentId?: string; remarks?: string | null; status?: boolean; actingAdminId?: number | null }
-): Promise<"not_found" | "order_not_found" | "already_active" | { order?: any; subscription: any }> => {
+  d: { razorpayOrderId?: string; razorpayPaymentId?: string; remarks?: string | null; status?: boolean; startAt?: string; endAt?: string; actingAdminId?: number | null }
+): Promise<"not_found" | "order_not_found" | "already_active" | "bad_start" | "bad_end" | { order?: any; subscription: any }> => {
   const sub = await repo.findSubscriptionBare(id);
   if (!sub) return "not_found";
 
@@ -609,6 +613,19 @@ export const updateSubscription = async (
     const data: any = {};
     if (d.status !== undefined) data.status = d.status;
     if (d.remarks !== undefined) data.remarks = d.remarks ?? null;
+    // Date edits are how an admin ends a subscription on a chosen day (as opposed to
+    // status:false, which kills it outright). Invalid input is rejected rather than
+    // dropped — silently ignoring it is the bug this path used to have.
+    if (d.startAt !== undefined) {
+      const dt = new Date(d.startAt);
+      if (isNaN(dt.getTime())) return "bad_start";
+      data.startAt = dt;
+    }
+    if (d.endAt !== undefined) {
+      const dt = new Date(d.endAt);
+      if (isNaN(dt.getTime())) return "bad_end";
+      data.endAt = dt;
+    }
     // Admin edit → stamp updated_by (created_by unchanged).
     if (d.actingAdminId != null) data.updated_by = d.actingAdminId;
     const subscription = await repo.updateSubscription(id, data);
@@ -636,6 +653,17 @@ export const updateSubscription = async (
 
   return { order: updatedOrder, subscription };
 };
+
+
+/**
+ * The customer owning this subscription, or null if it doesn't exist.
+ *
+ * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
+ * can flush that customer's per-user route cache. On delete the row is gone
+ * afterwards, so the id cannot be resolved after the mutation.
+ */
+export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
+  (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;
 
 export const deleteSubscription = async (id: number): Promise<boolean> => {
   if (!(await repo.findSubscriptionBare(id))) return false;

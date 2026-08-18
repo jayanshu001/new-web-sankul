@@ -620,7 +620,16 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
       endAt: newEnd,
       planId,
       paidAt: now,
-      paidAmount: v.amount ?? existing.paidAmount ?? 0,
+      // ACCUMULATE, never replace. `v.amount ?? existing.paidAmount` was safe only
+      // while every caller omitted `amount` — an explicit `amount: 0` is not nullish,
+      // so it would have zeroed what the customer paid (the same defect fixed for
+      // test-series/ebook). Dropping the field outright isn't right here either:
+      // live courses have NO order table, so this row IS the payment record and a
+      // paid extension would vanish. Summing keeps both properties and matches the
+      // client purchase path (live-course-order.service.ts), which already does
+      // `paidAmount: (existingActive.paidAmount ?? 0) + amount`.
+      // Free "Add Days" sends no amount ⇒ + 0 ⇒ the stored total is untouched.
+      paidAmount: (existing.paidAmount ?? 0) + (v.amount ?? 0),
       paymentMethod: v.paymentMethod ?? "cash",
       razorpayOrderId: v.razorpayOrderId ?? null,
       razorpayPaymentId: v.razorpayPaymentId ?? null,
@@ -666,6 +675,17 @@ export const updateSubscription = async (id: number, v: { status?: boolean; paym
   const updated = await repo.updateSubscription(id, data);
   return (await hydrateSubs([updated]))[0];
 };
+
+
+/**
+ * The customer owning this subscription, or null if it doesn't exist.
+ *
+ * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
+ * can flush that customer's per-user route cache. On delete the row is gone
+ * afterwards, so the id cannot be resolved after the mutation.
+ */
+export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
+  (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;
 
 export const deleteSubscription = async (id: number): Promise<boolean> => {
   if (!(await repo.findSubscriptionById(id))) return false;

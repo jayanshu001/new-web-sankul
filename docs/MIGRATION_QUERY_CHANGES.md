@@ -15,6 +15,263 @@
 
 ---
 
+## 2026-08-18 — "Add Days" extend no longer wipes the subscription's stored price (test-series + ebook)
+
+**Files:** `src/modules/admin-testseries/admin-testseries.service.ts`,
+`src/modules/admin-ebook/admin-ebook.repository.ts`,
+`src/modules/admin-ebook/admin-ebook.service.ts`, `src/admin/ebook/ebook.validation.ts`.
+**No DDL.** Request/response shapes unchanged.
+
+Handoff: `~/websankul/docs/backend-requests/2026-08-18-subscription-add-days.md` §1.
+
+A free "Add Days" extend wrote the request amount straight onto the SUBSCRIPTION row,
+so `price` went ₹699 → ₹0 and the amount the customer actually paid was lost —
+unrecoverable, since `updateSubscriptionSchema` can only set status/paymentStatus/
+startAt/endAt. `endAt` and access were always correct; only the stored price was wrong.
+
+Both extend paths now leave `price` alone entirely:
+- test-series `grantSubscription` extend branch (was `price` from `data.price ?? 0`)
+- ebook `extendBackendSubscription` (was `price: input.price`)
+
+**Deviation from the handoff, deliberate.** It asked for `price: data.price ?? existing.price`.
+That would NOT have fixed it: the shipped admin panel sends an explicit `price: 0` /
+`amount: 0` on extend, and 0 is not nullish, so the guard would still have zeroed the row.
+Since the doc requires the frontend to stay unchanged ("Deploy order: Backend only"), the
+extend paths ignore the field outright instead. The doc flags this exact hazard itself for
+live courses ("`??` and not `||` matters... an explicit `amount: 0` is not nullish") without
+noticing its own payload table hits it.
+
+The ORDER row still records the request amount (₹0, `payment_method: free`) — that is what
+distinguishes an admin grant from a paid renewal in reports, and the handoff wanted it kept.
+
+`orderPrice`/`amount` is now optional when `extend: true` (it was `.refine(orderPrice != null)`
+→ 400 "amount is required"). Still required for a FRESH grant, where the row has no prior price.
+
+**Verified on staging** with the handoff's own reproduction:
+
+| Case | price | endAt |
+|---|---|---|
+| test-series 1, `{durationDays:10, price:0, extend:true}` | **699 → 699** | 04 Sep → **14 Sep** |
+| ebook 45, `{durationDays:10, amount:0, extend:true}` | **499 → 499** | 04 Sep → **14 Sep** |
+| ebook 45, no amount at all | **499 → 499** | → **19 Sep** (201, was 400) |
+| fresh grant, no amount | — | still **400 "amount is required"** |
+
+**Live courses (handoff §3) — fixed too, but by ACCUMULATING, not by dropping.**
+`admin-live-course.service.ts:623` was `paidAmount: v.amount ?? existing.paidAmount ?? 0`,
+safe only while every caller omitted `amount`. The handoff suggested dropping `paidAmount`
+from the extend update for symmetry with test-series/ebook — but that is wrong here: live
+courses have **no order table** (`ws_live_course`, `_plan`, `_subscription` only), so the
+subscription row IS the payment record and a paid extension would leave no trace. It now
+sums: `(existing.paidAmount ?? 0) + (v.amount ?? 0)`, matching the client purchase path
+(`live-course-order.service.ts`) which already did exactly that. Verified: no amount →
+₹2599 unchanged; explicit `amount: 0` → ₹2599 unchanged (previously would have zeroed);
+`amount: 500` → ₹3099 accumulated.
+
+**Not done from the same handoff** (explicitly out of scope / needs a decision):
+extension history table, a dedicated `customers.extend-subscription` permission, bulk
+extend, deleting the unguarded `PUT /admin/customers/:id/course-subscriptions/:subscriptionId`,
+and aligning test-series lapsed-extend semantics with courses/packages.
+
+---
+
+## 2026-08-18 — Entitlement change-detector on `/client/my-subscriptions` (self-healing `isPurchased`)
+
+**Files:** `src/utils/entitlementWatch.ts` (new),
+`src/client/my-subscriptions/my-subscriptions.controller.ts`. **No DDL, no response change.**
+
+Flushing on write (the 8 revoke handlers, above) fixes admin-initiated revokes but
+CANNOT fix entitlement that lapses without a write:
+
+- **natural expiry** — `end_at` passes and no write happens at all
+- direct SQL edits, backfills, BullMQ jobs — they bypass route middleware
+- any future write path where the flush is forgotten
+
+Those stayed stale for up to 24h on the **33 client routes cached per-user for
+86400s**.
+
+`/client/my-subscriptions` has a **30s** TTL, so it recomputes the user's live
+entitlement set roughly every half-minute regardless of WHY it changed. It is now
+also the change-detector: the controller fingerprints the full (pre-search,
+pre-pagination) card set and, when it differs from the last fingerprint stored in
+Redis, calls `flushUserRouteCache(customerId)`.
+
+Fingerprint is `kind:id:endAt` per card, sorted (order-independent). `endAt` is
+included so *shortening* a window is caught too; `daysLeft` is deliberately
+excluded — it decrements daily and would force a pointless daily flush per active
+user. First sighting records a baseline WITHOUT flushing, so a deploy or cold
+Redis can't stampede every user's cache at once. Fail-open throughout.
+
+**Effect:** worst-case entitlement staleness drops from 24h to ~30s for every
+cause, without changing any route's TTL and with no per-request DB cost.
+
+**Verified** on staging: gave a customer a course, warmed the detail cache
+(`isPurchased:true`), then expired the subscription with a direct SQL `UPDATE` —
+no API call, so no flush could fire. Detail stayed `true` (correctly, nothing had
+recomputed); after `my-subscriptions` next ran, detail returned `false`.
+
+**Known limitation:** it only fires when the app actually calls my-subscriptions.
+A client that opens a detail screen without ever hitting that endpoint keeps its
+stale overlay until the 24h TTL lapses. It is a strong heuristic, not a guarantee
+— the guarantee would be caching the shared catalog body and computing the
+per-user entitlement overlay per request.
+
+---
+
+## 2026-08-18 — Ebook subscription update silently discarded `endAt` (admin could not end an ebook subscription by date)
+
+**Files:** `src/admin/ebook/ebook.validation.ts`, `src/admin/ebook/ebook-subscription.controller.ts`,
+`src/modules/admin-ebook/admin-ebook.service.ts`. **No DDL.**
+
+`PUT /admin/ebooks/subscriptions/:subscriptionId` with `{"endAt": "..."}` returned
+**200 `success:true`**, echoed a subscription body, and bumped `updated_at` — while
+`ws_ebook_subscription.end_at` was **never written**. The admin saw a success toast
+and nothing changed.
+
+Cause: `updateEbookSubscriptionSchema` had no `startAt`/`endAt` keys, and a bare
+Zod `z.object()` **strips** unknown keys rather than rejecting them, so the dates
+were dropped before the controller ever saw them. The service signature had no
+date fields either. Ebook was the ONLY product type with this gap — course/package
+(`subscription.validation.ts`) and test-series both accept `endAt`, and live-course
+accepts `startAt`/`endAt`.
+
+Fix: accept `startAt`/`endAt` in the schema, pass them through the controller, and
+write them on the service's toggle path. Invalid dates now return **400**
+(`"endAt must be a valid date"`) instead of being silently ignored — matching the
+`bad_start`/`bad_end` contract live-course already used.
+
+Verified: `PUT {endAt: now}` → 200, `end_at` written, `GET /client/ebooks/45` flips
+to `isPurchased:false` / `daysLeft:null` on the first request; `{endAt:"not-a-date"}`
+→ 400.
+
+**Note for anyone auditing similar endpoints:** grep for admin update schemas that
+omit a field the service claims to support. `z.object()` strip-by-default turns
+every such omission into a silent no-op with a success response.
+
+---
+
+## 2026-08-18 — Admin revoke now flushes the buyer's route cache (isPurchased sync)
+
+**Files:** `src/admin/subscription/subscription.controller.ts`,
+`src/admin/ebook/ebook-subscription.controller.ts`,
+`src/admin/live-course/live-course.subscription.controller.ts`,
+`src/admin/testSeries/testSeries.controller.ts`,
+`src/modules/admin-subscription/*`, `src/modules/admin-ebook/*`,
+`src/modules/admin-live-course/*`, `src/modules/admin-testseries/admin-testseries.service.ts`.
+
+**No DDL. No query-logic change.** Cache invalidation only.
+
+### The bug
+
+After an admin ended a subscription, `client/my-subscriptions` dropped the product
+but every listing/detail API kept returning `isPurchased: true` / `subscribed: true`
+with a live `daysLeft`, so the app still unlocked paid content.
+
+**The entitlement queries were never wrong.** Both predicates already mean
+"active, non-ended, non-expired":
+
+```ts
+// commerce-subscription.repository.ts (course/package)
+{ customerId, status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] }
+// commerce-ebook-sub.repository.ts (ebook)
+{ customerId, ebookId: { in: ebookIds }, status: true, endAt: { gt: now } }
+```
+
+The APIs simply never re-ran them. Every catalog read is cached per-user for
+**86400s**; `my-subscriptions` is cached for **30s**. My Subscriptions was not
+reading a better source — it just expired 2880× faster, which is why it alone
+looked correct.
+
+`flushUserRouteCache()` exists for exactly this ("use it after an entitlement
+change… so the buyer's `isPurchased` overlay refreshes immediately") and was wired
+into every GRANT path — 6 sites in `verify.controller.ts` plus admin course-create,
+ebook-create and live-grant — but **no revoke path anywhere**. Entitlement was
+treated as something only ever added.
+
+### The fix
+
+`flushUserRouteCache(customerId)` on all 8 revoke handlers (update + delete × 4
+product types). One flush clears that customer's keys across every entity, so all
+~40 listing/detail/dashboard/search surfaces in the bug report are fixed at once —
+no per-endpoint changes.
+
+New `getSubscriptionCustomerId(id)` per module (repository lookup, except
+`admin-testseries` which has no repository layer and calls Prisma directly, per
+that module's own convention). **The owner is resolved BEFORE the mutation** —
+mandatory on delete, since the row is gone afterwards; update follows the same
+order for symmetry.
+
+Flush is awaited, and fail-open (a Redis error is logged and swallowed), so it can
+never fail an admin revoke.
+
+### Not changed (verified, not assumed)
+
+- Shared-scope cached routes carry no per-user state: `/books/trending/*` is pure,
+  `/catalog/:type/:id/tests` is category counts only, `/free-dashboard` is
+  `scope:"user"` with ttl 60. So a per-user flush is sufficient and there is no
+  cross-user `isPurchased` leak.
+- Protected media (`media/resolve`, live recordings, `bookMediaToken`) is uncached
+  and already re-evaluates entitlement per request.
+
+### Verification
+
+`yarn typecheck` green. **Verified end-to-end against staging 2026-08-18** using
+customer 472335 / ebook 45 (chosen because that customer had exactly ONE ebook
+subscription and zero active ones — a controlled subject):
+
+| Step | Cached keys | `isPurchased` |
+|---|---|---|
+| read, then read again | 1 | `true` (2nd served from cache) |
+| `PUT /admin/ebooks/subscriptions/472056 {status:false}` | **0** (flushed) | — |
+| first read after revoke | — | **`false`** |
+
+**Negative control** — same setup, but revoking with a direct `UPDATE` in MySQL so
+the API (and therefore the flush) never runs: the DB reports `status=0` while the
+endpoint still answers `isPurchased:true`. That reproduces the original bug exactly
+and confirms the stale cache — not the entitlement predicate — was the cause.
+
+Caveat on a first attempt worth recording: the same test against course 114 showed
+`isPurchased:true` even AFTER a successful flush. That was not a failure — the
+seeded test customer holds thousands of active subscriptions, several of which
+still granted course 114. `daysLeft` moved 136→54 across the revoke, proving the
+response had been recomputed from the DB rather than served from cache. Pick a
+subject with a single entitlement path when re-running this.
+
+---
+
+## 2026-08-18 — Per-book `termsAndConditions` (`ws_book.terms_and_conditions`)
+
+**Files:** `prisma/schema.prisma` (model `Book`),
+`src/modules/catalog-book/catalog-book.types.ts`, `.transformer.ts`,
+`src/modules/admin-book/admin-book.service.ts`, `src/admin/book/book.controller.ts`,
+`docs/migration/schema-changes/2026-08-18_book_terms_and_conditions.sql`.
+
+**DDL — additive:** `ALTER TABLE ws_book ADD COLUMN terms_and_conditions TEXT NULL AFTER description;`
+
+`GET /client/books/:id` returned no `termsAndConditions` while the e-book detail
+always has. The admin book form was ALREADY sending the field on create/update and
+the SQL path silently discarded it — there was no column. Both gaps close together:
+
+- **Client:** `termsAndConditions: string` on the book DTO — same key AND type as
+  `catalog-ebook.types.ts`, so one FE code path renders both. NULL → `""`, never
+  null (the ebook column is NOT NULL; this one is nullable because it was added to
+  an existing table).
+- **Admin:** the field now persists on create + update and is returned by the admin
+  DTO (was hardcoded `termsAndConditions: null`).
+
+**Distinct from `ws_book_setting.terms_and_conditions`**, which is a store-wide
+array (shipping/returns policy) on the admin Book Settings screen. Unrelated and
+untouched — this is per-book copy.
+
+No backfill: existing books read `""` until an admin fills them in. Safe to apply
+before or after the code deploy (Prisma only selects columns it knows about).
+
+**Applied to local staging 2026-08-18** (`terms_and_conditions text NULL`);
+still pending on remote staging + prod. Verified live: `GET /client/books/10` with
+content returns the string, and a book with no terms returns `""` (type `string`,
+never null), matching the ebook contract.
+
+---
+
 ## 2026-08-18 — `ws_book_order.transaction_id` dropped (duplicate of `gateway_transaction_id`)
 
 **Files:** `prisma/schema.prisma` (model `BookOrder`), `src/modules/book-order/book-order.repository.ts`,
