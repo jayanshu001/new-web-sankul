@@ -66,6 +66,10 @@ export const clientCartRepository = {
 
   removeItem: (id: number) => prisma.bookCartItem.delete({ where: { id } }),
 
+  countCartItems: (cartId: number) => prisma.bookCartItem.count({ where: { cartId } }),
+
+  deleteCart: (id: number) => prisma.bookCart.delete({ where: { id } }),
+
   touchCart: (id: number) =>
     prisma.bookCart.update({ where: { id }, data: { updated_at: new Date() } }),
 

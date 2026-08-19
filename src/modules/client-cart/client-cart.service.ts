@@ -16,9 +16,9 @@ const num = (v: unknown): number => {
 
 /** Mongo-shaped cart DTO: { _id, items[{bookId,qty,...}], shippingId }. */
 const toCartDto = (cart: any) => ({
-  _id: String(cart.id),
-  items: (cart.bookCartItem ?? []).map((it: any) => ({ bookId: String(it.bookId), qty: it.qty })),
-  shippingId: cart.shippingId != null ? String(cart.shippingId) : null,
+  _id: !!cart?.id ? String(cart.id) : null,
+  items: (cart?.bookCartItem ?? []).map((it: any) => ({ bookId: String(it.bookId), qty: it.qty })),
+  shippingId: !!cart?.shippingId ? String(cart.shippingId) : null,
 });
 
 // ─── add / update / remove ────────────────────────────────────────────────────
@@ -53,6 +53,13 @@ export const removeCartItem = async (customerId: number, bookId: number) => {
   const item = await repo.findCartItem(cart.id, bookId);
   if (!item) return { ok: false as const };
   await repo.removeItem(item.id);
+
+  const remaining = await repo.countCartItems(cart.id);
+  if (!remaining) {
+    await repo.deleteCart(cart.id);
+    return { ok: true as const, data: { _id: null, items: [], shippingId: null } };
+  }
+
   await repo.touchCart(cart.id);
   const fresh = await repo.findActiveCartBare(customerId);
   return { ok: true as const, data: toCartDto(fresh) };

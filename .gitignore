@@ -4,6 +4,8 @@
 # /yarn.lock
 /.htaccess
 /.yarn
+# Yarn Berry local config (repo uses Yarn Classic) — machine-specific, not committed
+/.yarnrc.yml
 /logs
 /.env
 
