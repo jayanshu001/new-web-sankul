@@ -7,6 +7,8 @@ import {
   deleteFaq as deleteFaqService,
   listFaqTypes as listFaqTypesService,
   parseFaqId,
+  resolveFaqTypeFilter,
+  FAQ_TYPE_FILTER_MESSAGE,
 } from "../../modules/faq/faq.service";
 import {
   faqCreateSchemaMysql,
@@ -44,6 +46,7 @@ import {
   updateTerms as updateTermsService,
   deleteTerms as deleteTermsService,
   parseTermsId,
+  isTermsConflict,
 } from "../../modules/terms/terms.service";
 import {
   termsCreateSchemaMysql,
@@ -68,8 +71,6 @@ import {
   liveBannerUpdateSchema,
   testimonialCreateSchema,
   testimonialUpdateSchema,
-  termsCreateSchema,
-  termsUpdateSchema,
   versionUpsertSchema,
   appUpdateUpsertSchema,
   socialLinkCreateSchema,
@@ -153,7 +154,15 @@ export const listFaqs = async (req: Request, res: Response) => {
   try {
     const q = parseAdminList(req.query as Record<string, any>);
     const typeId = typeof req.query.typeId === "string" ? req.query.typeId : undefined;
-    const { items, total } = await listFaqsPagedService({ typeId, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    // Unknown type → 422 rather than a dropped filter that returns every category
+    // mixed together (which reads as "the filter is broken"). Case-insensitive, so
+    // the label casing "Referral" resolves.
+    const resolvedType = resolveFaqTypeFilter(typeId);
+    if (!resolvedType.ok) {
+      logger.warn("listFaqs invalid type filter", { traceId, typeId });
+      return res.status(422).json({ success: false, message: FAQ_TYPE_FILTER_MESSAGE, messages: { typeId: FAQ_TYPE_FILTER_MESSAGE } });
+    }
+    const { items, total } = await listFaqsPagedService({ typeId: resolvedType.type, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
     return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listFaqs failed", { traceId, error: getErrorMessage(e) });
@@ -800,6 +809,12 @@ export const createTerms = async (req: Request, res: Response) => {
     // MySQL `module` is a fixed enum; use the stricter schema.
     const data = termsCreateSchemaMysql.parse(req.body);
     const doc = await createTermsService(data);
+    // 409, not 400: the payload is valid — the module is simply already taken. A
+    // second row would silently shadow the first on the client read (findFirst).
+    if (isTermsConflict(doc)) {
+      logger.warn("createTerms duplicate module", { traceId, module: doc.module, existingId: doc.existingId });
+      return res.status(409).json({ success: false, message: `Terms for "${doc.module}" already exist. Edit the existing entry instead.`, data: { existingId: String(doc.existingId) } });
+    }
     return res.status(201).json({ success: true, data: doc });
   } catch (e: any) {
     if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
@@ -814,6 +829,10 @@ export const updateTerms = async (req: Request, res: Response) => {
     if (termsIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = termsUpdateSchemaMysql.parse(req.body);
     const doc = await updateTermsService(id, data);
+    if (isTermsConflict(doc)) {
+      logger.warn("updateTerms duplicate module", { traceId, id, module: doc.module, existingId: doc.existingId });
+      return res.status(409).json({ success: false, message: `Terms for "${doc.module}" already exist. Edit the existing entry instead.`, data: { existingId: String(doc.existingId) } });
+    }
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {

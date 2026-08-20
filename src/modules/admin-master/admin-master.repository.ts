@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
@@ -11,6 +11,81 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  *
  * ⚠ ws_package_category does NOT exist in SQL → master/packageCategory stays Mongo.
  */
+/**
+ * Everything attached to a video category — recorded course, live course, package —
+ * as ONE parameterised UNION.
+ *
+ * Modelled on `buildLinkedProductsQuery` (admin-material.repository) rather than
+ * three Prisma calls merged in JS: **paging a UNION in application code is wrong**,
+ * because each source would get its own offset. The union is paged in SQL, so
+ * `LIMIT/OFFSET` and the count both run over the merged set.
+ *
+ * `search` and `status` are applied PER BRANCH (not once over the union) so each
+ * branch can use its own name/status index instead of filtering a materialised
+ * temp table.
+ *
+ * ⚠ LIVE-COURSE LINK — TWO DIRECTIONS, NOT ONE. `ws_live_course.video_category_id`
+ * is the forward pointer, but admin has never populated it (0 of 4 live courses on
+ * staging have it set) — the link that actually exists is the REVERSE marker
+ * `ws_video_category.live_course_id` (5 categories carry it). Matching only the
+ * forward column is exactly why this tab showed "No courses found" for a category
+ * that IS a live course's root folder. `> 0` guards the legacy 0 sentinel. Same
+ * dual-source rule catalog-category-tree applies for the same reason.
+ *
+ * Column notes: ws_course.order_by is `ordered` in Prisma; ws_live_course's column
+ * really is `ordered`; ws_package.status is `active` in Prisma, `status` in SQL.
+ * `DISTINCT` on the package branch — a package can hold several pivot rows.
+ */
+function buildCategoryAttachmentsQuery(
+  categoryId: number,
+  opts: { search?: string; status?: boolean; type?: "course" | "live-course" | "package" }
+): { sql: string; params: unknown[] } {
+  const toks = searchTokens(opts.search);
+  const nameFilter = toks.map(() => "AND {alias}.name LIKE ?").join(" ");
+  const tokParams = toks.map((t) => `%${t}%`);
+  const statusFilter = (alias: string) => (opts.status === undefined ? "" : `AND ${alias}.status = ?`);
+  const statusParams = opts.status === undefined ? [] : [opts.status ? 1 : 0];
+  const branch = (alias: string) => `${nameFilter.replace(/\{alias\}/g, alias)} ${statusFilter(alias)}`;
+  const wants = (t: "course" | "live-course" | "package") => opts.type === undefined || opts.type === t;
+
+  const parts: string[] = [];
+  const params: unknown[] = [];
+
+  if (wants("course")) {
+    parts.push(`
+      SELECT 'course' AS type, c.id AS id, c.name AS name, c.status AS status, c.order_by AS order_by, 0 AS type_rank
+        FROM ws_course c
+       WHERE c.vcategory_id = ? ${branch("c")}`);
+    params.push(categoryId, ...tokParams, ...statusParams);
+  }
+
+  if (wants("live-course")) {
+    parts.push(`
+      SELECT 'live-course' AS type, lc.id AS id, lc.name AS name, lc.status AS status, lc.ordered AS order_by, 1 AS type_rank
+        FROM ws_live_course lc
+       WHERE (
+               lc.video_category_id = ?
+               OR lc.id = (SELECT vc.live_course_id FROM ws_video_category vc
+                            WHERE vc.id = ? AND vc.live_course_id > 0)
+             ) ${branch("lc")}`);
+    params.push(categoryId, categoryId, ...tokParams, ...statusParams);
+  }
+
+  if (wants("package")) {
+    parts.push(`
+      SELECT DISTINCT 'package' AS type, p.id AS id, p.name AS name, p.status AS status, p.order_by AS order_by, 2 AS type_rank
+        FROM ws_package_specific_subject pss
+        JOIN ws_package p ON p.id = pss.package_id
+       WHERE pss.subject_id = ? ${branch("p")}`);
+    params.push(categoryId, ...tokParams, ...statusParams);
+  }
+
+  // `type` narrowed everything away — a statement that is valid and returns nothing.
+  if (!parts.length) return { sql: "SELECT 'course' AS type, 0 AS id, '' AS name, 0 AS status, 0 AS order_by, 0 AS type_rank FROM DUAL WHERE 1 = 0", params: [] };
+
+  return { sql: parts.join("\n    UNION ALL\n"), params };
+}
+
 export const adminMasterRepository = {
   // ── PackageCourseMaterial (pc-material + master/material share this table) ──
   // Optional search (title) + pagination. skip/take omitted → full list.
@@ -192,20 +267,38 @@ export const adminMasterRepository = {
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.videoCategory.count({ where });
   },
-  coursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
-    const where: any = { videoCategoryId: categoryId };
-    const search = buildPrismaSearch(opts.search, ["name"]);
-    if (search) Object.assign(where, search);
-    if (opts.status !== undefined) where.status = opts.status;
-    return prisma.course.findMany({ where, select: { id: true, name: true, status: true, ordered: true }, orderBy: [{ ordered: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take });
+  /**
+   * One page of the category attachments union, ordered deterministically:
+   * type (course → live-course → package), then the kind's own order column,
+   * then id. Total + stable, so no row can straddle two pages.
+   */
+  categoryAttachments: (
+    categoryId: number,
+    opts: { search?: string; status?: boolean; type?: "course" | "live-course" | "package"; skip: number; take: number }
+  ) => {
+    const { sql, params } = buildCategoryAttachmentsQuery(categoryId, opts);
+    return prisma.$queryRawUnsafe<{ type: string; id: number; name: string | null; status: number | boolean; order_by: number }[]>(
+      `SELECT u.type, u.id, u.name, u.status, u.order_by FROM (${sql}) u
+        ORDER BY u.type_rank ASC, u.order_by ASC, u.id DESC
+        LIMIT ? OFFSET ?`,
+      ...params,
+      opts.take,
+      opts.skip
+    );
   },
-  countCoursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean }) => {
-    const where: any = { videoCategoryId: categoryId };
-    const search = buildPrismaSearch(opts.search, ["name"]);
-    if (search) Object.assign(where, search);
-    if (opts.status !== undefined) where.status = opts.status;
-    return prisma.course.count({ where });
+
+  countCategoryAttachments: async (
+    categoryId: number,
+    opts: { search?: string; status?: boolean; type?: "course" | "live-course" | "package" }
+  ): Promise<number> => {
+    const { sql, params } = buildCategoryAttachmentsQuery(categoryId, opts);
+    const rows = await prisma.$queryRawUnsafe<{ n: bigint | number }[]>(
+      `SELECT COUNT(*) AS n FROM (${sql}) u`,
+      ...params
+    );
+    return Number(rows[0]?.n ?? 0);
   },
+
   videosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string; skip: number; take: number }) => {
     const where: any = { videoCategoryId: categoryId };
     const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);

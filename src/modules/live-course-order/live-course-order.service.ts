@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
@@ -85,6 +86,34 @@ export const listPlansForLiveCourse = (liveCourseId: number) =>
   });
 
 /**
+ * The promo discount on a live-course subscription, DERIVED.
+ *
+ * `ws_live_course_subscription.discount_amount` was dropped 2026-08-20 as redundant.
+ * This function is the exact inverse of what `createLiveCourseOrderMysql` writes:
+ *
+ *   paid_amount = original_amount - discount - wallet_coin
+ *
+ * `original_amount` is set ONLY when a promo was applied (the same condition under
+ * which `discount_amount` used to be non-NULL), so a NULL original means no promo and
+ * therefore no discount. Wallet coin is subtracted out because it is redemption, not
+ * a discount — it was never part of the stored value either.
+ *
+ * Both API readers (live-course receipt, admin customer-details DTO) call this, so
+ * their responses are byte-identical to when the column existed. Keep the two in
+ * sync: if the write formula ever changes, this must change with it.
+ */
+export const liveSubDiscountAmount = (sub: {
+  originalAmount?: number | null;
+  paidAmount?: number | null;
+  walletCoin?: number | null;
+}): number => {
+  if (sub.originalAmount == null) return 0;
+  const discount = Number(sub.originalAmount) - Number(sub.paidAmount ?? 0) - Number(sub.walletCoin ?? 0);
+  // Clamp: a hand-edited or partially-refunded row must not report a negative discount.
+  return discount > 0 ? discount : 0;
+};
+
+/**
  * Create a pending live-course subscription row + return its id. The razorpay
  * order id is set on the row immediately (single-table — no order row to bridge).
  */
@@ -94,11 +123,26 @@ export const createLiveCourseOrderMysql = async (input: {
   planId: number;
   amount: number;
   razorpayOrderId: string;
-  promocodeId?: number | null;
-  referrerId?: number | null;
+  /**
+   * Purchase-time code snapshots from `buildOrderCodeSnapshots({..., planKind:
+   * "livePlan"})`. Frozen objects, routed to exactly ONE column — a real promocode →
+   * `promocode`, a customer referral code → `refferalcode` — mirroring
+   * ws_package_course_order. Both null when no code was applied, or when the snapshot
+   * could not be built — a snapshot never blocks a payment.
+   *
+   * These REPLACE the old `promocode_id` / `referrer_id` columns (dropped 2026-08-20):
+   * the snapshot is now the single source of truth for who redeemed what, and the
+   * referral credit at verify reads the referrer out of it (referrerIdOf below).
+   */
+  promocodeSnapshot?: unknown | null;
+  refferalcodeSnapshot?: unknown | null;
   coin?: number | null;
+  /**
+   * Pre-promo plan price, set ONLY when a promo was applied. This is what makes the
+   * discount derivable (see liveSubDiscountAmount) now that `discount_amount` is
+   * gone — do NOT stop writing it.
+   */
   originalAmount?: number | null;
-  discountAmount?: number | null;
   withMaterial?: boolean;
   customerShippingId?: number | null;
   now: Date;
@@ -110,9 +154,12 @@ export const createLiveCourseOrderMysql = async (input: {
       planId: input.planId,
       paidAmount: Math.round(input.amount),
       originalAmount: input.originalAmount != null ? Math.round(input.originalAmount) : null,
-      discountAmount: input.discountAmount != null ? Math.round(input.discountAmount) : null,
-      promocodeId: input.promocodeId ?? null,
-      referrerId: input.referrerId ?? null,
+      // `?? Prisma.DbNull` (not `?? null`): on a Json column Prisma reads a bare
+      // `null` as JsonNull — the JSON literal `null` INSIDE the column — whereas
+      // DbNull is a real SQL NULL. The report treats SQL NULL as "no code"; a JSON
+      // null would be a non-empty value that every JSON_EXTRACT path then misses.
+      promocode: (input.promocodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
+      refferalcode: (input.refferalcodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
       walletCoin: input.coin ?? null,
       paymentStatus: "pending",
       status: true,
@@ -124,6 +171,25 @@ export const createLiveCourseOrderMysql = async (input: {
     },
   });
   return { subscriptionId: sub.id };
+};
+
+/**
+ * The referring CUSTOMER's id, read out of the subscription's frozen referral
+ * snapshot. Replaces the dropped `referrer_id` column as the input to the
+ * post-payment referral credit.
+ *
+ * ⚠ In the legacy referral shape the key `promoter` holds the referring CUSTOMER
+ * (not a ws_promoter), so the id lives at `$.refferalcode.promoter.id` — the same
+ * value `referrer_id` used to carry. A promocode snapshot has no referrer at all and
+ * correctly yields null, so promocode purchases never credit anyone.
+ *
+ * Returns null for pre-2026-08-20 rows that were never backfilled; creditReferrer
+ * treats a null referrer as "nothing to credit" and is a no-op.
+ */
+const referrerIdOf = (sub: { refferalcode: unknown }): number | null => {
+  const ref = sub.refferalcode as any;
+  const id = ref && typeof ref === "object" ? ref.promoter?.id : null;
+  return Number.isInteger(id) && id > 0 ? (id as number) : null;
 };
 
 /** Owner lookup for verify (the pending sub owning this razorpay order id). */
@@ -191,7 +257,7 @@ export const verifyLiveCourseOrderMysql = async (
       });
       return ext;
     });
-    await creditReferrer({ referrerId: pending.referrerId, buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
+    await creditReferrer({ referrerId: referrerIdOf(pending), buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
     await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
     return toVerifyDto(result);
   }
@@ -209,7 +275,7 @@ export const verifyLiveCourseOrderMysql = async (
       ...(pending.withMaterial ? { trackingId: pending.id, trackingStatus: "pending" } : {}),
     },
   });
-  await creditReferrer({ referrerId: pending.referrerId, buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
+  await creditReferrer({ referrerId: referrerIdOf(pending), buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
   await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
   return toVerifyDto(updated);
 };

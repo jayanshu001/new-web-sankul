@@ -204,9 +204,17 @@ model ImageNotification {
 }
 
 model TermsAndConditions {
-  id                             Int     @id @default(autoincrement())
-  module                         String
+  id Int @id @default(autoincrement())
+  // MySQL enum('book','pendrive','referral code') — Prisma types it loosely as
+  // String; writes MUST use an accepted value (see TERMS_MODULES) or MySQL rejects
+  // the row with error 1265. UNIQUE because the client resolves a module with a
+  // findFirst, so a second row would silently shadow the first.
+  // DDL: docs/migration/schema-changes/2026-08-20_terms_module_unique.sql
+  module                         String  @unique(map: "uq_terms_module")
   terms                          String
+  // DEAD as of 2026-07-14: checkout reads the free-shipping threshold from
+  // ws_book_setting (book-order.service). Kept only because the column is NOT NULL
+  // and it still appears in TermsDto; nothing reads the value.
   freeShippingMinimumOrderAmount Int
   status                         Boolean
 
@@ -1322,6 +1330,10 @@ model PackageCourseOrder {
   orderType                         PackageCourseEbookOrderType         @map("order_type")
   PackageCourseEbookPrice           PackageCourseEbookPrice?            @relation(fields: [planId], references: [id])
   planId                            Int?                                @map("plan_id")
+  // Dispatch address = ws_customer_shipping.id, NEVER a ws_customer_address.id.
+  // The UIs hand over an address-book id; modules/customer-shipping snapshots it
+  // into a shipping row and that id is what lands here. See the 2026-08-20 entry
+  // in docs/MIGRATION_QUERY_CHANGES.md.
   CustomerShipping                  CustomerShipping?                   @relation(fields: [shipping], references: [id])
   shipping                          Int?                                @map("shipping")
   promocode                         Json?
@@ -1829,11 +1841,27 @@ model LiveCourseSubscription {
   startAt           DateTime? @map("start_at")
   endAt             DateTime? @map("end_at")
   status            Boolean   @default(true)
-  promocodeId       Int?      @map("promocode_id")
-  referrerId        Int?      @map("referrer_id")
+  // Purchase-time SNAPSHOT of the redeemed code, mirroring
+  // ws_package_course_order.promocode / .refferalcode byte for byte (see
+  // modules/order-code-snapshot). Exactly one is ever set. Frozen JSON, not a join:
+  // promocode percentages are editable and plans get repriced, so commission and the
+  // reported discount must reflect the terms in force at purchase.
+  //
+  // These REPLACED the old promocode_id / referrer_id int columns, dropped 2026-08-20.
+  // The referral credit at payment-verify now reads the referring customer from
+  // $.refferalcode.promoter.id (live-course-order.service referrerIdOf).
+  // DDL: 2026-08-20_live_course_subscription_code_snapshot.sql (add)
+  //    + 2026-08-20_live_course_subscription_drop_code_ids.sql (drop)
+  promocode         Json?
+  refferalcode      Json?
   walletCoin        Int?      @map("wallet_coin")
   originalAmount    Int?      @map("original_amount")
-  discountAmount    Int?      @map("discount_amount")
+  // NOTE: there is no `discountAmount` — the column was dropped 2026-08-20 as
+  // derivable. The write path sets paid = original - discount - coin, so the promo
+  // discount is `originalAmount - paidAmount - (walletCoin ?? 0)`, and originalAmount
+  // is non-null exactly when a promo was applied. Both API readers (live-course
+  // receipt, admin customer-details DTO) compute it; their responses are unchanged.
+  // DDL: 2026-08-20_live_course_subscription_drop_discount_amount.sql
   paidAmount        Int?      @map("paid_amount")
   paymentStatus     String?   @map("payment_status")
   paymentMethod     String?   @map("payment_method")
@@ -2075,6 +2103,21 @@ model EnrollmentResume {
 
   @@unique([customerId, scopeKind, scopeId], name: "uniq_customer_scope")
   @@map("ws_enrollment_resume")
+}
+
+model OfflineVideoDownload {
+  id           Int       @id @default(autoincrement())
+  customerId   Int       @map("customer_id")
+  videoId      Int       @map("video_id") // lecture id; = scopeId for "ebook" rows
+  scopeKind    String    @map("scope_kind") // "course" | "package" | "liveCourse" | "ebook"
+  scopeId      Int       @map("scope_id")
+  registeredAt DateTime? @map("registered_at")
+  createdAt    DateTime? @map("created_at")
+  updatedAt    DateTime? @map("updated_at")
+
+  @@unique([customerId, videoId, scopeKind, scopeId], name: "uniq_customer_video_scope")
+  @@index([customerId, scopeKind, scopeId], name: "idx_ovd_customer_scope")
+  @@map("ws_offline_video_download")
 }
 
 model Notification {

@@ -21,7 +21,22 @@
  * expects to read them back.
  */
 
-/** A plan row as embedded in a snapshot. Nullable int FKs render as 0 (legacy). */
+/**
+ * A plan row as embedded in a snapshot. Nullable int FKs render as 0 (legacy).
+ *
+ * Serves BOTH plan tables. `ws_package_course_ebook_price` (planKind "price") fills
+ * ebookId / courseId / packageId; `ws_live_course_plan` (planKind "livePlan") has no
+ * such parent, so those three stay 0 — the same "not this entity" sentinel V1 used —
+ * and the parent is carried in the extra `liveCourseId` key.
+ *
+ * `liveCourseId` is OPTIONAL and is OMITTED entirely for price plans: the
+ * package/course/ebook snapshot is a byte-compatible legacy contract and must not
+ * gain keys. Live-course snapshots are a new column with no legacy rows to match.
+ *
+ * ⚠ `duration` is DAYS for a price plan but MONTHS for a live-course plan (see
+ * LIVE_COURSE_DESIGN §3). The snapshot preserves the source value verbatim; the unit
+ * is implied by which kind of plan it is, exactly as on the live rows.
+ */
 export type SnapshotPlan = {
   id: number;
   name: string | null;
@@ -36,7 +51,19 @@ export type SnapshotPlan = {
   updated_at: string | null;
   withMaterial: boolean;
   materialPrice: number;
+  liveCourseId?: number;
 };
+
+/**
+ * Which plan table a snapshot's `planId` points at — the same discriminator
+ * `ws_promoted_package_course_ebook.plan_kind` uses.
+ *
+ * ⚠ The two tables SHARE an id space and the link row's `pcb_price_id` FK is declared
+ * against ws_package_course_ebook_price regardless of kind, so resolving a live-course
+ * plan id without this discriminator silently returns an unrelated course/package plan
+ * (and, worse, ITS promoter percentage).
+ */
+export type SnapshotPlanKind = "price" | "livePlan";
 
 /** The promoter who owns the promocode (ws_promoter) — snake_case, as in V1. */
 export type SnapshotPromoter = {

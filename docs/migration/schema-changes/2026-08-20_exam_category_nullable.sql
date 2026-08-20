@@ -1,0 +1,39 @@
+-- 2026-08-20 — Allow a category-less exam: ws_exam.exam_category_id becomes NULLable.
+--
+-- WHY: Daily tests are browsed by DATE, not by category. The client's daily browse is
+-- date-based raw SQL over ws_exam (client-exam.repository.ts — dailyYears / dailyMonths
+-- / dailyInWindowPaged / countDailyInWindow) and never joins ws_exam_category; only
+-- `type: "subject"` listing goes through examsByCategoryPaged. So a daily quiz has
+-- nothing meaningful to file under, yet admins could not save one without picking a
+-- parent category.
+--
+-- Three layers enforced non-emptiness (validator `.nonempty()`, createExam's hard
+-- error, setExamCategories' empty-set early return) — but underneath all of them this
+-- column was NOT NULL, so there was no way to STORE a category-less row at all. The
+-- code relaxations are useless without this DDL.
+--
+-- SUBJECT/MOCK/WEEKLY quizzes keep the "at least one leaf category" rule; only
+-- `type = 'daily'` may have an empty set. This column merely stops being the blocker.
+--
+-- NOT the `0` sentinel: `exam_category_id = 0` is the legacy "no category" marker that
+-- toExamDto already maps to null. Verified 2026-08-20 on staging: ZERO rows currently
+-- hold 0, so nothing needs converting. New category-less rows write a real NULL.
+--
+-- prisma/schema.prisma already models this as `examCategoryId Int?` — the schema and
+-- the database had DRIFTED in the permissive direction (Prisma would have accepted a
+-- NULL write and let MySQL reject it at runtime). This ALTER resolves the drift in the
+-- correct direction; no schema.prisma edit is needed, but re-run `yarn prisma:generate`
+-- afterwards so the client and DB agree.
+--
+-- NO BACKFILL: existing rows keep their current values untouched.
+--
+-- ORDERING: apply this DDL BEFORE the code deploy. The current build never writes NULL
+-- into the column, so relaxing it early is inert and the deploy window has no bad
+-- state. Applying it AFTER the code would make category-less daily saves fail with a
+-- MySQL NOT NULL error until it lands.
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-20_exam_category_nullable.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_exam
+  MODIFY COLUMN exam_category_id INT NULL;

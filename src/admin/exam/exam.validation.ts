@@ -30,11 +30,21 @@ export const createExamSchema = z
     // Full-replace set of leaf category ids. A single selection arrives from a
     // multipart form as ONE `categoryIds[]` key (a bare scalar, not an array), so
     // lift it before validating — otherwise picking exactly one category while
-    // uploading a solution PDF would 400. Existence + leaf-ness are checked in the
-    // service, which needs the DB; here we only enforce shape and non-emptiness.
+    // uploading a solution PDF would 400.
+    //
+    // An EMPTY array is a valid shape here (2026-08-20): daily tests are browsed by
+    // date and may have no parent category. "At least one category" is no longer a
+    // shape rule — it is type-dependent, so the service owns it (it is the only layer
+    // that knows the EFFECTIVE type on an update, where `type` may be absent from the
+    // payload). Existence + leaf-ness are likewise checked there, since they need the DB.
+    //
+    // `"" -> []` mirrors the startAt / endAt / solutionPdfUrl preprocess below: a
+    // multipart form appends NO keys for an empty array, so the field would arrive
+    // absent and read as "leave untouched", silently ignoring the admin's removal.
+    // The empty-string marker is the only way to express "clear all" over multipart.
     categoryIds: z.preprocess(
-      (v) => (v === undefined || Array.isArray(v) ? v : [v]),
-      z.array(z.string().min(1)).nonempty("At least one parent category is required").optional()
+      (v) => (v === "" ? [] : v === undefined || Array.isArray(v) ? v : [v]),
+      z.array(z.string().min(1)).optional()
     ),
     // Legacy single-category form, still accepted so older clients keep working.
     categoryId: z.string().nullable().optional(),

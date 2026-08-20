@@ -207,9 +207,19 @@ export const adminSubscriptionRepository = {
   packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
 
   // ── plans-for-target ─────────────────────────────────────────────────────────
-  plansForTarget: (opts: { courseId?: number; packageId?: number }) =>
+  // `status` undefined = no status filter (both active and inactive). The caller
+  // owns the default — the controller maps an absent `?status=` to `true` so
+  // existing callers are unaffected; only `?status=all` widens it. Deliberately NOT
+  // hard-coded here any more: the sibling live-course / test-series / ebook plan
+  // endpoints all return inactive rows, and the admin picker needs to show a
+  // deactivated plan rather than silently dropping it.
+  plansForTarget: (opts: { courseId?: number; packageId?: number; status?: boolean }) =>
     prisma.packageCourseEbookPrice.findMany({
-      where: { status: true, ...(opts.courseId ? { courseId: opts.courseId } : {}), ...(opts.packageId ? { packageId: opts.packageId } : {}) },
+      where: {
+        ...(opts.status === undefined ? {} : { status: opts.status }),
+        ...(opts.courseId ? { courseId: opts.courseId } : {}),
+        ...(opts.packageId ? { packageId: opts.packageId } : {}),
+      },
       orderBy: { duration: "asc" },
     }),
 

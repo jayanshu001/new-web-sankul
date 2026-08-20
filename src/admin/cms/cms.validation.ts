@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TERMS_MODULES } from "../../modules/terms/terms.types";
 import { UpdateType } from "../../shared/enums";
 
 // Accepts a MySQL integer id or a legacy Mongo ObjectId (migration-tolerant).
@@ -131,13 +132,11 @@ export const testimonialCreateSchema = z.object({
 export const testimonialUpdateSchema = testimonialCreateSchema.partial();
 
 // ─── Terms ──
-export const termsCreateSchema = z.object({
-  module: z.string().min(1).max(100),
-  terms: z.string().min(1),
-  freeShippingMinimumOrderAmount: z.number().int().nonnegative().default(0),
-  status: z.boolean().optional(),
-});
-export const termsUpdateSchema = termsCreateSchema.partial();
+// NOTE: the terms write path validates with `termsCreateSchemaMysql`
+// (modules/terms/terms.validation.ts), which pins `module` to the MySQL enum. A
+// second, looser free-string schema used to live here — imported but never called.
+// It was deleted rather than fixed: two schemas for one endpoint is how the loose
+// one eventually gets wired back in by mistake.
 
 // ─── Version ──
 export const versionUpsertSchema = z.object({

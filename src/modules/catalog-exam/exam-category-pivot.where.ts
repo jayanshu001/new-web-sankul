@@ -70,10 +70,17 @@ export const examInCategorySubtreeWhere = async (
  * soft-deleted) and each must be a LEAF. The admin picker only offers leaves, so a
  * non-leaf id reaching here means a hand-rolled request. Returns the first problem
  * as a message, or null when every id is acceptable.
+ *
+ * An EMPTY set is vacuously valid here (2026-08-20) — there is nothing to check. It
+ * used to return "At least one parent category is required", which conflated a
+ * per-id validity check with a type-dependent business rule; a daily test may
+ * legitimately have no category. WHETHER an empty set is allowed is decided by the
+ * sole caller (requireCategoryForType in admin-exam.service, which knows the
+ * effective exam type).
  */
 export const validateLeafCategoryIds = async (categoryIds: number[]): Promise<string | null> => {
   const unique = [...new Set(categoryIds)];
-  if (!unique.length) return "At least one parent category is required";
+  if (!unique.length) return null;
 
   const found = await prisma.examCategory.findMany({
     where: { id: { in: unique }, deleted: false },
@@ -104,13 +111,23 @@ export const validateLeafCategoryIds = async (categoryIds: number[]): Promise<st
  *
  * Rows already present are left untouched (preserving created_at) so a re-save with
  * an unchanged set is a no-op.
+ *
+ * An EMPTY set genuinely clears all links (2026-08-20). It used to early-return on the
+ * assumption that upstream validation made an empty set unreachable; now that a daily
+ * test may have no category, returning early would leave the old pivot rows behind and
+ * the admin's "clear all" would silently not apply. Callers gate WHETHER an empty set
+ * is legal (see requireCategoryForType in admin-exam.service); this function only
+ * applies whatever set it is handed.
  */
 export const setExamCategories = async (
   examId: number,
   categoryIds: number[]
 ): Promise<void> => {
   const unique = [...new Set(categoryIds)];
-  if (!unique.length) return; // guarded by validateLeafCategoryIds; never clear a set
+  if (!unique.length) {
+    await prisma.examCategoryPivot.deleteMany({ where: { examId } });
+    return;
+  }
 
   const now = new Date();
   await prisma.$transaction([

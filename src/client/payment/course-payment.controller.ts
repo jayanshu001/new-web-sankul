@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { resolveShippingIdForAddress } from "../../modules/customer-shipping/customer-shipping.service";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
@@ -108,10 +109,26 @@ const createCourseOrderMysqlPath = async (
     return res.status(404).json({ success: false, message: "Course not found or inactive." });
   }
 
-  // Validate the delivery address (when supplied) belongs to this customer (SQL).
+  // The request carries an ADDRESS-BOOK id (ws_customer_address) — that is the
+  // only list the app shows. `ws_package_course_order.shipping` is a foreign key
+  // to ws_customer_shipping, so snapshot the address into a real shipping row and
+  // persist THAT id. Resolving also proves ownership, replacing the old
+  // addressBelongsToCustomerSql gate (a not-found result covers unknown,
+  // soft-deleted and someone-else's ids alike).
+  let shippingIdSql: number | null = null;
   if (customerShippingId) {
-    const ok = await addressBelongsToCustomerSql(customerShippingId, customerId);
-    if (!ok) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+    const resolved = await resolveShippingIdForAddress(customerId, customerShippingId);
+    if (!resolved.ok) {
+      logger.warn("createCourseOrderPayment[mysql] shipping resolve failed", { traceId, customerId, customerShippingId, reason: resolved.reason });
+      return res.status(400).json({
+        success: false,
+        message:
+          resolved.reason === "address_not_found"
+            ? "Delivery address does not belong to this customer."
+            : "Delivery address is incomplete. Please update it and try again.",
+      });
+    }
+    shippingIdSql = resolved.shippingId;
   }
 
   // Resolve the promo code (if any) against THIS course; charge the reduced
@@ -190,7 +207,7 @@ const createCourseOrderMysqlPath = async (
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
     razorpayOrderPayload: JSON.stringify(rzpOrder),
-    customerShippingId: customerShippingId ?? null,
+    customerShippingId: shippingIdSql,
     referrerId: referrerIdNum,
     coin: walletUsage.coin,
   });

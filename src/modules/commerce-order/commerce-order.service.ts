@@ -52,22 +52,46 @@ export const parseCommerceOrderId = (id: string): number | null => {
 };
 
 /**
+ * The legacy V1 `minimumAmount.course` floor, restored 2026-08-20. A material plan's
+ * digital portion may never be booked at ₹0 — accounting needs a non-zero course
+ * line even when a heavy promo pushes the paid amount below the material price.
+ */
+const MIN_COURSE_AMOUNT = 100;
+
+/**
  * Split the paid amount into the digital course portion and the physical material
  * portion (PC_MATERIAL_SUBSCRIPTION_FLOW). Mirrors the legacy V1 logic, which —
  * across all three discount branches — reduces to the same shape once the order
  * already carries the post-discount paid amount:
  *
- *   courseAmount   = max(paidAmount − materialPrice, 0)   // digital portion
- *   materialAmount = paidAmount − courseAmount            // residual (physical)
+ *   courseAmount   = clamp(paidAmount − materialPrice, MIN_COURSE_AMOUNT, paidAmount)
+ *   materialAmount = paidAmount − courseAmount                     // residual (physical)
  *
  * Keeping materialAmount as the residual guarantees courseAmount + materialAmount
  * stays exactly equal to what the customer paid. With no material, courseAmount is
- * the full amount and materialAmount is null. The clamp at 0 (rather than the
- * legacy `minimumAmount.course` floor, which has no constant in this codebase)
- * just prevents a negative digital portion when a heavy promo drops the paid
- * amount below the plan's materialPrice. `pcMaterialId` is filled in by the caller.
+ * the full amount and materialAmount is null.
+ *
+ * Worked example (6-month plan, materialPrice 8000):
+ *
+ *   paid 13000 → 13000 − 8000 =  5000  → course  5000, material 8000
+ *   paid  6500 →  6500 − 8000 = −1500  → course   100, material 6400   ← the floor
+ *
+ * The floor is what stops a promo that drops the paid amount to or below the material
+ * price from booking the whole sale as material and ₹0 of course.
+ *
+ * ⚠ The floor CANNOT be honoured when paidAmount is itself ≤ ₹100 (reachable — the
+ * minimum payable is ₹1). Applying it blindly there drives materialAmount NEGATIVE,
+ * and capping course at paidAmount instead stores materialAmount = 0 — which the
+ * Subscription Material Report reads as "Without Material" (admin-subscription
+ * `rowHasMaterial` = pcMaterialId > 0 || materialAmount > 0), so a real material order
+ * would silently drop out of the dispatch report and never ship. In that corner
+ * material keeps ₹1 and course takes the remainder: the money still sums to what was
+ * paid AND the row stays visibly a material order. Fulfilment beats the accounting
+ * floor when the two cannot both hold.
+ *
+ * `pcMaterialId` is filled in by the caller.
  */
-const computeMaterialSplit = (
+export const computeMaterialSplit = (
   paidAmount: number,
   plan: { withMaterial?: boolean | null; materialPrice?: number | null } | null
 ): Omit<MaterialFulfillment, "pcMaterialId"> => {
@@ -75,7 +99,12 @@ const computeMaterialSplit = (
     return { courseAmount: paidAmount, materialAmount: null, withMaterial: false };
   }
   const materialPrice = plan.materialPrice ?? 0;
-  const courseAmount = Math.max(paidAmount - materialPrice, 0);
+  const raw = paidAmount - materialPrice;
+  const courseAmount =
+    raw >= MIN_COURSE_AMOUNT
+      ? raw
+      // Floor applies — but never at the cost of leaving material at 0 (see above).
+      : Math.min(MIN_COURSE_AMOUNT, Math.max(paidAmount - 1, 0));
   const materialAmount = paidAmount - courseAmount;
   return { courseAmount, materialAmount, withMaterial: true };
 };

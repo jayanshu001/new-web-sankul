@@ -105,7 +105,9 @@ export const getCategoryPackages = async (req: Request, res: Response) => {
   }
 };
 
-// GET /categories/:id/courses — paginated, searchable courses linked to this quiz category.
+// GET /categories/:id/courses — paginated, searchable Courses AND Live Courses
+// linked to this quiz category, each row tagged with `type`. Packages are NOT
+// included: they have their own tab at GET /categories/:id/packages.
 export const getCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -113,11 +115,30 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
     if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
     if (!(await catalogExam.categoryExists(numId)))
       return res.status(404).json({ success: false, message: "Category not found." });
-    const { search, status } = req.query as Record<string, string>;
+    const { search, status, type } = req.query as Record<string, string>;
+    // `type` narrows the union to one kind; absent means both. The three live-course
+    // spellings are all accepted because the sibling video-category endpoint emits
+    // `live_course` while this one emits `live-course` — a genuine typo still 422s,
+    // but that known inconsistency must not break the tab.
+    const typeFilter =
+      type === undefined || type === ""
+        ? undefined
+        : type === "course"
+          ? ("course" as const)
+          : type === "live-course" || type === "live_course" || type === "liveCourse"
+            ? ("live-course" as const)
+            : null;
+    if (typeFilter === null)
+      return res.status(422).json({
+        success: false,
+        message: "Validation failed",
+        messages: { type: "type must be one of: course, live-course" },
+      });
     const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
     const { items, total } = await catalogExam.getCategoryCourses(numId, {
       search,
       status: status === "true" ? true : status === "false" ? false : undefined,
+      type: typeFilter,
       page,
       per_page,
       skip,

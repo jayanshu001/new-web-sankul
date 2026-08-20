@@ -17,14 +17,39 @@ export const parseFaqId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-const resolveCategoryFilter = (
+/**
+ * Normalise a caller-supplied FAQ type filter.
+ *
+ * Case- and space-insensitive: the admin UI shows the LABEL ("Referral") while the
+ * slug is lowercase ("referral"), so `?type=Referral` is a natural and very likely
+ * mistake. It resolves rather than silently failing.
+ *
+ * Returns `{ ok: false }` for a value that is not a real category. That case MUST
+ * NOT be treated as "no filter": dropping it returns general + referral mixed
+ * together, so a typo in the app reads as "the referral sheet has extra content"
+ * instead of an error. Callers turn it into a 422 — the same rule
+ * `/client/subscriptions/access` applies to a bad `kinds`.
+ *
+ * `ws_faq.type` is a MySQL `enum('general','referral')`, so FAQ_TYPES cannot drift
+ * from the database without a schema change.
+ */
+export const resolveFaqTypeFilter = (
   typeId?: string
-): FaqCategory | undefined => {
-  if (!typeId) return undefined;
-  if ((FAQ_TYPES as readonly string[]).includes(typeId)) {
-    return typeId as FaqCategory;
-  }
-  return undefined;
+): { ok: true; type?: FaqCategory } | { ok: false } => {
+  const raw = (typeId ?? "").trim();
+  if (!raw) return { ok: true, type: undefined }; // absent → all types, unchanged
+  const match = (FAQ_TYPES as readonly string[]).find(
+    (t) => t.toLowerCase() === raw.toLowerCase()
+  );
+  return match ? { ok: true, type: match as FaqCategory } : { ok: false };
+};
+
+/** Human-readable list for the 422 message. */
+export const FAQ_TYPE_FILTER_MESSAGE = `Invalid \`type\`. Allowed: ${FAQ_TYPES.join(", ")}.`;
+
+const resolveCategoryFilter = (typeId?: string): FaqCategory | undefined => {
+  const r = resolveFaqTypeFilter(typeId);
+  return r.ok ? r.type : undefined;
 };
 
 // ─── FAQ CRUD ────────────────────────────────────────────────────────────────

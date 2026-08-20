@@ -21,29 +21,56 @@
  * caller stores null rather than blocking checkout.
  */
 import { orderCodeSnapshotRepository as repo } from "./order-code-snapshot.repository";
-import { toPromocodeSnapshot, toReferralSnapshot } from "./order-code-snapshot.transformer";
+import { toLiveSnapshotPlan, toPromocodeSnapshot, toReferralSnapshot, toSnapshotPlan } from "./order-code-snapshot.transformer";
 import type {
   OrderCodeSnapshots,
   PromocodeSnapshot,
   ReferralSnapshot,
+  SnapshotPlan,
+  SnapshotPlanKind,
 } from "./order-code-snapshot.types";
 
 export const ORDER_CODE_SNAPSHOT_MODULE = "order-code-snapshot";
 
 /**
+ * The purchased plan, read from whichever table `planKind` names, in the one
+ * SnapshotPlan shape. Centralised so a new plan kind can never be half-wired: every
+ * builder resolves its plan through here.
+ */
+const resolvePlan = async (
+  planId: number,
+  planKind: SnapshotPlanKind
+): Promise<SnapshotPlan | null> =>
+  planKind === "livePlan"
+    ? toLiveSnapshotPlan(await repo.findLivePlan(planId))
+    : toSnapshotPlan(await repo.findPlan(planId));
+
+/**
  * Snapshot a redeemed promocode against the purchased plan. Returns null if the
  * promocode row has since been deleted.
+ *
+ * `planKind` selects both the link row and the plan table — see
+ * repository.findPlanLink for why matching on the plan id alone is unsafe.
  */
 export const buildPromocodeSnapshot = async (
   promocodeId: number,
-  planId: number
+  planId: number,
+  planKind: SnapshotPlanKind = "price"
 ): Promise<PromocodeSnapshot | null> => {
   const [promo, link] = await Promise.all([
     repo.findPromocode(promocodeId),
-    repo.findPlanLink(promocodeId, planId),
+    repo.findPlanLink(promocodeId, planId, planKind),
   ]);
   if (!promo) return null;
-  return toPromocodeSnapshot(promo, link);
+  // A "price" link carries its plan on the relation already loaded; a "livePlan" link
+  // cannot (its FK points at the wrong table), so read the live plan separately. No
+  // link at all → a global-discount promocode → no plan to embed.
+  const linkPlan = !link
+    ? null
+    : planKind === "livePlan"
+      ? await resolvePlan(planId, "livePlan")
+      : toSnapshotPlan((link as { packageCourseEbookPrice?: any }).packageCourseEbookPrice ?? null);
+  return toPromocodeSnapshot(promo, link, linkPlan);
 };
 
 /**
@@ -52,12 +79,13 @@ export const buildPromocodeSnapshot = async (
  */
 export const buildReferralSnapshot = async (
   referrerId: number,
-  planId: number
+  planId: number,
+  planKind: SnapshotPlanKind = "price"
 ): Promise<ReferralSnapshot | null> => {
   const [program, referrer, plan] = await Promise.all([
     repo.findReferralProgram(),
     repo.findReferrer(referrerId),
-    repo.findPlan(planId),
+    resolvePlan(planId, planKind),
   ]);
   if (!program || !referrer) return null;
   return toReferralSnapshot(program, referrer, plan);
@@ -76,16 +104,23 @@ export const buildOrderCodeSnapshots = async (input: {
   promocodeId: number | null;
   referrerId: number | null;
   planId: number;
+  /**
+   * Which plan table `planId` belongs to. Defaults to "price"
+   * (ws_package_course_ebook_price) — the course / package / ebook checkouts — so
+   * those callers are unaffected. Live-course checkout MUST pass "livePlan".
+   */
+  planKind?: SnapshotPlanKind;
 }): Promise<OrderCodeSnapshots> => {
+  const planKind = input.planKind ?? "price";
   if (input.referrerId) {
     return {
       promocode: null,
-      refferalcode: await buildReferralSnapshot(input.referrerId, input.planId),
+      refferalcode: await buildReferralSnapshot(input.referrerId, input.planId, planKind),
     };
   }
   if (input.promocodeId) {
     return {
-      promocode: await buildPromocodeSnapshot(input.promocodeId, input.planId),
+      promocode: await buildPromocodeSnapshot(input.promocodeId, input.planId, planKind),
       refferalcode: null,
     };
   }

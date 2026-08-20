@@ -17,6 +17,14 @@ export const termsRepository = {
   findActiveByModule: (module: string) =>
     prisma.termsAndConditions.findFirst({ where: { module, status: true } }),
 
+  /**
+   * Any row for this module, active or not. One row per module is the model the
+   * client read assumes (`findActiveByModule` is a findFirst), so this backs the
+   * create/update duplicate guard.
+   */
+  findAnyByModule: (module: string) =>
+    prisma.termsAndConditions.findFirst({ where: { module }, select: { id: true, module: true } }),
+
   findById: (id: number) =>
     prisma.termsAndConditions.findUnique({ where: { id } }),
 

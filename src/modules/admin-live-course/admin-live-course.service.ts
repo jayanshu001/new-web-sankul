@@ -277,6 +277,57 @@ export const deletePlan = async (planId: number): Promise<"not_found" | "has_sub
 };
 
 // ── subscriptions ──────────────────────────────────────────────────────────────
+
+/**
+ * Read the redeemed code + who earns on it out of a subscription's purchase-time
+ * snapshot columns (`promocode` / `refferalcode`, written by modules/order-code-snapshot
+ * — same shape as ws_package_course_order).
+ *
+ * The two snapshot kinds spell both fields differently, and the legacy referral shape
+ * OVERLOADS the key name `promoter` to mean the referring CUSTOMER, not a ws_promoter:
+ *
+ *   promocode   → code = $.promocode,              earner = $.promoter.full_name
+ *   refferalcode→ code = $.promoter.referralCode,  earner = $.promoter.fullName
+ *
+ * Rows predating the 2026-08-20 columns (and rows where the snapshot could not be
+ * built) hold NULL and yield empty strings — exactly what the report rendered before.
+ */
+const subCodeInfo = (r: {
+  promocode?: unknown;
+  refferalcode?: unknown;
+}): {
+  code: string;
+  promoterName: string;
+  promoterId: number | null;
+  promocodeId: number | null;
+  codeType: "promocode" | "referral" | null;
+} => {
+  const promo = r.promocode as any;
+  if (promo && typeof promo === "object") {
+    return {
+      code: typeof promo.promocode === "string" ? promo.promocode : "",
+      promoterName: (promo.promoter?.full_name ?? "").trim(),
+      promoterId: typeof promo.promoterId === "number" ? promo.promoterId : null,
+      promocodeId: typeof promo.id === "number" ? promo.id : null,
+      codeType: "promocode",
+    };
+  }
+  const ref = r.refferalcode as any;
+  if (ref && typeof ref === "object") {
+    return {
+      code: (ref.promoter?.referralCode ?? "").trim(),
+      promoterName: (ref.promoter?.fullName ?? "").trim(),
+      // A referral deliberately has NO promoterId: the earner is a CUSTOMER, not a
+      // ws_promoter. Reporting a promoter here would attribute customer referral
+      // rewards as promoter commission.
+      promoterId: null,
+      promocodeId: null,
+      codeType: "referral",
+    };
+  }
+  return { code: "", promoterName: "", promoterId: null, promocodeId: null, codeType: null };
+};
+
 const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
@@ -293,6 +344,11 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
       planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStrOrNull(r.planId),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, status: r.status,
       paidAmount: r.paidAmount ?? 0, paymentStatus: r.paymentStatus ?? null, paidAt: r.paidAt ?? null,
+      // The purchase-time snapshot OBJECTS, not the bare ids — same contract as
+      // ws_package_course_order. Exactly one is ever non-null. Additive: promocodeId /
+      // referrerId were never in this DTO, so nothing that existed here changed shape.
+      promocode: (r.promocode as unknown) ?? null,
+      refferalcode: (r.refferalcode as unknown) ?? null,
       createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
     };
   });
@@ -398,7 +454,7 @@ export const listSubscriptions = async (q: SubReportQuery & {
   const data = rows.map((r) => {
     const course = courses.get(r.liveCourseId);
     const plan = r.planId != null ? plans.get(r.planId) : undefined;
-    return reportRow({
+    const base = reportRow({
       cust: r.customerId ? custs.get(r.customerId) : undefined,
       product: course ? { _id: String(course.id), type: "liveCourse" as const, name: course.name, image: course.image ?? null } : null,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
@@ -407,6 +463,24 @@ export const listSubscriptions = async (q: SubReportQuery & {
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
+    // Code attribution, read from the row's own snapshot columns — no extra query.
+    // Key names + types mirror the Subscription report (admin-subscription.service)
+    // so the two Reports screens stay interchangeable: `promocode` is the CODE
+    // STRING there, so it is the code string here too. The full frozen objects ride
+    // alongside under `promocodeSnapshot` / `refferalcodeSnapshot` for callers that
+    // want the promoter/plan/percentage detail without a second request.
+    const code = subCodeInfo(r);
+    return {
+      id: r.id,
+      ...base,
+      promocode: code.code || null,
+      promocodeId: code.promocodeId,
+      promoterName: code.promoterName || null,
+      promoterId: code.promoterId,
+      codeType: code.codeType,
+      promocodeSnapshot: (r.promocode as unknown) ?? null,
+      refferalcodeSnapshot: (r.refferalcode as unknown) ?? null,
+    };
   });
 
   return {
@@ -423,9 +497,12 @@ const LIVE_SUB_EXPORT_BATCH = 5000;
 
 // One flat export row per subscription. Only fields the list already fetches (raw
 // ws_live_course_subscription row + customer/course maps) are populated; columns
-// the live-course subscription doesn't expose (educator/promocode/promoter/shipping/
-// remarks/material split/ws-coin) stay empty — no extra Prisma joins are invented
+// the live-course subscription doesn't expose (educator/shipping/remarks/material
+// split/ws-coin) stay empty — no extra Prisma joins are invented
 // (docs/backend-requests/live-course-report-detailed-export.md).
+//
+// Promocode + Promoter Name are populated as of 2026-08-20: they come from the row's
+// own snapshot columns, so they still cost NO extra query.
 const buildSubExportRow = (
   r: LiveCourseSubscription,
   cust: { id: number; fullName: string | null; phoneNumber: string | null; emailAddress: string | null } | undefined,
@@ -433,8 +510,11 @@ const buildSubExportRow = (
   now: Date
 ) => {
   const method = r.razorpayOrderId ? "online" : "backend";
+  const code = subCodeInfo(r);
   return {
     _id: String(r.id),
+    promocode: code.code,
+    promoterName: code.promoterName,
     customerName: (cust?.fullName ?? "").trim(),
     phone: cust?.phoneNumber ?? "",
     email: cust?.emailAddress ?? "",
@@ -493,8 +573,8 @@ const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buil
   { header: "Course Name", get: (i) => i.courseName },
   { header: "Package Name", get: () => "" },
   { header: "Educator Name", get: () => "" },
-  { header: "Promocode", get: () => "" },
-  { header: "Promoter Name", get: () => "" },
+  { header: "Promocode", get: (i) => i.promocode },
+  { header: "Promoter Name", get: (i) => i.promoterName },
   { header: "Start Date", get: (i) => fmtExportDate(i.startAt) },
   { header: "End Date", get: (i) => fmtExportDate(i.endAt) },
   { header: "Amount", get: (i) => i.amount },

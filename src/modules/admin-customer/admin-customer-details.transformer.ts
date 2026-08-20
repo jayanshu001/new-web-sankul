@@ -4,6 +4,7 @@
  * admin UI is identical on either backend. Refs are emitted as `{ _id, name, … }`
  * populated sub-objects; Decimals become numbers; `isActive` = status && endAt>now.
  */
+import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 
 type Lookup<T> = Map<number, T>;
 
@@ -73,7 +74,10 @@ export const toPackageDto = (
 // ── Live course subscription ───────────────────────────────────────────────────
 type LiveSub = {
   id: number; liveCourseId: number; planId: number | null; paidAmount: number | null;
-  discountAmount: number | null; paymentStatus: string | null; status: boolean | null;
+  // `discount_amount` was dropped 2026-08-20; originalAmount + walletCoin are what
+  // the discount is now derived from (see liveSubDiscountAmount).
+  originalAmount: number | null; walletCoin: number | null;
+  paymentStatus: string | null; status: boolean | null;
   startAt: Date | null; endAt: Date | null;
 };
 
@@ -89,7 +93,9 @@ export const toLiveCourseDto = (
     liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image }),
     planId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
     paidAmount: s.paidAmount ?? null,
-    discountAmount: s.discountAmount ?? null,
+    // Derived, not stored — the DTO field is unchanged. Null (not 0) when no promo
+    // was applied, matching what the dropped column held for those rows.
+    discountAmount: s.originalAmount != null ? liveSubDiscountAmount(s) : null,
     paymentStatus: s.paymentStatus ?? (s.status ? "verified" : "pending"),
     startAt: s.startAt,
     endAt: s.endAt,

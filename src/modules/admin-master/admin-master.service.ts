@@ -330,13 +330,64 @@ export const listCategorySubCategories = async (categoryId: number, q: { search?
   return { items: rows.map((c) => ({ id: String(c.id), name: c.title, slug: c.slug, status: c.status, orderBy: c.order_by ?? 0 })), total };
 };
 
-export const listCategoryCourses = async (categoryId: number, q: { search?: string; status?: string; page: number; per_page: number }) => {
-  const opts = { search: q.search, status: q.status === "active" ? true : q.status === "inactive" ? false : undefined };
+/** Kinds the category "Courses & Packages" tab can list. */
+export type CategoryAttachmentType = "course" | "live-course" | "package";
+
+export interface CategoryAttachment {
+  id: string;
+  /** Nullable: ws_course.name is a nullable column and the pre-union response
+   *  already passed a null through. Not coerced to "" — that would be a contract
+   *  change on the one kind that was already shipping. */
+  name: string | null;
+  /** Required on EVERY row. The FE defaults a missing/unknown value to "course",
+   *  so an unlabelled live course or package would be silently mislabelled — and
+   *  it routes both the detail link and the status toggle off this field.
+   *  Hyphenated `live-course` matches /admin/materials/categories/:id/products. */
+  type: CategoryAttachmentType;
+  status: boolean;
+  orderBy: number;
+}
+
+/**
+ * Everything attached to a video category: recorded Courses, Live Courses and
+ * Packages, as ONE paginated list.
+ *
+ * WHY ONE ENDPOINT: three separately-paginated lists cannot be merged into a single
+ * page client-side without lying about `total` and dropping rows at page edges.
+ *
+ * The union is built and paged IN SQL (see buildCategoryAttachmentsQuery) — the same
+ * shape `/admin/materials/categories/:id/products` uses. Paging it in application
+ * code would be wrong: each source would get its own offset.
+ */
+export const listCategoryCourses = async (
+  categoryId: number,
+  q: { search?: string; status?: string; type?: CategoryAttachmentType; page: number; per_page: number }
+): Promise<{ items: CategoryAttachment[]; total: number }> => {
+  const opts = {
+    search: q.search,
+    status: q.status === "active" ? true : q.status === "inactive" ? false : undefined,
+    type: q.type,
+  };
+
   const [rows, total] = await Promise.all([
-    repo.coursesForCategory(categoryId, { ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
-    repo.countCoursesForCategory(categoryId, opts),
+    repo.categoryAttachments(categoryId, { ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
+    repo.countCategoryAttachments(categoryId, opts),
   ]);
-  return { items: rows.map((c) => ({ id: String(c.id), name: c.name, status: c.status, orderBy: c.ordered ?? 0 })), total };
+
+  return {
+    // `id` stays the id within its OWN table — course 7 and live course 7 both
+    // exist, and the FE keys rows by `type:id`. Deliberately NOT namespaced.
+    // A raw query returns MySQL TINYINT(1) as 0/1, so `status` is normalised back
+    // to a real boolean here — Prisma would have done it for a typed model read.
+    items: rows.map((r) => ({
+      id: String(r.id),
+      name: r.name,
+      type: r.type as CategoryAttachmentType,
+      status: Boolean(r.status),
+      orderBy: Number(r.order_by ?? 0),
+    })),
+    total,
+  };
 };
 
 export const listCategoryVideos = async (categoryId: number, q: { search?: string; status?: string; platform?: string; page: number; per_page: number }) => {

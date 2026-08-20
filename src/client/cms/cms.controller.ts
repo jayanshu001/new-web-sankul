@@ -2,10 +2,12 @@ import { Request, Response } from "express";
 import {
   listFaqsClientPaged as listFaqsService,
   listFaqTypesClientPaged as listFaqTypesService,
+  resolveFaqTypeFilter,
+  FAQ_TYPE_FILTER_MESSAGE,
 } from "../../modules/faq/faq.service";
 import { listBannersClientPaged as listBannersService } from "../../modules/banner-slider/banner-slider.service";
 import { listTestimonialsClientPaged as listTestimonialsService } from "../../modules/testimonial/testimonial.service";
-import { getClientTerms } from "../../modules/terms/terms.service";
+import { getClientTerms, resolveTermsModuleFilter, TERMS_MODULE_FILTER_MESSAGE } from "../../modules/terms/terms.service";
 import { getActivePopup as getActivePopupService } from "../../modules/popup/popup.service";
 import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
 import { getVersionSettings } from "../../modules/version/version.service";
@@ -36,9 +38,19 @@ export const listFaqs = async (req: Request, res: Response) => {
   try {
     const { typeId, type } = req.query as Record<string, string>;
     const filterKey = typeId ?? type;
+    // An unknown type is a 422, NOT a dropped filter. Silently ignoring it returns
+    // general + referral mixed together, so a typo in the app reads as "the
+    // referral sheet gained extra content" instead of failing. Same rule
+    // /client/subscriptions/access applies to a bad `kinds`. Valid values resolve
+    // case-insensitively, so `?type=Referral` (the display label) works.
+    const resolvedType = resolveFaqTypeFilter(filterKey);
+    if (!resolvedType.ok) {
+      logger.warn("listFaqs invalid type filter", { traceId, type: filterKey });
+      return res.status(422).json({ success: false, message: FAQ_TYPE_FILTER_MESSAGE, messages: { type: FAQ_TYPE_FILTER_MESSAGE } });
+    }
     const { search, page, limit, skip } = parseListQuery(req.query);
     const { items: data, total } = await listFaqsService({
-      typeId: filterKey || undefined,
+      typeId: resolvedType.type,
       search,
       skip,
       take: limit,
@@ -229,7 +241,14 @@ export const getTerms = async (req: Request, res: Response) => {
 
   try {
     const { module: moduleName } = req.query as Record<string, string>;
-    const data = await getClientTerms(moduleName);
+    // Unknown module → 422, not a silent `data: null` the app renders as "no terms".
+    // Resolves case-insensitively, so `?module=Referral code` works.
+    const resolvedModule = resolveTermsModuleFilter(moduleName);
+    if (!resolvedModule.ok) {
+      logger.warn("getTerms invalid module filter", { traceId, module: moduleName });
+      return res.status(422).json({ success: false, message: TERMS_MODULE_FILTER_MESSAGE, messages: { module: TERMS_MODULE_FILTER_MESSAGE } });
+    }
+    const data = await getClientTerms(resolvedModule.module);
     logger.info("getTerms success", { traceId, moduleName });
     return res.status(200).json({ success: true, data: data ?? null });
   } catch (e: any) {

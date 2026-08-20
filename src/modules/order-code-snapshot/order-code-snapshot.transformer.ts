@@ -68,6 +68,50 @@ export const toSnapshotPlan = (
       }
     : null;
 
+/**
+ * A LIVE-COURSE plan (ws_live_course_plan) in the SAME SnapshotPlan shape, so a
+ * consumer reading `$.promotedPackageCourseEbook[0].planId.price` does not need to
+ * know which plan table the purchase came from.
+ *
+ * ebookId / courseId / packageId are 0 — the legacy "not this entity" sentinel — and
+ * the real parent rides in `liveCourseId`, a key that exists ONLY on this variant.
+ * ⚠ `duration` here is MONTHS, not days (LIVE_COURSE_DESIGN §3); the value is copied
+ * verbatim, exactly as the live row carries it.
+ */
+export const toLiveSnapshotPlan = (
+  p: {
+    id: number;
+    name: string | null;
+    price: number;
+    status: boolean;
+    duration: number;
+    isDefault: boolean;
+    liveCourseId: number;
+    createdAt: Date | null;
+    updatedAt: Date | null;
+    withMaterial: boolean;
+    materialPrice: number | null;
+  } | null
+): SnapshotPlan | null =>
+  p
+    ? {
+        id: p.id,
+        name: p.name,
+        price: p.price,
+        status: p.status,
+        ebookId: 0,
+        courseId: 0,
+        duration: p.duration,
+        isDefault: p.isDefault,
+        packageId: 0,
+        created_at: iso(p.createdAt),
+        updated_at: iso(p.updatedAt),
+        withMaterial: p.withMaterial,
+        materialPrice: zero(p.materialPrice),
+        liveCourseId: p.liveCourseId,
+      }
+    : null;
+
 const toSnapshotPromoter = (
   pr: {
     id: number;
@@ -95,19 +139,27 @@ const toSnapshotPromoter = (
       }
     : null;
 
-const toSnapshotPlanLink = (l: {
-  id: number;
-  type: string | null;
-  created_at: Date | null;
-  updated_at: Date | null;
-  promocodeId: number | null;
-  customerPercentage: unknown;
-  promoterPercentage: unknown;
-  packageCourseEbookPrice?: Parameters<typeof toSnapshotPlan>[0];
-}): SnapshotPlanLink => ({
+/**
+ * `plan` is passed in already resolved rather than read off the link's relation: a
+ * live-course link's `pcb_price_id` FK resolves against the WRONG table (see
+ * order-code-snapshot.repository.findPlanLink), so only the caller knows which plan
+ * table the id belongs to.
+ */
+const toSnapshotPlanLink = (
+  l: {
+    id: number;
+    type: string | null;
+    created_at: Date | null;
+    updated_at: Date | null;
+    promocodeId: number | null;
+    customerPercentage: unknown;
+    promoterPercentage: unknown;
+  },
+  plan: SnapshotPlan | null
+): SnapshotPlanLink => ({
   id: l.id,
   type: l.type,
-  planId: toSnapshotPlan(l.packageCourseEbookPrice ?? null),
+  planId: plan,
   created_at: iso(l.created_at),
   updated_at: iso(l.updated_at),
   promocodeId: l.promocodeId,
@@ -139,7 +191,8 @@ export const toPromocodeSnapshot = (
     promo_expire_at: Date | null;
     promoter?: Parameters<typeof toSnapshotPromoter>[0];
   },
-  link: Parameters<typeof toSnapshotPlanLink>[0] | null
+  link: Parameters<typeof toSnapshotPlanLink>[0] | null,
+  linkPlan: SnapshotPlan | null
 ): PromocodeSnapshot => ({
   id: promo.id,
   type: promo.type,
@@ -153,7 +206,7 @@ export const toPromocodeSnapshot = (
   description: promo.description,
   promo_start_at: iso(promo.promo_start_at),
   promo_expire_at: iso(promo.promo_expire_at),
-  promotedPackageCourseEbook: link ? [toSnapshotPlanLink(link)] : [],
+  promotedPackageCourseEbook: link ? [toSnapshotPlanLink(link, linkPlan)] : [],
 });
 
 /**
@@ -179,14 +232,14 @@ export const toReferralSnapshot = (
     phoneNumber: string | null;
     referralCode: string | null;
   },
-  plan: Parameters<typeof toSnapshotPlan>[0]
+  plan: SnapshotPlan | null
 ): ReferralSnapshot => ({
   id: program.id,
   name: program.name,
   image: program.image,
   title: program.title,
   video: program.video,
-  planId: toSnapshotPlan(plan),
+  planId: plan,
   status: program.status ?? false,
   promoter: {
     id: referrer.id,

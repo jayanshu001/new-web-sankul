@@ -9,7 +9,8 @@ import {
   findPackagePlanForOrder,
   createPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
-import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { resolveShippingIdForAddress } from "../../modules/customer-shipping/customer-shipping.service";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 
@@ -64,9 +65,25 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         return res.status(400).json({ success: false, message: "Invalid customer id." });
       }
       const body = createPackageOrderSqlSchema.parse(req.body);
+      // The request carries an ADDRESS-BOOK id (ws_customer_address) — that is the
+      // only list the app shows. `ws_package_course_order.shipping` is a foreign
+      // key to ws_customer_shipping, so snapshot the address into a real shipping
+      // row and persist THAT id. Resolving also proves ownership, replacing the
+      // old addressBelongsToCustomerSql gate.
+      let shippingIdSql: number | null = null;
       if (body.customerShippingId) {
-        const ok = await addressBelongsToCustomerSql(body.customerShippingId, customerIdInt);
-        if (!ok) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+        const resolved = await resolveShippingIdForAddress(customerIdInt, body.customerShippingId);
+        if (!resolved.ok) {
+          logger.warn("createPackageOrderPayment[mysql] shipping resolve failed", { traceId, customerId, customerShippingId: body.customerShippingId, reason: resolved.reason });
+          return res.status(400).json({
+            success: false,
+            message:
+              resolved.reason === "address_not_found"
+                ? "Delivery address does not belong to this customer."
+                : "Delivery address is incomplete. Please update it and try again.",
+          });
+        }
+        shippingIdSql = resolved.shippingId;
       }
       const planSql = await findPackagePlanForOrder(body.packageId);
       if (!planSql) {
@@ -126,7 +143,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       });
       // The order row keeps the full money breakdown, not just the charged amount:
       //   price (list) − code_discount (promo/referral) − ws_coin = discount_price (paid)
-      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: codeSnapshot.promocode, referralCode: codeSnapshot.refferalcode, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
+      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: codeSnapshot.promocode, referralCode: codeSnapshot.refferalcode, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: shippingIdSql, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,

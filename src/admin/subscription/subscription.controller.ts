@@ -162,6 +162,9 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       if (r.reason === "plan_not_found") return res.status(404).json({ success: false, message: "Plan not found." });
       if (r.reason === "course_mismatch") return res.status(400).json({ success: false, message: "Plan does not belong to the selected course." });
       if (r.reason === "package_mismatch") return res.status(400).json({ success: false, message: "Plan does not belong to the selected package." });
+      // The posted id is an address-book id; it must resolve to this customer's
+      // own active address before it can become a ws_customer_shipping row.
+      if (r.reason === "shipping_invalid") return res.status(400).json({ success: false, message: "Delivery address is invalid or does not belong to this customer." });
       return res.status(400).json({ success: false, message: "Shipping address (customerShippingId) is required when withMaterial is true." });
     }
     // Admin granted access → clear that customer's cached catalog reads so their
@@ -176,14 +179,34 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
 
 // ─── Helper endpoints for the Add-Subscription form ───────────────────────────
 
-// GET /admin/subscriptions/plans?courseId=...&packageId=...
+// GET /admin/subscriptions/plans?courseId=...&packageId=...&status=true|false|all
+//
+// `status` is opt-in and DEFAULTS TO "true" (active only) when absent — existing
+// callers, including the customer-facing app, must keep seeing active plans only.
+// `all` is what the Add-Subscription picker sends so an admin can see a plan they
+// deactivated instead of it silently vanishing from the list.
 export const listPlansForTarget = async (req: Request, res: Response) => {
   try {
-    const { courseId, packageId } = req.query as Record<string, string>;
+    const { courseId, packageId, status } = req.query as Record<string, string>;
     const cId = courseId ? subSql.parseSubId(courseId) ?? undefined : undefined;
     const pId = packageId ? subSql.parseSubId(packageId) ?? undefined : undefined;
     if (!cId && !pId) return res.status(400).json({ success: false, message: "Provide courseId or packageId." });
-    return res.status(200).json({ success: true, data: await subSql.listPlansForTarget(cId, pId) });
+    // undefined → repository applies no status filter (both kinds).
+    const statusFilter =
+      status === undefined || status === "" || status === "true"
+        ? true
+        : status === "false"
+          ? false
+          : status === "all"
+            ? undefined
+            : null;
+    if (statusFilter === null)
+      return res.status(422).json({
+        success: false,
+        message: "Validation failed",
+        messages: { status: "status must be one of: true, false, all" },
+      });
+    return res.status(200).json({ success: true, data: await subSql.listPlansForTarget(cId, pId, statusFilter) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

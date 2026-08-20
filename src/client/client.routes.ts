@@ -44,6 +44,7 @@ import clientCatalogRoutes from "./catalog/catalog.routes";
 import clientRecentlyAddedRoutes from "./recently-added/recently-added.routes";
 import clientAppVersionRoutes from "./app-version/app-version.routes";
 import clientDownloadsRoutes from "./downloads/downloads.routes";
+import clientSubscriptionsRoutes from "./subscriptions/subscriptions.routes";
 
 const router = Router();
 
@@ -103,5 +104,6 @@ router.use("/learning", clientLearningRoutes);      // -> /api/v1/client/learnin
 router.use("/catalog", clientCatalogRoutes);        // -> /api/v1/client/catalog/:type/:id/{videos|materials|tests}
 router.use("/app-version", clientAppVersionRoutes); // -> /api/v1/client/app-version/check (PUBLIC: store vs. installed + force-update gate, pre-login)
 router.use("/downloads", clientDownloadsRoutes);    // -> /api/v1/client/downloads/encryption-key (GET/PUT per-user offline AES key)
+router.use("/subscriptions", clientSubscriptionsRoutes); // -> /api/v1/client/subscriptions/access (offline entitlement snapshot: kind+id+endAt)
 
 export default router;

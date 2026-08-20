@@ -98,10 +98,14 @@ export const categorySubCategoriesQuerySchema = z.object({
   per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
 });
 
-// Query schema for the category-scoped Courses tab list.
+// Query schema for the category-scoped "Courses & Packages" tab list — the UNION
+// of recorded courses, live courses and packages attached to the category.
 export const categoryCoursesQuerySchema = z.object({
   search: z.string().trim().optional(),
   status: statusFilter,
+  // Optional narrowing to one kind. Absent = all three (the tab's default). Values
+  // match the `type` discriminator on each row, so the FE can round-trip them.
+  type: z.enum(["course", "live-course", "package"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
 });

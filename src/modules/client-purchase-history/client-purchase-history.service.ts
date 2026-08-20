@@ -1,5 +1,6 @@
 import { clientPurchaseHistoryRepository as repo } from "./client-purchase-history.repository";
 import { COURIER } from "../../config/courier";
+import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 
 export const PURCHASE_HISTORY_MODULE = "client-purchase-history";
 export const isPurchaseHistoryMysql = (): boolean => true;
@@ -711,7 +712,9 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
 
   const paid = Number(sub.paidAmount ?? 0);
   const subTotal = sub.originalAmount != null ? Number(sub.originalAmount) : paid;
-  const discount = sub.discountAmount != null ? Number(sub.discountAmount) : 0;
+  // `discount_amount` was dropped 2026-08-20 — derived from the columns that remain.
+  // Same value the column held; the receipt is unchanged.
+  const discount = liveSubDiscountAmount(sub);
 
   return {
     kind: "live-course" as const,

@@ -9,6 +9,7 @@
  * embed has no SQL column). Active = status=true AND deleted=false. See types.ts.
  */
 import { catalogExamRepository as repo } from "./catalog-exam.repository";
+import type { CategoryCourseType } from "./catalog-exam.repository";
 import { toExamCategoryDto } from "./catalog-exam.transformer";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import type {
@@ -330,22 +331,44 @@ export const getCategoryPackages = async (
   return { items, total };
 };
 
-/** Paginated courses linked to a category (admin getCategoryCourses shape). */
+/**
+ * Paginated Courses AND Live Courses linked to a category (admin Courses tab).
+ *
+ * WHY ONE ENDPOINT: two separately-paginated lists cannot be merged into a single
+ * page client-side without lying about `total` and dropping rows at page edges —
+ * so the union is built and paged in SQL (see the repository).
+ *
+ * Packages are deliberately NOT here: the exam-category detail page has its own
+ * Package tab (GET .../packages), and including them would double-count.
+ */
 export const getCategoryCourses = async (
   id: number,
-  opts: { search?: string; status?: boolean; page: number; per_page: number; skip: number }
+  opts: {
+    search?: string;
+    status?: boolean;
+    type?: CategoryCourseType;
+    page: number;
+    per_page: number;
+    skip: number;
+  }
 ) => {
-  const filter = { search: opts.search?.trim() || undefined, status: opts.status };
+  const filter = { search: opts.search?.trim() || undefined, status: opts.status, type: opts.type };
   const [rows, total] = await Promise.all([
     repo.listCategoryCourses(id, { ...filter, skip: opts.skip, take: opts.per_page }),
     repo.countCategoryCourses(id, filter),
   ]);
 
   const items = rows.map((c) => ({
+    // `id` stays the id within its OWN table — course 7 and live course 7 both
+    // exist, and the FE keys rows by `type-id`. Deliberately NOT namespaced.
     id: String(c.id),
     name: c.name,
-    status: c.status,
-    orderBy: c.ordered ?? 0,
+    // Required on EVERY row — the FE defaults a missing value to "course", so an
+    // unlabelled live course would render as (and link to) a recorded course.
+    type: c.type,
+    // Raw SQL hands back TINYINT 0/1, not a JS boolean.
+    status: Boolean(c.status),
+    orderBy: c.order_by ?? 0,
   }));
   return { items, total };
 };

@@ -110,8 +110,9 @@ export interface ExamWriteInput {
   type?: string;
   /**
    * Full-replace set of leaf category ids. Omitted → links left untouched; present
-   * but empty is rejected upstream (validation), never treated as a clear.
-   * `categoryId` remains accepted as the legacy single-category form.
+   * but EMPTY clears the set (allowed for `type: "daily"` only — see
+   * requireCategoryForType). `categoryId` remains accepted as the legacy
+   * single-category form.
    */
   categoryIds?: string[];
   categoryId?: string | null;
@@ -161,6 +162,24 @@ const resolveCategoryIds = async (
 };
 
 /**
+ * Daily tests are browsed by DATE (dailyInWindowPaged & friends never join
+ * ws_exam_category), so they may be filed under no category at all. Every other type
+ * is browsed BY category (examsByCategoryPaged is scoped to type "subject"), so a
+ * category-less one would be unreachable in the app — those keep the original rule.
+ *
+ * Lives here rather than in the Zod schema because an update's payload may omit
+ * `type` entirely; only the service can compare the empty set against the EFFECTIVE
+ * type (payload merged over the stored row).
+ */
+const CATEGORY_REQUIRED_ERROR = "At least one parent category is required";
+
+const requireCategoryForType = (
+  effectiveType: "daily" | "subject",
+  ids: number[]
+): { error: string } | null =>
+  effectiveType !== "daily" && !ids.length ? { error: CATEGORY_REQUIRED_ERROR } : null;
+
+/**
  * Returns the conflicting daily test as a Mongo-shaped clash ({_id,title,startAt,
  * endAt}) for the controller's 409, or null when no clash. Only PUBLISHED daily
  * tests with a complete window can clash — mirrors the Mongo `findDailyOverlap`.
@@ -174,14 +193,19 @@ export const examDailyOverlap = async (c: {
 };
 
 export const createExam = async (input: ExamWriteInput): Promise<{ error: string } | ReturnType<typeof toExamDto>> => {
-  // An exam must be filed under at least one leaf category.
+  // A non-daily exam must be filed under at least one leaf category; a daily test may
+  // have none. On create an absent categoryIds is the same as an empty set — there are
+  // no existing links to "leave untouched".
   const resolved = await resolveCategoryIds(input);
-  if (resolved === null) return { error: "At least one parent category is required" };
-  if ("error" in resolved) return resolved;
-  // ws_exam.exam_category_id is NOT NULL in the DB (no FK, no sentinel). It stays the
-  // PRIMARY category — first of the chosen set — because several read paths still
-  // OR against the column (see examInCategoriesWhere); the pivot holds the full set.
-  const catId = resolved.ids[0]!;
+  if (resolved && "error" in resolved) return resolved;
+  const categoryIds = resolved?.ids ?? [];
+  const typeError = requireCategoryForType(mapType(input.type), categoryIds);
+  if (typeError) return typeError;
+  // exam_category_id stays the PRIMARY category — first of the chosen set — because
+  // several read paths still OR against the column (see examInCategoriesWhere); the
+  // pivot holds the full set. NULL when there is no set (daily); the column was made
+  // NULLable by 2026-08-20_exam_category_nullable.sql for exactly this.
+  const catId = categoryIds[0] ?? null;
   const now = new Date();
   // ws_exam.start_date is NOT NULL, so a missing start defaults to now.
   // end_date is nullable (2026-07-27 migration): NULL means "no end date — the
@@ -206,7 +230,7 @@ export const createExam = async (input: ExamWriteInput): Promise<{ error: string
     createAt: now,
     updatedAt: now,
   });
-  await setExamCategories(row.id, resolved.ids);
+  await setExamCategories(row.id, categoryIds);
   // Re-read so the response carries the populated categoryIds the caller just set
   // (the create row has no pivot relation loaded).
   return toExamDto((await repo.findExam(row.id)) ?? row);
@@ -222,16 +246,26 @@ export const updateExam = async (id: number, input: ExamWriteInput): Promise<"no
   if (!meta) return "not_found";
 
   // Full-replace semantics: an omitted categoryIds leaves the links alone, a present
-  // one is the exam's complete category set. Resolved before the write so an invalid
-  // id fails the whole update rather than half-applying it.
+  // one is the exam's complete category set (empty = clear all). Resolved before the
+  // write so an invalid id fails the whole update rather than half-applying it.
   const resolved = await resolveCategoryIds(input);
   if (resolved && "error" in resolved) return resolved;
+  // Only a PRESENT set can violate the rule — an omitted one leaves whatever is
+  // already stored. Checked against the EFFECTIVE type (payload over stored row), so
+  // flipping a daily test to subject while clearing its categories is still rejected.
+  if (resolved) {
+    const typeError = requireCategoryForType(mapType(input.type ?? meta.type), resolved.ids);
+    if (typeError) return typeError;
+  }
 
   const data: any = { updatedAt: new Date() };
   if (input.title !== undefined) data.name = input.title;
   if (input.type !== undefined) data.type = mapType(input.type);
-  // exam_category_id is NOT NULL — keep it pointing at the primary (first) category.
-  if (resolved) data.examCategoryId = resolved.ids[0]!;
+  // Keep exam_category_id pointing at the primary (first) category — or NULL when the
+  // admin cleared the set. `?? null` is load-bearing: `resolved.ids[0]` on an empty
+  // array is `undefined`, which Prisma SKIPS, so the row would silently keep its stale
+  // primary category after a clear.
+  if (resolved) data.examCategoryId = resolved.ids[0] ?? null;
   if (input.isPaid !== undefined) data.isPaid = input.isPaid;
   if (input.durationMinutes !== undefined) data.time = input.durationMinutes;
   if (input.questionCount !== undefined) data.numberOfQuestions = input.questionCount;

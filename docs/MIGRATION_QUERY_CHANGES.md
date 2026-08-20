@@ -15,6 +15,1144 @@
 
 ---
 
+## 2026-08-20 — `ws_package_course_subscription.course_amount`: ₹100 floor + one split rule
+
+**Files:** `src/modules/commerce-order/commerce-order.service.ts`
+(+`MIN_COURSE_AMOUNT`, `computeMaterialSplit` clamp changed + now exported),
+`src/modules/admin-subscription/admin-subscription.service.ts`
+(`createCourseSubscription` uses the shared split instead of hand-assigning
+`plan.price` / `plan.materialPrice`).
+**DDL:** none. **Backfill:** none needed — see below.
+
+### The rule
+
+`course_amount` + `material_amount` must always sum to `amount`, material is carved OUT
+of what was paid, and the digital portion may never be booked at ₹0:
+
+```
+raw = paid - materialPrice
+courseAmount   = raw >= 100 ? raw : min(100, max(paid - 1, 0))
+materialAmount = paid - courseAmount
+```
+
+Worked example (6-month plan, materialPrice 8000):
+
+| paid | old course | old material | new course | new material |
+|---|---|---|---|---|
+| 13000 (no discount) | 5000 | 8000 | 5000 | 8000 (unchanged) |
+| 6500 (50% off) | **0** | **6500** | **100** | **6400** |
+
+### Why
+
+`computeMaterialSplit` clamped at 0, so a promo dropping the paid amount to or below the
+material price booked the entire sale as material and ₹0 of course. ₹100 is the legacy V1
+`minimumAmount.course` floor — the existing code comment already flagged it as lost in
+migration ("which has no constant in this codebase"). Now restored as a named constant.
+
+The `min(100, max(paid - 1, 0))` branch covers what the spec did not: when `paid` is
+itself ≤ ₹100 (reachable — the minimum payable is ₹1) the floor is unsatisfiable.
+Applying it blindly drives `material_amount` NEGATIVE; capping course at `paid` instead
+stores `material_amount = 0`, and **the Subscription Material Report reads that as
+"Without Material"** (`rowHasMaterial` = `pcMaterialId > 0 || materialAmount > 0`), so a
+real material order would drop out of the dispatch report and never ship. Material
+therefore keeps ₹1 in that corner and course takes the remainder — fulfilment beats the
+accounting floor when both cannot hold. Verified: paid 100 → 99/1, paid 50 → 49/1,
+paid 1 → 0/1, all still labelled "With Material".
+
+### Second writer, brought onto the same rule
+
+`admin-subscription.createCourseSubscription` (manual grant) wrote
+`courseAmount: plan.price` / `materialAmount: plan.materialPrice` directly, bypassing the
+split entirely. For a plan-priced grant that happened to be self-consistent
+(`computedAmount` = price + materialPrice, so the subtraction returns exactly price) —
+**byte-identical before and after, verified.** But when the admin OVERRODE `amount` it
+broke: a ₹6500 discounted grant still booked ₹13000 to course and ₹8000 to material, a
+row whose parts summed to 21000 against an `amount` of 6500. Both writers now call the
+one exported `computeMaterialSplit`.
+
+### Existing rows — no backfill
+
+Counted on staging over all 140,129 rows with `material_amount` set:
+`course_amount = 0` → **0 rows**; `course_amount` between 1 and 99 → **0 rows**;
+`course + material != amount` → **0 rows**. Nothing to correct; the floor only affects
+rows written from now on.
+
+### Reports — inherit the rule, no change needed
+
+Subscription Report and Subscription Material Report both read the STORED columns
+(`decToNum(r.courseAmount)` / `r.materialAmount`, export columns "Course Amount" /
+"Material Amount") and never recompute, so they follow the write path automatically. The
+other four reports in the sidebar (EBook Subscriptions, Book Orders, Live Course, Test
+Series) read different tables and have no `course_amount` at all.
+
+⚠ Pre-existing, NOT introduced here and not changed: a plan with `with_material = 1` but
+`material_price = 0` stores `material_amount = 0` and would label "Without Material" on
+the `materialAmount` clause alone. It is rescued by the `pcMaterialId > 0` clause, which
+the checkout path sets whenever the course/package has a `pc_material` row. One such plan
+exists in staging data (id 923, itself an orphan).
+
+### Verified
+
+Both card cases exact (13000 → 5000/8000; 6500 → 100/6400) plus every corner: paid ==
+material price, raw exactly 100, raw 99, paid 100, paid 50, paid 1, material price 0, and
+no-material plans. In all of them `course + material == paid`, neither side negative, and
+every with-material row still classifies as "With Material". Admin grant path re-checked
+old-vs-new across plan-priced and override inputs — plan-priced byte-identical, all three
+override cases fixed. `yarn typecheck` green.
+
+### Read sites (values change on NEW rows only, shapes unchanged)
+
+`admin-subscription.service.ts:202` (`courseAmount` DTO), `:344` (CSV export "Course
+Amount"), `client/course/course.service.ts:324`.
+
+---
+
+## 2026-08-20 — Drop `ws_live_course_subscription.discount_amount` (derivable)
+
+**Files:** `prisma/schema.prisma` (field removed from `LiveCourseSubscription`),
+`src/modules/live-course-order/live-course-order.service.ts` (+`liveSubDiscountAmount`,
+`discountAmount` removed from `createLiveCourseOrderMysql` input + insert),
+`src/client/payment/live-course-payment.controller.ts` (stops passing it),
+`src/modules/client-purchase-history/client-purchase-history.service.ts` (receipt
+`discount` derived), `src/modules/admin-customer/admin-customer-details.transformer.ts`
+(`discountAmount` DTO field derived).
+**DDL:** `docs/migration/schema-changes/2026-08-20_live_course_subscription_drop_discount_amount.sql`
+— **apply AFTER the code deploy** (the new build stops writing the column; the old build
+would fail inserts if the column went first). No backfill. Applied on local staging
+2026-08-20.
+
+### Why
+
+Redundant. The write path sets `paid_amount = original_amount - discount - wallet_coin`,
+and `original_amount` is non-NULL exactly when a promo was applied — the same condition
+under which `discount_amount` was non-NULL. So the column stored a value already implied
+by three others.
+
+### The derivation (single definition)
+
+`liveSubDiscountAmount()` in `live-course-order.service.ts`, deliberately colocated with
+the write it inverts:
+
+```
+originalAmount == null            → 0            (no promo)
+else max(0, originalAmount - paidAmount - (walletCoin ?? 0))
+```
+
+Wallet coin is subtracted out because it is redemption, not discount — it was never part
+of the stored value either. The clamp guards a hand-edited or partially-refunded row from
+reporting a negative discount. **If the write formula ever changes, this must change with
+it.**
+
+### Response shapes — UNCHANGED
+
+Both readers compute instead of reading, and emit the same values:
+- live-course receipt `totals.discount` (`GET /client/purchase-history/.../receipt`)
+- admin customer-details live-sub DTO `discountAmount` — still `null` (not `0`) when no
+  promo, matching what the column held.
+
+### Verified
+
+Staging row id=9 (original 259, paid 129, coin 0, stored discount was 130):
+receipt → `{subTotal: 259, discount: 130, grandTotal: 129}`; admin DTO →
+`discountAmount: 130`. Both identical to pre-drop. The DDL's guard query
+(stored ≠ derived) returned **0** before applying — but on ONE row only, so it is weak
+evidence; the DDL requires re-running it on prod. Column backed up to
+`ws_lcs_discount_backup_20260820` on staging first. `yarn typecheck` green,
+`prisma:generate` run.
+
+---
+
+## 2026-08-20 — `/admin/subscriptions/plans`: add `updatedAt` to the plan DTO
+
+**Files:** `src/modules/admin-subscription/admin-subscription.service.ts`
+(`listPlansForTarget` maps `updatedAt: p.updated_at ?? null`).
+**DDL:** none — `ws_package_course_ebook_price.updated_at` already exists.
+**FE doc:** `docs/admin/SUBSCRIPTION_PLANS_STATUS_FILTER.md`. Second half of
+`~/websankul/docs/backend-requests/2026-08-20-subscription-plans-status-filter.md`
+(revised — the handoff grew this requirement after the `status` param landed).
+
+### Why
+
+The admin picker's rule is "all active plans, plus inactive plans updated within the last
+7 days". The `status` param (logged below) made inactive rows reachable; without a
+timestamp the client still could not age them. The live-course / test-series / ebook plan
+DTOs already emit `updatedAt` — this brings course/package into line.
+
+### Change
+
+Purely additive: the row gains exactly one key, `updatedAt` (Date → ISO, or `null`).
+The other ten keys, their order, and `orderBy: duration ASC` are untouched.
+
+### ⚠ Two data findings the frontend needs
+
+Counted on staging over all 1367 rows of `ws_package_course_ebook_price`:
+
+| | Count |
+|---|---|
+| Inactive plans | 317 |
+| … `updated_at IS NULL` → **stays invisible in the picker** | **149** (47%) |
+| … `updated_at` within the last 7 days → will actually show | **0** |
+
+1. Half the inactive plans have no `updated_at`, so the FE's "cannot prove it is recent →
+   drop" rule hides them permanently. Not fixable server-side without a backfill, and
+   there is nothing truthful to backfill from.
+2. Zero inactive plans were touched in the last 7 days on staging, so the 7-day rule
+   currently surfaces nothing there — the endpoint is correct but the feature looks inert
+   on staging data. Toggle a plan off to test it.
+
+`updated_at` is also **not** a deactivated-at: a plan switched off months ago but renamed
+yesterday passes the recency test. Flagged in the handoff and accepted as a known
+approximation; the exact fix would be a `deactivated_at` column stamped on the
+true → false transition. Not requested, not built.
+
+### Verified
+
+`?packageId=5&status=all` → 17 rows, keys are the ten previous ones plus `updatedAt`;
+inactive sample carries `"updatedAt":"2025-06-19T15:32:14.000+05:30"`. Default
+`?packageId=5` still 5 rows, all active. `yarn typecheck` green.
+
+---
+
+## 2026-08-20 — `/admin/subscriptions/plans`: status filter is now the caller's choice
+
+**Files:** `src/admin/subscription/subscription.controller.ts` (`listPlansForTarget`
+parses `?status=`), `src/modules/admin-subscription/admin-subscription.service.ts`
+(`listPlansForTarget` gains a 3rd `status?: boolean` arg),
+`src/modules/admin-subscription/admin-subscription.repository.ts` (`plansForTarget`).
+**DDL:** none. **FE doc:** `docs/admin/SUBSCRIPTION_PLANS_STATUS_FILTER.md`.
+Answers `~/websankul/docs/backend-requests/2026-08-20-subscription-plans-status-filter.md`.
+
+### Why
+
+`plansForTarget` hard-coded `where: { status: true }`, so a deactivated
+`ws_package_course_ebook_price` row for a Package/Course never reached the admin
+Add-Subscription picker — its Plan Status column could only ever read "Active". The
+sibling live-course / test-series / ebook plan endpoints all return inactive rows, so this
+one was the odd endpoint out.
+
+### Query change
+
+```
+- where: { status: true, ...courseId, ...packageId }
++ where: { ...(status === undefined ? {} : { status }), ...courseId, ...packageId }
+```
+
+`status: undefined` now honestly means **no status filter**. `orderBy: { duration: "asc" }`
+unchanged; no pagination on this endpoint.
+
+**The default did NOT move** — it relocated to the controller, which maps an absent
+`?status=` to `true`. Every existing caller (including the customer-facing app, which must
+never see inactive plans) is byte-identical. Only an explicit `?status=all` widens the
+result. Putting the default in the controller rather than the repository means a future
+non-HTTP caller must state what it wants instead of inheriting an invisible filter.
+
+`?status=` accepts `true` | `false` | `all`; anything else `422`s rather than silently
+falling back to active-only (which would reproduce the original bug as a typo).
+
+### Response shape
+
+Unchanged — same ten keys, same order. `status` per row was always mapped faithfully from
+the column; it simply could never be `false` before because those rows were filtered out.
+
+### Data spot-check the handoff asked for (`material_price`)
+
+On staging: 217 plans have `with_material = 1`; **0** have a NULL `material_price`, 216
+have `> 0`. The null→`0` coalesce is not masking a data-entry gap. The two outliers (id
+923: attached to no product and inactive; id 1459: faker-named seed row) are unreachable
+from the picker. ⚠ Staging only — re-run on prod before closing the question.
+
+### Verified
+
+Live HTTP against `websankul_staging_1`, package 5 (5 active / 12 inactive):
+`?packageId=5` → 5 rows (unchanged default), `&status=true` → 5, `&status=false` → 12,
+`&status=all` → 17, `&status=bogus` → 422, `?courseId=11&status=all` → 4 vs 3 by default,
+no id → 400. Row keys and `duration ASC` ordering identical to before. `yarn typecheck`
+green.
+
+---
+
+## 2026-08-20 — Exam-category Courses tab: Course + Live Course UNION
+
+**Files:** `src/modules/catalog-exam/catalog-exam.repository.ts`
+(`listCategoryCourses` / `countCategoryCourses` rewritten; `categoryCourseWhere` deleted
+— no other callers; +`buildCategoryCoursesUnion`, +`CategoryCourseType`,
++`CategoryCourseRow`), `src/modules/catalog-exam/catalog-exam.service.ts`
+(`getCategoryCourses` +`type` opt, rows gain `type`),
+`src/admin/exam/exam.controller.ts` (`getCategoryCourses` accepts `?type=`).
+**DDL:** none — `ws_live_course.exam_categories` already exists and is already populated
+by the live-course admin write path. No backfill.
+**FE doc:** `docs/admin/EXAM_CATEGORY_COURSES_UNION.md`.
+Answers `~/websankul/docs/backend-requests/2026-08-20-exam-category-courses-tab-union.md`.
+
+### Why
+
+`GET /admin/quizzes/categories/:id/courses` queried `ws_course` alone through
+`ws_exam_category_course`, so live courses linked to an exam category never appeared and
+a category holding only live courses reported `total: 0`.
+
+### Query change
+
+Single-table `prisma.course.findMany` → a parameterised two-branch `UNION ALL` on
+`$queryRawUnsafe`, paged in SQL:
+
+- branch 1: `ws_exam_category_course` → `ws_course`, tagged `'course'`
+- branch 2: `ws_live_course` joined via `JSON_TABLE` over `exam_categories`, tagged
+  `'live-course'`
+
+`search` (tokenised via `utils/searchFilter.searchTokens`) and `status` are applied
+**per branch** so each uses its own name index rather than filtering a materialised temp
+table. New optional `?type=course|live-course` narrows the union to one branch; unknown
+values `422`, but `live_course`/`liveCourse` are accepted as aliases (the sibling
+video-category endpoint emits the underscore spelling).
+
+**Ordering changed:** was `[ordered asc, created_at desc]` over courses only; now
+`[order_by asc, created_at desc, id asc]` over the union. The `id` tiebreak is new and
+makes the ordering total, so no row can straddle two pages.
+
+**Packages stay out** — the exam-category page has a separate Package tab
+(`GET .../packages`); including them here would double-count. Deliberate divergence from
+`admin-material`'s three-way `buildLinkedProductsQuery`.
+
+### ⚠ MySQL gotcha worth remembering
+
+The live-course branch **cannot** be written as `WHERE EXISTS (SELECT 1 FROM JSON_TABLE(
+lc.exam_categories, ...) ...)`. MySQL 8.0 does not correlate the outer `lc` column into a
+`JSON_TABLE` inside a subquery and returns **zero rows silently — no error**. Verified on
+8.0.46. Only the `JOIN JSON_TABLE(...) ON ...` form works; `SELECT DISTINCT` is what
+guards against a live course listing the same category twice in its JSON array.
+
+`admin-material.repository.ts:buildLinkedProductsQuery` uses the bare join with no
+`DISTINCT` and has the same duplicate-row exposure — noticed, not changed (different
+endpoint's contract).
+
+### Response shape
+
+Each item gains `type: "course" | "live-course"`; `id` stays the id within its own table
+(course 7 and live course 7 both exist — the FE keys rows by `type-id`). `orderBy` is
+`ws_course.order_by` / `ws_live_course.ordered`. `status` is coerced from the raw TINYINT
+0/1 back to a boolean. Envelope and `meta` unchanged.
+
+### Verified
+
+Live HTTP against `websankul_staging_1`: category 149 (live-only) went `total: 0` → `1`
+— the reported bug; category 138 (course-only) unchanged at `total: 2`; category 65
+returns both kinds, pages disjointly at `per_page=1`, and filters correctly on `type`,
+`status` and multi-word/Gujarati `search`. `yarn typecheck` green.
+
+---
+
+## 2026-08-20 — One-off data purge: subscription reset for customers 472366 / 472367
+
+**Files:** `scripts/clear-customer-subscriptions.sql` (new, reusable).
+**DDL:** none — pure DML, no schema change.
+**Scope:** ran on `websankul_staging_1` (local `ws-mysql`, 127.0.0.1:3307) only.
+**NOT run on staging-server or prod.**
+
+### Why
+
+Both test accounts needed to look like they had never purchased anything, so the
+full purchase → entitlement chain had to go, not just the subscription rows.
+
+### What was deleted (39,101 rows, all backed up row-level first)
+
+| Table | Rows |
+| --- | --- |
+| `ws_package_course_subscription` | 38,980 (38,967 of them `remarks = 'DUMMY_SEED'` from `scripts/seed-dummy-package-course-subscriptions.ts`) |
+| `ws_package_course_order` | 22 |
+| `ws_package_course_subscription_tracking` | 9 (resolved via `order`) |
+| `ws_ebook_subscription` / `ws_ebook_order` | 13 / 16 |
+| `ws_live_course_subscription` | 15 |
+| `ws_test_series_subscription` / `ws_test_series_order` | 1 / 4 |
+| `ws_ebook_download` | 2 |
+| `ws_offline_video_download` | 3 |
+| `ws_lecture_progress` | 16 |
+| `ws_enrollment_resume` | 10 |
+| `ws_folder_item` | 10 |
+| `ws_refferal_transaction` | 9 |
+
+**Deliberately left intact:** `ws_customer` (both rows), addresses, access tokens,
+`ws_wishlist`, `ws_book_order`, `ws_book_cart`, notifications, search history.
+
+### Notes for anyone re-running this
+
+- These tables carry **no foreign keys** — only 4 FKs exist in the whole schema and
+  none of them touch order/subscription tables. Delete order is therefore free,
+  **except** `ws_package_course_subscription_tracking`, which has no `customer_id`
+  and resolves through `ws_package_course_order.id` — it must be deleted **before**
+  the orders are.
+- `ws_refferal_transaction` is the coin ledger keyed on the deleted orders; leaving it
+  behind strands credits against orders that no longer exist.
+- Client GET responses are Redis-cached per user (`cacheRoute` key embeds
+  `:{customerId}:{role}:`). After a purge, sweep with
+  `redis-cli --scan --pattern "*:<customerId>:customer:*" | xargs redis-cli del`
+  or the accounts keep serving stale entitlements for up to the TTL. (Nothing was
+  cached at the time of this run.)
+
+---
+
+## 2026-08-20 — `ws_package_course_order.shipping` now holds a ws_customer_shipping id
+
+**Files:** `src/modules/customer-shipping/*` (new: repository + service),
+`src/modules/client-cart/client-cart.service.ts` (attachShipping now delegates),
+`src/client/payment/course-payment.controller.ts`,
+`src/client/payment/package-payment.controller.ts`,
+`src/modules/admin-subscription/admin-subscription.service.ts`,
+`src/admin/subscription/subscription.controller.ts`,
+`prisma/schema.prisma` (comment only).
+**DDL:** none. **Backfill:** `scripts/backfill-order-shipping-ids.ts`
+— **dry-run by default; run with `--apply` after the code deploy.**
+
+### The bug
+
+`ws_package_course_order.shipping` is a foreign key to **`ws_customer_shipping`**,
+but every SQL write path was storing a **`ws_customer_address`** id in it:
+
+| Path | Validated against | Wrote into |
+|---|---|---|
+| `client/payment/course/create-order` | `ws_customer_address` (`addressBelongsToCustomerSql`) | `ws_package_course_order.shipping` |
+| `client/payment/package/create-order` | `ws_customer_address` | same |
+| admin subscription grant | admin customer-details lists `ws_customer_address` | `createPaymentOrder` → same |
+
+`ws_package_course_subscription.shipping` inherits the value at verify
+(`commerce-order.repository` copies `order.shipping`), so the bad id propagated.
+
+Two tables, two id spaces, one column — the reason nobody noticed is that
+`client-purchase-history.service.ts:322` reads the id out of **both** tables and
+takes whichever hits, so the customer's own receipt still rendered. The admin
+Subscription Report does **not** compensate (`admin-subscription.repository`
+`shippingsByIds` reads `prisma.customerShipping` only), so those subscriptions
+showed **blank shipping** to admins.
+
+Books were never affected — `client-cart.attachShipping` has always snapshotted
+the address into `ws_customer_shipping` and stored that id.
+
+### The fix — one shared resolver
+
+New `modules/customer-shipping.resolveShippingIdForAddress(customerId, addressId)`:
+a **verbatim extraction** of what `attachShipping` already did. `attachShipping`
+now delegates to it (book behaviour byte-identical), and the course/package/admin
+paths call it instead of `addressBelongsToCustomerSql`. Resolving doubles as the
+ownership gate — `address_not_found` covers unknown, soft-deleted and
+someone-else's ids alike, so the old 400 is preserved.
+
+**Snapshot rule: find-or-create on `(user_id, name, phone, address, pincode)`** —
+identical to the book-cart key it replaces, so one shipping row is SHARED by every
+order to the same address. ⚠ `refreshOnReuse` (default true, matching books)
+rewrites that shared row's email/city/state/address_2 in place, so correcting
+those on an address book entry also changes them on **already-placed** orders'
+receipts and AWBs. Pre-existing book behaviour, kept for consistency. If order
+history must be immutable the change is to always create, never reuse — it was
+deliberately not made unilaterally.
+
+`createIfMissing: false` makes the resolver strictly read-only (used so the
+backfill's dry run cannot write); `includeSoftDeleted: true` lets the backfill
+repair an order placed against an address the customer has since deleted. Neither
+is reachable from a checkout.
+
+### API contract — unchanged
+
+`customerShippingId` in the request body is still the **address-book id**. No FE
+change: the address book is the only list the UIs show, and converting it is BE's
+job. Only the persisted value changes.
+
+### Backfill
+
+Legacy (Mongo-era) rows were already correct — **56,214 of 56,215**
+`ws_package_course_subscription` rows resolved in `ws_customer_shipping` before
+the fix. Only the newer SQL payment path produced bad rows.
+
+`scripts/backfill-order-shipping-ids.ts` finds rows whose `shipping` misses in
+`ws_customer_shipping`, confirms the id is an address **owned by that order's
+customer** (never guesses — a foreign id is reported, not rewritten), snapshots
+it, and rewrites the column. Dry run by default and verified side-effect-free.
+
+### Verified against staging DB
+
+Before: `ws_package_course_order` 1 unresolvable, `ws_package_course_subscription`
+1 unresolvable. Backfill dry run left the row count untouched (4 → 4), then
+`--apply` repaired both to the same new shipping row 96245 — **0 unresolvable in
+both tables afterwards**. Resolver: address 95791 → shipping 96240 (reused an
+existing row, 0 rows created on the second call); another customer's address and
+an unknown id both → `address_not_found`.
+
+⚠ **Still out of scope / unfixed:** `ws_live_course_subscription.customer_shipping_id`
+still receives an address id (`live-course-payment.controller.ts:262`), and its
+schema comment still documents `ws_customer_address.id`. `ws_book_order` has 2
+rows whose `shipping_id` matches neither table (pre-existing dangling ids). The
+`client-purchase-history` dual-read fallback was deliberately left in place.
+
+## 2026-08-20 — Offline download registrations + coverage-expanding access snapshot
+
+**Files:** `src/modules/offline-video-download/*` (new: types / repository / service),
+`src/client/subscriptions/subscriptions.routes.ts` (new),
+`src/client/subscriptions/subscriptions.controller.ts` (new),
+`src/client/client.routes.ts` (mount `/subscriptions`),
+`prisma/schema.prisma` (+`OfflineVideoDownload`).
+**DDL:** `docs/migration/schema-changes/2026-08-20_offline_video_download.sql`
+— **apply BEFORE the code deploy** (unlike an additive column, both routes touch
+the table on every call). **No backfill possible** — see below.
+**FE doc:** `docs/client/SUBSCRIPTION_ACCESS.md`.
+
+### Why
+
+The app downloads paid lectures and ebooks for offline play and must expire them
+without a network call at playback. A lecture can live in a course, a package AND
+a live course at once, but the app only knows the ONE product on screen when the
+user tapped download — it cannot discover the others.
+
+So the two halves are deliberately asymmetric:
+
+- **POST** records a single `{content, product}` pair — whatever the user saw.
+- **GET** *ignores* that product for videos and re-derives coverage from the
+  customer's CURRENT active subscriptions: every active course/package/live
+  course whose curriculum contains a registered lecture, each carrying the
+  registered ids it covers (`videoIds`).
+
+Without that expansion a lecture downloaded from Course A would be deleted the
+moment A expired, even though Package B still entitles the same lecture.
+
+`ws_folder_item` was rejected as a home for this — it is a user-curated
+saved-items list with no product-scope column, and its writer route is currently
+disabled. `/client/my-subscriptions` was rejected by FE: paginated, tab-split,
+and its slim projection already **drops `startAt`/`endAt`** (the `omit` in
+`my-subscriptions.controller.ts`).
+
+### New table — `ws_offline_video_download`
+
+`(customer_id, video_id, scope_kind, scope_id, registered_at, created_at, updated_at)`.
+
+- `scope_kind` borrows `ws_enrollment_resume`'s vocabulary (`"course"` |
+  `"package"` | `"liveCourse"`, camelCase `liveCourse` included) plus `"ebook"`,
+  so the two enrollment-scoped tables stay greppable together. Materials stay out
+  of scope (local stamp only, per the FE spec).
+- For `ebook` rows `video_id = scope_id = the ebook id` — the ebook IS the
+  content, so there is no curriculum to expand into.
+- `UNIQUE (customer_id, video_id, scope_kind, scope_id)` makes POST idempotent: a
+  repeat registration upserts `registered_at`, never duplicates.
+- `KEY idx_ovd_customer_scope (customer_id, scope_kind, scope_id)` serves the GET,
+  which reads `DISTINCT video_id` (video scopes) and `DISTINCT scope_id` (ebooks)
+  for one customer — leading column `customer_id`, so one index range scan
+  however many videos were downloaded.
+- **`scope_id` is an idempotency key and an audit trail, not an entitlement.**
+  GET never trusts it for videos.
+- **No backfill is possible.** Nothing records what a past download covered.
+  Existing offline files produce no GET rows until the app re-registers them.
+
+### Query-level shape — entitlement is NOT a new query
+
+`activeProducts()` calls the **same** `buildCourseAndPackageCards` /
+`buildLiveCourseCards` / `buildEbookCards` that back My Subscriptions. The active
+filter is therefore identical **by construction**, not by convention:
+
+- `ws_package_course_subscription`: `status = true AND end_at > now`
+- `ws_live_course_subscription`: `status = true AND payment_status = "verified" AND (end_at IS NULL OR end_at > now)`
+- `ws_ebook_subscription`: `status = true AND end_at > now`
+
+Their dedup (furthest `end_at` per product wins; lifetime beats dated) comes along
+unchanged. **Do not** re-implement this as its own repository call — the two would
+drift the first time either active-filter changed, and a revoked offline download
+would keep playing. `isPurchased` on the product row is never read. Only the
+builders the request's `kinds` need are run.
+
+**Coverage test:** one `reachableCategoryIds(kind, id)` walk per active video
+product, intersected against the registered lectures' `vcategory_id`. That helper
+is **reused rather than inlined** so GET's coverage test and POST's membership
+check can never disagree about what "in this product" means — a drift there would
+either strand files or keep revoked ones playable. Measured **~40 ms** for a
+customer with 7 active products on staging.
+
+**Short-circuit:** GET returns `[]` after only the two registration index reads
+when the customer has downloaded nothing — the common case — skipping the
+entitlement builders and every reachability walk.
+
+Membership lookup uses `has()`, not a truthy check, because a **lifetime**
+entitlement is present with `endAt = null`.
+
+**POST** validates 404-then-403: content exists → product exists → entitled →
+lecture in product. `ebook` skips the last step and requires `videoId === id`
+(a `400` from the Zod refine). Entitlement reuses the same `activeProducts()`
+set, so a registration can never succeed for a product the very next GET would
+omit. Membership uses `reachableCategoryIds`, a **superset** of what
+`/client/catalog/:type/:id/videos` lists, so a lecture the app legitimately showed
+and downloaded can never be 403'd and stranded.
+
+### Caching — deliberately none
+
+Neither route is `cacheRoute`-wrapped. GET is the app's only online signal for an
+admin revoke, so any TTL is a window in which revoked content stays playable.
+Payload is ids + timestamps only; per-user `clientLimiter` still applies.
+
+An **unfiltered** GET feeds `syncEntitlementCache` under a new fingerprint key
+`entitlement_fp:<cid>:access`. The app hits GET on login and Home focus, so this
+is the fastest trigger for sweeping a customer's 24h-cached catalog overlay
+(`isPurchased` / `daysLeft`) — additive to the existing `:course` / `:ebook` /
+`:test_series` keys. Filtered calls skip it (a subset fingerprints as a mass
+revoke). The set is coverage-scoped, so it only detects changes on products that
+cover something downloaded; My Subscriptions still covers the rest.
+
+### Response-shape note
+
+`endAt` / `syncedAt` / `registeredAt` are emitted as **UTC `...Z` strings**, not
+the app-wide IST `+05:30` render. They are produced as strings (`.toISOString()`),
+which also bypasses the global `istJson` replacer. Intentional: FE compares them
+to the device clock offline and asked for stable UTC. Same instant either way.
+
+### Verified against staging DB (customer 472335)
+
+Video `33089` sits in `package:94` + `package:91` + `course:114`. **One** POST
+under `package:94` → GET returned **all three** rows, each with
+`videoIds: ["33089"]`. Revoking only `package:94` dropped that row while the other
+two kept covering the file. Active products covering nothing registered never
+appeared. Ebook (temp grant): POST → one `ebook:18` row with `videoIds:["18"]`,
+`daysLeft` 31; POST twice → 1 row; revoke → row gone, registration row survives.
+`?kinds=` filters exclude the other side cleanly. Unknown content → 404, unknown
+product → 404, unentitled → 403. GET latency ~40 ms. All test rows removed.
+
+## 2026-08-20 — Live-course subscriptions carry the promocode / referral SNAPSHOT OBJECT
+
+**Files:** `prisma/schema.prisma` (LiveCourseSubscription),
+`src/modules/order-code-snapshot/*` (types / repository / transformer / service — now plan-kind aware),
+`src/modules/live-course-order/live-course-order.service.ts`,
+`src/client/payment/live-course-payment.controller.ts`,
+`src/modules/admin-live-course/admin-live-course.service.ts`,
+`scripts/backfill-live-course-code-snapshots.ts` (new).
+**DDL:** `docs/migration/schema-changes/2026-08-20_live_course_subscription_code_snapshot.sql`
+— **apply before the code deploy.** Backfill after.
+
+Extends the 2026-08-18 entry below (`ws_package_course_order`) to live courses.
+
+### Why
+
+`ws_live_course_subscription` stored only `promocode_id` / `referrer_id`. Nothing read
+`promocode_id` for display, so the live-course subscription report rendered its
+**"Promocode"** and **"Promoter Name"** columns as literal empty strings, and
+`modules/promoter-data` (which reads `ws_package_course_order` + `ws_ebook_order` only)
+never saw a live-course sale.
+
+### Schema — ADDITIVE, ids kept
+
+`promocode JSON NULL` + `refferalcode JSON NULL`. **`promocode_id` and `referrer_id`
+stay**: `creditReferrer` reads `referrer_id` at payment-verify to credit referral coins,
+and `ws_package_course_order` likewise kept its `referrer_id` beside the json.
+
+Shape is byte-identical to `ws_package_course_order`, so the same JSON paths resolve
+(`$.promoterId`, `$.promocode`, `$.promotedPackageCourseEbook[0].promoterPercentage`).
+The embedded plan gains one key, `liveCourseId`, because a `ws_live_course_plan` row has
+no ebook/course/package parent — those three keys remain present as `0` (the legacy "not
+this entity" sentinel) so no existing path read breaks. `liveCourseId` is OMITTED for
+price plans, keeping the legacy course/package/ebook snapshot byte-compatible.
+⚠ `duration` inside a live snapshot is MONTHS, not days (LIVE_COURSE_DESIGN §3).
+
+### ⚠ plan_kind — the bug this change had to avoid
+
+`ws_promoted_package_course_ebook.pcb_price_id` is declared as an FK to
+`ws_package_course_ebook_price` **for every `plan_kind`**, but live-course links use
+`plan_kind = 'livePlan'` with ids from `ws_live_course_plan`. **The two tables share an
+id space.** `findPlanLink()` previously matched on `(promocodeId, planId)` alone and
+expanded the plan through that relation — reusing it for live courses would have
+embedded an unrelated course/package plan and paid out ITS promoter percentage.
+
+Confirmed on staging: live plan `id=1` is ₹259 while price-plan `id=1` is ₹120.
+
+So `findPlanLink(promocodeId, planId, planKind)` now filters on `planKind`, and only the
+`"price"` kind may use the relation; `"livePlan"` resolves the plan through the new
+`findLivePlan()` against `ws_live_course_plan`. `planKind` defaults to `"price"`
+everywhere, so the course / package / ebook checkouts are untouched.
+
+### Query/write-shape changes
+
+- `liveCourseSubscription.create` writes two new Json columns. `?? Prisma.DbNull` (NOT
+  `?? null`): on a Json column Prisma reads a bare `null` as **JsonNull** — the JSON
+  literal `null` stored *inside* the column — while `DbNull` is a real SQL NULL. A JSON
+  null is a non-empty value that every `JSON_EXTRACT` path then misses. Verified with
+  `SELECT refferalcode IS NULL, JSON_TYPE(refferalcode)`.
+- New reads on the checkout path for a live-course purchase **only when a code is
+  redeemed**: one `ws_live_course_plan` lookup, plus the existing promocode/link/program
+  reads. No code redeemed → still zero extra queries.
+- `admin-live-course.listSubscriptions` and the CSV/XLSX export read the code off the
+  row's own snapshot columns — **no extra join, no extra query**.
+
+### API response — additive only
+
+`GET /admin/live-courses/subscriptions` (Reports list) rows gain `id`, `promocode` (the
+CODE STRING, matching the Subscription report's key and type), `promocodeId`,
+`promoterName`, `promoterId`, `codeType` (`"promocode" | "referral" | null`), plus the
+full frozen objects as `promocodeSnapshot` / `refferalcodeSnapshot`. The per-course
+subscription DTO (`hydrateSubs`) gains `promocode` / `refferalcode` objects. Nothing
+that already existed changed shape or type.
+
+A **referral** deliberately reports `promoterId: null` — the earner is a CUSTOMER, not a
+`ws_promoter`. (The legacy referral shape overloads the key name `promoter` to mean the
+referring customer, and spells the code `$.promoter.referralCode` where a promocode
+spells it `$.promocode`; `subCodeInfo` is the single place that reconciles the two.)
+Reporting a promoter there would book customer referral rewards as promoter commission.
+
+CSV/XLSX: the **"Promocode"** and **"Promoter Name"** columns are now populated; they
+were hardcoded `""`. Rows predating this change hold NULL and still render `""`.
+
+### Backfill — `scripts/backfill-live-course-code-snapshots.ts`
+
+Rebuilds the object from the existing `promocode_id` / `referrer_id` via the SAME
+builder as the live path, so backfilled and new rows are identical. Rows that already
+hold an object are never rewritten; a code that no longer resolves (or a row with no
+`planId`) is **left NULL and logged** rather than half-built. `updated_at` is pinned —
+a repair is not a business event. PK-batched (500), resumable (`--from=`), idempotent,
+dry-run by default.
+
+```bash
+npx tsx scripts/backfill-live-course-code-snapshots.ts            # dry run
+npx tsx scripts/backfill-live-course-code-snapshots.ts --apply
+```
+
+**Staging run** (`websankul_staging_1`, 2026-08-20): scanned 15, 2 referral snapshots
+written, 0 promocode snapshots, 1 unresolved (`id=9` — `referrer_id=472366` but no
+`plan_id`, so there is nothing to snapshot against; left NULL). Re-run wrote nothing
+(`alreadySnapshotted=2`), confirming idempotency.
+
+### Not included
+
+`modules/promoter-data` still does not query live-course sales — the snapshot now makes
+that possible, but extending the promoter dashboard was explicitly out of scope.
+
+---
+
+## 2026-08-20 (f) — One row per module on `ws_termsandcondition` (409 + unique index)
+
+**Files:** `src/modules/terms/terms.repository.ts`, `src/modules/terms/terms.service.ts`,
+`src/admin/cms/cms.controller.ts`, `src/admin/cms/cms.validation.ts`,
+`prisma/schema.prisma`.
+**DDL:** `docs/migration/schema-changes/2026-08-20_terms_module_unique.sql`.
+
+Answers the one open question in
+`~/websankul/docs/backend-requests/2026-08-20-cms-terms-modules-and-faq-types.md` §1 —
+"should the API reject a duplicate module too?" **Yes.**
+
+### Why it is a real bug, not tidiness
+
+The client resolves a module with `findActiveByModule`, a **`findFirst`**. A second
+active row for the same module therefore SILENTLY SHADOWS the first: the admin edits one
+row, the app keeps rendering the other, and nothing errors on either side. `module` is an
+enum of two live values and **both already have a row**, so "Add Terms" could now only
+ever produce that duplicate.
+
+### Two layers
+
+- **App:** `moduleTaken()` in `terms.service` → `createTerms` / `updateTerms` return a
+  `TermsWriteConflict`; the admin controller maps it to **409** with
+  `Terms for "book" already exist. Edit the existing entry instead.` plus
+  `data.existingId` so the UI can deep-link to the row. 409 not 400 — the payload is
+  valid, the module is just taken.
+- **DB:** `ADD UNIQUE KEY uq_terms_module (module)`. The index is the guarantee; the 409
+  is the readable message. `@unique(map: "uq_terms_module")` added to the Prisma model.
+
+`updateTerms` only checks when `module` is present in the payload, and passes the row's
+own id as `exceptId`, so re-saving a row with its unchanged module does not collide with
+itself.
+
+⚠ Trade-off: this forbids an inactive/archived second row per module. Intended — `status`
+is a display toggle, not versioning, and the read path cannot tell "archived" from
+"shadowing".
+
+### Also: deleted a duplicate, looser validation schema
+
+`admin/cms/cms.validation.ts` held `termsCreateSchema` / `termsUpdateSchema` with a
+free-string `module`. They were imported by the controller but **never called** — the live
+path is `termsCreateSchemaMysql`, which always enforced the enum. Deleted, with a comment
+pointing at the real schema. (This corrects the claim in entry (e); see the note there.)
+
+### Verified on staging
+
+Unique index present; duplicate create for `referral code` and for `book` both refused
+with no row written; re-saving a row with its own module still works; moving a row onto a
+taken module refused and the original left untouched; a **raw** duplicate `INSERT` blocked
+by the index (`1062 … uq_terms_module`), proving the app check is not the only guard;
+client read still resolves the referral row; row count unchanged at 2. Pre-flight
+duplicate query returned none.
+
+### From the same handoff — deliberately NOT done
+
+- **§2 retire `POST/PUT/DELETE /admin/cms/faq-types`.** They only ever 400, but removing
+  them turns that into a 404 for the admin client code that still references them; the
+  handoff calls it low priority and offers to delete the client side in the same pass.
+  Needs coordination, not a unilateral removal.
+- **§3 drop `ws_termsandcondition.freeShippingMinimumOrderAmount`.** Confirmed dead —
+  checkout reads `ws_book_setting` since 2026-07-14, and nothing reads this column except
+  the DTO that echoes it. NOT dropped: it is `int NOT NULL` and still a field on
+  `TermsDto`, so removing it is an API response-shape change needing FE sign-off. Marked
+  DEAD in `schema.prisma` so it is not resurrected as a "missing field".
+
+---
+
+## 2026-08-20 (e) — FAQ `type` / Terms `module` filters: unknown value is now 422, not a dropped filter
+
+**Files:** `src/modules/faq/faq.service.ts`, `src/modules/terms/terms.service.ts`,
+`src/client/cms/cms.controller.ts`, `src/admin/cms/cms.controller.ts`,
+`src/admin/cms/cms.validation.ts`.
+**No DDL.** Response shapes unchanged for every valid request.
+
+Raised while consolidating referral content onto the shared CMS tables
+(`docs/client/REFERRAL_CONTENT_SOURCES.md`): "if the FAQ type name is changed from admin,
+the list may misbehave."
+
+### The rename cannot happen — the DB is the guard
+
+Both discriminators are **MySQL ENUM columns**, verified on staging:
+
+```
+ws_faq.type                     enum('general','referral')
+ws_termsandcondition.module     enum('book','pendrive','referral code')
+```
+
+There is no `ws_faq_type` table — `FAQ_TYPES` is a hardcoded catalogue, and
+`POST/PUT/DELETE /admin/faq-types` already hard-return 400 ("FAQ categories are fixed").
+FAQ writes validate `type` with `z.enum(FAQ_TYPES)`. So admin cannot rename, add or
+delete a type through any path.
+
+### The real hole was on the READ side
+
+`resolveCategoryFilter` returned `undefined` for an unrecognised value, and an undefined
+filter means *no filter*. Measured before the fix:
+
+| `?type=` | rows returned |
+|---|---|
+| `referral` | 8 (correct) |
+| `referal` (typo) | **13 — general + referral mixed** |
+| `Referral` (the display label's casing) | **13** |
+| `banana` | **13** |
+
+So a typo read as "the referral sheet gained unrelated content", silently. The `Referral`
+case is the likely one in practice, since that is the label the admin UI shows.
+
+`?module=` on terms failed more quietly but just as wrongly: an exact `findFirst` on an
+unknown module returns `data: null`, which the app renders as "no terms published".
+
+### Fix
+
+- New `resolveFaqTypeFilter` / `resolveTermsModuleFilter`: trim + **case-insensitive**
+  match against the enum list, returning `{ ok: false }` for anything unrecognised.
+- Client `GET /client/faqs`, admin `GET /admin/faqs`, client `GET /client/terms` return
+  **422** with `messages.type` / `messages.typeId` / `messages.module` naming the allowed
+  values. Same rule `/client/subscriptions/access` already applies to a bad `kinds`: a
+  typo must never read as "everything was revoked" / "there is no content".
+- An **absent** filter still means "all" on both endpoints — unchanged.
+- `termsCreateSchema.module` in `admin/cms/cms.validation.ts` tightened from
+  `z.string().max(100)` to `z.enum(TERMS_MODULES)`.
+
+  **Correction (2026-08-20, same day):** that schema is **dead code** — imported by
+  `cms.controller` but never called. The live terms write path uses
+  `termsCreateSchemaMysql` (`modules/terms/terms.validation.ts`), which has **always**
+  pinned `module` to the enum. So the "was a MySQL 1265 → 500" claim above was wrong:
+  the live path already returned a clean 400. The dead schema has since been deleted
+  outright (see entry (f)) rather than kept in a fixed state — two schemas for one
+  endpoint is how the loose one eventually gets wired back in. The advice to the admin
+  UI (render a fixed dropdown) stands.
+
+No query shape changed — only which values are allowed to reach the query.
+
+### Verified on staging
+
+Case variants (`Referral`, `  REFERRAL  `, `Referral Code`, `" referral code "`) all
+resolve; `referal` / `banana` / `referral-code` / `referral_code` / `pendrive` are
+rejected; `?type=Referral` now returns the 8 referral FAQs instead of 13 mixed;
+`?module=Referral Code` resolves to the real row instead of `null`; a bad module fails
+validation instead of reaching MySQL.
+
+---
+
+## 2026-08-20 (d) — Video-category "Courses" tab returns the UNION of course + live course + package
+
+**Files:** `src/modules/admin-master/admin-master.repository.ts`,
+`src/modules/admin-master/admin-master.service.ts`,
+`src/admin/videoCategory/videoCategory.validation.ts`,
+`src/admin/videoCategory/videoCategory.controller.ts`.
+**No DDL** — all three links already exist as columns / pivot rows.
+
+Handoff: `~/websankul/docs/backend-requests/2026-08-20-video-category-courses-tab-union.md`.
+Contract: `docs/admin/VIDEO_CATEGORY_ATTACHMENTS.md`.
+
+`GET /admin/video-categories/:id/courses` queried `ws_course` alone, so a category that
+exists only to hold a Live Course's videos rendered "No courses found".
+
+### ⚠ The handoff's live-course link is the WRONG column
+
+It specified `prisma.liveCourse.findMany({ where: { videoCategoryId } })`. On real data
+that column is **never populated**: staging has **0 of 4** live courses with
+`ws_live_course.video_category_id` set, against **5** categories carrying the reverse
+marker `ws_video_category.live_course_id`. Implementing it as written returns `[]` for
+category `3180` — the exact category in the bug report — so the fix would have shipped
+without fixing anything.
+
+Both directions are unioned (`OR: [{ videoCategoryId }, { id: markerId }]`), and the
+marker is read with `> 0`, not `!= null`, because the column carries the legacy 0
+sentinel. Same dual-source rule `catalog-category-tree` already applies for the same
+reason.
+
+### New queries
+
+- `liveCourseIdFromCategoryMarker` — one `ws_video_category` lookup for the reverse marker.
+- `liveCoursesForCategory` / `countLiveCoursesForCategory` — `ws_live_course`, OR'd link
+  above, same `search` (on `name`) + `status` filters.
+- `packagesForCategory` / `countPackagesForCategory` — `ws_package`, filtered by
+  `packageSpecificSubject: { some: { subjectId: categoryId } }`. **No filter on the
+  PIVOT's status** — the tab answers "what is attached", and a deactivated attachment
+  must stay visible to be fixable. `opts.status` filters the package (`ws_package.status`,
+  mapped to `active` on the model).
+
+### Paged in SQL, not in application code
+
+`buildCategoryAttachmentsQuery` emits one parameterised `UNION ALL`, paged with
+`LIMIT/OFFSET` over the merged set and counted with `COUNT(*)` over the same subquery —
+modelled on `buildLinkedProductsQuery` (`admin-material.repository.ts`), which the handoff
+names as the precedent. Merging three Prisma calls in JS would be wrong: each source would
+get its own offset.
+
+`search` and `status` are applied PER BRANCH (not once over the union) so each branch uses
+its own index instead of filtering a materialised temp table. Search uses the shared
+`searchTokens` helper (multi-word ANDs). A `type` query param drops the other branches
+from the statement entirely; narrowing to nothing emits a valid `WHERE 1 = 0` statement.
+
+Order: `type_rank` (course → live-course → package), then the kind's own order column,
+then `id DESC` — total and stable, so no row straddles a page. The raw read returns MySQL
+`TINYINT(1)` as 0/1, so `status` is normalised back to a boolean in the service.
+
+### Response — additive
+
+Each row gains **`type`**: `"course" | "live-course" | "package"` (hyphenated, matching
+`/admin/materials/categories/:id/products`), present on every row
+(the FE defaults a missing value to `course`, so an unlabelled live course would be
+silently mislabelled). `id` stays the id within its OWN table — ids collide across types
+and the FE keys by `type:id`. `name` stays nullable (`ws_course.name` always could be
+null). `orderBy` sources: `ws_course.ordered`, `ws_live_course.ordered`,
+`ws_package.order_by`. The FE routes both the detail link and the status toggle off
+`type`, so a mislabelled row would open the wrong module.
+
+### Verified on staging (`websankul_staging_1`)
+
+Category `3180` ("Live One") went from `total: 0` to **`total: 2`** — live course `4`
+found via the reverse marker, package `990096` via the pivot. `type=package` narrows to
+1; `type=course` is empty there. A category with recorded courses (`283`) returns its
+course rows unchanged. Paging 1-row-at-a-time across the type boundary reproduces the
+full list exactly, `total` stable across pages, past-the-end page empty. `search` and
+`status=inactive` filter all three kinds.
+
+---
+
+## 2026-08-20 (c) — `/client/subscriptions/access` expands past the registered product (+ `videoIds`)
+
+**Files:** `src/modules/offline-video-download/{service,repository,types}.ts`,
+`src/client/subscriptions/subscriptions.controller.ts`.
+**No DDL.** `ws_offline_video_download` is unchanged — only how it is READ.
+Request contract unchanged; the GET response gains one key per row.
+
+Answers the FE follow-up to `be-offline-subscription-end-times-api.md`; contract
+copy updated at `docs/client/SUBSCRIPTION_ACCESS.md`.
+
+### The bug being fixed
+
+The app can only POST the ONE product it downloaded from. The same `videoId`
+routinely lives in a course, a package AND a live course. v1 scoped the snapshot to
+`registeredScopes` (DISTINCT `scope_kind`,`scope_id` on the registration row), so
+when that one course ended the file lost its last owner and the app deleted it —
+even though the customer still owned a package containing the same video.
+
+### Query-shape change
+
+| | v1 | now |
+|---|---|---|
+| Start from | DISTINCT registered **scopes** | DISTINCT registered **video ids** |
+| Candidate set | those scopes only | **every active entitlement** |
+| Row emitted when | scope ∈ active | active product's reachable categories ∩ registered videos ≠ ∅ |
+
+- `registeredScopes` (DISTINCT on scope) **replaced** by `registeredVideoIds`
+  (DISTINCT on `video_id`), plus a new `videoCategoriesByIds` read
+  (`ws_video.video_category_id` for the registered ids).
+- **New per-request cost: one recursive-CTE walk (`reachableCategoryIds`) per
+  ACTIVE product**, run concurrently (the Prisma pool bounds real parallelism).
+  This is inherent to expansion — the registered scope can no longer narrow the
+  candidate set, because narrowing it *is* the bug. Short-circuits to **zero**
+  walks when the customer has no registrations (the common case), so users who
+  never download pay nothing.
+- Membership uses the SAME `reachableCategoryIds` resolver that `registerDownload`
+  validates with and that `/client/catalog/:type/:id/videos` lists by, so a video
+  the app could legitimately show and download always resolves. A video with no
+  category is never covered — and POST already refuses to register one.
+- Entitlement still comes from `buildCourseAndPackageCards` /
+  `buildLiveCourseCards` (the My Subscriptions builders). Unchanged, and still not
+  a parallel "is active" query, so an admin revoke drops the row in the same request.
+- Still NOT `cacheRoute`-wrapped.
+
+### Response — additive
+
+Each `items[]` row gains **`videoIds: string[]`** — the registered video ids that
+product still covers, ascending, never empty (a product covering none is not a row).
+`kind` / `id` / `endAt` / `daysLeft` / `syncedAt` are unchanged. FE reconciles files
+by `videoId` across rows instead of by the POSTed product.
+
+⚠ Behaviour change worth flagging to QA: a product the customer **never downloaded
+from** now DOES appear, if it contains a video they registered elsewhere. v1
+documented the opposite ("Active products never downloaded from → not returned").
+That is the requested expansion, not a regression.
+
+The unfiltered-GET entitlement-cache fingerprint now covers this wider set, so it
+sweeps the 24h catalog cache on slightly more changes than before. Still skipped for
+`kinds`-filtered calls.
+
+### Verified on staging (`websankul_staging_1`) — the request doc's own repro
+
+Customer `472369`: **7 active products**; video `33089` sits in `course:114`,
+`package:91`, `package:94`.
+
+1. Registered `33089` under `course:114` **only** → GET returned **all 3** rows,
+   each with `videoIds: ["33089"]`; the other 4 active products absent.
+2. Revoked `course:114` → row omitted, **both packages still returned** with the
+   video (the exact case that used to delete the file).
+3. Revoked the packages too → `33089` in no row's `videoIds`.
+4. Restored; repeat POST left exactly 1 row (idempotent); `kinds=package` returned
+   2 rows; no registrations → `items: []`.
+
+---
+
+## 2026-08-20 (b) — Drop `ws_live_course_subscription.promocode_id` + `referrer_id`
+
+**Files:** `prisma/schema.prisma` (LiveCourseSubscription),
+`src/modules/live-course-order/live-course-order.service.ts`,
+`src/client/payment/live-course-payment.controller.ts`,
+`scripts/backfill-live-course-code-snapshots.ts`.
+**DDL:** `docs/migration/schema-changes/2026-08-20_live_course_subscription_drop_code_ids.sql`
+— **destructive; apply LAST.**
+
+Follows the entry below, which added the snapshot columns and deliberately KEPT these
+two ints. They are now removed: the frozen `promocode` / `refferalcode` objects carry
+strictly more (code, promoter/referrer, plan, percentages as at purchase), so the ids
+are redundant.
+
+### The one dependency, rewired first
+
+`referrer_id` was **not** dead. `creditReferrer` read it at payment-verify to credit the
+referral reward (two call sites in `verifyLiveCourseOrderMysql` — the fold-onto-active
+branch and the fresh-grant branch; `fulfillLiveCourseWebhookMysql` delegates to the same
+function, so the webhook was covered by both).
+
+New helper `referrerIdOf(sub)` reads the referring customer from
+`$.refferalcode.promoter.id` instead. ⚠ That path looks wrong at a glance: the legacy
+referral shape overloads the key `promoter` to mean the referring CUSTOMER, not a
+`ws_promoter`. It is the same value `referrer_id` held. A promocode snapshot has no
+referrer and yields null, so promocode purchases still credit nobody.
+
+`promocode_id` had no reader at all.
+
+### Deploy order — this DDL is NOT reorderable
+
+```
+1. 2026-08-20_live_course_subscription_code_snapshot.sql   (add columns)
+2. deploy backend                                          (writes snapshots)
+3. backfill-live-course-code-snapshots.ts --apply          (hydrates history)
+4. 2026-08-20_live_course_subscription_drop_code_ids.sql   (drop) ← LAST
+```
+
+The backfill's ONLY input is these two columns. Applying step 4 before step 3
+permanently loses the redeemed code of every un-snapshotted row — there is no other
+record of it. Gate on this returning 0:
+
+```sql
+SELECT COUNT(*) FROM ws_live_course_subscription
+ WHERE (referrer_id  IS NOT NULL AND refferalcode IS NULL)
+    OR (promocode_id IS NOT NULL AND promocode    IS NULL);
+```
+
+Staging returned **1** — `id=9` has `referrer_id=472366` but `plan_id IS NULL`, so no
+snapshot can be built for it at all; its referrer is unrecoverable by design. It is
+already `verified`, so no credit was outstanding. The DDL file carries a backup-table
+snippet for prod if the count is non-zero there.
+
+⚠ Deploy-window edge: a row created by the OLD build (referrer_id set, snapshot NULL)
+still `pending` when step 4 lands would verify without crediting. Step 3 closes this for
+any row with a `plan_id`; staging had **0** such pending rows.
+
+### Query/write-shape changes
+
+- `liveCourseSubscription.create` no longer writes `promocodeId` / `referrerId`; the
+  fields are gone from `createLiveCourseOrderMysql`'s input and from the model.
+- The backfill now reads the id columns via **raw SQL**, not the typed model — the
+  fields no longer exist on the Prisma client, so a typed read would not compile, and
+  the script must keep working in the window where the columns still exist.
+- Response shapes **unchanged**: neither column was ever exposed by any endpoint. The
+  report's `promocodeId` / `promoterId` come from inside the snapshot, not these
+  columns, and are unaffected.
+
+### Verified on staging (`websankul_staging_1`, columns actually dropped)
+
+Both columns gone from `information_schema`; a pending live-course subscription created
+with only a referral snapshot; `verifyLiveCourseOrderMysql` credited the referral reward
+(`ws_refferal_transaction` 0 → 1) sourced purely from `$.refferalcode.promoter.id`;
+subscription verified; snapshot intact.
+
+---
+
+## 2026-08-20 — A daily quiz may have NO parent category (`ws_exam.exam_category_id` → NULLable)
+
+**Files:** `src/admin/exam/exam.validation.ts`,
+`src/modules/admin-exam/admin-exam.service.ts`,
+`src/modules/catalog-exam/exam-category-pivot.where.ts`.
+**DDL:** `docs/migration/schema-changes/2026-08-20_exam_category_nullable.sql` — **apply
+before the code deploy.** No backfill. `prisma/schema.prisma` unchanged (already `Int?`).
+
+Handoff: `~/websankul/docs/backend-requests/2026-08-20-daily-quiz-optional-category.md` §1.
+
+Admin → Exam → *Add Quiz* with **Type = Daily** and no parent category 400'd with
+"At least one parent category is required". Daily tests are browsed by DATE, not by
+category, so there is nothing meaningful to file them under. Subject quizzes are
+unchanged — `examsByCategoryPaged` is scoped to `type: "subject"`, so a category-less
+subject quiz would be unreachable in the app.
+
+**FOUR layers enforced non-emptiness**, not the three named in the handoff:
+
+1. `exam.validation.ts` — `categoryIds` was `.nonempty(...)`; now shape-only.
+2. `admin-exam.service.ts` `createExam` — hard error on a missing set; now
+   type-dependent via the new `requireCategoryForType`.
+3. `exam-category-pivot.where.ts` `setExamCategories` — early-returned on an empty
+   set, so "clear all" silently left the old pivot rows; now `deleteMany({ examId })`.
+4. **`exam-category-pivot.where.ts` `validateLeafCategoryIds` returned the same
+   message on an empty set** — missed by the handoff. Relaxing only 1–3 left create
+   still failing and clear-all still erroring out. An empty set is now vacuously valid
+   there (nothing to validate); its ONE caller decides whether empty is legal.
+
+**Query/write-shape changes**
+
+- `ws_exam.exam_category_id` can now be written **NULL** (was `int NOT NULL`). It
+  remains the PRIMARY category — read paths still OR against it
+  (`examInCategoriesWhere`) — and the pivot still holds the full set.
+- `updateExam` previously did `data.examCategoryId = resolved.ids[0]!`, which is
+  `undefined` for an empty array; **Prisma SKIPS undefined**, so a cleared exam kept
+  its stale primary category. Now `resolved.ids[0] ?? null`.
+- `setExamCategories(examId, [])` now issues `examCategoryPivot.deleteMany({ examId })`
+  — a genuinely new delete for that module.
+- `validateLeafCategoryIds([])` short-circuits to `null` and issues **no** queries
+  (previously returned early too, so no query-count change).
+
+**Contract** (unchanged envelope; `toExamDto` already handled a null category)
+
+- `categoryIds` absent on `PUT` = leave links untouched. Present-and-empty = clear all,
+  allowed for `type: "daily"` only; any other type still 400s with the original message.
+- Flipping daily → subject **while** clearing is rejected: the rule runs against the
+  EFFECTIVE type (payload merged over the stored row), which is why it lives in the
+  service — an update payload may omit `type` entirely, so the Zod schema cannot see it.
+- Response for such an exam: `categoryId: null`, `categoryIds: []`.
+- **Multipart:** `categoryIds` = `""` is now accepted as `[]`, mirroring the existing
+  `startAt`/`endAt`/`solutionPdfUrl` preprocess. An empty array appends no keys over
+  `multipart/form-data`, so without this marker a removal-with-PDF-attached arrived
+  absent and read as "leave untouched". The FE will start sending it.
+
+**Verified** against local staging MySQL (`websankul_staging_1`) with the DDL applied:
+daily create with no category succeeds and returns `categoryId: null` / `categoryIds:
+[]`; subject create with none still 400s; clear-all on a daily empties the pivot AND
+nulls the column; daily→subject with an empty set is rejected; omitted `categoryIds`
+still leaves links untouched; the single-scalar multipart lift still works. Pre-check
+confirmed ZERO existing rows use the legacy `exam_category_id = 0` sentinel, so nothing
+needed converting.
+
+---
+
 ## 2026-08-18 — "Add Days" extend no longer wipes the subscription's stored price (test-series + ebook)
 
 **Files:** `src/modules/admin-testseries/admin-testseries.service.ts`,

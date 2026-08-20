@@ -1,7 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { examInCategoryWhere, subjectStartedWhere } from "./exam-category-pivot.where";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · exam READ branch (flag OFF). Scoped to
@@ -127,34 +127,51 @@ export const catalogExamRepository = {
         })
       : Promise.resolve([]),
 
-  /** Courses linked to a category via ws_exam_category_course (paginated). */
+  /**
+   * Everything a category is attached to on the admin Courses tab: recorded
+   * Courses AND Live Courses, as ONE paginated set, each row tagged with `type`.
+   *
+   * Raw SQL because the two links have nothing in common structurally:
+   *   course       → pivot ws_exam_category_course
+   *   live course  → JSON column ws_live_course.exam_categories, holding
+   *                  [{ category, order }] where `category` may be a JSON string
+   *                  ("12") or a number (12) depending on which admin build wrote
+   *                  it — hence the CAST-to-UNSIGNED comparison.
+   * Mirrors admin-material's `buildLinkedProductsQuery`, minus the package branch:
+   * the exam-category page has its own Package tab (GET .../packages), so listing
+   * packages here too would double-count them in the UI.
+   *
+   * Paging a UNION in application code would be wrong (each source would get its
+   * own offset), so the union is paged in SQL.
+   */
   listCategoryCourses: (
     categoryId: number,
-    opts: { search?: string; status?: boolean; skip: number; take: number }
-  ) =>
-    prisma.course.findMany({
-      where: catalogExamRepository.categoryCourseWhere(categoryId, opts),
-      select: { id: true, name: true, status: true, ordered: true },
-      orderBy: [{ ordered: "asc" }, { createdAt: "desc" }],
-      skip: opts.skip,
-      take: opts.take,
-    }),
-
-  countCategoryCourses: (
-    categoryId: number,
-    opts: { search?: string; status?: boolean }
-  ) =>
-    prisma.course.count({ where: catalogExamRepository.categoryCourseWhere(categoryId, opts) }),
-
-  categoryCourseWhere: (
-    categoryId: number,
-    opts: { search?: string; status?: boolean }
+    opts: { search?: string; status?: boolean; type?: CategoryCourseType; skip: number; take: number }
   ) => {
-    const where: any = { examCategoryCourse: { some: { examCategoryId: categoryId } } };
-    const search = buildPrismaSearch(opts.search, ["name"]);
-    if (search) where.AND = search.AND;
-    if (opts.status !== undefined) where.status = opts.status;
-    return where;
+    const { sql, params } = buildCategoryCoursesUnion(categoryId, opts);
+    return prisma.$queryRawUnsafe<CategoryCourseRow[]>(
+      // Same ordering contract the courses-only query shipped with
+      // ([order_by asc, created_at desc]), now spanning both kinds. `id` is the
+      // final tiebreak so a row can never straddle two pages.
+      `SELECT u.type, u.id, u.name, u.status, u.order_by FROM (${sql}) u
+        ORDER BY u.order_by ASC, u.created_at DESC, u.id ASC
+        LIMIT ? OFFSET ?`,
+      ...params,
+      opts.take,
+      opts.skip
+    );
+  },
+
+  countCategoryCourses: async (
+    categoryId: number,
+    opts: { search?: string; status?: boolean; type?: CategoryCourseType }
+  ) => {
+    const { sql, params } = buildCategoryCoursesUnion(categoryId, opts);
+    const rows = await prisma.$queryRawUnsafe<{ total: bigint | number }[]>(
+      `SELECT COUNT(*) AS total FROM (${sql}) u`,
+      ...params
+    );
+    return Number(rows[0]?.total ?? 0);
   },
 
   /**
@@ -225,3 +242,77 @@ export const catalogExamRepository = {
         })
       : Promise.resolve([]),
 };
+
+/**
+ * The two kinds the admin Courses tab can surface. Hyphenated, matching the
+ * spelling `admin-material`'s linked-products helper already emits — the admin FE
+ * keys rows by `type-id` and routes `course` → /admin/courses/:id and
+ * `live-course` → /admin/live-courses/:id.
+ */
+export type CategoryCourseType = "course" | "live-course";
+
+export type CategoryCourseRow = {
+  type: CategoryCourseType;
+  id: number;
+  name: string | null;
+  /** MySQL returns TINYINT(1) for these BOOLEAN columns, so 0/1 rather than a JS boolean. */
+  status: number | boolean | null;
+  /** ws_course.order_by / ws_live_course.ordered — each row's own display order. */
+  order_by: number | null;
+};
+
+/**
+ * The two-way UNION plus its filters, as one parameterised statement.
+ *
+ * Search and status are applied PER BRANCH (not once over the union) so each
+ * branch can use its own name index instead of filtering a materialised temp
+ * table. `type` narrows the union to a single branch; absent means both.
+ *
+ * The live-course branch is `SELECT DISTINCT` over a JSON_TABLE join, not an
+ * EXISTS subquery: a live course whose `exam_categories` array lists the same
+ * category twice would otherwise emit two rows and corrupt both the page window
+ * and `total`. ⚠ EXISTS is NOT an option here — MySQL 8.0 will not correlate the
+ * outer `lc.exam_categories` into a JSON_TABLE inside a subquery, and returns
+ * zero rows SILENTLY (no error) rather than failing. Verified on 8.0.46.
+ */
+function buildCategoryCoursesUnion(
+  categoryId: number,
+  opts: { search?: string; status?: boolean; type?: CategoryCourseType }
+): { sql: string; params: unknown[] } {
+  const toks = searchTokens(opts.search);
+  const tokParams = toks.map((t) => `%${t}%`);
+  const nameFilter = toks.map(() => "AND {alias}.name LIKE ?").join(" ");
+  // Bind as 1/0 — these are TINYINT(1) columns, and MySQL will not coerce a JS
+  // boolean bound through the driver.
+  const statusParam = opts.status === undefined ? [] : [opts.status ? 1 : 0];
+  const filters = (alias: string) =>
+    `${nameFilter.replace(/\{alias\}/g, alias)}${opts.status === undefined ? "" : ` AND ${alias}.status = ?`}`;
+
+  const branches: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts.type === undefined || opts.type === "course") {
+    branches.push(`
+    SELECT 'course' AS type, c.id AS id, c.name AS name, c.status AS status,
+           c.order_by AS order_by, c.created_at AS created_at
+      FROM ws_exam_category_course ecc
+      JOIN ws_course c ON c.id = ecc.course_id
+     WHERE ecc.exam_category_id = ? ${filters("c")}`);
+    params.push(categoryId, ...tokParams, ...statusParam);
+  }
+
+  if (opts.type === undefined || opts.type === "live-course") {
+    branches.push(`
+    SELECT DISTINCT 'live-course' AS type, lc.id AS id, lc.name AS name, lc.status AS status,
+           lc.ordered AS order_by, lc.created_at AS created_at
+      FROM ws_live_course lc
+      JOIN JSON_TABLE(
+             COALESCE(lc.exam_categories, JSON_ARRAY()),
+             '$[*]' COLUMNS (category JSON PATH '$.category')
+           ) jt ON CAST(JSON_UNQUOTE(jt.category) AS UNSIGNED) = ?
+     WHERE 1 = 1 ${filters("lc")}`);
+    params.push(categoryId, ...tokParams, ...statusParam);
+  }
+
+  return { sql: branches.join("\n    UNION ALL\n"), params };
+}

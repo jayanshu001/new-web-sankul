@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
@@ -283,6 +284,23 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         referrerIdNum = result.referrerId ?? null;
       }
 
+      // Freeze the redeemed code into the subscription as the snapshot OBJECT, routed
+      // to exactly ONE column: a real promocode → `promocode`, a customer referral
+      // code → `refferalcode`. Same contract as ws_package_course_order, so the
+      // live-course subscription report can render the code + promoter, and the same
+      // JSON paths resolve. Both null when no code was applied.
+      //
+      // planKind "livePlan" is REQUIRED: body.planId is a ws_live_course_plan id, and
+      // that table shares an id space with ws_package_course_ebook_price. Defaulting
+      // to "price" here would snapshot an unrelated course/package plan and its
+      // promoter percentage (see order-code-snapshot.repository.findPlanLink).
+      const codeSnapshot = await buildOrderCodeSnapshots({
+        promocodeId: promocodeIdNum,
+        referrerId: referrerIdNum,
+        planId: body.planId,
+        planKind: "livePlan",
+      });
+
       // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
       const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
       if (walletUsage.error) {
@@ -302,7 +320,11 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
       const { subscriptionId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
-        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, referrerId: referrerIdNum, coin: walletUsage.coin, originalAmount, discountAmount,
+        // `discountAmount` is NOT persisted — ws_live_course_subscription.discount_amount
+        // was dropped 2026-08-20. originalAmount + paidAmount + walletCoin make it
+        // derivable (liveSubDiscountAmount). It is still echoed in the response below.
+        amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: walletUsage.coin, originalAmount,
+        promocodeSnapshot: codeSnapshot.promocode, refferalcodeSnapshot: codeSnapshot.refferalcode,
         withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });
       logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });

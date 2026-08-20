@@ -1,4 +1,5 @@
 import { clientCartRepository as repo } from "./client-cart.repository";
+import { resolveShippingIdForAddress } from "../customer-shipping/customer-shipping.service";
 import { getFreeShippingMin } from "../book-order/book-order.service";
 
 export const CLIENT_CART_MODULE = "client-cart";
@@ -120,47 +121,32 @@ export const getCart = async (customerId: number) => {
 };
 
 // ─── attach shipping ──────────────────────────────────────────────────────────
+// The address→shipping snapshot itself now lives in modules/customer-shipping so
+// the package/course order path shares the exact same rule (it used to store a
+// raw ws_customer_address id in a ws_customer_shipping FK column). Behaviour here
+// is unchanged — that module is a verbatim extraction of what this function did.
 export const attachShipping = async (
   customerId: number,
   addressId: number,
   userIpAddress: string | null = null
 ): Promise<{ ok: false; reason: "address" | "phone" | "city" } | { ok: true; cart: any; shipping: any }> => {
-  const address = await repo.findAddress(addressId, customerId);
-  if (!address) return { ok: false, reason: "address" };
-
-  // Address carries phone (BigInt) + email; fall back to the customer profile.
-  let phone = address.phone ?? BigInt(0);
-  let email = address.email ?? "";
-  if (!phone || !email) {
-    const c = await repo.findCustomerContact(customerId);
-    if (!phone && c?.phoneNumber) phone = BigInt(c.phoneNumber);
-    email = email || c?.emailAddress || "";
+  const resolved = await resolveShippingIdForAddress(customerId, addressId);
+  if (!resolved.ok) {
+    const reason = resolved.reason === "address_not_found" ? "address" : resolved.reason === "phone_missing" ? "phone" : "city";
+    return { ok: false, reason };
   }
-  if (!phone) return { ok: false, reason: "phone" };
-
-  // The address carries the city as a plain name string on the row itself.
-  const cityName = (address.city ?? "").trim();
-  if (!cityName) return { ok: false, reason: "city" };
-
-  const existing = await repo.findShipping(customerId, address.name, phone, address.address, address.pincode);
-  const shipData = {
-    userId: customerId, name: address.name, phone,
-    alternate_phone: address.alternate_phone ?? null,
-    email, address: address.address, address_2: address.address_2 ?? "",
-    city: cityName.slice(0, 20), state: address.state ?? null, pincode: address.pincode, status: true,
-    created_at: new Date(), updated_at: new Date(),
-  };
-  const shipping = existing
-    ? await repo.updateShipping(existing.id, shipData)
-    : await repo.createShipping(shipData);
 
   const cart = await repo.ensureCart(customerId, userIpAddress);
-  await repo.attachShipping(cart.id, shipping.id);
+  await repo.attachShipping(cart.id, resolved.shippingId);
   const fresh = await repo.findActiveCartBare(customerId);
   // FE (Checkout) reads shipping.phone for display; the snapshot previously sent
   // only {_id, city}. phone is the validated BigInt above → emit as a string.
   // See docs/api-optimization (FE↔BE mismatch fix).
-  return { ok: true, cart: toCartDto(fresh), shipping: { _id: String(shipping.id), city: cityName, phone: String(phone) } };
+  return {
+    ok: true,
+    cart: toCartDto(fresh),
+    shipping: { _id: String(resolved.shippingId), city: resolved.city, phone: String(resolved.phone) },
+  };
 };
 
 export { toCartDto };

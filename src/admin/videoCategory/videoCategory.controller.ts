@@ -85,7 +85,11 @@ export const listVideoCategorySubCategories = async (req: Request, res: Response
   }
 };
 
-// GET /:id/courses — paginated, searchable courses linked to this video category.
+// GET /:id/courses — paginated, searchable UNION of everything attached to this
+// video category: recorded courses, live courses and packages. Each row carries a
+// `type` discriminator; ids are per-type and can collide, so the FE keys by
+// `type:id`. Path kept as /courses (the tab's existing route) — widening it in
+// place is what keeps pagination and `total` honest.
 export const listVideoCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -95,8 +99,8 @@ export const listVideoCategoryCourses = async (req: Request, res: Response) => {
     if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
     const parsed = categoryCoursesQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
-    const { search, status, page, per_page } = parsed.data;
-    const { items, total } = await vcat.listCategoryCourses(numId, { search, status, page, per_page });
+    const { search, status, type, page, per_page } = parsed.data;
+    const { items, total } = await vcat.listCategoryCourses(numId, { search, status, type, page, per_page });
     return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

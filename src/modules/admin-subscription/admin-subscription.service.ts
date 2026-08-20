@@ -1,10 +1,12 @@
 import ExcelJS from "exceljs";
+import { resolveShippingIdForAddress } from "../customer-shipping/customer-shipping.service";
 import type { ReportSource } from "../../utils/reportStream";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
+import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { PaymentMethod } from "../../shared/enums";
 
@@ -514,7 +516,7 @@ export interface CreateCourseSubInput {
 }
 
 export type CreateCourseSubResult =
-  | { ok: false; reason: "plan_not_found" | "course_mismatch" | "package_mismatch" | "shipping_required" }
+  | { ok: false; reason: "plan_not_found" | "course_mismatch" | "package_mismatch" | "shipping_required" | "shipping_invalid" }
   | { ok: true; extended: boolean; data: any };
 
 export const createCourseSubscription = async (input: CreateCourseSubInput): Promise<CreateCourseSubResult> => {
@@ -526,6 +528,17 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   if (plan && input.courseId && Number(plan.courseId ?? 0) !== input.courseId) return { ok: false, reason: "course_mismatch" };
   if (plan && input.packageId && Number(plan.packageId ?? 0) !== input.packageId) return { ok: false, reason: "package_mismatch" };
   if (input.withMaterial && !input.customerShippingId) return { ok: false, reason: "shipping_required" };
+
+  // The admin form posts an ADDRESS-BOOK id — the customer-details screen lists
+  // ws_customer_address rows and nothing else. Both rows written below key their
+  // shipping column to ws_customer_shipping, so snapshot the address into a real
+  // shipping row first and use THAT id for the order and the subscription alike.
+  let shippingIdSql: number | null = null;
+  if (input.customerShippingId) {
+    const resolved = await resolveShippingIdForAddress(input.customerId, input.customerShippingId);
+    if (!resolved.ok) return { ok: false, reason: "shipping_invalid" };
+    shippingIdSql = resolved.shippingId;
+  }
 
   const resolvedCourseId = input.courseId || plan?.courseId || null;
   const resolvedPackageId = input.packageId || plan?.packageId || null;
@@ -540,7 +553,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     repo.createPaymentOrder({
       customerId: input.customerId,
       planId: plan?.id ?? null,
-      shippingId: input.customerShippingId ?? null,
+      shippingId: shippingIdSql,
       amount: Math.round(computedAmount),
       paymentMethod: input.paymentMethod ?? "cash",
       razorpayOrderId: input.razorpayOrderId ?? null,
@@ -574,19 +587,35 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
 
   const order = await makeOrder();
 
+  // Course/material money split — the SAME rule as the checkout path
+  // (commerce-order.computeMaterialSplit), so course_amount obeys one definition no
+  // matter who wrote the row: material is carved OUT of the granted amount, course
+  // takes the rest, floored at ₹100, and the two always sum back to `amount`.
+  //
+  // For a plan-priced grant this is byte-identical to the previous
+  // `courseAmount: plan.price` / `materialAmount: plan.materialPrice` — computedAmount
+  // is price + materialPrice there, so subtracting material hands back exactly price.
+  // It only changes the case that was wrong: when the admin OVERRIDES `amount` (a
+  // discounted manual grant), course_amount used to stay at the full plan price and
+  // could exceed what was actually granted — ₹6500 granted, ₹13000 booked to course.
+  const grantSplit = computeMaterialSplit(computedAmount, {
+    withMaterial: input.withMaterial,
+    materialPrice: plan?.materialPrice ?? 0,
+  });
+
   const created = await repo.createSub({
     customerId: input.customerId,
     orderId: order.id,
     courseId: resolvedCourseId,
     packageId: resolvedPackageId,
     planId: plan?.id ?? null,
-    shippingId: input.customerShippingId ?? null,
+    shippingId: shippingIdSql,
     startAt,
     endAt,
     status: input.status,
     amount: computedAmount,
-    courseAmount: plan?.price ?? null,
-    materialAmount: input.withMaterial ? (plan?.materialPrice ?? 0) : null,
+    courseAmount: grantSplit.courseAmount,
+    materialAmount: grantSplit.materialAmount,
     payment_type: input.paymentType,
     remarks: input.remark ?? null,
     actingAdminId: input.actingAdminId ?? null,
@@ -595,9 +624,23 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   return { ok: true, extended: wasExtension, data: await getCourseSubscriptionById(created.id) };
 };
 
-export const listPlansForTarget = async (courseId?: number, packageId?: number) => {
-  const plans = await repo.plansForTarget({ courseId, packageId });
-  return plans.map((p) => ({ _id: String(p.id), name: p.name ?? null, duration: p.duration, price: p.price, materialPrice: p.materialPrice ?? 0, withMaterial: p.withMaterial, isDefault: p.isDefault, status: p.status, courseId: idStr(p.courseId), packageId: idStr(p.packageId) }));
+/**
+ * Pricing plans for one course or package (Add-Subscription picker).
+ *
+ * `status`: true = active only, false = inactive only, undefined = both.
+ * The CALLER decides — the controller defaults an absent `?status=` to `true`, so
+ * today's "active only" behaviour is unchanged for every existing consumer
+ * (including the customer-facing app, which must never see inactive plans).
+ *
+ * `updatedAt` is emitted for parity with the live-course / test-series / ebook plan
+ * DTOs. The admin picker ages inactive plans by it ("active, plus inactive updated in
+ * the last 7 days"), so an inactive row without it cannot be shown. ⚠ It is
+ * `updated_at`, NOT a deactivated-at — a plan switched off months ago but renamed
+ * yesterday looks recent. No table has a deactivated-at column; see the handoff.
+ */
+export const listPlansForTarget = async (courseId?: number, packageId?: number, status?: boolean) => {
+  const plans = await repo.plansForTarget({ courseId, packageId, status });
+  return plans.map((p) => ({ _id: String(p.id), name: p.name ?? null, duration: p.duration, price: p.price, materialPrice: p.materialPrice ?? 0, withMaterial: p.withMaterial, isDefault: p.isDefault, status: p.status, courseId: idStr(p.courseId), packageId: idStr(p.packageId), updatedAt: p.updated_at ?? null }));
 };
 
 // ── ebook subscriptions list ────────────────────────────────────────────────────
