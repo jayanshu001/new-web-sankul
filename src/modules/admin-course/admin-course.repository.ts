@@ -233,6 +233,15 @@ export const adminCourseRepository = {
   findPlanById: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
   createPlan: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) => prisma.packageCourseEbookPrice.create({ data }),
   updatePlan: (id: number, data: Prisma.PackageCourseEbookPriceUncheckedUpdateInput) => prisma.packageCourseEbookPrice.update({ where: { id }, data }),
+  /**
+   * Promo-code plan links point at ws_package_course_ebook_price.id with NO foreign
+   * key, so deleting a plan without clearing them leaves rows in
+   * ws_promoted_package_course_ebook aimed at an id that no longer exists — the same
+   * orphan class the delete guards exist to prevent. admin-plan.deletePlan has always
+   * done this; the per-module deletes did not.
+   */
+  deletePromotedForPlan: (planId: number) =>
+    prisma.promotedPackageCourseEbook.deleteMany({ where: { planId } }),
   deletePlan: (id: number) => prisma.packageCourseEbookPrice.delete({ where: { id } }),
   /** Single-default invariant: flip all OTHER course-owned plans to isDefault=false. */
   clearSiblingDefaults: (courseId: number, exceptId: number) =>

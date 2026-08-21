@@ -27,7 +27,7 @@
           <%= contactNumber %><br>
           <%= email %><br><br>
           Payment Method: <%= paymentMethod %><br>
-          Payment Id: <%= razorpayPaymentId %><br>
+          <%= typeof paymentIdLabel !== 'undefined' && paymentIdLabel ? paymentIdLabel : 'Payment Id' %>: <%= razorpayPaymentId %><br>
         </td>
         <td></td>
         <td style="padding: 20px;">

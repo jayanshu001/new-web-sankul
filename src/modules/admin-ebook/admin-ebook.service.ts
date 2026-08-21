@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { PassThrough } from "node:stream";
@@ -274,7 +275,13 @@ export const listEbookPlans = async (
     repo.listPlans(ebookId, { skip: opts.skip, take: opts.take }),
     repo.countPlans(ebookId),
   ]);
-  return { data: plans.map(toPlanDto), pagination: buildPagination(total, opts.page, opts.limit) };
+  // All-time, status-blind order count → the panel's Delete lock. One grouped
+  // query per page (utils/planUsage).
+  const usage = await countPlanUsage("price", plans.map((pl) => pl.id));
+  return {
+    data: plans.map((pl) => ({ ...toPlanDto(pl), orderCount: usage.get(pl.id) ?? 0 })),
+    pagination: buildPagination(total, opts.page, opts.limit),
+  };
 };
 
 export const createEbookPlan = async (ebookId: number, d: { name?: string | null; duration: number; price: number; isDefault?: boolean; status?: boolean }): Promise<"not_found" | any> => {
@@ -300,20 +307,32 @@ export const getEbookPlanById = async (planId: number) => {
   return plan ? toPlanDto(plan) : null;
 };
 
-export const updateEbookPlan = async (planId: number, d: { name?: string | null; duration?: number; price?: number; isDefault?: boolean; status?: boolean }): Promise<"not_found" | any> => {
-  if (!(await repo.findPlanBare(planId))) return "not_found";
+export const updateEbookPlan = async (planId: number, d: { name?: string | null; duration?: number; price?: number; isDefault?: boolean; status?: boolean }): Promise<"not_found" | "frozen_terms" | any> => {
+  const existing = await repo.findPlanBare(planId);
+  if (!existing) return "not_found";
+  // Commercial terms are frozen once saved; only a real CHANGE is refused, so a
+  // form re-sending the stored values still saves.
+  if (
+    (d.duration !== undefined && d.duration !== existing.duration) ||
+    (d.price !== undefined && d.price !== existing.price)
+  ) return "frozen_terms";
   const data: any = { updated_at: new Date() };
   if (d.name !== undefined) data.name = d.name;
-  if (d.duration !== undefined) data.duration = d.duration;
-  if (d.price !== undefined) data.price = d.price;
   if (d.isDefault !== undefined) data.isDefault = d.isDefault;
   if (d.status !== undefined) data.status = d.status;
   const updated = await repo.updatePlan(planId, data);
   return toPlanDto(updated);
 };
 
-export const deleteEbookPlan = async (planId: number): Promise<boolean> => {
-  if (!(await repo.findPlanBare(planId))) return false;
+export const deleteEbookPlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
+  if (!(await repo.findPlanBare(planId))) return "not_found";
+  // Ebook plans live in ws_package_course_ebook_price and are referenced by
+  // ws_ebook_order.plan_id. NOTE: ws_ebook_subscription has NO plan_id column, so an
+  // order-less legacy ebook subscription cannot be attributed to a plan — see
+  // utils/planUsage. Every real purchase writes an order, so this holds in practice.
+  const inUse = await countPlanUsageOne("price", planId);
+  if (inUse > 0) return { inUse };
+  await repo.deletePromotedForPlan(planId);
   await repo.deletePlan(planId);
   return true;
 };

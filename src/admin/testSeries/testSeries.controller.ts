@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { planInUseMessage } from "../../utils/planUsage";
+import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
 import { z } from "zod";
 import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderType } from "../../shared/enums";
 import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
@@ -463,6 +465,7 @@ export const updatePrice = async (req: Request, res: Response) => {
     }
     const r = await tsSql.updatePrice(nid, data as any);
     if (!r) { logger.warn("updatePrice not found", { traceId, priceId }); return failure(res, "Price plan not found.", 404); }
+    if (r === "frozen_terms") { logger.warn("updatePrice frozen terms", { traceId, priceId }); return failure(res, PLAN_TERMS_FROZEN_MESSAGE, 422); }
     logger.info("updatePrice success", { traceId, priceId });
     return success(res, r, "Price plan updated.");
   } catch (err) {
@@ -480,10 +483,11 @@ export const deletePrice = async (req: Request, res: Response) => {
   try {
     const nid = tsSql.parseAtsId(priceId);
     if (nid == null) { logger.warn("deletePrice invalid id", { traceId, priceId }); return failure(res, "Invalid price id.", 422); }
-    const subs = await tsSql.activeSubsForPlan(nid, new Date());
-    if (subs > 0) {
-      logger.warn("deletePrice refused active subs", { traceId, priceId, subs });
-      return failure(res, `Cannot delete: ${subs} active subscription(s) reference this plan. Toggle status off instead.`, 409);
+    // ALL-TIME: an expired subscription pins the plan exactly as a live one does.
+    const inUse = await tsSql.ordersForPlan(nid);
+    if (inUse > 0) {
+      logger.warn("deletePrice refused: plan in use", { traceId, priceId, inUse });
+      return failure(res, planInUseMessage(inUse), 409);
     }
     const ok = await tsSql.deletePrice(nid);
     if (!ok) { logger.warn("deletePrice not found", { traceId, priceId }); return failure(res, "Price plan not found.", 404); }

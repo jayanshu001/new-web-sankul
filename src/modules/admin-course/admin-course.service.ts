@@ -3,6 +3,7 @@ import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import { buildPagination } from "../../utils/listQuery";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import type { Course } from "@prisma/client";
 
 export const ADMIN_COURSE_MODULE = "admin-course";
@@ -261,8 +262,12 @@ export const listCoursePlans = async (
     repo.listPlans(courseId, opts.skip, opts.take),
     repo.countPlans(courseId),
   ]);
+  // `orderCount` drives the panel's Delete lock (all-time, status-blind) — one
+  // grouped query for the page, never one per row. Always a number: absent means
+  // "unknown" to the FE, which then leaves Delete enabled.
+  const usage = await countPlanUsage("price", rows.map((r) => r.id));
   return {
-    data: rows.map(toPlanDto),
+    data: rows.map((r) => ({ ...toPlanDto(r), orderCount: usage.get(r.id) ?? 0 })),
     pagination: buildPagination(total, opts.page, opts.limit),
   };
 };
@@ -437,16 +442,29 @@ export const getCoursePlanById = async (planId: number): Promise<"not_found" | a
   return plan ? toPlanDto(plan) : "not_found";
 };
 
-export const updateCoursePlan = async (planId: number, validated: any): Promise<"not_found" | any> => {
+/**
+ * A saved plan's COMMERCIAL terms are immutable (product rule, 2026-08-21) — a
+ * wrong price is corrected by adding a new plan and deactivating the old one, not
+ * by rewriting what buyers already paid. Only `name`, `status` and the editorial
+ * `isDefault` flag stay writable; everything else is dropped rather than 422'd, so
+ * a form that still re-sends the stored values on save is not broken by the rule.
+ */
+export const updateCoursePlan = async (planId: number, validated: any): Promise<"not_found" | "frozen_terms" | any> => {
   const existing = await repo.findPlanById(planId);
   if (!existing) return "not_found";
-  const data: any = { updated_at: new Date() };
+
+  // Reject only a payload that would actually CHANGE a frozen term; a no-op
+  // re-send of the stored values passes untouched.
   const duration = validated.duration ?? validated.subscriptionDurationMonths;
-  if (duration !== undefined) data.duration = duration;
+  const changesFrozen =
+    (duration !== undefined && duration !== existing.duration) ||
+    (validated.price !== undefined && validated.price !== existing.price) ||
+    (validated.withMaterial !== undefined && validated.withMaterial !== existing.withMaterial) ||
+    (validated.materialPrice !== undefined && (validated.materialPrice ?? 0) !== (existing.materialPrice ?? 0));
+  if (changesFrozen) return "frozen_terms";
+
+  const data: any = { updated_at: new Date() };
   if (validated.name !== undefined) data.name = validated.name;
-  if (validated.price !== undefined) data.price = validated.price;
-  if (validated.withMaterial !== undefined) data.withMaterial = validated.withMaterial;
-  if (validated.materialPrice !== undefined) data.materialPrice = validated.materialPrice;
   if (validated.isDefault !== undefined) data.isDefault = validated.isDefault;
   if (validated.status !== undefined) data.status = validated.status;
   const updated = await repo.updatePlan(planId, data);
@@ -454,8 +472,14 @@ export const updateCoursePlan = async (planId: number, validated: any): Promise<
   return toPlanDto(updated);
 };
 
-export const deleteCoursePlan = async (planId: number): Promise<boolean> => {
-  if (!(await repo.findPlanById(planId))) return false;
+export const deleteCoursePlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
+  if (!(await repo.findPlanById(planId))) return "not_found";
+  // One ordered row — of any status, expired or not — pins the plan for good.
+  // ws_package_course_subscription has no FK on pcb_id, so without this the
+  // delete succeeds and leaves those rows pointing at a plan that is gone.
+  const inUse = await countPlanUsageOne("price", planId);
+  if (inUse > 0) return { inUse };
+  await repo.deletePromotedForPlan(planId);
   await repo.deletePlan(planId);
   return true;
 };

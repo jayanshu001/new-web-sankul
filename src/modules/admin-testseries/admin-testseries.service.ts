@@ -24,6 +24,7 @@
  *   - TestSeriesOrder is read-only here (listOrders).
  */
 import ExcelJS from "exceljs";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { nextOrder } from "../../utils/listOrdering";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
@@ -625,7 +626,9 @@ export const listPrices = async (
     }),
     prisma.testSeriesPrice.count({ where: { testSeriesId } }),
   ]);
-  const data = rows.map(priceDto);
+  // All-time, status-blind order count → the panel's Delete lock (utils/planUsage).
+  const usage = await countPlanUsage("testSeriesPrice", rows.map((r) => r.id));
+  const data = rows.map((r) => ({ ...priceDto(r), orderCount: usage.get(r.id) ?? 0 }));
   return { data, pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
@@ -661,11 +664,22 @@ export const createPrice = async (testSeriesId: number, data: PriceWrite) => {
   return { price: priceDto(price) };
 };
 
-/** Returns null when the price is missing. */
-export const updatePrice = async (priceId: number, data: PriceWrite) => {
+/**
+ * Returns null when the price is missing, "frozen_terms" when the payload would
+ * change a saved plan's commercial terms (durationDays / price / originalPrice).
+ * Only `name`, `isDefault` and `status` stay writable; a payload repeating the
+ * stored values still saves, which the product form relies on.
+ */
+export const updatePrice = async (priceId: number, data: PriceWrite): Promise<null | "frozen_terms" | { price: any }> => {
   const price = await prisma.$transaction(async (tx) => {
     const existing = await tx.testSeriesPrice.findUnique({ where: { id: priceId } });
     if (!existing) return null;
+    if (
+      (data.durationDays !== undefined && data.durationDays !== existing.durationDays) ||
+      (data.price !== undefined && data.price !== num(existing.price)) ||
+      (data.originalPrice !== undefined &&
+        (data.originalPrice ?? 0) !== (existing.originalPrice != null ? num(existing.originalPrice) : 0))
+    ) return "frozen_terms" as const;
     if (data.isDefault === true) {
       await tx.testSeriesPrice.updateMany({
         where: { testSeriesId: existing.testSeriesId, isDefault: true, id: { not: priceId } },
@@ -674,21 +688,24 @@ export const updatePrice = async (priceId: number, data: PriceWrite) => {
     }
     const set: any = {};
     if (data.name !== undefined) set.name = data.name;
-    if (data.durationDays !== undefined) set.durationDays = data.durationDays;
-    if (data.price !== undefined) set.price = data.price;
-    if (data.originalPrice !== undefined) set.originalPrice = data.originalPrice;
     if (data.isDefault !== undefined) set.isDefault = data.isDefault;
     if (data.status !== undefined) set.status = data.status;
     return tx.testSeriesPrice.update({ where: { id: priceId }, data: set });
   });
-  return price ? { price: priceDto(price) } : null;
+  if (price === null) return null;
+  if (price === "frozen_terms") return "frozen_terms";
+  return { price: priceDto(price) };
 };
 
-/** Active subscriptions referencing this plan. */
-export const activeSubsForPlan = async (planId: number, now: Date): Promise<number> =>
-  prisma.testSeriesSubscription.count({
-    where: { planId, status: true, endAt: { gt: now } },
-  });
+/**
+ * ALL-TIME orders referencing this plan — the delete guard.
+ *
+ * Replaces `activeSubsForPlan` (status:true AND endAt > now), under which a single
+ * EXPIRED subscription no longer blocked the delete and the plan could be removed
+ * out from under its own historical rows.
+ */
+export const ordersForPlan = (planId: number): Promise<number> =>
+  countPlanUsageOne("testSeriesPrice", planId);
 
 /** Returns false when the price is missing. */
 export const deletePrice = async (priceId: number): Promise<boolean> => {

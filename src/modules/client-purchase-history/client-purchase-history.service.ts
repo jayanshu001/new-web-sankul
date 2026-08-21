@@ -1,4 +1,5 @@
 import { clientPurchaseHistoryRepository as repo } from "./client-purchase-history.repository";
+import { formatPaymentMethod, formatPaymentType, resolvePaymentReference } from "../../utils/paymentMethod";
 import { COURIER } from "../../config/courier";
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 
@@ -514,9 +515,10 @@ export const getEbookReceiptMysql = async (orderId: number, customerId: number) 
     status: order.status,
     customer: { id: order.userId != null ? String(order.userId) : "" },
     payment: {
-      method: order.paymentMethod,
+      method: formatPaymentMethod(order.paymentMethod) || "Online",
       razorpayOrderId: order.gatewayOrderId ?? null,
       razorpayPaymentId: order.gatewayPaymentId ?? null,
+      transactionId: order.bankTransactionId || null,
     },
     items: [
       {
@@ -535,7 +537,7 @@ export const getEbookReceiptMysql = async (orderId: number, customerId: number) 
       ebookId: ebook ? String(ebook.id) : null,
       planId: order.planId != null ? String(order.planId) : null,
       duration: plan?.duration ?? null,
-      transactionId: order.bankTransactionId ?? null,
+      transactionId: order.bankTransactionId || null,
     },
   };
 };
@@ -568,9 +570,12 @@ export const getBookReceiptMysql = async (orderId: number, customerId: number) =
     status: o.status,
     customer: { id: String(o.userId) },
     payment: {
-      method: o.paymentMethod,
+      method: formatPaymentMethod(o.paymentMethod) || "Online",
       razorpayOrderId: o.gatewayOrderId ?? null,
       razorpayPaymentId: o.gatewayPaymentId ?? null,
+      // ws_book_order has no bank reference column (its transaction_id was
+      // dropped), so a bank-paid book order genuinely has nothing to show here.
+      transactionId: null,
     },
     items,
     totals: {
@@ -630,9 +635,12 @@ export const getCourseReceiptMysql = async (orderId: number, customerId: number)
     status: "verified",
     customer: { id: String(order.userId ?? customerId) },
     payment: {
-      method: "razorpay",
+      // Was hardcoded "razorpay" — a bank/cash/backend order reported the wrong
+      // method on the receipt screen while the PDF showed the real one.
+      method: formatPaymentMethod(order.paymentMethod) || "Online",
       razorpayOrderId: order.gatewayOrderId ?? null,
       razorpayPaymentId: order.gatewayPaymentId ?? null,
+      transactionId: order.bankTransactionId || null,
     },
     items: [
       {
@@ -683,7 +691,14 @@ export const getCourseReceiptBySubMysql = async (subId: number, customerId: numb
     paidAt: null,
     status: "verified",
     customer: { id: String(sub.customerId) },
-    payment: { method: "razorpay", razorpayOrderId: null, razorpayPaymentId: null },
+    // Legacy order-less sub: `payment_type` (backend|online) is all there is —
+    // report that instead of claiming a gateway that was never involved.
+    payment: {
+      method: formatPaymentType(sub.payment_type) || "Online",
+      razorpayOrderId: null,
+      razorpayPaymentId: null,
+      transactionId: null,
+    },
     items: [{ name: lineName, qty: 1, unitPrice: amount, lineTotal: amount }],
     totals: { subTotal: amount, grandTotal: amount, currency: "INR" as const },
     extra: {
@@ -724,9 +739,12 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
     status: sub.paymentStatus ?? "verified",
     customer: { id: String(sub.customerId) },
     payment: {
-      method: "razorpay",
+      // ws_live_course_subscription carries its own payment_method +
+      // bank_transaction_id; this was hardcoded "razorpay" and ignored both.
+      method: formatPaymentMethod(sub.paymentMethod) || "Online",
       razorpayOrderId: sub.razorpayOrderId ?? null,
       razorpayPaymentId: sub.razorpayPaymentId ?? null,
+      transactionId: sub.bankTransactionId || null,
     },
     items: [
       {
@@ -783,9 +801,11 @@ export const getTestSeriesReceiptMysql = async (orderId: number, customerId: num
     status: "verified",
     customer: { id: String(order.customerId) },
     payment: {
-      method: order.paymentMethod ?? "razorpay",
+      // Fallback was "razorpay"; a missing method is not evidence of a gateway.
+      method: formatPaymentMethod(order.paymentMethod) || "Online",
       razorpayOrderId: order.razorpayOrderId ?? null,
       razorpayPaymentId: order.razorpayPaymentId ?? null,
+      transactionId: order.transactionId || null,
     },
     items: [
       {
@@ -828,7 +848,12 @@ export const getTestSeriesReceiptBySubMysql = async (subId: number, customerId: 
     paidAt: sub.createdAt ?? null,
     status: sub.status ? "verified" : "inactive",
     customer: { id: String(sub.customerId) },
-    payment: { method: sub.paymentType ?? "razorpay", razorpayOrderId: null, razorpayPaymentId: null },
+    payment: {
+      method: formatPaymentType(sub.paymentType) || "Online",
+      razorpayOrderId: null,
+      razorpayPaymentId: null,
+      transactionId: null,
+    },
     items: [{ name: ts?.title || "Test Series subscription", qty: 1, unitPrice: total, lineTotal: total }],
     totals: { subTotal: total, grandTotal: total, currency: "INR" as const },
     extra: {

@@ -1,4 +1,5 @@
 import { HttpError } from "../../middlewares/errorHandler";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
@@ -432,20 +433,38 @@ export const reorderEmbedded = async (
 };
 
 // ── plans ──────────────────────────────────────────────────────────────────────
-export const listPackagePlans = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
+export const listPackagePlans = async (
+  packageId: number,
+  q: { page?: string; limit?: string; status?: string }
+): Promise<"not_found" | { data: any[]; pagination: any }> => {
   if (!(await repo.exists(packageId))) return "not_found";
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(q.limit ?? "10", 10) || 10, 1), 500);
+  // Optional filter for callers that DO want one view or the other. Absent (the
+  // panel's case) = every plan, active and inactive. Anything other than the two
+  // literals is ignored rather than 422'd — this is a display toggle, not a
+  // reference, and a typo must not empty the tab.
+  const status = q.status === "true" ? true : q.status === "false" ? false : undefined;
   const [rows, total] = await Promise.all([
-    repo.listPlans(packageId, (pageNum - 1) * limitNum, limitNum),
-    repo.countPlans(packageId),
+    repo.listPlans(packageId, (pageNum - 1) * limitNum, limitNum, status),
+    repo.countPlans(packageId, status),
   ]);
-  // `subscriberCount` drives the admin UI's edit lock: a plan customers already bought
-  // must not have its terms rewritten (the PUT /plans/:id guard enforces the same rule).
-  const counts = rows.length ? await repo.subscriptionCountsByPlan(rows.map((r) => r.id)) : [];
+  // `orderCount` is the cross-module contract (all-time, status-blind) that drives
+  // the Delete lock. `subscriberCount` is kept beside it — it predates orderCount,
+  // the panel reads `orderCount ?? subscriberCount`, and the two are NOT synonyms:
+  // subscriberCount counts subscription rows only, orderCount also counts orders
+  // with no subscription row yet. Dropping it would be a silent contract change.
+  const [counts, usage] = await Promise.all([
+    rows.length ? repo.subscriptionCountsByPlan(rows.map((r) => r.id)) : Promise.resolve([]),
+    countPlanUsage("price", rows.map((r) => r.id)),
+  ]);
   const countByPlan = new Map(counts.map((c: any) => [c.planId, c._count?._all ?? 0]));
   return {
-    data: rows.map((r) => ({ ...toPlanDto(r), subscriberCount: countByPlan.get(r.id) ?? 0 })),
+    data: rows.map((r) => ({
+      ...toPlanDto(r),
+      subscriberCount: countByPlan.get(r.id) ?? 0,
+      orderCount: usage.get(r.id) ?? 0,
+    })),
     pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
   };
 };
@@ -458,8 +477,21 @@ export const attachPlansToPackage = async (packageId: number, planIds: string[])
   return { modified: r.count };
 };
 
-export const detachPlan = async (packageId: number, planId: number): Promise<void> => {
-  await repo.detachPlan(packageId, planId);
+/**
+ * Delete a plan from a package — a REAL delete now, guarded exactly like the other
+ * four modules. Was an `updateMany({ status: false })` that returned 200 and looked
+ * identical to a delete from the panel's side.
+ */
+export const detachPlan = async (
+  packageId: number,
+  planId: number
+): Promise<"not_found" | { inUse: number } | true> => {
+  if (!(await repo.findPlanInPackage(packageId, planId))) return "not_found";
+  const inUse = await countPlanUsageOne("price", planId);
+  if (inUse > 0) return { inUse };
+  await repo.deletePromotedForPlan(planId);
+  await repo.deletePlanFromPackage(packageId, planId);
+  return true;
 };
 
 // ── subscribers ───────────────────────────────────────────────────────────────

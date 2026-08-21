@@ -123,6 +123,18 @@ export const adminCustomerRepository = {
       orderBy: { name: "asc" },
     }),
 
+  /**
+   * One education row by id, for validating a write. ws_customer has NO foreign
+   * keys (checked on staging: information_schema lists none), so an unknown
+   * education_id is accepted by MySQL and then reads back as `educationId: null`
+   * through the relation include — a silent data loss the caller never sees.
+   */
+  findEducation: (id: number) =>
+    prisma.customerEducation.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    }),
+
   listDistrictsByState: (stateId: number) =>
     prisma.customerDistict.findMany({
       where: { stateId, active: true },

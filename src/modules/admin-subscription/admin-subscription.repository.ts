@@ -98,6 +98,39 @@ export const adminSubscriptionRepository = {
         updatedAt: d.now,
       },
     }),
+  /**
+   * Correct the payment record on a subscription's linked ws_package_course_order.
+   *
+   * The payment METHOD and its reference ids live on the ORDER, not on the
+   * subscription — ws_package_course_subscription has only `payment_type`
+   * (backend|online). The edit-subscription path patched the subscription alone,
+   * so an admin correcting "this was actually a bank transfer" changed nothing and
+   * the receipt kept printing the original gateway.
+   *
+   * Only keys explicitly passed are written, so an edit that does not touch payment
+   * leaves the order untouched.
+   */
+  patchOrderPayment: (
+    orderId: number,
+    d: {
+      paymentMethod?: string;
+      bankTransactionId?: string | null;
+      razorpayOrderId?: string | null;
+      razorpayPaymentId?: string | null;
+      now: Date;
+    }
+  ) =>
+    prisma.packageCourseOrder.update({
+      where: { id: orderId },
+      data: {
+        ...(d.paymentMethod !== undefined ? { paymentMethod: d.paymentMethod as any } : {}),
+        ...(d.bankTransactionId !== undefined ? { bankTransactionId: d.bankTransactionId } : {}),
+        ...(d.razorpayOrderId !== undefined ? { gatewayOrderId: d.razorpayOrderId } : {}),
+        ...(d.razorpayPaymentId !== undefined ? { gatewayPaymentId: d.razorpayPaymentId } : {}),
+        updatedAt: d.now,
+      },
+    }),
+
   createSub: (d: {
     customerId: number; orderId?: number | null; courseId: number | null; packageId: number | null; planId: number | null;
     shippingId: number | null; startAt: Date; endAt: Date; status: boolean; amount: number;

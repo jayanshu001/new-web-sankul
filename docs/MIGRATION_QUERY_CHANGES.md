@@ -15,6 +15,574 @@
 
 ---
 
+## 2026-08-21 (f) — Package plans: show inactive ones, and make Delete actually delete
+
+**Files:** `src/modules/admin-package/admin-package.repository.ts`,
+`admin-package.service.ts`, `src/admin/package/package.service.ts`,
+`package.controller.ts`, plus `deletePromotedForPlan` added to the admin-course and
+admin-ebook repositories. **DDL:** none. **Backfill:** none.
+
+Implements §4 and §5 of
+`~/websankul/docs/backend-requests/2026-08-21-pricing-plan-immutability.md`.
+
+### §4 — the list no longer hides inactive plans
+
+`repo.listPlans` / `countPlans` had `status: true` baked in, making Packages the only
+plan list that filtered — so switching a package plan Inactive made the row VANISH from
+the Pricing tab with no way back from that screen.
+
+Filter dropped from both. Optional `?status=true|false` added for callers that do want
+one view; an unrecognised value is ignored rather than 422'd (a display toggle must not
+empty the tab on a typo).
+
+**Ordered active-first** (`status desc, duration asc`), which was not requested but is
+needed for the change to be usable: **251 of 633 package plans on staging are inactive
+(40%)**, and several packages hold more inactive than active (package 3: 14 vs 5). The
+panel pages at `limit=10`, so plain `duration: asc` could have filled page 1 entirely
+with retired plans. Within the active block the order is unchanged.
+
+`orderCount` added alongside `subscriberCount`. **Both are kept** — they are not
+synonyms: `subscriberCount` counts subscription rows only, `orderCount` also counts
+orders with no subscription row yet. Dropping the older field would have been a silent
+contract change.
+
+### §5 — DELETE was a disguised deactivate
+
+`detachPlan` was `updateMany({ status: false })`, returning 200 and indistinguishable
+from a real delete. That is where the 251 inactive rows largely come from, and §4 would
+have surfaced every historical pseudo-delete at once.
+
+Now **Option A**, as preferred in the request: a real `deleteMany({ id, packageId })`,
+scoped to the owning package, guarded by `countPlanUsageOne("price", planId) > 0` → **409**
+with the shared wording. Missing plan → 404. The route and the panel need no change.
+
+### Also fixed: promo links were being orphaned
+
+`ws_promoted_package_course_ebook.pcb_price_id` points at a plan id with **no foreign
+key**. `admin-plan.deletePlan` has always cleared those links before deleting; the
+per-module deletes never did — so course, ebook and (now) package deletes would leave
+promo-code plan links aimed at a row that no longer exists. That is the same orphan class
+§1 exists to prevent. `deletePromotedForPlan` added to all three repositories and called
+before the delete.
+
+### Verified against staging (package 3 — 14 inactive, 5 active)
+
+```
+§4 unfiltered total=19  page1=[317:on 97:on 763:on 98:on 764:on 384:OFF 653:OFF 748:OFF 726:OFF 723:OFF]
+§4 ?status=true total=5   ?status=false total=14
+§4 orderCount on every row=true   subscriberCount kept=true
+§5 delete SOLD plan 1293   -> {"inUse":99}        → 409
+§5 delete UNSOLD plan 1460 -> true; row after = null   (really gone, not deactivated)
+§5 missing plan            -> "not_found"         → 404
+```
+
+Note page 1: all five active plans sort ahead of the inactive ones — the ordering change
+doing its job. The throwaway probe plan was removed; no residue.
+
+### For the panel
+
+251 previously-invisible rows become visible the moment this deploys, across ~12
+packages. They are ordinary inactive plans now — reactivatable, and deletable when
+unsold. Nothing to migrate, but the Pricing tab will look much fuller on some packages,
+and the explanatory note under the table can be removed.
+
+---
+
+## 2026-08-21 (e) — `GET /admin/dashboard` timeout on wide ranges
+
+**Files:** `src/modules/admin-dashboard/admin-dashboard.service.ts`,
+`src/admin/dashboard/dashboard.controller.ts`, `src/admin/dashboard/dashboard.routes.ts`,
+`src/middlewares/flushGroups.ts` (+`"admin-dashboard"` cache entity).
+**DDL:** `docs/migration/schema-changes/2026-08-21_admin_dashboard_indexes.sql`
+— **applied on staging, pending on prod.** **Backfill:** none.
+
+### What was actually slow — not what it looked like
+
+Reported as "a yearly filter over 13 lakh rows times out". Measured on staging
+(555k rows in `ws_package_course_subscription`, 149k inside the year window): the
+year-range aggregates run in **~50ms each**, because
+`idx_pcs_created_course_amount (created_at, course_id, amount)` already covers them.
+Whole endpoint: **180ms**. The date range was never the expensive part.
+
+Three query shapes had **no usable index**, and they scale with TOTAL table size, not
+with the selected range:
+
+```
+EXPLAIN SELECT ... FROM ws_customer WHERE is_account_deleted = 0
+ ORDER BY created_at DESC LIMIT 7;
+-- type: ALL, key: NULL, Extra: "Using where; Using filesort"
+```
+
+On a 600k-row `ws_customer` that is a full scan plus a sort of every surviving row **to
+return seven**. Plus both customer counters (`type: ALL`), and the recent-ebook list
+(filesort). This is why the page is slow regardless of range — and why a year filter
+looked like the cause.
+
+### 1. Indexes (the actual fix)
+
+`ws_customer (is_account_deleted, created_at)`, `ws_customer (is_account_deleted, status)`,
+`ws_ebook_subscription (created_at)`. Verified on staging — all four EXPLAINs moved from
+`type: ALL` + filesort to `type: ref` / `Backward index scan; Using index`.
+
+### 2. Totals folded from the series instead of re-aggregated
+
+`fetchDashboardData` ran five `*Revenue(tot)` aggregates AND six `seriesFor()` queries
+over the **same window, table and filter** — the Total Order Reports card paid for the
+range twice. `totals` is now summed from the series buckets. Five fewer full-range scans,
+and five fewer connections held for the duration of a year-range scan.
+
+Verified identical, not assumed — the folded totals were compared against the old
+five-aggregate path across all three bucket units:
+
+```
+unit=month  137ms totals={"orders":148900,"earnings":464005504} matchesOldPath=true
+unit=day    119ms  (same)                                        matchesOldPath=true
+unit=hour   121ms  (same)                                        matchesOldPath=true
+expected (old 5-aggregate path): {"orders":148900,"earnings":464005504}
+```
+
+### 3. Twelve counters → one connection
+
+The summary counters were twelve entries in the same `Promise.all`, each acquiring its own
+pool connection. Now one `$transaction([...])` — sequential on a single connection.
+
+**This is the likely timeout mechanism.** `DATABASE_URL` sets no `connection_limit`, so
+Prisma's default pool is `physical_cpus * 2 + 1` — **five connections on a 2-vCPU box**.
+The endpoint fired ~40 concurrent queries; they queue in waves, and once one wave is slow
+the rest wait until `pool_timeout` (10s default) throws *"Timed out fetching a new
+connection from the connection pool"* — which matches the reported symptom far better than
+any single query being slow. The burst is now ~25.
+
+⚠ First written as one raw statement with twelve scalar subqueries; that needed literal
+table names and broke immediately on `Inquiry`, whose table is **`ws_website_inquiry`**,
+not `ws_inquiry`. Reverted to the typed API — the pool win is identical and the drift risk
+is gone.
+
+### 4. Correctness bug found in the same path: `DAYOFMONTH` over a year
+
+`bucketStage` picked `DAYOFMONTH` for anything over 26 hours, so a **year** window charted
+31 buckets in which Jan 5 + Feb 5 + Mar 5 … were summed together. The numbers were real
+but the chart was meaningless — for exactly the `totalRange=year` case reported here.
+
+Ranges longer than 31 days now bucket by **`MONTH` (1-12)**. The response already carries
+`unit`, which now returns `"month"`; `hour` and `day` are unchanged.
+
+**This changes what the chart shows for `week`-crossing, `month`+ and `year` ranges** —
+same field, same types, different semantics. FE note:
+`docs/admin/DASHBOARD_SERIES_BUCKETS.md`.
+
+### 5. Route cached (2 min, shared)
+
+The dashboard had no `cacheRoute`. Added `entity: "admin-dashboard"`, `scope: "shared"`
+(the handler reads `req.user` only for logs, so one entry serves the whole team),
+`ttl: 120`. Deliberately **not** in any `FLUSH_GROUPS` entry — it aggregates live revenue
+across every product, so admin writes would flush it continuously and the TTL would never
+apply. Two minutes of staleness is the accepted trade.
+
+### Result
+
+Staging 180ms → ~130ms. The staging delta is small because staging was never the problem;
+the production win is the three indexes plus the smaller connection burst.
+
+### Recommended ops change (not applied — needs your call)
+
+Add `?connection_limit=10&pool_timeout=20` to the production `DATABASE_URL`. The default
+five is low for an app that fans out like this. Not changed here because pool sizing has
+to be weighed against the MySQL `max_connections` budget across all PM2 workers.
+
+---
+
+## 2026-08-21 (d) — Pricing plans: immutable terms + delete refused while ever ordered
+
+**Files:** `src/utils/planUsage.ts` (**new**), `admin-plan` service/repository/controller,
+`admin-course`, `admin-ebook`, `admin-live-course`, `admin-testseries` services + their
+admin wrappers/controllers. **DDL:** none. **Backfill:** none.
+
+Implements `~/websankul/docs/backend-requests/2026-08-21-pricing-plan-immutability.md`
+(§1 delete guards, §2 `orderCount`, §3 immutability) across all five plan-carrying
+products.
+
+### New: `countPlanUsage` — one definition of "has this plan ever been ordered?"
+
+ALL-TIME and status-blind by contract: an expired subscription, a cancelled one and a
+pending order all pin the plan. The count is a **union, not one table** — neither source
+alone is correct:
+
+- orders alone miss LEGACY subscriptions with `order_id IS NULL` (they would report 0 and
+  let a sold plan be deleted);
+- subscriptions alone miss PENDING/FAILED orders — exactly the case the live-course guard
+  was missing.
+
+So: every order, plus only those subscriptions with no order row. Exact union, no double
+counting, two grouped queries per page.
+
+⚠ **Deviation from the request:** it asked for the ebook count over
+`ebookSubscription.planId`. **That column does not exist** — `ws_ebook_subscription`
+reaches the plan only through its order. Ebook usage is counted over
+`ws_ebook_order.plan_id` instead, which is the truer "ever ordered" measure anyway. The
+one blind spot: an order-less legacy ebook subscription cannot be attributed to a plan.
+
+### §1 — delete guards (5 endpoints, one rule)
+
+| Endpoint | Was | Now |
+|---|---|---|
+| `DELETE /admin/plans/:id` | `subscriberCount > 0` → **400** | full usage → **409** |
+| `POST /admin/plans/bulk-delete` | `subscriberCountForPlans` | full usage, still all-or-nothing |
+| `DELETE /admin/courses/plans/:planId` | **no guard — hard-deleted** | full usage → 409 |
+| `DELETE /admin/ebooks/plans/:planId` | **no guard — hard-deleted** | full usage → 409 |
+| `DELETE /admin/test-series/prices/:priceId` | `status:true AND endAt > now` | full usage → 409 |
+| `DELETE /admin/live-courses/plans/:planId` | `paymentStatus:"verified"` only | full usage → 409 |
+
+All five now return the same body: `"Cannot delete: N order(s) reference this plan. Turn
+its status off instead."`
+
+⚠ **Status change:** `DELETE /admin/plans/:id` returned **400**, not the 409 the request
+assumed (the 409 it quoted comes from elsewhere). It is now 409 with the shared wording.
+
+### §2 — `orderCount` on every plan/price list row
+
+Added to `GET /admin/plans`, `/admin/courses/:id/plans`, `/admin/ebooks/:id/plans`,
+`/admin/live-courses/:id/plans`, `/admin/test-series/:id/prices`, and to
+`GET /admin/plans/:id`. Always an integer (`0` = never ordered); never `null`. Batched as
+one grouped query per source table per page — never one per row.
+
+`GET /admin/packages/:id/plans` keeps `subscriberCount` with its existing **all-time**
+meaning, untouched, as requested.
+
+### §3 — commercial terms frozen on every saved plan
+
+`admin-plan.updatePlan` dropped the `activeSubscriberCount(id) > 0` condition: price /
+duration / withMaterial / materialPrice are now refused on **any** saved plan, sold or
+not. The narrowing existed only because the old package/course edit form re-PUT every
+plan on save; that form stopped writing saved plans (frontend shipped 2026-08-21).
+
+Still scoped to an **actual change** — `changesPaidTerms` compares against the stored
+row, so a payload repeating current values passes. The live-course and test-series
+product forms depend on that when they re-send `status`; do not tighten to "field
+present".
+
+The same freeze now applies to the four per-module update endpoints, which previously
+wrote whatever they were given with no guard at all. Shape chosen (uniform on all four):
+**422 only when a frozen term would actually change**, otherwise the key is ignored.
+
+Rejection is **422** with `messages.price` / `messages.duration` /
+`messages.withMaterial` / `messages.materialPrice` so the panel can pin it to the field
+(`/admin/plans/:id` previously returned 400 with a bare `message`).
+
+### Also done from "nice to have"
+
+**Owner re-linking is frozen for sold plans.** `courseId`/`packageId`/`ebookId` on
+`PUT /admin/plans/:id` now refuse when the plan has any usage — moving a sold plan
+between products misattributes every historical order as badly as repricing it. Unsold
+plans stay freely movable.
+
+### Deliberately NOT done
+
+- **`isDefault` left editable.** Freezing it on `PUT` would be incoherent while
+  `PATCH /admin/plans/:id/default` (`markAsDefault`) still exists as a dedicated endpoint
+  — the rule would be enforced on one route and open on the other. `isMostPopular` is
+  already computed and read-only everywhere. Flagged back to the panel team for a call.
+- **`bulk-delete` stays all-or-nothing.** Per-id results were marked low priority.
+
+### Removed so they cannot be re-adopted
+
+`admin-plan.repository.activeSubscriberCount` and
+`admin-live-course.repository.verifiedSubCountForPlan` — both encoded the exact narrowing
+this change removes. Replaced by comments pointing at `utils/planUsage`.
+
+### Verified against staging
+
+```
+usage(price, 1293) = 99            (the union counter)
+§2 /admin/plans rows: 1459:oc=0 1458:oc=0 1457:oc=0
+§3 reprice saved plan  -> has_subscribers      (refused, nothing written)
+§3 no-op re-send       -> allowed
+§1 plan delete (sold)  -> {"inUse":99}         (refused)
+§1 course delete(sold) -> {"inUse":99}         (refused — previously hard-deleted)
+§1 ts ordersForPlan    -> 2                    (was 0 under the active-only filter)
+§2 ts prices: 1:oc=2   live plans: 1:oc=0
+```
+
+The no-op-re-send probe wrote `name` on plan id 1; restored to `NULL` (58 of its 59
+sibling rows are NULL, so the original value is not in doubt). No other row was mutated.
+
+### Not fixed — flagged in the request, still true
+
+`ws_package_course_subscription` has **no FK** on `pcb_id`, which is why a missing guard
+could orphan rows silently rather than failing at the DB. The guards now make §1
+impossible through the API, but the constraint would make it impossible full stop.
+
+---
+
+## 2026-08-21 (c) — Edit Subscription silently discarded the payment method
+
+**Files:** `src/admin/subscription/subscription.validation.ts`
+(`updateSubscriptionSchema` + payment fields),
+`src/modules/admin-subscription/admin-subscription.repository.ts`
+(`patchOrderPayment`), `src/modules/admin-subscription/admin-subscription.service.ts`
+(`updateCourseSubscription`), `src/admin/subscription/subscription.controller.ts`
+(pass-through + 422 for `no_order`). **DDL:** none. **Backfill:** none.
+
+### The receipt was right; the write was lost
+
+Reported as "the receipt still shows razorpay after I set it to bank". The receipt was
+correct — `ws_package_course_order.payment_method` really did say `razorpay`, because
+**`PUT /admin/subscriptions/:id` could not change it.**
+
+`updateSubscriptionSchema` had no `paymentMethod` / `bankTransactionId` fields, and Zod
+`z.object()` **strips unknown keys silently**. So the admin panel could post them, get a
+200, and have them vanish. The stale comment on `updateCourseSubscription` —
+*"Mongo-only fields (paymentStatus/paymentMethod) have no column"* — was wrong and is
+why nobody caught it: the method DOES have a column, just on the linked **order** row,
+not on the subscription. The subscription carries only `payment_type` (backend|online),
+the activation channel.
+
+Every client-app checkout hardcodes `paymentMethod: "razorpay"` at order creation
+(commerce-order / ebook-order / book-order repositories, test-series-order.service), so
+an app purchase later settled by bank transfer had **no way at all** to be recorded
+correctly.
+
+### The change
+
+`updateSubscriptionSchema` now accepts `paymentMethod` (same enum as create),
+`bankTransactionId`, `razorpayOrderId`, `razorpayPaymentId` — all optional. When any is
+present, `repo.patchOrderPayment` writes them to the subscription's linked
+`ws_package_course_order`; only the keys actually sent are written, so an edit that does
+not touch payment leaves the order untouched.
+
+A legacy order-less subscription has nowhere to hold a payment method, so that case
+returns **422** (`"This subscription has no payment record to correct (legacy grant with
+no order)."`) rather than repeating the silent-drop bug in a new place.
+
+### ⚠ Audit implication — deliberate, worth knowing
+
+This makes the payment record of a **completed** order editable after the fact. That is
+the point (correcting a mis-recorded settlement), but it means a receipt can now change
+retroactively. `updated_by` / `updated_at` on the subscription record who made the edit;
+the order row itself keeps no per-field history. If payment records should be
+append-only, this endpoint is the place to reconsider — say so and it can be narrowed to
+"only when the current method is a non-gateway placeholder", or moved behind its own
+permission.
+
+### Verified
+
+```
+ORDER BEFORE    {"paymentMethod":"cash","gatewayPaymentId":"","bankTransactionId":""}
+RECEIPT BEFORE  Payment Method: Cash
+-- PUT /admin/subscriptions/:id  { paymentMethod:"bank", bankTransactionId:"NEFT-EDIT-7788" }
+ORDER AFTER     {"paymentMethod":"bank","gatewayPaymentId":null,"bankTransactionId":"NEFT-EDIT-7788"}
+RECEIPT AFTER   Payment Method: Bank   Transaction Id: NEFT-EDIT-7788
+```
+
+Row restored afterwards. Also re-verified the PDF renders `Bank` + `Transaction Id` for
+course/package (via both order id and subscription id), live course, and test series.
+
+### Not covered
+
+The equivalent edit endpoints for **ebook**, **live-course** and **test-series**
+subscriptions were not touched — same fix would apply if their edit forms also offer a
+payment method.
+
+---
+
+## 2026-08-21 (b) — JSON receipt reported `"razorpay"` for payments that were not Razorpay
+
+**Files:** `src/utils/paymentMethod.ts` (**new** — shared helpers),
+`src/libs/core/generate.ts` (now imports them instead of defining its own),
+`src/modules/client-purchase-history/client-purchase-history.service.ts` (7 receipt
+builders), `src/client/purchase-history/receipts.controller.ts` (`payment.transactionId`
+added to the response type). **DDL:** none. **Backfill:** none.
+
+Follow-up to the PDF fix in the entry below. That one fixed
+`GET /client/{courses,books,ebooks}/orders/:id/invoice` (the PDF). The **JSON** receipt
+behind `GET /client/purchase-history/subscriptions/:id/receipt` was worse, and was still
+wrong afterwards — so the same purchase reported `Bank` on the PDF and `razorpay` in the
+JSON.
+
+### Four hardcodes and two bad fallbacks
+
+| Builder | Was | Now |
+|---|---|---|
+| `getCourseReceiptMysql` | `method: "razorpay"` **hardcoded** | `order.payment_method` |
+| `getCourseReceiptBySubMysql` | `method: "razorpay"` **hardcoded** | `payment_type` → `Backend`/`Online` |
+| `getLiveCourseReceiptMysql` | `method: "razorpay"` **hardcoded** | `sub.payment_method` |
+| `getTestSeriesReceiptMysql` | `order.paymentMethod ?? "razorpay"` | `?? "Online"` |
+| `getTestSeriesReceiptBySubMysql` | `sub.paymentType ?? "razorpay"` | `payment_type` → `Backend`/`Online` |
+| ebook / book | raw column (`bank`) | capitalised (`Bank`) |
+
+A missing method is not evidence of a gateway — the fallback is now `"Online"`, which
+claims nothing about *which* gateway. The two order-less legacy builders only have
+`payment_type` (`backend`|`online`), the **activation channel**, not a payment method;
+they now report that truthfully rather than naming a gateway that was never involved.
+
+### `payment.transactionId` added (additive)
+
+The JSON `payment` object exposed only `razorpayOrderId` / `razorpayPaymentId`, so a bank
+reference had nowhere to go — it existed under `extra.transactionId` on the ebook builder
+alone. `payment.transactionId` is now on every builder, sourced per table
+(`bank_transaction_id`, or `transaction_id` on ebook/test-series; always `null` for book
+orders, which have no such column). Existing keys are untouched; `extra.transactionId`
+stays where it was. Empty-string legacy values collapse to `null` so the FE has one
+empty case, not two.
+
+### Shared helper — the real cause
+
+The PDF and the JSON each decided "how was this paid?" independently, which is how they
+drifted. `formatPaymentMethod` / `formatPaymentType` / `resolvePaymentReference` now live
+in `src/utils/paymentMethod.ts` and **both** paths import them. Any future receipt surface
+should too.
+
+### Verified
+
+Same staging order rendered through both paths, flipped to bank and restored:
+
+```
+BEFORE PDF  -> Payment Method: Cash   Payment Id: -
+BEFORE JSON -> {"method":"Cash", …, "transactionId":null}      // was "razorpay"
+BANK   PDF  -> Payment Method: Bank   Transaction Id: NEFT-TEST-99881
+BANK   JSON -> {"method":"Bank", …, "transactionId":"NEFT-TEST-99881"}
+```
+
+---
+
+## 2026-08-21 — Pay receipts: capitalised payment method + the bank reference that was never read
+
+**Files:** `src/libs/core/generate.ts` (`formatPaymentMethod`, `resolvePaymentReference`,
+all 6 receipt loaders, both `ReceiptData` / `CourseReceiptData` shapes and their
+renderers), `src/libs/views/pages/receiptTemplate.ejs` (id row label).
+**DDL:** none. **Backfill:** none — every column read already existed.
+
+### Two bugs, one row of the receipt
+
+1. **`Payment Method: bank`** — the template printed `payment_method` verbatim. The
+   `PaymentMethod` enum is mixed-case by accident of history (`bank`, `cash`,
+   `razorpay`, `free` lowercase; `Backend`, `Paykun`, `Paytm` capitalised), so online
+   payments looked fine and manual ones looked broken. Now capitalised via
+   `formatPaymentMethod` — no lookup table, so a new enum value can't silently print raw.
+2. **`Payment Id: -`** — every loader read only the gateway payment id. Bank transfers
+   are settled manually and never have one; their reference lives in a **separate
+   column** the receipt never selected. That is the "feels empty" part.
+
+### Where the bank reference actually lives (it differs per table)
+
+| Receipt | Table | Gateway id | Bank reference |
+|---|---|---|---|
+| Course / Package | `ws_package_course_order` | `razorpay_payment_id` | `bank_transaction_id` |
+| Live course | `ws_live_course_subscription` | `razorpay_payment_id` | `bank_transaction_id` |
+| Ebook | `ws_ebook_order` | `razorpay_payment_id` | **`transaction_id`** |
+| Test series | `ws_test_series_order` | `razorpay_payment_id` | **`transaction_id`** |
+| Book | `ws_book_order` | `gateway_transaction_id` | **none — see below** |
+
+Each loader now selects the extra column and resolves the reference through
+`resolvePaymentReference`, which **falls back across both** rather than switching hard
+on the method: an order can be recorded as `bank` and still carry a gateway id (or the
+reverse) after a manual correction, and printing the id that exists beats printing `-`
+because the method column disagrees.
+
+### The label changes too
+
+`Payment Id` is the gateway's language; a manual transfer has a transaction reference.
+The template row is now driven by `paymentIdLabel` — `"Transaction Id"` when the method
+is bank or when only the bank column is populated, `"Payment Id"` otherwise. The EJS
+guards with `typeof paymentIdLabel !== 'undefined'` so any caller that renders the
+template without the new field still prints `Payment Id`.
+
+### Also fixed: live-course receipts hardcoded the method
+
+`loadLiveCourseReceiptFromMysql` set `paymentMethod: "Online"` as a literal and never
+read the column, so a bank- or cash-settled live course printed **"Online"** regardless.
+It now reads `ws_live_course_subscription.payment_method`, with `"Online"` kept only as
+the fallback for rows predating the column being populated.
+
+### Verified
+
+Rendered `buildCourseReceiptHtml` for a real staging order before/after flipping it to
+bank (restored immediately afterwards):
+
+```
+BEFORE : Payment Method: Cash    // Payment Id: -
+BANK   : Payment Method: Bank    // Transaction Id: NEFT-TEST-99881
+```
+
+Note `cash` → `Cash` comes along for free — the capitalisation fix is not bank-specific.
+
+### Known gap: book orders
+
+`ws_book_order` has **only** `gateway_transaction_id`; its `transaction_id` column was
+dropped (commit f4b2a1a, "drop redundant transaction_id column from BookOrder"). So a
+bank-paid book order has no reference to print and still shows `-`. Left as-is rather
+than inventing a value — restoring it needs a column back on `ws_book_order` plus a
+write path in the book-order flow. Raise it if bank-paid book orders are a real case.
+
+**Staging note:** no `payment_method = 'bank'` rows exist in any order table on staging
+today (only `razorpay`, `cash`, `free`), so this is verified by construction rather than
+against production-shaped data.
+
+---
+
+## 2026-08-21 — Admin customer write validates `education_id` against `ws_customer_education`
+
+**Files:** `src/modules/admin-customer/admin-customer.repository.ts` (`findEducation`),
+`src/modules/admin-customer/admin-customer.service.ts` (`educationIdIsValid`),
+`src/admin/customer/customer.controller.ts` (422 guard on create + update).
+**DDL:** none. **Backfill:** none required (see the `education_id = 0` note below).
+
+### Why
+
+`ws_customer` has **no foreign keys at all** — confirmed against staging:
+
+```sql
+SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME
+  FROM information_schema.KEY_COLUMN_USAGE
+ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_customer'
+   AND REFERENCED_TABLE_NAME IS NOT NULL;   -- returns nothing
+```
+
+The Prisma relation `Customer.education → CustomerEducation` is therefore app-level
+only. `POST`/`PUT /admin/customers` validated `educationId` for **format** but never for
+**existence**, so an unknown id was written to the column without error and then read
+back through the relation include as `educationId: null`. The admin saw the save
+succeed and the field silently empty — no error anywhere in between.
+
+### The change
+
+One extra indexed read on the write path:
+
+```ts
+prisma.customerEducation.findUnique({ where: { id }, select: { id: true, status: true } })
+```
+
+`undefined` / `null` still pass (the column is nullable — omitting or clearing is
+legal). An id that does not exist, **or exists but has `status = false`**, is rejected
+with **422** + `messages.educationId`, matching how the rest of the API reports a bad
+reference. Inactive is rejected because `GET /admin/customers/pre-requisites` only ever
+offers `status: true` rows, so an inactive id can only reach the API from a stale form.
+
+No response shape changed on any success path. No new endpoint — the dropdown source
+(`/admin/customers/pre-requisites`) and the `educationId` write field both already
+existed; only the FE never rendered the control. FE doc:
+`docs/admin/CUSTOMER_EDUCATION_DROPDOWN.md`.
+
+### Known data, not fixed here
+
+5 `ws_customer` rows carry `education_id = 0` — a legacy sentinel that is neither a
+valid id nor `NULL`. They already read back as `educationId: null`, so nothing is
+broken; the new guard cannot reintroduce them (`"0"` fails the id-format regex with a
+400). Optional cleanup when someone is next in that table:
+
+```sql
+UPDATE ws_customer SET education_id = NULL WHERE education_id = 0;
+```
+
+### Not changed
+
+`stateId` / `districtId` have the same missing-FK hole and are still unvalidated. They
+differ in one important way — both columns are **NOT NULL and default to `0` when
+cleared** — so adding an existence check there is a behaviour change for the `0`
+sentinel, not just a new guard. Left alone deliberately; raise it if you want it.
+
+---
+
 ## 2026-08-21 — `ws_promoted_package_course_ebook.type`: real product types, and a kind-scoped link lookup
 
 **Files:** `src/modules/promo-code/promo-code.service.ts` (PLAN_LINK_TYPES +

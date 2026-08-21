@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { ReportSource } from "../../utils/reportStream";
@@ -238,7 +239,13 @@ export const listPlans = async (
     repo.listPlans(liveCourseId, opts.skip, opts.take),
     repo.countPlans(liveCourseId),
   ]);
-  return { data: plans.map(toPlanDto), pagination: buildPagination(total, opts.page, opts.limit) };
+  // All-time, status-blind — a PENDING or FAILED order pins the plan just as a
+  // verified one does (utils/planUsage).
+  const usage = await countPlanUsage("livePlan", plans.map((pl) => pl.id));
+  return {
+    data: plans.map((pl) => ({ ...toPlanDto(pl), orderCount: usage.get(pl.id) ?? 0 })),
+    pagination: buildPagination(total, opts.page, opts.limit),
+  };
 };
 
 export const createPlan = async (liveCourseId: number, v: any): Promise<"not_found" | any> => {
@@ -259,19 +266,33 @@ export const getPlan = async (planId: number): Promise<"not_found" | any> => {
   return p ? toPlanDto(p) : "not_found";
 };
 
-export const updatePlan = async (planId: number, v: any): Promise<"not_found" | any> => {
+// Frozen once saved; `name`, `status` and the editorial `isDefault` stay writable.
+const LIVE_PLAN_FROZEN = ["duration", "price", "originalPrice", "withMaterial", "materialPrice"] as const;
+
+export const updatePlan = async (planId: number, v: any): Promise<"not_found" | "frozen_terms" | any> => {
   const plan = await repo.findPlanById(planId);
   if (!plan) return "not_found";
+  // Only an actual CHANGE is refused — the live-course product form re-sends the
+  // stored values (including `status`) on a paid→free switch and must keep working.
+  const changesFrozen = LIVE_PLAN_FROZEN.some(
+    (k) => v[k] !== undefined && (v[k] ?? 0) !== ((plan as any)[k] ?? 0)
+  );
+  if (changesFrozen) return "frozen_terms";
+
   if (v.isDefault === true) await repo.clearDefaultPlans(plan.liveCourseId, planId);
   const data: any = { updatedAt: new Date() };
-  for (const k of ["name", "duration", "price", "originalPrice", "withMaterial", "materialPrice", "isDefault", "status"]) if (v[k] !== undefined) data[k] = v[k];
+  for (const k of ["name", "isDefault", "status"]) if (v[k] !== undefined) data[k] = v[k];
   const updated = await repo.updatePlan(planId, data);
   return toPlanDto(updated);
 };
 
-export const deletePlan = async (planId: number): Promise<"not_found" | "has_subs" | true> => {
+export const deletePlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
   if (!(await repo.findPlanById(planId))) return "not_found";
-  if ((await repo.verifiedSubCountForPlan(planId)) > 0) return "has_subs";
+  // Widened from `verifiedSubCountForPlan` — a PENDING or FAILED order references
+  // the plan just as firmly, and ws_live_course_subscription is the only table
+  // (there is no separate live-course order table).
+  const inUse = await countPlanUsageOne("livePlan", planId);
+  if (inUse > 0) return { inUse };
   await repo.deletePlan(planId);
   return true;
 };

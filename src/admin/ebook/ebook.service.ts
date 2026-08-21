@@ -4,6 +4,8 @@
 //   cache-aside on hot reads, HttpError for predictable status codes.
 
 import { HttpError } from "../../middlewares/errorHandler";
+import { planInUseMessage } from "../../utils/planUsage";
+import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
 import cache from "../../libs/cache";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 
@@ -128,11 +130,13 @@ export const getEbookPlanById = async (planId: string) => {
 export const updateEbookPlan = async (planId: string, validated: any) => {
   const res = await adminEbook.updateEbookPlan(assertEbookSqlId(planId, "Plan"), validated);
   if (res === "not_found") throw new HttpError(404, "Plan not found");
+  if (res === "frozen_terms") throw new HttpError(422, PLAN_TERMS_FROZEN_MESSAGE);
   return res;
 };
 
 export const deleteEbookPlan = async (planId: string) => {
-  const ok = await adminEbook.deleteEbookPlan(assertEbookSqlId(planId, "Plan"));
-  if (!ok) throw new HttpError(404, "Plan not found");
+  const res = await adminEbook.deleteEbookPlan(assertEbookSqlId(planId, "Plan"));
+  if (res === "not_found") throw new HttpError(404, "Plan not found");
+  if (typeof res === "object") throw new HttpError(409, planInUseMessage(res.inUse));
   return;
 };

@@ -6,6 +6,8 @@
 //   3. Map the return value to the HTTP response.
 
 import { HttpError } from "../../middlewares/errorHandler";
+import { planInUseMessage } from "../../utils/planUsage";
+import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
 import cache from "../../libs/cache";
 import logger from "../../utils/logger";
 import * as adminCourse from "../../modules/admin-course/admin-course.service";
@@ -243,11 +245,18 @@ export const getCoursePlanById = async (planId: string) => {
 export const updateCoursePlan = async (planId: string, validated: any) => {
   const res = await adminCourse.updateCoursePlan(assertCourseSqlId(planId, "Plan"), validated);
   if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
+  // A saved plan's commercial terms are frozen — 422 so the panel can pin the
+  // message to the offending field.
+  if (res === "frozen_terms") throw new HttpError(422, PLAN_TERMS_FROZEN_MESSAGE);
   return res;
 };
 
 export const deleteCoursePlan = async (planId: string) => {
-  if (!(await adminCourse.deleteCoursePlan(assertCourseSqlId(planId, "Plan")))) throw new HttpError(404, "Pricing plan not found");
+  const res = await adminCourse.deleteCoursePlan(assertCourseSqlId(planId, "Plan"));
+  if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
+  // 409 — same status + wording the packages module already returns, so the panel
+  // shows one message everywhere.
+  if (typeof res === "object") throw new HttpError(409, planInUseMessage(res.inUse));
   return;
 };
 

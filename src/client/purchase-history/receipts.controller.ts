@@ -40,9 +40,16 @@ type ReceiptResponse = {
   status: string;
   customer: { id: string };
   payment: {
+    /** Display-ready: "Bank", "Cash", "Razorpay", "Free", "Backend"… */
     method: string;
     razorpayOrderId: string | null;
     razorpayPaymentId: string | null;
+    /**
+     * Manual/bank settlement reference (`bank_transaction_id`, or
+     * `transaction_id` on the ebook/test-series tables). Null for gateway
+     * payments and for book orders, which have no such column. Additive.
+     */
+    transactionId: string | null;
   };
   items: Array<{
     name: string;

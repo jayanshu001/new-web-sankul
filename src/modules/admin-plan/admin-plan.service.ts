@@ -1,4 +1,5 @@
 import { adminPlanRepository as repo, OWNED } from "./admin-plan.repository";
+import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 
 export const ADMIN_PLAN_MODULE = "admin-plan";
 export const isAdminPlanMysql = (): boolean => true;
@@ -61,14 +62,26 @@ export const listPlans = async (q: { entityType?: string; courseId?: string; pac
     repo.list({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
     repo.count(opts),
   ]);
-  return { items: rows.map(toDto), total };
+  // `orderCount` — all-time, status-blind — drives the panel's Delete lock. One
+  // grouped query for the page (see utils/planUsage), never one per row.
+  const usage = await countPlanUsage("price", rows.map((r) => r.id));
+  return {
+    items: rows.map((r) => ({ ...toDto(r), orderCount: usage.get(r.id) ?? 0 })),
+    total,
+  };
 };
 
 export const getPlanById = async (id: number) => {
   const plan = await repo.findById(id);
   if (!plan) return null;
-  const [promotedCount, subscriberCount] = await Promise.all([repo.promotedCount(id), repo.subscriberCount(id)]);
-  return { ...toDto(plan), promotedCount, subscriberCount };
+  const [promotedCount, subscriberCount, orderCount] = await Promise.all([
+    repo.promotedCount(id),
+    // ⚠ subscriberCount keeps its existing ALL-TIME meaning — the delete guard has
+    // always reported on it and the panel reads `orderCount ?? subscriberCount`.
+    repo.subscriberCount(id),
+    countPlanUsageOne("price", id),
+  ]);
+  return { ...toDto(plan), promotedCount, subscriberCount, orderCount };
 };
 
 // ── create / update ─────────────────────────────────────────────────────────
@@ -108,17 +121,41 @@ const changesPaidTerms = (existing: any, input: PlanWriteInput): boolean =>
   (input.withMaterial !== undefined && input.withMaterial !== existing.withMaterial) ||
   (input.materialPrice !== undefined && (input.materialPrice ?? 0) !== (existing.materialPrice ?? 0));
 
+/** The 422 body every frozen-terms rejection returns, so all five modules match. */
+export const PLAN_TERMS_FROZEN_MESSAGE =
+  "A saved plan's price, duration and material terms cannot be changed. Add a new plan and turn this one off instead.";
+
 export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any | null | "has_subscribers"> => {
   const existing = await repo.findBare(id);
   if (!existing) return null;
-  // Customers have already bought on these terms — changing price/duration retroactively
-  // would misrepresent what they paid for. Scoped as tightly as possible so the admin
-  // package/course edit form (which re-PUTs every plan on save) is not blocked:
-  //   • only the COMMERCIAL terms below are locked — name/isDefault/status/owner stay editable
-  //   • only when the value actually CHANGES — a no-op re-save always passes
-  //   • only against ACTIVE subscribers — expired rows must not lock a plan forever
-  if (changesPaidTerms(existing, input) && (await repo.activeSubscriberCount(id)) > 0)
-    return "has_subscribers";
+  // Commercial terms are frozen at creation (product rule, 2026-08-21). A wrong price
+  // is corrected by adding a new plan and deactivating this one — never by rewriting
+  // what buyers already paid.
+  //
+  // This used to fire only when `activeSubscriberCount(id) > 0`. That narrowing existed
+  // for ONE reason: the old package/course edit form re-PUT every plan on save, so a
+  // strict guard would have blocked unrelated edits. That form stopped writing saved
+  // plans (frontend shipped 2026-08-21), and meanwhile the loose guard let a plan sold
+  // twelve times in 2024 — all now expired — accept a repricing that rewrote what every
+  // historical report says those customers paid.
+  //
+  // Still scoped to an ACTUAL change: `changesPaidTerms` compares against the stored
+  // row, so a payload repeating the current values passes untouched. The live-course
+  // and test-series product forms rely on that when they re-send `status` on a
+  // paid→free switch — do NOT tighten this to "field present".
+  //
+  // name / status / isDefault stay editable. isDefault is editorial ("show this one
+  // first"), not a term anyone paid for.
+  if (changesPaidTerms(existing, input)) return "has_subscribers";
+
+  // Re-linking a SOLD plan to a different product misattributes every historical order
+  // as badly as repricing it, so it is frozen on the same terms. Unsold plans stay
+  // freely movable.
+  const relinking =
+    (input.courseId !== undefined && (toInt(input.courseId) ?? 0) !== (existing.courseId ?? 0)) ||
+    (input.packageId !== undefined && (toInt(input.packageId) ?? 0) !== (existing.packageId ?? 0)) ||
+    (input.ebookId !== undefined && (toInt(input.ebookId) ?? 0) !== (existing.ebookId ?? 0));
+  if (relinking && (await countPlanUsageOne("price", id)) > 0) return "has_subscribers";
   const data: any = { updated_at: new Date() };
   if (input.name !== undefined) data.name = input.name;
   if (input.duration !== undefined) data.duration = input.duration;
@@ -142,10 +179,13 @@ export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any
   return toDto(await repo.findById(id));
 };
 
-export const deletePlan = async (id: number): Promise<"ok" | "not_found" | "has_subscribers"> => {
+export const deletePlan = async (id: number): Promise<"ok" | "not_found" | { inUse: number }> => {
   const existing = await repo.findBare(id);
   if (!existing) return "not_found";
-  if ((await repo.subscriberCount(id)) > 0) return "has_subscribers";
+  // Widened from `subscriberCount` to the full all-time usage union so a plan with
+  // only a PENDING order (no subscription row yet) is pinned too.
+  const inUse = await countPlanUsageOne("price", id);
+  if (inUse > 0) return { inUse };
   await repo.deletePromotedForPlan(id);
   await repo.delete(id);
   return "ok";
@@ -174,7 +214,9 @@ export const bulkStatus = async (ids: number[], status: boolean) => {
 };
 
 export const bulkDelete = async (ids: number[]): Promise<{ ok: false } | { ok: true; deleted: number }> => {
-  if ((await repo.subscriberCountForPlans(ids)) > 0) return { ok: false };
+  // All-or-nothing, as today: one ordered plan in the selection refuses the batch.
+  const usage = await countPlanUsage("price", ids);
+  if ([...usage.values()].some((n) => n > 0)) return { ok: false };
   await repo.deletePromotedForPlans(ids);
   const r = await repo.deleteMany(ids);
   return { ok: true, deleted: r.count };

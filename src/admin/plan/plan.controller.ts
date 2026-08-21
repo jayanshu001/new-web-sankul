@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { planInUseMessage } from "../../utils/planUsage";
+import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
 import {
   createPlanSchema,
   updatePlanSchema,
@@ -72,8 +74,19 @@ export const updatePlan = async (req: Request, res: Response) => {
     const data = updatePlanSchema.parse(req.body);
     const updated = await planSql.updatePlan(numId, data as any);
     if (!updated) return res.status(404).json({ success: false, message: "Plan not found." });
+    // 422 + field-keyed messages so the panel can pin the error to price/duration
+    // rather than showing a bare toast. Was a 400 with a bare `message`.
     if (updated === "has_subscribers")
-      return res.status(400).json({ success: false, message: "Plan has active subscribers; its price, duration and material options can no longer be changed. Deactivate it and add a new plan instead." });
+      return res.status(422).json({
+        success: false,
+        message: PLAN_TERMS_FROZEN_MESSAGE,
+        messages: {
+          price: PLAN_TERMS_FROZEN_MESSAGE,
+          duration: PLAN_TERMS_FROZEN_MESSAGE,
+          withMaterial: PLAN_TERMS_FROZEN_MESSAGE,
+          materialPrice: PLAN_TERMS_FROZEN_MESSAGE,
+        },
+      });
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
@@ -89,7 +102,10 @@ export const deletePlan = async (req: Request, res: Response) => {
     if (!numId) return res.status(400).json({ success: false, message: "Invalid plan id." });
     const r = await planSql.deletePlan(numId);
     if (r === "not_found") return res.status(404).json({ success: false, message: "Plan not found." });
-    if (r === "has_subscribers") return res.status(400).json({ success: false, message: "Plan has subscribers; archive (set status=false) instead." });
+    // 409 + the shared wording, so all five plan-delete endpoints answer alike.
+    // NOTE: this was a 400 — the status changed deliberately (see the backend
+    // request 2026-08-21); the panel already treats any non-2xx here as a toast.
+    if (typeof r === "object") return res.status(409).json({ success: false, message: planInUseMessage(r.inUse) });
     return res.status(200).json({ success: true, message: "Plan deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

@@ -437,18 +437,38 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
 };
 
 // ── course/package subscription update / delete (admin edit) ─────────────────
-// Only columns that exist on ws_package_course_subscription are patched;
-// Mongo-only fields (paymentStatus/paymentMethod) have no column. Returns the
-// same DTO shape as getCourseSubscriptionById.
+// Date/status/shipping columns are patched on ws_package_course_subscription; the
+// PAYMENT fields (method + reference ids) live on the linked
+// ws_package_course_order and are patched there. The subscription itself carries
+// only `payment_type` (backend|online) — the activation channel, not a method.
 export const updateCourseSubscription = async (
   id: number,
   patch: {
     startAt?: Date; endAt?: Date; status?: boolean;
     shippingId?: number | null; trackingId?: bigint | null; remark?: string;
     actingAdminId?: number | null;
+    // Payment correction — written to the linked order row (2026-08-21).
+    paymentMethod?: string;
+    bankTransactionId?: string | null;
+    razorpayOrderId?: string | null;
+    razorpayPaymentId?: string | null;
   }
-): Promise<"not_found" | any> => {
-  if (!(await repo.findCourseSubById(id))) return "not_found";
+): Promise<"not_found" | "no_order" | any> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing) return "not_found";
+
+  const touchesPayment =
+    patch.paymentMethod !== undefined ||
+    patch.bankTransactionId !== undefined ||
+    patch.razorpayOrderId !== undefined ||
+    patch.razorpayPaymentId !== undefined;
+
+  // A legacy order-less subscription has nowhere to record a payment method, so
+  // say so rather than accepting the edit and dropping it — the exact failure this
+  // change exists to remove.
+  if (touchesPayment && existing.orderId == null) return "no_order";
+
+  const now = new Date();
   await repo.patchSub(id, {
     startAt: patch.startAt,
     endAt: patch.endAt,
@@ -457,8 +477,19 @@ export const updateCourseSubscription = async (
     trackingId: patch.trackingId,
     remarks: patch.remark,
     actingAdminId: patch.actingAdminId ?? null,
-    now: new Date(),
+    now,
   });
+
+  if (touchesPayment) {
+    await repo.patchOrderPayment(existing.orderId as number, {
+      paymentMethod: patch.paymentMethod,
+      bankTransactionId: patch.bankTransactionId,
+      razorpayOrderId: patch.razorpayOrderId,
+      razorpayPaymentId: patch.razorpayPaymentId,
+      now,
+    });
+  }
+
   return getCourseSubscriptionById(id);
 };
 

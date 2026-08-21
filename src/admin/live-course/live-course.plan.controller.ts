@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { planInUseMessage } from "../../utils/planUsage";
+import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -92,12 +94,13 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
   try { v = updatePlanSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
   const r = await liveSql.updatePlan(pid, v);
   if (r === "not_found") return failure(res, "Plan not found.", 404);
+  if (r === "frozen_terms") return failure(res, PLAN_TERMS_FROZEN_MESSAGE, 422);
   return success(res, { plan: r }, "Plan updated.");
 };
 
 // DELETE /api/v1/admin/live-courses/plans/:planId
-// Refuses if any verified subscriptions point at the plan — prevents stranding
-// paying customers when admin tries to clean up.
+// Refuses if ANY subscription row points at the plan — verified, pending or failed,
+// expired or live. Deleting a referenced plan strands the rows that point at it.
 export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const planId = String(req.params.planId ?? "");
@@ -108,7 +111,7 @@ export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
     if (!pid) return failure(res, "Invalid plan id.", 422);
     const r = await liveSql.deletePlan(pid);
     if (r === "not_found") return failure(res, "Plan not found.", 404);
-    if (r === "has_subs") return failure(res, "Cannot delete: verified subscription(s) reference this plan. Toggle status off instead.", 409);
+    if (typeof r === "object") return failure(res, planInUseMessage(r.inUse), 409);
     return success(res, { id: planId }, "Plan deleted.");
   } catch (err) {
     logger.error("deleteLiveCoursePlan failed", { traceId, planId, error: getErrorMessage(err), stack: (err as Error).stack });

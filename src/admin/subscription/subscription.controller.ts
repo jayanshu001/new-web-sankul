@@ -337,11 +337,22 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
       shippingId,
       trackingId: data.trackingId === undefined ? undefined : data.trackingId === null ? null : BigInt(data.trackingId),
       remark: data.remark,
+      // Payment correction → written to the linked order row, not the subscription.
+      paymentMethod: data.paymentMethod,
+      bankTransactionId: data.bankTransactionId,
+      razorpayOrderId: data.razorpayOrderId,
+      razorpayPaymentId: data.razorpayPaymentId,
       // Audit: acting admin from the JWT stamps updated_by (created_by unchanged).
       actingAdminId: subSql.parseSubId(String(req.user?.id ?? "")) ?? null,
     });
     if (result === "not_found")
       return res.status(404).json({ success: false, message: "Subscription not found." });
+    // A legacy subscription with no order row has no column to hold a payment
+    // method. Refuse loudly instead of accepting the edit and silently dropping it.
+    if (result === "no_order") {
+      const msg = "This subscription has no payment record to correct (legacy grant with no order).";
+      return res.status(422).json({ success: false, message: msg, messages: { paymentMethod: msg } });
+    }
     // Admin revoke/extend changes isPurchased + daysLeft on every catalog surface;
     // those reads are cached per-user for 24h, so without this the app keeps showing
     // the product as owned until the TTL lapses.

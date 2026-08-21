@@ -111,6 +111,12 @@ export const getDistrictsByState = async (req: Request, res: Response) => {
   }
 };
 
+// ws_customer has no FK on education_id, so an unknown/inactive id would be
+// written happily and then read back as `educationId: null` — the admin sees the
+// save succeed and the field silently empty. 422 with a field-keyed message
+// instead, matching how the rest of the API reports a bad reference.
+const EDUCATION_INVALID = "Invalid educationId. Pick one from GET /admin/customers/pre-requisites.";
+
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 export const createCustomer = async (req: Request, res: Response) => {
@@ -124,6 +130,9 @@ export const createCustomer = async (req: Request, res: Response) => {
     }
     if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress))) {
       return res.status(409).json({ success: false, message: "Email address already registered" });
+    }
+    if (!(await customerSql.educationIdIsValid(validatedData.educationId))) {
+      return res.status(422).json({ success: false, message: EDUCATION_INVALID, messages: { educationId: EDUCATION_INVALID } });
     }
     const created = await customerSql.createCustomer(validatedData);
     return res.status(201).json({ success: true, data: created });
@@ -153,6 +162,9 @@ export const updateCustomer = async (req: Request, res: Response) => {
     }
     if (validatedData.phoneNumber && (await customerSql.phoneInUse(validatedData.phoneNumber, numId))) {
       return res.status(409).json({ success: false, message: "Phone number already registered" });
+    }
+    if (!(await customerSql.educationIdIsValid(validatedData.educationId))) {
+      return res.status(422).json({ success: false, message: EDUCATION_INVALID, messages: { educationId: EDUCATION_INVALID } });
     }
 
     const updated = await customerSql.updateCustomer(numId, validatedData);

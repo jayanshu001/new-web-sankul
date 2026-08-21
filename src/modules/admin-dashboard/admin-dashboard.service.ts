@@ -16,6 +16,7 @@ import * as dashTransformer from "./admin-dashboard.transformer";
 export const isAdminDashboardMysql = (): boolean => true;
 
 type Win = { start: Date; end: Date };
+export type BucketUnit = "hour" | "day" | "month";
 const num = (v: any) => (v == null ? 0 : Number(v));
 
 // ── revenue + count for a window ───────────────────────────────────────────────
@@ -47,9 +48,16 @@ const liveCourseRevenue = async (w: Win) => {
   return { revenue: num(agg._sum.paidAmount), count: agg._count._all };
 };
 
-// ── time-series buckets (HOUR or DAYOFMONTH, IST) ──────────────────────────────
-const seriesFor = async (table: string, revenueCol: string, w: Win, unit: "hour" | "day", extraWhere = "") => {
-  const fn = unit === "hour" ? "HOUR" : "DAYOFMONTH";
+// ── time-series buckets (HOUR / DAYOFMONTH / MONTH, IST) ──────────────────────
+/**
+ * ⚠ DAYOFMONTH only makes sense INSIDE one month. Over a year window it collapses
+ * Jan 5 + Feb 5 + Mar 5 … into slot 5, so `totalRange=year` was charting 31
+ * meaningless buckets built from every row in the range. Ranges longer than a
+ * month now bucket by MONTH (1-12); the controller reports which via `unit`, which
+ * it already returns.
+ */
+const seriesFor = async (table: string, revenueCol: string, w: Win, unit: BucketUnit, extraWhere = "") => {
+  const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
   const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
     // created_at is stored as IST wall-clock (see config/prisma.ts IST shift), so
     // HOUR()/DAYOFMONTH() on the raw column already yields the IST bucket — no
@@ -64,10 +72,53 @@ const seriesFor = async (table: string, revenueCol: string, w: Win, unit: "hour"
   return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
 };
 
+/**
+ * The twelve summary counters on ONE connection.
+ *
+ * They were twelve entries in the big `Promise.all`, so each acquired its own pool
+ * connection. Individually they are ~1ms index counts; the problem is the burst.
+ * Prisma's default pool is `physical_cpus * 2 + 1` — five connections on a 2-vCPU
+ * box — and the dashboard fires ~25 other queries alongside them. Forty concurrent
+ * queries against five connections queue in waves, and once one wave is slow the
+ * rest wait behind it until `pool_timeout` (10s default) fires:
+ * "Timed out fetching a new connection from the connection pool".
+ *
+ * `$transaction([...])` runs the array sequentially on a SINGLE connection, so this
+ * removes eleven connection acquisitions from the burst. Kept on the typed Prisma
+ * API rather than one hand-written SQL statement with twelve scalar subqueries:
+ * that version needed literal table names and silently broke on `Inquiry`, whose
+ * table is `ws_website_inquiry`, not `ws_inquiry`.
+ */
+const summaryCounters = async () => {
+  const [
+    totalCustomers, activeCustomers, totalCourses, totalPackages, totalEbooks, totalBooks,
+    totalTestSeries, totalLiveCourses, totalPromoters, totalEducators,
+    pendingOfflineEnquiries, pendingInquiries,
+  ] = await prisma.$transaction([
+    prisma.customer.count({ where: { isAccountDeleted: false } }),
+    prisma.customer.count({ where: { isAccountDeleted: false, status: true } }),
+    prisma.course.count({ where: { status: true } }),
+    prisma.package.count({ where: { active: true } }),
+    prisma.eBook.count({ where: { active: true } }),
+    prisma.book.count({ where: { active: true } }),
+    prisma.testSeries.count({ where: { status: true } }),
+    prisma.liveCourse.count({ where: { status: true } }),
+    prisma.promoter.count({ where: { status: true } }),
+    prisma.courseEducator.count({ where: { status: true } }),
+    prisma.offlineEnquiry.count({}),
+    prisma.inquiry.count({}),
+  ]);
+  return {
+    totalCustomers, activeCustomers, totalCourses, totalPackages, totalEbooks, totalBooks,
+    totalTestSeries, totalLiveCourses, totalPromoters, totalEducators,
+    pendingOfflineEnquiries, pendingInquiries,
+  };
+};
+
 export const fetchDashboardData = async (opts: {
   orderWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
   totalWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
-  unit: "hour" | "day";
+  unit: BucketUnit;
   limit: number;
 }) => {
   const { orderWindow: ow, totalWindow: tw, unit, limit } = opts;
@@ -78,14 +129,17 @@ export const fetchDashboardData = async (opts: {
   const [
     pkgRev, courseRev, ebookRev, bookRev, tsRev, lcRev,
     pkgRevP, courseRevP, ebookRevP, bookRevP, tsRevP, lcRevP,
-    totSub, totEbook, totBook, totTs, totLc,
     pkgSeries, courseSeries, ebookSeries, bookSeries, tsSeries, lcSeries,
     newCustomers, recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
-    totalCustomers, activeCustomers, totalCourses, totalPackages, totalEbooks, totalBooks, totalTestSeries, totalLiveCourses, totalPromoters, totalEducators, pendingOfflineEnquiries, pendingInquiries,
+    counters,
   ] = await Promise.all([
     subRevenue(cur, "package"), subRevenue(cur, "course"), ebookRevenue(cur), bookRevenue(cur), testSeriesRevenue(cur), liveCourseRevenue(cur),
     subRevenue(prev, "package"), subRevenue(prev, "course"), ebookRevenue(prev), bookRevenue(prev), testSeriesRevenue(prev), liveCourseRevenue(prev),
-    subRevenue(tot, "all"), ebookRevenue(tot), bookRevenue(tot), testSeriesRevenue(tot), liveCourseRevenue(tot),
+    // NOTE: the five `*Revenue(tot)` aggregates that used to sit here are gone. Each
+    // scanned exactly the same window, table and filter as its seriesFor() below and
+    // then summed it — so the Total Order Reports card was paying for the range twice.
+    // `totals` is now folded from the series rows (identical numbers, half the scans,
+    // five fewer connections held for the length of a year-range scan).
     seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NULL"),
     seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NOT NULL"),
     seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
@@ -101,19 +155,10 @@ export const fetchDashboardData = async (opts: {
     // relations) — refs are batch-loaded below.
     prisma.testSeriesSubscription.findMany({ orderBy: { createdAt: "desc" }, take: limit }),
     prisma.liveCourseSubscription.findMany({ where: { paymentStatus: "verified" }, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.customer.count({ where: { isAccountDeleted: false } }),
-    prisma.customer.count({ where: { isAccountDeleted: false, status: true } }),
-    prisma.course.count({ where: { status: true } }),
-    prisma.package.count({ where: { active: true } }),
-    prisma.eBook.count({ where: { active: true } }),
-    prisma.book.count({ where: { active: true } }),
-    prisma.testSeries.count({ where: { status: true } }),
-    prisma.liveCourse.count({ where: { status: true } }),
-    prisma.promoter.count({ where: { status: true } }),
-    prisma.courseEducator.count({ where: { status: true } }),
-    prisma.offlineEnquiry.count({}),
-    prisma.inquiry.count({}),
+    summaryCounters(),
   ]);
+
+  const series = [...pkgSeries, ...courseSeries, ...ebookSeries, ...bookSeries, ...tsSeries, ...lcSeries];
 
   // ── test-series + live-course recents: batch-load customer + catalog refs ──────
   const custIds = [...new Set([...recentTestSeriesSubs, ...recentLiveCourseSubs].map((s) => s.customerId).filter((x): x is number => x != null))];
@@ -160,11 +205,14 @@ export const fetchDashboardData = async (opts: {
     },
     // Total Order Reports chart folds ALL six paid categories so the aggregate stays
     // consistent with the per-category cards (test-series + live-course included).
+    // Folded from `series` rather than re-aggregated: every series query already
+    // COUNTs and SUMs the same window/filter, so summing the buckets is the same
+    // number without a second pass over the range.
     totals: {
-      orders: totSub.count + totEbook.count + totBook.count + totTs.count + totLc.count,
-      earnings: totSub.revenue + totEbook.revenue + totBook.revenue + totTs.revenue + totLc.revenue,
+      orders: series.reduce((n, r) => n + r.orders, 0),
+      earnings: series.reduce((n, r) => n + r.earnings, 0),
     },
-    series: [...pkgSeries, ...courseSeries, ...ebookSeries, ...bookSeries, ...tsSeries, ...lcSeries],
+    series,
     newCustomers,
     recentPackageSubs: recentPackageSubs.map(dashTransformer.toPackageSubDto),
     recentCourseSubs: recentCourseSubs.map(dashTransformer.toCourseSubDto),
@@ -175,10 +223,10 @@ export const fetchDashboardData = async (opts: {
     recentTestSeriesSubs: recentTestSeriesSubs.map((s) => dashTransformer.toTestSeriesSubDto(s, custMap, tsMap)),
     recentLiveCourseSubs: recentLiveCourseSubs.map((s) => dashTransformer.toLiveCourseSubDto(s, custMap, lcMap)),
     summary: {
-      customers: { total: totalCustomers, active: activeCustomers },
-      catalog: { courses: totalCourses, packages: totalPackages, ebooks: totalEbooks, books: totalBooks, testSeries: totalTestSeries, liveCourses: totalLiveCourses },
-      team: { promoters: totalPromoters, educators: totalEducators },
-      enquiries: { offline: pendingOfflineEnquiries, website: pendingInquiries },
+      customers: { total: counters.totalCustomers, active: counters.activeCustomers },
+      catalog: { courses: counters.totalCourses, packages: counters.totalPackages, ebooks: counters.totalEbooks, books: counters.totalBooks, testSeries: counters.totalTestSeries, liveCourses: counters.totalLiveCourses },
+      team: { promoters: counters.totalPromoters, educators: counters.totalEducators },
+      enquiries: { offline: counters.pendingOfflineEnquiries, website: counters.pendingInquiries },
     },
   };
 };

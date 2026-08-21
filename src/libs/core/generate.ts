@@ -4,6 +4,7 @@ import puppeteer, { type Browser } from "puppeteer";
 
 import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
+import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
 
 // Receipt/PDF DB reads. Each generator selects its SQL loader.
 //   course-receipt → PackageCourseSubscription (+ order hop) — see buildCourseReceiptHtml
@@ -204,6 +205,8 @@ interface ReceiptItem {
 interface ReceiptData {
   paymentMethod: string;
   razorpayPaymentId: string;
+  /** "Payment Id" for gateway payments, "Transaction Id" for bank transfers. */
+  paymentIdLabel: string;
   receipt: string;
   createdDate: string;
   userName: string;
@@ -267,9 +270,16 @@ async function loadBookReceiptFromMysql(
 
   const amount = Number(order.amount);
 
+  // ws_book_order carries ONLY gateway_transaction_id — its transaction_id column
+  // was dropped (see BookOrder in schema.prisma), so a bank-paid book order has no
+  // reference to print. Left as "-" rather than inventing one.
+  const bookMethod = formatPaymentMethod(String(order.paymentMethod || "Online"));
+  const bookRef = resolvePaymentReference(bookMethod, order.gatewayPaymentId, null);
+
   return {
-    paymentMethod: String(order.paymentMethod || "Online"),
-    razorpayPaymentId: order.gatewayPaymentId || "-",
+    paymentMethod: bookMethod,
+    razorpayPaymentId: bookRef.paymentId,
+    paymentIdLabel: bookRef.paymentIdLabel,
     receipt: order.receiptId,
     createdDate: formatDate((order.paidAt || order.createdAt) ?? undefined),
     userName: (order.user.fullName || "").trim() || "-",
@@ -286,6 +296,7 @@ function renderReceiptData(loaded: ReceiptData): Promise<string> {
     email: COMPANY_EMAIL,
     paymentMethod: loaded.paymentMethod,
     razorpayPaymentId: loaded.razorpayPaymentId,
+    paymentIdLabel: loaded.paymentIdLabel,
     receipt: loaded.receipt,
     createdDate: loaded.createdDate,
     userName: loaded.userName,
@@ -322,6 +333,7 @@ async function loadEbookReceiptFromMysql(
       orderPrice: true,
       paymentMethod: true,
       gatewayPaymentId: true,
+      bankTransactionId: true,
       gatewayOrderId: true,
       status: true,
       createdAt: true,
@@ -356,9 +368,13 @@ async function loadEbookReceiptFromMysql(
     },
   ];
 
+  const ebookMethod = formatPaymentMethod(String(order.paymentMethod || "Online"));
+  const ebookRef = resolvePaymentReference(ebookMethod, order.gatewayPaymentId, order.bankTransactionId);
+
   return {
-    paymentMethod: String(order.paymentMethod || "Online"),
-    razorpayPaymentId: order.gatewayPaymentId || "-",
+    paymentMethod: ebookMethod,
+    razorpayPaymentId: ebookRef.paymentId,
+    paymentIdLabel: ebookRef.paymentIdLabel,
     receipt: order.gatewayOrderId || String(ordId),
     createdDate: formatDate(order.createdAt ?? undefined),
     userName: (order.Customer.fullName || "").trim() || "-",
@@ -387,6 +403,8 @@ export async function generateEbookReceipt(orderId: string, customerId: string):
 interface CourseReceiptData {
   paymentMethod: string;
   razorpayPaymentId: string;
+  /** "Payment Id" for gateway payments, "Transaction Id" for bank transfers. */
+  paymentIdLabel: string;
   receipt: string;
   createdDate: string;
   userName: string;
@@ -416,6 +434,7 @@ async function loadCourseReceiptFromOrderMysql(
       amount: true,
       paymentMethod: true,
       gatewayPaymentId: true,
+      bankTransactionId: true,
       gatewayOrderId: true,
       createdAt: true,
       planId: true,
@@ -450,9 +469,13 @@ async function loadCourseReceiptFromOrderMysql(
 
   const rawAmount = ord.amount != null ? Number(ord.amount) : 0;
 
+  const orderMethod = formatPaymentMethod(String(ord.paymentMethod || "Online"));
+  const orderRef = resolvePaymentReference(orderMethod, ord.gatewayPaymentId, ord.bankTransactionId);
+
   return {
-    paymentMethod: String(ord.paymentMethod || "Online"),
-    razorpayPaymentId: ord.gatewayPaymentId || "-",
+    paymentMethod: orderMethod,
+    razorpayPaymentId: orderRef.paymentId,
+    paymentIdLabel: orderRef.paymentIdLabel,
     receipt: ord.gatewayOrderId || ord.uniqueId || String(ord.id),
     createdDate: formatDate(ord.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",
@@ -489,6 +512,7 @@ async function loadCourseReceiptFromSubMysql(
         select: {
           paymentMethod: true,
           gatewayPaymentId: true,
+          bankTransactionId: true,
           gatewayOrderId: true,
           status: true,
           amount: true,
@@ -516,9 +540,13 @@ async function loadCourseReceiptFromSubMysql(
     sub.amount != null ? Number(sub.amount) : ord?.amount != null ? Number(ord.amount) : 0;
   const amount = Number.isFinite(rawAmount) ? rawAmount : 0;
 
+  const subMethod = formatPaymentMethod(String(ord?.paymentMethod || "Online"));
+  const subRef = resolvePaymentReference(subMethod, ord?.gatewayPaymentId, ord?.bankTransactionId);
+
   return {
-    paymentMethod: String(ord?.paymentMethod || "Online"),
-    razorpayPaymentId: ord?.gatewayPaymentId || "-",
+    paymentMethod: subMethod,
+    razorpayPaymentId: subRef.paymentId,
+    paymentIdLabel: subRef.paymentIdLabel,
     receipt: ord?.gatewayOrderId || String(subId),
     createdDate: formatDate(ord?.createdAt ?? sub.createdAt ?? undefined),
     userName: (sub.customer?.fullName || "").trim() || "-",
@@ -577,6 +605,7 @@ function renderReceiptHtml(loaded: CourseReceiptData): Promise<string> {
     email: COMPANY_EMAIL,
     paymentMethod: loaded.paymentMethod,
     razorpayPaymentId: loaded.razorpayPaymentId,
+    paymentIdLabel: loaded.paymentIdLabel,
     receipt: loaded.receipt,
     createdDate: loaded.createdDate,
     userName: loaded.userName,
@@ -621,6 +650,7 @@ async function loadLiveCourseReceiptFromMysql(
     select: {
       paidAmount: true, originalAmount: true, createdAt: true, paidAt: true,
       paymentStatus: true, razorpayPaymentId: true, razorpayOrderId: true,
+      paymentMethod: true, bankTransactionId: true,
       withMaterial: true, liveCourseId: true, planId: true,
     },
   });
@@ -637,9 +667,17 @@ async function loadLiveCourseReceiptFromMysql(
 
   const rawAmount = sub.paidAmount != null ? Number(sub.paidAmount) : sub.originalAmount != null ? Number(sub.originalAmount) : 0;
 
+  // Was hardcoded to "Online", so a bank/cash-settled live course printed the
+  // wrong method AND an empty id. ws_live_course_subscription carries both its own
+  // payment_method and bank_transaction_id — use them, keeping "Online" only as the
+  // fallback for rows that predate the column being populated.
+  const liveMethod = formatPaymentMethod(String(sub.paymentMethod || "Online"));
+  const liveRef = resolvePaymentReference(liveMethod, sub.razorpayPaymentId, sub.bankTransactionId);
+
   return {
-    paymentMethod: "Online",
-    razorpayPaymentId: sub.razorpayPaymentId || "-",
+    paymentMethod: liveMethod,
+    razorpayPaymentId: liveRef.paymentId,
+    paymentIdLabel: liveRef.paymentIdLabel,
     receipt: sub.razorpayOrderId || String(subId),
     createdDate: formatDate(sub.paidAt ?? sub.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",
@@ -672,15 +710,19 @@ async function loadTestSeriesReceiptFromSubMysql(
   const [ts, plan, order, customer] = await Promise.all([
     prisma.testSeries.findFirst({ where: { id: sub.testSeriesId }, select: { title: true } }),
     sub.planId ? prisma.testSeriesPrice.findFirst({ where: { id: sub.planId }, select: { durationDays: true } }) : Promise.resolve(null),
-    sub.orderId ? prisma.testSeriesOrder.findFirst({ where: { id: sub.orderId }, select: { paymentMethod: true, razorpayPaymentId: true, razorpayOrderId: true } }) : Promise.resolve(null),
+    sub.orderId ? prisma.testSeriesOrder.findFirst({ where: { id: sub.orderId }, select: { paymentMethod: true, razorpayPaymentId: true, razorpayOrderId: true, transactionId: true } }) : Promise.resolve(null),
     prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
   ]);
 
   const rawAmount = sub.price != null ? Number(sub.price) : 0;
 
+  const tsSubMethod = formatPaymentMethod(String(order?.paymentMethod || sub.paymentType || "Online"));
+  const tsSubRef = resolvePaymentReference(tsSubMethod, order?.razorpayPaymentId, order?.transactionId);
+
   return {
-    paymentMethod: String(order?.paymentMethod || sub.paymentType || "Online"),
-    razorpayPaymentId: order?.razorpayPaymentId || "-",
+    paymentMethod: tsSubMethod,
+    razorpayPaymentId: tsSubRef.paymentId,
+    paymentIdLabel: tsSubRef.paymentIdLabel,
     receipt: order?.razorpayOrderId || String(subId),
     createdDate: formatDate(sub.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",
@@ -710,6 +752,7 @@ async function loadTestSeriesReceiptFromOrderMysql(
       paymentMethod: true,
       razorpayOrderId: true,
       razorpayPaymentId: true,
+      transactionId: true,
       status: true,
     },
   });
@@ -733,9 +776,13 @@ async function loadTestSeriesReceiptFromOrderMysql(
 
   const rawAmount = ord.orderPrice != null ? Number(ord.orderPrice) : 0;
 
+  const tsMethod = formatPaymentMethod(String(ord.paymentMethod || "Online"));
+  const tsRef = resolvePaymentReference(tsMethod, ord.razorpayPaymentId, ord.transactionId);
+
   return {
-    paymentMethod: String(ord.paymentMethod || "Online"),
-    razorpayPaymentId: ord.razorpayPaymentId || "-",
+    paymentMethod: tsMethod,
+    razorpayPaymentId: tsRef.paymentId,
+    paymentIdLabel: tsRef.paymentIdLabel,
     receipt: ord.razorpayOrderId || String(ord.id),
     createdDate: formatDate(ord.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",

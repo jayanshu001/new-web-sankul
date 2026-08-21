@@ -163,8 +163,32 @@ export const adminPackageRepository = {
     ),
 
   // ── plans ────────────────────────────────────────────────────────────────────
-  listPlans: (packageId: number, skip?: number, take?: number) => prisma.packageCourseEbookPrice.findMany({ where: { packageId, status: true }, orderBy: { duration: "asc" }, skip, take }),
-  countPlans: (packageId: number) => prisma.packageCourseEbookPrice.count({ where: { packageId, status: true } }),
+  /**
+   * Every plan attached to the package — active AND inactive.
+   *
+   * `status: true` used to be baked in here and in countPlans, which made Packages
+   * the odd one out: none of the four sibling endpoints (course / ebook /
+   * live-course / test-series) filter. The consequence was that switching a package
+   * plan to Inactive made the row VANISH from the Pricing tab with no way to switch
+   * it back on from that screen.
+   *
+   * Ordered active-first: 251 of 633 package plans on staging are inactive (40%),
+   * several packages have more inactive than active (id 25: 17 vs 4), and the panel
+   * pages at limit=10 — so plain `duration: asc` could fill the first page entirely
+   * with retired plans. Duration remains the tiebreaker, so the active block reads
+   * exactly as it did before.
+   */
+  listPlans: (packageId: number, skip?: number, take?: number, status?: boolean) =>
+    prisma.packageCourseEbookPrice.findMany({
+      where: { packageId, ...(status === undefined ? {} : { status }) },
+      orderBy: [{ status: "desc" }, { duration: "asc" }],
+      skip,
+      take,
+    }),
+  countPlans: (packageId: number, status?: boolean) =>
+    prisma.packageCourseEbookPrice.count({
+      where: { packageId, ...(status === undefined ? {} : { status }) },
+    }),
   // Subscriptions per plan for one page of plans, batched so the list stays a single
   // query rather than one count per row.
   subscriptionCountsByPlan: (planIds: number[]) =>
@@ -175,8 +199,28 @@ export const adminPackageRepository = {
     }),
   attachPlans: (packageId: number, planIds: number[]) =>
     prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: planIds } }, data: { packageId, courseId: 0, ebookId: 0 } }),
-  detachPlan: (packageId: number, planId: number) =>
-    prisma.packageCourseEbookPrice.updateMany({ where: { id: planId, packageId }, data: { status: false } }),
+  /**
+   * REAL delete, scoped to the owning package so a stray planId cannot remove
+   * someone else's row.
+   *
+   * This used to `updateMany({ status: false })` — a silent deactivate that returned
+   * 200 and looked identical to a delete. It is why 251 "deleted" package plans are
+   * still in ws_package_course_ebook_price. Guarded by countPlanUsageOne in the
+   * service, matching the other four modules.
+   */
+  /**
+   * Promo-code plan links point at ws_package_course_ebook_price.id with NO foreign
+   * key, so deleting a plan without clearing them leaves rows in
+   * ws_promoted_package_course_ebook aimed at an id that no longer exists — the same
+   * orphan class the delete guards exist to prevent. admin-plan.deletePlan has always
+   * done this; the per-module deletes did not.
+   */
+  deletePromotedForPlan: (planId: number) =>
+    prisma.promotedPackageCourseEbook.deleteMany({ where: { planId } }),
+  deletePlanFromPackage: (packageId: number, planId: number) =>
+    prisma.packageCourseEbookPrice.deleteMany({ where: { id: planId, packageId } }),
+  findPlanInPackage: (packageId: number, planId: number) =>
+    prisma.packageCourseEbookPrice.findFirst({ where: { id: planId, packageId }, select: { id: true } }),
 
   // ── subscribers ───────────────────────────────────────────────────────────────
   listSubscribers: (packageId: number, skip: number, take: number) =>

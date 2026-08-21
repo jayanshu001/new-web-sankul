@@ -6,6 +6,7 @@
 // handler.
 
 import { HttpError } from "../../middlewares/errorHandler";
+import { planInUseMessage } from "../../utils/planUsage";
 import {
   listChatMessagesMysql,
   postChatMessageMysql,
@@ -132,7 +133,15 @@ export const reorderEmbedded = async (
 // Plans
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listPackagePlans = async (packageId: string, query: PaginationQuery) => {
+/** Plans list accepts an optional `status` filter that the subscribers list does not. */
+export interface PlanListQuery {
+  page?: string;
+  limit?: string;
+  /** "true" | "false" — omit for every plan, active and inactive (the panel's case). */
+  status?: string;
+}
+
+export const listPackagePlans = async (packageId: string, query: PlanListQuery) => {
   const res = await adminPackage.listPackagePlans(assertPkgSqlId(packageId, "package"), query);
   if (res === "not_found") throw new HttpError(404, "Package not found.");
   return res;
@@ -146,7 +155,9 @@ export const attachPlansToPackage = async (packageId: string, planIds: string[])
 };
 
 export const detachPlan = async (packageId: string, planId: string) => {
-  await adminPackage.detachPlan(assertPkgSqlId(packageId, "package"), assertPkgSqlId(planId, "plan"));
+  const res = await adminPackage.detachPlan(assertPkgSqlId(packageId, "package"), assertPkgSqlId(planId, "plan"));
+  if (res === "not_found") throw new HttpError(404, "Pricing plan not found on this package.");
+  if (typeof res === "object") throw new HttpError(409, planInUseMessage(res.inUse));
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

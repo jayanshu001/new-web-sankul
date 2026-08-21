@@ -181,7 +181,7 @@ export const reorderExamCategories = asyncHandler(async (req: Request, res: Resp
 export const listPackagePlans = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await packageService.listPackagePlans(
     req.params.id as string,
-    req.query as packageService.PaginationQuery
+    req.query as packageService.PlanListQuery
   );
   return res.status(200).json({ success: true, data, pagination });
 });

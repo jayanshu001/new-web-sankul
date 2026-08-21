@@ -66,7 +66,12 @@ export type CacheEntity =
   | "free"
   | "cms"
   // Per-user client caches (scope:"user", short TTL)
-  | "cart";
+  | "cart"
+  // Admin dashboard (scope:"shared", 2-min TTL). Deliberately NOT in any
+  // FLUSH_GROUPS entry: it aggregates live revenue across every product, so an
+  // admin write would flush it constantly and the TTL would never do its job.
+  // Two minutes of staleness is the accepted trade — see dashboard.routes.ts.
+  | "admin-dashboard";
 
 /**
  * `FLUSH_GROUPS[x]` = every cache entity tag to clear when entity `x` is

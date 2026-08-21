@@ -100,7 +100,9 @@ export const adminLiveCourseRepository = {
   deletePlan: (id: number) => prisma.liveCoursePlan.delete({ where: { id } }),
   clearDefaultPlans: (liveCourseId: number, exceptId?: number) =>
     prisma.liveCoursePlan.updateMany({ where: { liveCourseId, isDefault: true, ...(exceptId ? { id: { not: exceptId } } : {}) }, data: { isDefault: false } }),
-  verifiedSubCountForPlan: (planId: number) => prisma.liveCourseSubscription.count({ where: { planId, paymentStatus: "verified" } }),
+  // NOTE: `verifiedSubCountForPlan` (paymentStatus:"verified" only) was the delete
+  // guard here until 2026-08-21 — a pending or failed order did not block the delete.
+  // Superseded by utils/planUsage, which counts every referencing row.
 
   // ── subscriptions (Reports contract — docs/REPORTS_SUBSCRIPTIONS_ADMIN.md) ────
   // The caller composes the final `where` (base filters AND a normalized-status

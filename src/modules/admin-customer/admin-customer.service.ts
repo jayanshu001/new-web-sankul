@@ -164,6 +164,27 @@ export const softDeleteCustomer = (id: number) => repo.softDelete(id);
 export const setCustomerStatus = (id: number, status: boolean) =>
   repo.setStatus(id, status);
 
+/**
+ * Is this educationId a real, ACTIVE ws_customer_education row?
+ *
+ * Called before create/update because the column has no FK — writing an unknown
+ * id "succeeds" and then silently reads back as null. Inactive rows are rejected
+ * too: `getPreRequisites` only offers `status: true` options, so an inactive id
+ * can only come from a stale form or a hand-made request.
+ *
+ * `undefined`/`null` (field omitted, or education cleared) is always allowed —
+ * the column is nullable.
+ */
+export const educationIdIsValid = async (
+  educationId?: string | null
+): Promise<boolean> => {
+  if (educationId === undefined || educationId === null || educationId === "") return true;
+  const id = parseIntId(educationId);
+  if (id === undefined) return false;
+  const row = await repo.findEducation(id);
+  return !!row && row.status === true;
+};
+
 // ─── Pre-requisites ────────────────────────────────────────────────────────
 export const getPreRequisites = async () => {
   const [states, educations] = await Promise.all([

@@ -119,6 +119,18 @@ function bucketStage(start: Date, end: Date) {
       slots: Array.from({ length: 24 }, (_, i) => i),
     };
   }
+  // ⚠ DAYOFMONTH only means anything INSIDE a single month. Past ~31 days it
+  // collapses Jan 5 + Feb 5 + Mar 5 … into one slot, so `totalRange=year` charted 31
+  // buckets that mixed every month together. Anything longer than a month buckets by
+  // MONTH instead; `unit` (already in the response) tells the panel how to label.
+  const spanDays = spanHours / 24;
+  if (spanDays > 31) {
+    return {
+      unit: "month" as const,
+      group: { $month: { date: "$createdAt", timezone: "Asia/Kolkata" } },
+      slots: Array.from({ length: 12 }, (_, i) => i + 1),
+    };
+  }
   return {
     unit: "day" as const,
     group: { $dayOfMonth: { date: "$createdAt", timezone: "Asia/Kolkata" } },

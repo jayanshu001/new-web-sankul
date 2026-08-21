@@ -67,6 +67,26 @@ export const updateSubscriptionSchema = z.object({
   customerShippingId: objectIdSchema.nullable().optional(),
   trackingId: z.number().int().nullable().optional(),
   remark: z.string().max(1000).optional(),
+  // Payment correction (2026-08-21). These live on the linked
+  // ws_package_course_order, NOT on the subscription — which is why they were
+  // absent here and, because Zod strips unknown keys silently, an admin editing
+  // "this was a bank transfer" saw the save succeed and nothing change. Same
+  // vocabulary as the create schema; every field optional, and only the ones sent
+  // are written.
+  paymentMethod: z
+    .enum([
+      PaymentMethod.BACKEND,
+      PaymentMethod.RAZORPAY,
+      PaymentMethod.BANK,
+      PaymentMethod.CASH,
+      PaymentMethod.FREE,
+      PaymentMethod.PAYKUN,
+      PaymentMethod.PAYTM,
+    ])
+    .optional(),
+  bankTransactionId: z.string().max(191).optional().nullable(),
+  razorpayOrderId: z.string().max(191).optional().nullable(),
+  razorpayPaymentId: z.string().max(191).optional().nullable(),
 });
 
 export const createEbookSubscriptionSchema = z.object({
