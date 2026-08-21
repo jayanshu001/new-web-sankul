@@ -16,6 +16,7 @@
 import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import logger from "../../utils/logger";
 
 // 2026-07-08: the discount-rule promocode was merged into ws_promocode (Prisma
 // model `Promocode`); the former ws_promo_code / `PromoCodeRule` model is gone.
@@ -731,6 +732,40 @@ const PLAN_KIND_BY_TYPE: Record<AppliesToType, PlanKind> = {
   testSeries: "testSeriesPrice",
 };
 
+/**
+ * `type` on ws_promoted_package_course_ebook — WHAT the link is for. Distinct from
+ * `planKind`, which only says WHICH TABLE `pcb_price_id` points at:
+ *
+ *   planKind "price"           → type "package" | "course" | "ebook"  (one table, 3 products)
+ *   planKind "livePlan"        → type "live_course"
+ *   planKind "testSeriesPrice" → type "test_series"
+ *
+ * So `planKind` cannot answer "is this a course or an ebook link?" — that is why
+ * this column exists. The legacy Mongo-era values were single letters ('P'/'C'/'B')
+ * and NULL for everything the migration added; these full words replace them (see
+ * docs/migration/schema-changes/2026-08-21_promoted_plan_link_type.sql).
+ */
+export const PLAN_LINK_TYPES = [
+  "package",
+  "course",
+  "ebook",
+  "live_course",
+  "test_series",
+] as const;
+export type PlanLinkType = (typeof PLAN_LINK_TYPES)[number];
+
+const PLAN_LINK_TYPE_BY_APPLIES_TO: Record<AppliesToType, PlanLinkType> = {
+  package: "package",
+  course: "course",
+  ebook: "ebook",
+  liveCourse: "live_course",
+  testSeries: "test_series",
+};
+
+/** appliesTo type (camelCase, API-facing) → the stored `type` value. */
+export const planLinkTypeFor = (type: AppliesToType): PlanLinkType =>
+  PLAN_LINK_TYPE_BY_APPLIES_TO[type];
+
 export interface ResolvedPlanSql {
   id: number;
   entityId: number;
@@ -738,12 +773,24 @@ export interface ResolvedPlanSql {
   price: number;
   withMaterial: boolean;
   kind: PlanKind;
+  /** Product type stored on the link row's `type` column. */
+  type: PlanLinkType;
 }
 
 export interface PlanLinkInputSql {
   planId: string | number;
   promoterPercentage: number;
   customerPercentage: number;
+  /**
+   * OPTIONAL disambiguator. A bare `planId` is not globally unique: live-course
+   * plan ids and test-series price ids live in their own tables and overlap the
+   * ws_package_course_ebook_price id space (live plans are 1-4 and price plans 1-4
+   * both exist today). For a promocode whose appliesTo spans a live course AND a
+   * package/course/ebook, a colliding id is genuinely ambiguous from the payload
+   * alone. Send this and the link is resolved exactly; omit it and the resolver
+   * falls back to first-match and logs a warning.
+   */
+  planKind?: PlanKind;
 }
 
 /** Load all active plans for the given entities of `type`, normalised. */
@@ -765,6 +812,7 @@ export const loadPlansForEntitiesSql = async (
       price: r.price,
       withMaterial: false,
       kind: "livePlan" as const,
+      type: "live_course" as const,
     }));
   }
 
@@ -780,6 +828,7 @@ export const loadPlansForEntitiesSql = async (
       price: Number(r.price),
       withMaterial: false,
       kind: "testSeriesPrice" as const,
+      type: "test_series" as const,
     }));
   }
 
@@ -814,7 +863,41 @@ export const loadPlansForEntitiesSql = async (
     price: r.price,
     withMaterial: !!r.withMaterial,
     kind: "price" as const,
+    // package | course | ebook — all three share ws_package_course_ebook_price,
+    // so the caller's appliesTo type is the only thing that tells them apart.
+    type: planLinkTypeFor(type),
   }));
+};
+
+/**
+ * planId → every plan that id could refer to. Normally one entry; more than one
+ * when a promocode's appliesTo spans plan tables whose id spaces overlap
+ * (ws_live_course_plan 1-4 and ws_package_course_ebook_price 1-4 both exist).
+ */
+export type ValidPlanMap = Map<number, ResolvedPlanSql[]>;
+
+/**
+ * Pick the plan a `plans[]` entry refers to. Exact when the caller sent a
+ * `planKind`; otherwise first-match, with a warning so an ambiguous link that
+ * lands on the wrong kind is traceable instead of silent.
+ */
+const pickPlanCandidate = (
+  candidates: ResolvedPlanSql[],
+  wanted: PlanKind | undefined,
+  ctx: { promocodeId: number; planId: number }
+): ResolvedPlanSql => {
+  if (candidates.length === 1) return candidates[0];
+  if (wanted) {
+    const exact = candidates.find((c) => c.kind === wanted);
+    if (exact) return exact;
+  }
+  logger.warn("syncPlanLinksSql ambiguous planId", {
+    ...ctx,
+    wanted: wanted ?? null,
+    candidates: candidates.map((c) => `${c.kind}:${c.type}`),
+    picked: `${candidates[0].kind}:${candidates[0].type}`,
+  });
+  return candidates[0];
 };
 
 /**
@@ -826,16 +909,24 @@ export const loadPlansForEntitiesSql = async (
 export const syncPlanLinksSql = async (
   promocodeId: number,
   plans: PlanLinkInputSql[],
-  validPlans: Map<number, ResolvedPlanSql>
+  validPlans: ValidPlanMap
 ): Promise<void> => {
   const kept = plans
     .map((p) => ({ ...p, pid: Number(p.planId) }))
     .filter((p) => Number.isInteger(p.pid) && validPlans.has(p.pid));
 
   for (const p of kept) {
-    const kind = validPlans.get(p.pid)!.kind;
+    // A bare planId collides across the three plan tables, so prefer the FE's
+    // explicit planKind when it sent one.
+    const { kind, type } = pickPlanCandidate(validPlans.get(p.pid)!, p.planKind, {
+      promocodeId,
+      planId: p.pid,
+    });
+    // planKind is part of the identity: (promocodeId, planId) alone can match a
+    // live-course link when a price link was meant, and the update would then
+    // rewrite the wrong row's percentages.
     const existing = await prisma.promotedPackageCourseEbook.findFirst({
-      where: { promocodeId, planId: p.pid },
+      where: { promocodeId, planId: p.pid, planKind: kind },
       select: { id: true },
     });
     if (existing) {
@@ -843,6 +934,7 @@ export const syncPlanLinksSql = async (
         where: { id: existing.id },
         data: {
           planKind: kind,
+          type,
           promoterPercentage: p.promoterPercentage,
           customerPercentage: p.customerPercentage,
           updated_at: new Date(),
@@ -854,6 +946,7 @@ export const syncPlanLinksSql = async (
           promocodeId,
           planId: p.pid,
           planKind: kind,
+          type,
           promoterPercentage: p.promoterPercentage,
           customerPercentage: p.customerPercentage,
           created_at: new Date(),
@@ -1158,10 +1251,24 @@ export const resolvePromoForPlanSql = async (
   if (!promoCovers(promo, entity)) return { error: "This promo code is not valid for this item." };
 
   // Per-plan scope: a code with link rows is valid only for linked plans.
+  //
+  // ⚠ `planKind` is REQUIRED in the link filter, not decorative — the same rule
+  // order-code-snapshot.repository.findPlanLink documents. ws_live_course_plan,
+  // ws_test_series_price and ws_package_course_ebook_price have OVERLAPPING id
+  // spaces (live plans 1-4, test-series 1 and price plans 1-4 all exist), and
+  // `pcb_price_id` stores a bare id for every kind. Matching on (promocodeId,
+  // planId) alone therefore lets a live-course link answer for an ebook plan of
+  // the same id — paying out that other link's promoterPercentage and applying
+  // its customerPercentage. Promocode JAL already links live plans 1-4 and ebook
+  // plans under one code, so this is reachable, not theoretical.
+  //
+  // The count stays kind-agnostic on purpose: it answers "is this code per-plan
+  // scoped at all?", which is a property of the code, not of one plan table.
+  const planKind = PLAN_KIND_BY_TYPE[entity.type];
   const [totalLinks, link] = await Promise.all([
     prisma.promotedPackageCourseEbook.count({ where: { promocodeId: promo.id } }),
     prisma.promotedPackageCourseEbook.findFirst({
-      where: { promocodeId: promo.id, planId },
+      where: { promocodeId: promo.id, planId, planKind },
       select: { customerPercentage: true, promoterPercentage: true },
     }),
   ]);
@@ -1375,13 +1482,19 @@ export const getPromocodePlansSql = async (query: {
   };
 };
 
-/** Resolve the validPlans map for a syncPlanLinksSql call from appliesTo. */
+/**
+ * Resolve the validPlans map for a syncPlanLinksSql call from appliesTo.
+ *
+ * The value is a LIST because `planId` is not unique across plan tables — see
+ * ValidPlanMap. A single-type promocode can never collide (one table), but the
+ * shape is shared with resolveValidPlansMultiSql, which can.
+ */
 export const resolveValidPlansSql = async (
   type: AppliesToType,
   entityIds: number[]
-): Promise<Map<number, ResolvedPlanSql>> => {
+): Promise<ValidPlanMap> => {
   const resolved = await loadPlansForEntitiesSql(type, entityIds);
-  return new Map(resolved.map((p) => [p.id, p]));
+  return new Map(resolved.map((p) => [p.id, [p]]));
 };
 
 /**
@@ -1393,11 +1506,18 @@ export const resolveValidPlansSql = async (
  */
 export const resolveValidPlansMultiSql = async (
   groups: AppliesGroup[]
-): Promise<Map<number, ResolvedPlanSql>> => {
-  const map = new Map<number, ResolvedPlanSql>();
+): Promise<ValidPlanMap> => {
+  const map: ValidPlanMap = new Map();
   for (const g of groups) {
     const resolved = await loadPlansForEntitiesSql(g.type, g.ids);
-    for (const p of resolved) map.set(p.id, p);
+    for (const p of resolved) {
+      // Append, never overwrite: a live-course plan and a price plan can share an
+      // id, and `map.set(p.id, p)` silently dropped whichever group ran first —
+      // which then stored that link under the wrong planKind AND the wrong type.
+      const existing = map.get(p.id);
+      if (existing) existing.push(p);
+      else map.set(p.id, [p]);
+    }
   }
   return map;
 };

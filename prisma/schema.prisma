@@ -1540,6 +1540,14 @@ model PromotedPackageCourseEbook {
   packageCourseEbookPrice PackageCourseEbookPrice? @relation(fields: [planId], references: [id])
   planId                  Int?                     @map("pcb_price_id")
   planKind                String                   @default("price") @map("plan_kind")
+  // WHAT the link is for: package | course | ebook | live_course | test_series
+  // (PLAN_LINK_TYPES in promo-code.service). Distinct from `planKind`, which only
+  // says which TABLE `pcb_price_id` points at — planKind "price" covers three
+  // different products, so it cannot tell a course link from an ebook link.
+  // Legacy rows held single letters ('P'/'C'/'B') or NULL; backfilled + written on
+  // every sync as of DDL 2026-08-21_promoted_plan_link_type.sql. Left nullable so
+  // a row inserted outside this service is still accepted — read paths must keep
+  // treating NULL as "unknown, fall back to planKind", never as a product type.
   type                    String?
   promoterPercentage      Decimal                  @map("promoter_percentage")
   customerPercentage      Decimal                  @map("customer_percentage")

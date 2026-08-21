@@ -15,6 +15,99 @@
 
 ---
 
+## 2026-08-21 — `ws_promoted_package_course_ebook.type`: real product types, and a kind-scoped link lookup
+
+**Files:** `src/modules/promo-code/promo-code.service.ts` (PLAN_LINK_TYPES +
+`planLinkTypeFor`, `ResolvedPlanSql.type`, `ValidPlanMap`, `pickPlanCandidate`,
+`loadPlansForEntitiesSql`, `syncPlanLinksSql`, `resolveValidPlansSql` /
+`resolveValidPlansMultiSql`, `resolvePromoForPlanSql`),
+`src/admin/promocode/promocode.validation.ts` (optional `planKind` on `planLinkSchema`),
+`prisma/schema.prisma` (`PromotedPackageCourseEbook.type` documented).
+**DDL:** `docs/migration/schema-changes/2026-08-21_promoted_plan_link_type.sql`
+(MODIFY column + backfill). **Applied on staging 2026-08-21. Pending on prod.**
+**Backfill:** in the DDL file, pure SQL, idempotent.
+
+### The change
+
+`type` on the promocode→plan link table now holds a real product type on every row:
+
+| value | when |
+|---|---|
+| `package` / `course` / `ebook` | `plan_kind = 'price'`, resolved from which of `package_id` / `course_id` / `ebook_id` is set on the plan row |
+| `live_course` | `plan_kind = 'livePlan'` |
+| `test_series` | `plan_kind = 'testSeriesPrice'` |
+
+Previously it was the legacy Mongo-era single-letter column (`'P'`/`'C'`/`'B'`) that
+the SQL migration never wrote — so live courses, and in fact 105 of 110 staging rows,
+sat at `NULL`.
+
+**`plan_kind` does not make `type` redundant.** `plan_kind` says which TABLE
+`pcb_price_id` points at (`price` | `livePlan` | `testSeriesPrice`); `price` covers
+package AND course AND ebook, so it can never distinguish a course link from an ebook
+link. The two columns answer different questions and both are now always populated.
+
+`test_series` is included even though it was not in the original request: leaving one
+category at `NULL` would keep `NULL` ambiguous and defeat the column.
+
+The column stays `varchar` + nullable (narrowed 255 → 20) rather than becoming an
+`ENUM NOT NULL` — the 5 legacy `'p'` rows would fail the conversion, and the adjacent
+`plan_kind` is already a plain `varchar(20)`. The value set is enforced in app code
+(`PLAN_LINK_TYPES`). **Read paths must keep treating `NULL` as "unknown → fall back to
+`plan_kind`", never as a product type.**
+
+Staging backfill result — 110 rows, zero `NULL`, zero disagreements with `plan_kind`,
+zero orphans: 104 `package`, 4 `live_course`, 2 `ebook`.
+
+### Query-level change: link lookups are now scoped by `plan_kind`
+
+`resolvePromoForPlanSql` (the checkout promo resolver behind every
+`/client/payment/*` apply) matched links on `(promocodeId, planId)` with **no kind
+filter**. `ws_live_course_plan`, `ws_test_series_price` and
+`ws_package_course_ebook_price` have **overlapping id spaces** — live plan ids 1-4,
+test-series id 1 and price plan ids 1-4 all exist on staging — and `pcb_price_id`
+stores a bare id for every kind. So a live-course link could answer for an ebook plan
+of the same id, applying that other link's `customerPercentage` and paying out its
+`promoterPercentage`.
+
+Promocode `JAL` links live plans 1-4 **and** price plans under one code, so this was
+reachable, not theoretical. `order-code-snapshot.repository.findPlanLink` already
+documented and guarded this exact hazard; the checkout resolver did not.
+
+Now filtered by `planKind: PLAN_KIND_BY_TYPE[entity.type]`. The sibling `count()` stays
+kind-agnostic on purpose — it answers "is this code per-plan scoped at all?", a
+property of the code, not of one plan table.
+
+The same fix applies to `syncPlanLinksSql`'s existing-row lookup, which could
+otherwise rewrite the wrong row's percentages.
+
+### Query-level change: `validPlans` keeps every candidate
+
+`resolveValidPlansMultiSql` built `Map<planId, plan>` with `map.set(p.id, p)`, so for a
+multi-type promocode a colliding id **silently dropped** whichever group resolved
+first — storing that link under the wrong `plan_kind` and now the wrong `type`. The map
+is now `ValidPlanMap = Map<planId, plan[]>` and appends.
+
+Picking from the candidates is exact when the admin FE sends the new **optional**
+`plans[].planKind` (`price` | `livePlan` | `testSeriesPrice`); otherwise it is
+first-match plus a `logger.warn("syncPlanLinksSql ambiguous planId", …)`, which
+preserves the previous behaviour rather than guessing differently. A bare `planId` is
+genuinely undecidable from the payload — the optional field is the only real fix.
+
+**Not changed:** the replace-delete at the end of `syncPlanLinksSql` still deletes by
+`planId` alone. Making it composite would, in the ambiguous case, delete a valid link
+of the other kind; over-keeping a stale row is the safer failure.
+
+### Data issue this surfaced (no code fix — admin content)
+
+With `type` populated, promocode `JAL` (`applies_to_type = mixed`, covering
+`liveCourse [1-4]` + `ebook [18,45,…]`) is visibly holding **78 `package` links** left
+over from an earlier `appliesTo`, while only **2 of its 55 ebook** entities have a
+linked plan. Because any link row switches the code to per-plan scoping, most ebook
+plans under `JAL` are rejected with *"This promo code is not valid for this plan."*
+Re-saving `JAL` in the admin panel prunes the stale links (`prunePlanLinksSql`).
+
+---
+
 ## 2026-08-20 — `ws_package_course_subscription.course_amount`: ₹100 floor + one split rule
 
 **Files:** `src/modules/commerce-order/commerce-order.service.ts`
