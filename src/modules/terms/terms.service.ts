@@ -135,3 +135,21 @@ export const getClientTerms = async (
   const rows = await termsRepository.findMany({ activeOnly: true });
   return rows.map(toTermsDto);
 };
+
+/**
+ * Module-level T&C TEXT, or "" when there is no active row for that module.
+ *
+ * This is the fallback source for products that carry their own per-product T&C
+ * column but were created (or migrated) without one — today: books
+ * (`ws_book.terms_and_conditions`, nullable since 2026-08-18). The product
+ * service asks for the module text ONCE per request and hands it to the
+ * transformer; see `catalog-book.service`.
+ *
+ * Deliberately returns "" rather than null: every consumer's DTO field is a
+ * non-null string, so a missing global row must collapse to the same empty
+ * string a missing per-product value does.
+ */
+export const getModuleTermsText = async (module: TermsModule): Promise<string> => {
+  const row = await termsRepository.findActiveByModule(module);
+  return row?.terms?.trim() ? row.terms : "";
+};

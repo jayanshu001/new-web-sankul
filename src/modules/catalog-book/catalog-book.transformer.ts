@@ -8,11 +8,16 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
 
 /**
  * `ws_book` row → DTO, shape-compatible with the Mongo `Book` document (data
- * fields only). Field renames per types.ts; `isTrending` synthesized false;
+ * fields only). `opts.fallbackTerms` is the module-level T&C the service resolved
+ * once for the request; it is used only when the book row itself has none.
+ * Field renames per types.ts; `isTrending` synthesized false;
  * `publication`/`deliveryEta` synthesized to the Mongo defaults (no SQL columns).
  * The Mongo-only `packageIds[]` and order/cart-derived fields are NOT produced.
  */
-export const toBookDto = (row: Book, opts: { customerId?: number | null } = {}): BookDto => {
+export const toBookDto = (
+  row: Book,
+  opts: { customerId?: number | null; fallbackTerms?: string } = {}
+): BookDto => {
   // No raw demo PDF URL. The demo is PUBLIC content, so its short-lived encrypted
   // token is always emitted when a demo PDF exists — independent of login OR
   // purchase (null only when there is no demo). It is customer-bound when a viewer
@@ -26,8 +31,14 @@ export const toBookDto = (row: Book, opts: { customerId?: number | null } = {}):
   author: row.author ?? null,
   image: row.image ?? null,
   description: row.description ?? null,
-  // null → "" so the client always gets a string, matching the ebook contract.
-  termsAndConditions: row.termsAndConditions ?? "",
+  // Per-book T&C wins; when the book has none (null, or whitespace-only — the
+  // admin form posts "" for an untouched editor) fall back to the module-level
+  // `ws_termsandcondition` row for module='book', supplied by the service.
+  // Still null → "" at the end so the client always gets a string, matching the
+  // ebook contract.
+  termsAndConditions: row.termsAndConditions?.trim()
+    ? row.termsAndConditions
+    : opts.fallbackTerms ?? "",
   demoMediaToken,
   weight: row.weight ?? null,
   pages: row.pages ?? 0,

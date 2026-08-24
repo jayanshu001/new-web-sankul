@@ -78,6 +78,34 @@ export const getActivePackageSubscription = async (
   return row ? toSubscriptionDto(row) : null;
 };
 
+/**
+ * Per-package entitlement state for ONE customer over a PAGE of packages, in a
+ * single query — `packageId → endAt` for every active package subscription.
+ *
+ * Use this on listings instead of calling `getActivePackageSubscription` per row
+ * (that is 1 query per card). Presence in the Map is `isPurchased`; the value
+ * feeds `computeDaysLeft`. A `null` value means an active row with no expiry.
+ *
+ * `customerId` may be null (anonymous / no bearer) → empty Map, so callers need
+ * no separate branch.
+ */
+export const getActivePackageSubMap = async (
+  customerId: number | null,
+  packageIds: number[],
+  now: Date = new Date()
+): Promise<Map<number, Date | null>> => {
+  const map = new Map<number, Date | null>();
+  if (customerId == null || !packageIds.length) return map;
+  const rows = await repo.findActivePackageSubsForPackages(customerId, packageIds, now);
+  // Rows arrive endAt ASC, so a later row overwrites an earlier one and the
+  // latest-expiring subscription wins — the same row `findFirst` + `endAt desc`
+  // would have picked for a single package.
+  for (const r of rows) {
+    if (r.packageId != null) map.set(r.packageId, r.endAt ?? null);
+  }
+  return map;
+};
+
 // ── single / listings ───────────────────────────────────────────────────────
 
 export const findSubscriptionById = async (id: number): Promise<SubscriptionDto | null> => {

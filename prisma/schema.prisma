@@ -332,6 +332,12 @@ model Customer {
   // return it to the authenticated owner via /client/downloads/encryption-key.
   // NULL = this user has never stored a key (the API's documented 404 state).
   downloadKeyHex            String?                     @map("download_key_hex") @db.VarChar(64)
+  // Notification read watermark: every notification created at or BEFORE this instant
+  // counts as read for this customer, without a per-row mark. Powers O(1)
+  // mark-all-read and suppressed the cutover badge storm when read state moved off the
+  // shared ws_notification.is_read. NULL = nothing pre-read (all new customers — the
+  // signup cut-off already hides pre-signup broadcasts, so they need no stamp).
+  notificationsReadBefore   DateTime?                   @map("notifications_read_before")
   os_type                   OsType                      @default(android)
   lastLogin                 DateTime?                   @map("last_login_date")
   lastLoginIp               String?                     @map("last_login_ip") @db.VarChar(255)
@@ -2157,6 +2163,24 @@ model Notification {
 // Per-customer "delete from my feed" marker. Presence of a row = the customer has
 // dismissed that notification; the client feed + unread count exclude it. Broadcast
 // rows are shared, so dismissal is tracked here rather than hard-deleting the source.
+// Per-customer "I have read this" marker — the read-state twin of
+// NotificationDismissal. Read state used to live on ws_notification.is_read, which for
+// a BROADCAST row is shared by every customer, so one reader marked it read for all of
+// them. Presence of a row here = that customer has read that notification.
+// See docs/migration/schema-changes/2026-08-24_notification_read_state.sql.
+// Rows older than the customer's `notificationsReadBefore` watermark are redundant and
+// pruned by mark-all-read.
+model NotificationRead {
+  id             Int       @id @default(autoincrement())
+  customerId     Int       @map("customer_id")
+  notificationId Int       @map("notification_id")
+  readAt         DateTime? @map("read_at")
+
+  @@unique([customerId, notificationId], name: "uniq_notif_read")
+  @@index([customerId], map: "idx_notif_read_customer")
+  @@map("ws_notification_read")
+}
+
 model NotificationDismissal {
   id             Int       @id @default(autoincrement())
   customerId     Int       @map("customer_id")

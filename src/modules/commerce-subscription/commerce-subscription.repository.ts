@@ -106,6 +106,29 @@ export const commerceSubscriptionRepository = {
   updateEndAt: (id: number, endAt: Date) =>
     prisma.packageCourseSubscription.update({ where: { id }, data: { endAt } }),
 
+  /**
+   * Active, unexpired PACKAGE entitlements for ONE customer across MANY packages
+   * — the batched form of `findActivePackageSub`, for listing surfaces.
+   *
+   * Same predicate as the single-row version so `isPurchased` cannot disagree
+   * between a list and a detail screen. Ordered `endAt ASC` so a caller building
+   * a Map by packageId keeps the LAST (latest-expiring) row per package, matching
+   * the single-row query's `orderBy: { endAt: "desc" }` + `findFirst`.
+   */
+  findActivePackageSubsForPackages: (customerId: number, packageIds: number[], now: Date) =>
+    packageIds.length
+      ? prisma.packageCourseSubscription.findMany({
+          where: {
+            customerId,
+            packageId: { in: packageIds },
+            status: true,
+            endAt: { gt: now },
+          },
+          select: { packageId: true, endAt: true },
+          orderBy: { endAt: "asc" },
+        })
+      : Promise.resolve([]),
+
   /** Count active owners of a package (`package_id`, the actual package). */
   countActiveByPackage: (packageId: number, now: Date) =>
     prisma.packageCourseSubscription.count({

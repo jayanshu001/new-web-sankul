@@ -145,7 +145,11 @@ export const FLUSH_GROUPS: Partial<Record<CacheEntity, CacheEntity[]>> = {
   // Flat, single-entity CMS surfaces — only their own client endpoint.
   faq: ["faq", "cms"],
   popup: ["popup", "cms"],
-  terms: ["terms", "cms"],
+  // Terms is NOT flat any more: since the book T&C fallback (catalog-book.service
+  // → getModuleTermsText("book")), the client book list/detail embed the
+  // module='book' terms text whenever the book row has none of its own. Editing
+  // the global terms therefore stales every cached book read.
+  terms: ["terms", "cms", "catalog-book"],
   "social-link": ["social-link", "cms"],
   "current-affair": ["current-affair", "cms"],
 };

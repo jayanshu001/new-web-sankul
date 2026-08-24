@@ -443,6 +443,11 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
 // ─── Package Categories ──────────────────────────────────────────────────────
 import * as pkgCatSql from "../../modules/package-category/package-category.service";
 
+// Request origin for share links — same local helper every other client
+// controller defines (book/package/ebook/live-course/...).
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
+
 export const listPackageCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveOnly = String(req.query.live ?? "").toLowerCase() === "true";
@@ -474,7 +479,7 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const tab = String(req.query.tab ?? "").toLowerCase() === "live" ? "live" : "recorded";
     const data = await pkgCatSql.listPackagesAndLiveByCategory(catId, customerId, {
-      tab, search: search || null, skip, take: limitNum,
+      tab, search: search || null, skip, take: limitNum, baseUrl: resolveBase(req),
     });
     logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, tab, recordedCount: data.recorded.length, liveCount: data.live.length, total: data.total });
     return res.status(200).json({

@@ -14,6 +14,9 @@ import { prisma } from "../../config/prisma";
 import * as liveSql from "../admin-live-course/admin-live-course.service";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
+import { getActivePackageSubMap } from "../commerce-subscription/commerce-subscription.service";
+import { computeDaysLeft } from "../../utils/planDuration";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
 export const isPackageCategoryMysql = (): boolean => true;
@@ -39,7 +42,20 @@ const idStr = (v: number | null | undefined): string | null => (v != null ? Stri
 
 // ws_package row + its plans → the Mongo `recorded[]` shape (plans sorted
 // default-first then by duration; defaultPlan + startingPrice derived).
-const toCategoryPackageDto = (p: any, allPlans: any[]) => {
+//
+// `opts` carries the per-request extras the recorded tab was missing until
+// 2026-08-24 (it used to be a pure column-mapper, so every card came back
+// without purchase state while the live tab had it):
+//  - `subEndAt`: the customer's active subscription end date for THIS package,
+//    or `undefined` when there is none → drives isPurchased/daysLeft.
+//  - `baseUrl`: request origin, so shareableLink is BUILT like every other
+//    surface instead of read from ws_package.shareable_link, which is junk
+//    (mostly NULL/""/"https://" — links written with an empty origin).
+const toCategoryPackageDto = (
+  p: any,
+  allPlans: any[],
+  opts: { subEndAt?: Date | null; baseUrl?: string } = {}
+) => {
   const plans = allPlans
     .filter((pl) => pl.packageId === p.id)
     .map((pl) => ({
@@ -57,13 +73,19 @@ const toCategoryPackageDto = (p: any, allPlans: any[]) => {
       return (a.duration ?? 0) - (b.duration ?? 0);
     });
   const defaultPlan = plans.find((pl) => pl.isDefault) ?? plans[0] ?? null;
+  // `undefined` = no active subscription. A row that IS active but has no expiry
+  // (lifetime) is `null`, which is purchased with daysLeft: null — hence the
+  // `!== undefined` test rather than a truthiness check.
+  const isPurchased = opts.subEndAt !== undefined;
   return {
     _id: String(p.id),
     name: p.name,
     description: p.description,
     image: p.image ?? null,
-    shareableLink: p.shareable_link ?? null,
+    shareableLink: buildShareUrl("packages", String(p.id), opts.baseUrl),
     order: p.order_by,
+    isPurchased,
+    daysLeft: isPurchased ? computeDaysLeft(opts.subEndAt ?? null) : null,
     isPaid: p.isPaid,
     withMaterialText: p.withMaterial,
     withoutMaterialText: p.withoutMaterial,
@@ -96,6 +118,8 @@ export interface ListPackagesAndLiveOpts {
   search?: string | null;
   skip?: number;
   take?: number;
+  /** Request origin from the controller's `resolveBase(req)` — builds shareableLink. */
+  baseUrl?: string;
 }
 
 /**
@@ -134,12 +158,26 @@ export const listPackagesAndLiveByCategory = async (
 
   if (tab === "recorded") {
     const packages = await prisma.package.findMany({ where: pkgWhere, orderBy: [{ order_by: "asc" }, { created_at: "asc" }, { id: "desc" }], skip, take });
-    const plans = packages.length
-      ? await prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packages.map((p) => p.id) }, status: true } })
-      : [];
+    const pkgIds = packages.map((p) => p.id);
+    // Plans AND entitlements are both fetched for the WHOLE page in one query
+    // each — deliberately not the per-row pattern `enrichPackagesSql` uses, which
+    // would be ~2 extra round-trips per card.
+    const [plans, subMap] = await Promise.all([
+      pkgIds.length
+        ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: pkgIds }, status: true } })
+        : Promise.resolve([] as any[]),
+      getActivePackageSubMap(customerId, pkgIds),
+    ]);
     return {
       tab,
-      recorded: packages.map((p) => toCategoryPackageDto(p, plans)),
+      recorded: packages.map((p) =>
+        toCategoryPackageDto(p, plans, {
+          // `has` distinguishes "no subscription" (absent) from an active
+          // lifetime one (present, value null) — `get` alone cannot.
+          subEndAt: subMap.has(p.id) ? subMap.get(p.id) ?? null : undefined,
+          baseUrl: opts.baseUrl,
+        })
+      ),
       live: [] as any[],
       counts,
       total: recordedTotal,

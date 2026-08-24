@@ -15,6 +15,220 @@
 
 ---
 
+## 2026-08-24 (c) — Notifications: per-customer read state + broadcast signup cut-off
+
+**Files:** `src/modules/client-notification/client-notification.service.ts`,
+`prisma/schema.prisma`. **DDL:** `2026-08-24_notification_read_state.sql`.
+**Backfill:** `scripts/backfill-notification-read-watermark.ts` (PK-batched).
+
+Reported as "a deleted-and-recreated account still sees the old notifications". It is
+not a deletion-cleanup gap — personal rows are keyed by `customer_id` and re-signup
+gets a NEW id, so those never carried over. Two unrelated bugs were behind it.
+
+### Bug 1 — broadcast read state was GLOBAL
+
+`ws_notification.is_read` / `read_at` sit on the notification row. For `broadcast = 1`
+that row is shared by the whole user base, so `markRead`'s
+`prisma.notification.update(...)` marked it read for EVERY customer. On staging **60 of
+63 broadcasts were already `is_read = 1`** — which is why a brand-new account showed 63
+items but an unread badge of 3.
+
+`markAllRead` had the mirror-image bug: it filtered `{ customerId }`, which never
+matches a broadcast (`customer_id` is NULL), so "mark all read" skipped exactly the rows
+`markRead` over-applied.
+
+Read state now lives in **`ws_notification_read` (customer_id, notification_id,
+read_at)** — the exact mirror of `ws_notification_dismissal`, which already had this
+right since 2026-07-20. `ws_notification.is_read` is left in place but is no longer read
+or written by the client path.
+
+### Bug 2 — no time bound on broadcasts
+
+`visWhere` was `{ OR: [{ customerId }, { broadcast: true }] }` with no date filter, so
+every account inherited the entire broadcast history (oldest on staging: 2026-07-02).
+A brand-new account that had never deleted anything saw the same 63 items — the trigger
+was signing up, not deleting.
+
+Broadcasts are now bounded by `createdAt >= customer.createdAt`. A no-op for existing
+users (a broadcast sent after they joined still passes); only pre-signup history drops.
+`createdAt` NULL → no bound, i.e. the old behaviour, because losing a whole feed is a
+worse failure than showing extra.
+
+### The watermark, and why it is a column
+
+`ws_customer.notifications_read_before` = "everything created at/before this instant is
+read for this customer". Two jobs:
+
+- **Cutover.** Dropping the shared `is_read` would relight every broadcast for every
+  existing customer on deploy. One scalar per customer suppresses that; the alternative
+  (a read row per customer x notification) is ~37M rows at 600k customers.
+- **Mark-all-read becomes O(1)** — move the watermark, then prune the now-redundant
+  per-row marks, which is what stops `ws_notification_read` growing forever.
+
+Per the ws_customer scalar rule this is a COLUMN, while (customer x notification) marks
+are a real 1:N and get a table.
+
+### Backfill safety
+
+`scripts/backfill-notification-read-watermark.ts` pages by PK (5k) and only touches
+`notifications_read_before IS NULL`, so it is resumable and never re-stamps. Deliberately
+NOT an unbounded `updateMany` — that pattern over this same 600k-row table caused the
+prod "Server has closed the connection" incident. Personal read state is carried over by
+an `INSERT ... SELECT` inside the DDL, bounded by notification count, not customer count.
+
+### Verified on staging
+
+| | before | after |
+|---|---|---|
+| Brand-new account feed | 63 items | **0** |
+| Existing account feed / badge | 63 / 3 | 63 / **0** (no badge storm) |
+| New account reads a broadcast | marked read for everyone | other customer still `isRead:false` |
+
+### Not changed
+
+- `ws_notification.is_read` / `read_at` columns are left in place (rollback safety);
+  nothing in the client path reads them any more.
+- New customers are left with a NULL watermark on purpose — the signup cut-off already
+  hides pre-signup broadcasts, so there is nothing to pre-read.
+
+---
+
+## 2026-08-24 (b) — Category packages: add isPurchased/daysLeft, build shareableLink
+
+**Files:** `src/modules/commerce-subscription/commerce-subscription.repository.ts`,
+`commerce-subscription.service.ts`,
+`src/modules/package-category/package-category.service.ts`,
+`src/client/categories/categories.controller.ts`. **DDL:** none. **Backfill:** none.
+
+Affects `GET /client/package-categories/:id/packages?tab=recorded`.
+
+### Problem
+
+`toCategoryPackageDto` was a pure column-mapper: the recorded tab returned no
+`isPurchased` and no `daysLeft`, so every package card rendered as un-owned even for a
+subscriber. `customerId` was already threaded into `listPackagesAndLiveByCategory` but
+was read ONLY by the `live` branch — which is why `?tab=live` was correct on the same
+endpoint and `?tab=recorded` was not.
+
+Separately, `shareableLink` was `p.shareable_link` — a raw read of
+`ws_package.shareable_link`, which is junk data: 9 of 10 rows are NULL, `''` or the
+literal `'https://'` (links written with an empty origin). Every other surface BUILDS
+the URL per request via `buildShareUrl`.
+
+### Change
+
+`toCategoryPackageDto` takes a third `opts` arg (`subEndAt`, `baseUrl`) and now emits:
+
+- `isPurchased` — `opts.subEndAt !== undefined`. The `!== undefined` test (not
+  truthiness) is load-bearing: an active LIFETIME grant has `endAt = null`, which is
+  purchased-with-no-countdown, and a truthiness check would report it as un-owned.
+- `daysLeft` — `computeDaysLeft(subEndAt)`, `null` when not purchased or lifetime.
+- `shareableLink` — `buildShareUrl("packages", id, baseUrl)`, with `baseUrl` threaded
+  from a new local `resolveBase(req)` in `categories.controller` (the same helper the
+  book/package/ebook/live-course controllers already define).
+
+Additive on the wire. `defaultPlan` / `startingPrice` are preserved — this is why the
+recorded branch was NOT switched wholesale onto `enrichPackagesSql`, which does not
+emit those two and would have broken the app.
+
+### New query (batched, not per-row)
+
+`commerce-subscription.repository.findActivePackageSubsForPackages(customerId, packageIds, now)`
+→ `prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in }, status: true, endAt: { gt: now } }, select: { packageId, endAt }, orderBy: { endAt: 'asc' } })`,
+wrapped by `getActivePackageSubMap()` returning `Map<packageId, endAt|null>`.
+
+ONE query per page, not one per card. `enrichPackagesSql` (the `/client/packages`
+enricher) does ~5 round-trips per row; copying that pattern here would have added ~10
+queries to a 10-item page. Predicate is identical to the single-row
+`findActivePackageSub`, so `isPurchased` cannot disagree between this list and the
+package detail screen. `endAt ASC` + Map overwrite makes the latest-expiring row win,
+matching the single-row `findFirst` + `orderBy endAt desc`.
+
+### Verified
+
+Against `websankul_staging_1`, category 3 (test subscription inserted then deleted):
+
+- no subscription → `isPurchased:false, daysLeft:null`
+- active sub, 30 days → `isPurchased:true, daysLeft:30`, sibling package still `false`
+- `shareableLink` → `https://<origin>/share/packages/990096` (was `https://`)
+- `defaultPlan` / `startingPrice` unchanged
+
+### Known, NOT changed here
+
+- **Lifetime package subs are invisible to both paths.** `findActivePackageSub` filters
+  `endAt: { gt: now }`, and Prisma's `gt` excludes NULL, so a lifetime grant
+  (`end_at IS NULL`) reports `isPurchased:false` — on this endpoint AND on
+  `/client/packages`. Left as-is deliberately so the two agree; fixing it is a separate
+  change to the shared predicate. See [[project_prisma_not_excludes_null]].
+- **`daysLeft` vs the 24h route cache.** The route is
+  `cacheRoute({ ttl: 86400, scope: "user" })`. Per-user scoping keeps `isPurchased`
+  correct, but `daysLeft` decrements daily so a cached entry can be one day stale. The
+  `live` tab already had this. Fix is either a shorter TTL or having the app derive the
+  countdown from an `endAt` timestamp — a contract change, not made here.
+- **`ws_package.shareable_link` is now dead for this endpoint** but still read by
+  `catalog-package.transformer.ts:31`. Worth auditing whether that transformer feeds a
+  live route.
+
+---
+
+## 2026-08-24 — Book T&C falls back to the module-level `ws_termsandcondition` row
+
+**Files:** `src/modules/terms/terms.service.ts`,
+`src/modules/catalog-book/catalog-book.transformer.ts`,
+`src/modules/catalog-book/catalog-book.service.ts`,
+`src/middlewares/flushGroups.ts`. **DDL:** none. **Backfill:** none.
+
+### Problem
+
+`ws_book.terms_and_conditions` was added late (2026-08-18) and is nullable, so every
+book created before that — and any book the admin saved without touching the T&C
+editor — carries `NULL` or `''`. The client transformer collapsed that to `""`, and the
+app rendered an empty Terms & Conditions section on the book detail screen. The
+store-wide book terms the admin already maintains under CMS → Terms & Conditions
+(`ws_termsandcondition` row with `module='book'`) were never consulted.
+
+### Change
+
+`termsAndConditions` in the client book DTO is now resolved per row as:
+
+```
+book.terms_and_conditions (non-blank)  →  ws_termsandcondition.terms WHERE module='book' AND status=1  →  ""
+```
+
+The per-book value still always wins when set; the fallback only fills the hole. A
+whitespace-only per-book value counts as absent (the admin form posts `""` for an
+untouched editor), so `.trim()` — not `?? null` — is the emptiness test.
+
+### Query shape
+
+New read: `getModuleTermsText("book")` in `terms.service` →
+`termsRepository.findActiveByModule` → `prisma.termsAndConditions.findFirst({ where: { module: 'book', status: true } })`.
+
+Resolved **once per service call**, not once per row, and issued inside the existing
+`Promise.all` alongside the book read — so a 20-book page costs one extra single-row
+lookup on a two-row table, concurrently with the list query, not twenty sequential ones.
+Applied in `getBookById`, `listBooksData` and `findBooksByIds`.
+
+### Cache
+
+`FLUSH_GROUPS.terms` was `["terms", "cms"]`. Client book responses now embed the terms
+text, so the group gains `"catalog-book"` — without it an admin edit to the global book
+terms would stay invisible for the full 24h TTL on
+`GET /client/books` and `GET /client/books/:id`. All three admin terms writes
+(`POST/PUT/DELETE /admin/cms/terms`) already route through `autoFlushGroup("terms")`.
+
+### Deliberately NOT changed
+
+- **Admin book reads** (`admin-book.service.toBookDto`) still return the raw per-book
+  column. The admin edit form must show what is actually stored — pre-filling it with
+  the global text would let an editor save a copy of the global terms into the book row
+  on the next save, permanently detaching that book from the fallback.
+- **Ebooks.** `ws_ebook.terms_and_conditions` is NOT NULL and the
+  `ws_termsandcondition.module` enum has no ebook value, so there is nothing to fall
+  back to.
+
+---
+
 ## 2026-08-21 (f) — Package plans: show inactive ones, and make Delete actually delete
 
 **Files:** `src/modules/admin-package/admin-package.repository.ts`,

@@ -13,6 +13,7 @@
  * The per-request deep link is supplied by a `buildShareLink` callback.
  */
 import { isNewItem } from "../../utils/isNew";
+import { getModuleTermsText } from "../terms/terms.service";
 import { catalogBookRepository as repo } from "./catalog-book.repository";
 import { toBookDto } from "./catalog-book.transformer";
 import type {
@@ -23,6 +24,18 @@ import type {
 
 export const BOOK_MODULE = "catalog-book";
 export const isBookMysql = (): boolean => true;
+
+/**
+ * Books whose own `terms_and_conditions` is empty fall back to the module-level
+ * `ws_termsandcondition` row for module='book' — the store-wide book T&C the
+ * admin maintains under Terms & Conditions. Resolved ONCE per service call (one
+ * single-row read on a two-row table) and handed to every row's transformer, so
+ * a 20-book page still costs one extra query, not twenty.
+ *
+ * The per-book value always wins when set; this only fills the hole that made
+ * the app render an empty T&C section.
+ */
+const bookTermsFallback = (): Promise<string> => getModuleTermsText("book");
 
 /** Parse a string id to a positive int, else null. */
 export const parseBookId = (id: string): number | null => {
@@ -51,8 +64,13 @@ export const getBookById = async (
   now: Date = new Date(),
   customerId: number | null = null
 ): Promise<BookListItemDto | null> => {
-  const row = await repo.findActiveById(id);
-  return row ? decorate(toBookDto(row, { customerId }), buildShareLink, now) : null;
+  const [row, fallbackTerms] = await Promise.all([
+    repo.findActiveById(id),
+    bookTermsFallback(),
+  ]);
+  return row
+    ? decorate(toBookDto(row, { customerId, fallbackTerms }), buildShareLink, now)
+    : null;
 };
 
 /**
@@ -72,15 +90,22 @@ export const listBooksData = async (
     language: opts.language,
     type: opts.type,
   };
-  const [rows, total] = await Promise.all([
+  const [rows, total, fallbackTerms] = await Promise.all([
     repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),
     repo.countActive(filter),
+    bookTermsFallback(),
   ]);
-  return { items: rows.map((r) => decorate(toBookDto(r, { customerId }), buildShareLink, now)), total };
+  return {
+    items: rows.map((r) =>
+      decorate(toBookDto(r, { customerId, fallbackTerms }), buildShareLink, now)
+    ),
+    total,
+  };
 };
 
 /** Books by ids (bulk hydration — purchase-history/cart book thumbnails). */
 export const findBooksByIds = async (ids: number[]): Promise<BookDto[]> => {
-  const rows = await repo.findByIds(ids);
-  return rows.map(toBookDto);
+  if (!ids.length) return [];
+  const [rows, fallbackTerms] = await Promise.all([repo.findByIds(ids), bookTermsFallback()]);
+  return rows.map((r) => toBookDto(r, { fallbackTerms }));
 };
