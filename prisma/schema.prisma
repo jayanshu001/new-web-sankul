@@ -1246,7 +1246,12 @@ model Course {
   material                  PackageCourseMaterial?      @relation(fields: [pcMaterialId], references: [id])
   pcMaterialId              Int?                        @map("pc_material_id")
   level                     String
-  purchase                  CourseFlag01?               @map("purchase")
+  /// Business rule: a course is NEVER free. DB-side this column is NOT NULL
+  /// DEFAULT '1' (2026-08-25_ws_course_purchase_always_paid.sql); it is left
+  /// OPTIONAL here on purpose so this schema is valid both before and after that
+  /// DDL lands on an environment. Tighten to non-nullable once it is applied
+  /// everywhere.
+  purchase                  CourseFlag01?               @default(yes) @map("purchase")
   is_featured               CourseFlag01?               @map("is_featured")
   status                    Boolean
   createdAt                 DateTime?                   @map("created_at")
@@ -1851,11 +1856,75 @@ model LiveCoursePlan {
   @@map("ws_live_course_plan")
 }
 
+/// Live-course purchase record. Created at CHECKOUT (status "pending") and flipped
+/// to "complete" at payment verify, at which point ONE LiveCourseSubscription row is
+/// created for it. Renewals get their own order + their own subscription row — they
+/// never fold onto the existing entitlement.
+///
+/// THE ORDER OWNS PAYMENT; THE SUBSCRIPTION OWNS ENTITLEMENT. Before 2026-08-25 live
+/// course had no order table and the subscription carried both, which is why a
+/// renewal had nowhere to record its own payment. Those columns still exist on
+/// LiveCourseSubscription for pre-migration rows; new writes go here.
+/// DDL: 2026-08-25_create_ws_live_course_order.sql
+model LiveCourseOrder {
+  id                Int       @id @default(autoincrement())
+  customerId        Int       @map("customer_id")
+  liveCourseId      Int       @map("live_course_id")
+  planId            Int?      @map("plan_id")
+
+  // Whole rupees (int, not Decimal) — matches ws_live_course_subscription, which
+  // these columns were moved from. `originalAmount` is the pre-promo price and is
+  // set ONLY when a promo was applied; that is what keeps the discount derivable
+  // (liveSubDiscountAmount = original - paid - walletCoin).
+  paidAmount        Int?      @map("paid_amount")
+  originalAmount    Int?      @map("original_amount")
+  walletCoin        Int?      @map("wallet_coin")
+
+  // Frozen purchase-time snapshots, exactly one ever set (see modules/order-code-snapshot).
+  promocode         Json?
+  refferalcode      Json?
+
+  paymentMethod     String?   @map("payment_method")
+  razorpayOrderId   String?   @map("razorpay_order_id")
+  razorpayPaymentId String?   @map("razorpay_payment_id")
+  bankTransactionId String?   @map("bank_transaction_id")
+
+  /// "pending" | "complete" | "failed" — ws_test_series_order vocabulary, NOT the
+  /// subscription's "verified". The backfill maps verified → complete.
+  status            String    @default("pending")
+  paidAt            DateTime? @map("paid_at")
+
+  // Chosen at checkout, before any subscription exists; copied onto the sub at verify.
+  withMaterial       Boolean   @default(false) @map("with_material")
+  customerShippingId Int?      @map("customer_shipping_id")
+
+  remarks           String?
+  createdAt         DateTime? @map("created_at")
+  updatedAt         DateTime? @map("updated_at")
+  created_by        Int?
+  updated_by        Int?
+
+  /// Normally exactly one — the entitlement this order paid for. A list, not a
+  /// single row, only because Prisma models the inverse side of an optional FK that way.
+  subscriptions     LiveCourseSubscription[]
+
+  @@index([razorpayOrderId], name: "idx_lco_razorpay_order")
+  @@index([customerId, liveCourseId], name: "idx_lco_customer_course")
+  @@index([createdAt, status], name: "idx_lco_created_status")
+  @@map("ws_live_course_order")
+}
+
 model LiveCourseSubscription {
   id                Int       @id @default(autoincrement())
   customerId        Int       @map("customer_id")
   liveCourseId      Int       @map("live_course_id")
   planId            Int?      @map("plan_id")
+  // The order that paid for this row. NULL only on pre-2026-08-25 rows that the
+  // backfill has not reached. DDL: 2026-08-25_create_ws_live_course_order.sql
+  orderId           Int?      @map("order_id")
+  /// Purchase history gates live rows on `order.status = "complete"` rather than the
+  /// legacy `payment_status`, so an abandoned checkout never lists as a purchase.
+  order             LiveCourseOrder? @relation(fields: [orderId], references: [id])
   startAt           DateTime? @map("start_at")
   endAt             DateTime? @map("end_at")
   status            Boolean   @default(true)

@@ -41,10 +41,12 @@ const testSeriesRevenue = async (w: Win) => {
   const agg = await prisma.testSeriesSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end } }, _sum: { price: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.price), count: agg._count._all };
 };
-// Live-course is single-table (pending + folded rows coexist), so restrict to
-// payment_status='verified' to count only real paid money — sum paid_amount.
+// Revenue comes from the ORDER table (2026-08-25): live course used to be
+// single-table, so this had to sum the subscription and exclude pending/folded rows
+// via payment_status. Each purchase is now its own completed order, which also means
+// a renewal is finally counted as its own sale instead of vanishing into a folded row.
 const liveCourseRevenue = async (w: Win) => {
-  const agg = await prisma.liveCourseSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, paymentStatus: "verified" }, _sum: { paidAmount: true }, _count: { _all: true } });
+  const agg = await prisma.liveCourseOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" }, _sum: { paidAmount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.paidAmount), count: agg._count._all };
 };
 
@@ -145,7 +147,9 @@ export const fetchDashboardData = async (opts: {
     seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
     seriesFor("ws_test_series_subscription", "price", tot, unit),
-    seriesFor("ws_live_course_subscription", "paid_amount", tot, unit, "AND payment_status = 'verified'"),
+    // Order table + its "complete" vocabulary (was ws_live_course_subscription /
+    // payment_status='verified' before the 2026-08-25 split).
+    seriesFor("ws_live_course_order", "paid_amount", tot, unit, "AND status = 'complete'"),
     prisma.customer.findMany({ where: { isAccountDeleted: false }, select: { id: true, fullName: true, phoneNumber: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
@@ -154,7 +158,9 @@ export const fetchDashboardData = async (opts: {
     // TestSeries/LiveCourse subscription models carry only scalar FKs (no Prisma
     // relations) — refs are batch-loaded below.
     prisma.testSeriesSubscription.findMany({ orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.liveCourseSubscription.findMany({ where: { paymentStatus: "verified" }, orderBy: { createdAt: "desc" }, take: limit }),
+    // "Recent purchases" is an ORDER concern — reading the order table also makes a
+    // renewal show up as its own recent sale (2026-08-25 split).
+    prisma.liveCourseOrder.findMany({ where: { status: "complete" }, orderBy: { createdAt: "desc" }, take: limit }),
     summaryCounters(),
   ]);
 

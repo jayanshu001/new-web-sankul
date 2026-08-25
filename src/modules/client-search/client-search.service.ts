@@ -197,7 +197,9 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
   }
 
   if (type === "liveCourses") {
-    const subs = await prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } });
+    // `paymentStatus` dropped 2026-08-25 — payment moved to ws_live_course_order and
+    // a subscription row is only ever written for a paid one, so `status` is the gate.
+    const subs = await prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } });
     const life = new Set<number>(); const latest = new Map<number, Date>();
     for (const s of subs) { const e = s.endAt ?? null; if (e === null) { life.add(s.liveCourseId); continue; } if (life.has(s.liveCourseId)) continue; const prev = latest.get(s.liveCourseId); if (!prev || e > prev) latest.set(s.liveCourseId, e); }
     return base.map((it) => { if (life.has(it.id)) return { ...it, isPurchased: true, daysLeft: null }; const e = latest.get(it.id); return { ...it, isPurchased: !!e, daysLeft: e ? computeDaysLeft(e, now) : null }; });

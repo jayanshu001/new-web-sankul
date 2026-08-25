@@ -54,15 +54,26 @@ export const countPlanUsage = async (
   if (!ids.length) return out;
 
   if (kind === "livePlan") {
-    // ws_live_course_subscription is a SINGLE table — it is both the order and the
-    // entitlement (there is no separate ws_live_course_order), so every row counts
-    // exactly once regardless of payment_status.
-    const liveRows = await prisma.liveCourseSubscription.groupBy({
-      by: ["planId"],
-      where: { planId: { in: ids } },
-      _count: { _all: true },
-    });
-    return tally(out, liveRows as unknown as CountRow[]);
+    // Live course gained an order table on 2026-08-25, so usage is counted the same
+    // way as test-series below: ORDERS of every status (a pending checkout still
+    // pins the plan — it no longer writes a subscription row, so counting only
+    // subscriptions would let an in-flight purchase's plan be deleted), plus legacy
+    // subscriptions the backfill has not linked to an order yet. The two sets are
+    // disjoint, so nothing is counted twice.
+    const [liveOrders, orphanLiveSubs] = await Promise.all([
+      prisma.liveCourseOrder.groupBy({
+        by: ["planId"],
+        where: { planId: { in: ids } },
+        _count: { _all: true },
+      }),
+      prisma.liveCourseSubscription.groupBy({
+        by: ["planId"],
+        where: { planId: { in: ids }, orderId: null },
+        _count: { _all: true },
+      }),
+    ]);
+    tally(out, liveOrders as unknown as CountRow[]);
+    return tally(out, orphanLiveSubs as unknown as CountRow[]);
   }
 
   if (kind === "testSeriesPrice") {

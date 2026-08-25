@@ -188,17 +188,18 @@ export const verifyPayment = async (req: Request, res: Response) => {
     }
 
     // ── MySQL live-course write path (live-course-order) ─────────────────────
-    // Single-table: the pending ws_live_course_subscription owns the razorpay id.
+    // The pending ws_live_course_order owns the razorpay id; verifying it creates
+    // the subscription row (2026-08-25 — live course used to be single-table).
     {
       const customerIdInt = Number(userId);
-      const mysqlLiveSub = Number.isInteger(customerIdInt)
+      const mysqlLiveOrder = Number.isInteger(customerIdInt)
         ? await findLiveCourseOrderForVerify(razorpay_order_id, customerIdInt)
         : null;
-      if (mysqlLiveSub) {
-        if (mysqlLiveSub.paymentStatus && mysqlLiveSub.paymentStatus !== "pending") {
-          logger.info("verifyPayment: live-course sub already verified (idempotent, mysql)", { subscriptionId: mysqlLiveSub.id, razorpay_order_id });
+      if (mysqlLiveOrder) {
+        if (mysqlLiveOrder.status && mysqlLiveOrder.status !== "pending") {
+          logger.info("verifyPayment: live-course order already complete (idempotent, mysql)", { orderId: mysqlLiveOrder.id, razorpay_order_id });
         }
-        const subscription = await verifyLiveCourseOrderMysql(mysqlLiveSub, razorpay_payment_id);
+        const subscription = await verifyLiveCourseOrderMysql(mysqlLiveOrder, razorpay_payment_id);
         logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success

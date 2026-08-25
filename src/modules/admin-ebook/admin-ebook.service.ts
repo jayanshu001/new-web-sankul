@@ -571,7 +571,15 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     if (plan.ebookId && plan.ebookId > 0) resolvedEbookId = plan.ebookId;
   }
 
-  const startAt = new Date();
+  const now = new Date();
+
+  // Subscription Type = Extend: read the customer's current active subscription so
+  // the new row can continue from where it ends. ONE ORDER = ONE SUBSCRIPTION ROW —
+  // the existing row is NOT modified (it was previously updated in place, which
+  // repointed its order_id at the extension order and orphaned the original
+  // purchase). No active sub → this is a plain fresh grant starting now.
+  const existing = d.extend ? await repo.findActiveSubscription(d.customerId, resolvedEbookId, now) : null;
+  const startAt = existing?.endAt && existing.endAt.getTime() > now.getTime() ? new Date(existing.endAt) : now;
   // `duration` is in DAYS (see [[project_plan_duration_unit]]) — endAt via the
   // planDuration helper (asDays), NOT raw ms math.
   const endAt = computeEndAt({ startAt, durationMonths: durationDays ?? 0, asDays: true });
@@ -586,15 +594,17 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     planId: d.planId ?? null,
     paymentMethod: d.paymentMethod,
     // Order row always carries a number (0 for a free extend) — it is the
-    // purchase record. The subscription's own price is left alone below.
+    // purchase record.
     orderPrice: d.orderPrice ?? 0,
     razorpayOrderId: d.razorpayOrderId ?? null,
     razorpayPaymentId: d.razorpayPaymentId ?? null,
     transactionId: d.transactionId ?? null,
     ipAddress: d.ipAddress ?? null,
-    // undefined ⇒ "caller sent no amount" ⇒ repository omits the column and the
-    // existing subscription price survives the extend.
-    price: d.orderPrice,
+    // The new row's OWN price. A free "Add Days" extension is genuinely worth 0 to
+    // this row; the customer's earlier row keeps whatever it was paid, because we no
+    // longer write to it. (The old fold had to skip this field entirely to avoid
+    // zeroing a real price — that hazard is gone with one row per order.)
+    price: d.orderPrice ?? 0,
     startAt,
     endAt,
     remarks: d.remarks ?? null,
@@ -602,17 +612,8 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     actingAdminId: d.actingAdminId ?? null,
   };
 
-  // Subscription Type = Extend: append the plan's duration onto the customer's
-  // existing active subscription for this ebook. A fresh order row is still
-  // written (an extend is a paid txn); fall back to a fresh grant when none.
-  const existing = d.extend ? await repo.findActiveSubscription(d.customerId, resolvedEbookId, startAt) : null;
-  if (existing) {
-    const base = existing.endAt && existing.endAt > startAt ? new Date(existing.endAt) : new Date(startAt);
-    const newEnd = computeEndAt({ startAt: base, durationMonths: durationDays ?? 0, asDays: true });
-    const { order, subscription } = await repo.extendBackendSubscription(existing.id, { ...orderInput, endAt: newEnd });
-    return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };
-  }
-
+  // One path for both cases: a fresh order + a fresh subscription row. Whether this
+  // is a first grant or an extension only changed `startAt` above.
   const { order, subscription } = await repo.createBackendSubscription(orderInput);
 
   return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };

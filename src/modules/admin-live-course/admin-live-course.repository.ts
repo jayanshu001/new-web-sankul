@@ -3,6 +3,26 @@ import type { Prisma } from "@prisma/client";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
+ * "This subscription was paid for."
+ *
+ * Payment moved from ws_live_course_subscription to ws_live_course_order on
+ * 2026-08-25, so the old `payment_status = "verified"` test became the linked
+ * order's `status = "complete"`. The second branch covers rows the backfill has not
+ * reached yet (order_id still NULL), which still carry the legacy column — remove it
+ * when that column is dropped.
+ *
+ * NOTE this is a PURCHASE test, not an ACTIVE-ENTITLEMENT test. Callers that want a
+ * live entitlement filter on `status: true` (+ the endAt window) and do not need this
+ * at all: since 2026-08-25 a subscription row is only ever written for a paid order.
+ */
+const LIVE_SUB_PURCHASED = {
+  OR: [
+    { order: { status: "complete" } },
+    { orderId: null, paymentStatus: "verified" },
+  ],
+} satisfies Prisma.LiveCourseSubscriptionWhereInput;
+
+/**
  * Prisma persistence for the admin-live-course MySQL branch (Wave 6).
  *  - courses       → ws_live_course (schedule folders/entries live in JSON cols)
  *  - plans         → ws_live_course_plan
@@ -35,7 +55,10 @@ export const adminLiveCourseRepository = {
   coursesSlimByIds: (ids: number[]) =>
     prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, isPaid: true, status: true, educatorId: true } }),
   myLiveCourseSubs: (customerId: number, filterStatus: string, now: Date) => {
-    const where: any = { customerId, paymentStatus: "verified" };
+    // "Paid for" used to mean payment_status='verified' on this row. Payment moved to
+    // ws_live_course_order (2026-08-25), so it now means the linked order completed —
+    // with a fallback to the legacy column for rows the backfill has not reached.
+    const where: any = { customerId, ...LIVE_SUB_PURCHASED };
     if (filterStatus === "active") { where.status = true; where.OR = [{ endAt: null }, { endAt: { gte: now } }]; }
     else if (filterStatus === "expired") { where.OR = [{ status: false }, { endAt: { lt: now } }]; }
     return prisma.liveCourseSubscription.findMany({ where, orderBy: { createdAt: "desc" } });
@@ -120,8 +143,27 @@ export const adminLiveCourseRepository = {
       orderBy: { id: "desc" },
       take,
     }),
-  aggSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) =>
-    prisma.liveCourseSubscription.aggregate({ where, _sum: { paidAmount: true }, _count: { _all: true } }),
+  /**
+   * Report summary: row count + revenue for a filtered set of subscriptions.
+   *
+   * The count still comes from the subscriptions (that is what the report lists), but
+   * revenue is summed across TWO sources since payment moved on 2026-08-25:
+   *   - orders linked to the matching subscriptions (every row written since), and
+   *   - the legacy inline column, for pre-backfill rows whose order_id is still NULL.
+   * The two sets are disjoint by construction, so adding them cannot double-count.
+   * Drop the second half together with the payment_status/paid_amount columns.
+   */
+  aggSubs: async (where: Prisma.LiveCourseSubscriptionWhereInput) => {
+    const [counted, fromOrders, fromLegacy] = await Promise.all([
+      prisma.liveCourseSubscription.aggregate({ where, _count: { _all: true } }),
+      prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: where } }, _sum: { paidAmount: true } }),
+      prisma.liveCourseSubscription.aggregate({ where: { AND: [where, { orderId: null }] }, _sum: { paidAmount: true } }),
+    ]);
+    return {
+      _count: counted._count,
+      _sum: { paidAmount: (fromOrders._sum.paidAmount ?? 0) + (fromLegacy._sum.paidAmount ?? 0) },
+    };
+  },
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
   // Customer search resolver (name / phone / EMAIL) → id set for the OR fragment.
   customerIdsByText: async (q: string) =>
@@ -136,12 +178,28 @@ export const adminLiveCourseRepository = {
   findSubscriptionCustomerId: (id: number) =>
     prisma.liveCourseSubscription.findUnique({ where: { id }, select: { customerId: true } }),
   createSubscription: (data: Prisma.LiveCourseSubscriptionUncheckedCreateInput) => prisma.liveCourseSubscription.create({ data }),
+  /**
+   * The order row behind an admin grant. Admin grants are recorded as a completed
+   * purchase like any other (2026-08-25): payment lives here, entitlement on the
+   * subscription, and each grant/extension is its own order.
+   */
+  createOrder: (data: Prisma.LiveCourseOrderUncheckedCreateInput) => prisma.liveCourseOrder.create({ data }),
+  /** Payment rows behind a page of subscriptions (admin DTO / report hydration). */
+  ordersByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourseOrder.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
+  updateOrder: (id: number, data: Prisma.LiveCourseOrderUncheckedUpdateInput) =>
+    prisma.liveCourseOrder.update({ where: { id }, data }),
   updateSubscription: (id: number, data: Prisma.LiveCourseSubscriptionUncheckedUpdateInput) => prisma.liveCourseSubscription.update({ where: { id }, data }),
   deleteSubscription: (id: number) => prisma.liveCourseSubscription.delete({ where: { id } }),
-  /** Existing active+verified subscription for grant-extend (latest endAt). */
+  /**
+   * The customer's current entitlement for this live course (latest endAt), read to
+   * place a grant's start date. No `payment_status` filter: since 2026-08-25 a
+   * subscription row only exists for a paid order, and the backfill deactivated the
+   * legacy rows that were never verified — `status` is the entitlement gate now.
+   */
   findActiveSubscription: (customerId: number, liveCourseId: number, now: Date) =>
     prisma.liveCourseSubscription.findFirst({
-      where: { customerId, liveCourseId, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+      where: { customerId, liveCourseId, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
       orderBy: { endAt: "desc" },
     }),
 
@@ -216,38 +274,49 @@ export const adminLiveCourseRepository = {
   },
 
   // ── entitlement (client reads) — all on migrated subscription/plan/course tables ──
-  /** Active+verified subscriptions for a customer over a set of courses. */
+  // These three are ACTIVE-ENTITLEMENT reads, so they filter on `status` + the endAt
+  // window and no longer test payment at all: since 2026-08-25 a subscription row is
+  // written only for a completed order, and the backfill deactivated legacy rows that
+  // never verified. See LIVE_SUB_PURCHASED for the purchase-history counterpart.
+  /** Active subscriptions for a customer over a set of courses. */
   activeSubsForCourses: (customerId: number, liveCourseIds: number[], now: Date) =>
     liveCourseIds.length
       ? prisma.liveCourseSubscription.findMany({
-          where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+          where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
           select: { liveCourseId: true, endAt: true },
         })
       : Promise.resolve([]),
-  /** All a customer's active+verified course ids (for "my courses" / owned set). */
+  /** All a customer's active course ids (for "my courses" / owned set). */
   ownedCourseIds: async (customerId: number, now: Date): Promise<number[]> => {
     const rows = await prisma.liveCourseSubscription.findMany({
-      where: { customerId, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+      where: { customerId, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
       select: { liveCourseId: true },
     });
     return [...new Set(rows.map((r) => r.liveCourseId))];
   },
   /**
-   * Active+verified subscribers across a set of live courses — the reverse of
+   * Active subscribers across a set of live courses — the reverse of
    * activeSubsForCourses (all buyers, not one customer). Powers the "session went
    * live" push fan-out. Returns one row per (customer, course); the caller dedups.
    */
   activeSubscribersForCourses: (liveCourseIds: number[], now: Date): Promise<{ customerId: number; liveCourseId: number }[]> =>
     liveCourseIds.length
       ? prisma.liveCourseSubscription.findMany({
-          where: { liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+          where: { liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
           select: { customerId: true, liveCourseId: true },
         })
       : Promise.resolve([]),
-  /** Verified-subscription count per course (popularity ranking). */
+  /**
+   * Completed-purchase count per course (popularity ranking).
+   *
+   * Counted off the ORDER table since 2026-08-25. This is a SALES measure, and the
+   * count is unchanged by the move: the old read counted verified subscription rows
+   * INCLUDING the retired rows a fold left behind, so renewals were already in the
+   * total — they are simply their own order now instead of a retired row.
+   */
   purchaseCounts: async (liveCourseIds: number[]): Promise<Map<number, number>> => {
     if (!liveCourseIds.length) return new Map();
-    const rows = await prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: liveCourseIds }, paymentStatus: "verified" }, _count: { _all: true } });
+    const rows = await prisma.liveCourseOrder.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: liveCourseIds }, status: "complete" }, _count: { _all: true } });
     return new Map(rows.map((r) => [r.liveCourseId, r._count._all]));
   },
 

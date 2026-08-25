@@ -19,18 +19,35 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  */
 export const clientPurchaseHistoryRepository = {
   // ── subscriptions tab ────────────────────────────────────────────────────
-  // Live-course subscriptions live in their OWN single-table (ws_live_course_subscription
-  // carries payment + entitlement together — see live-course-order.service). They are
-  // NOT in ws_package_course_subscription, so the subscriptions tab must union them in.
-  // "Purchased" for live = payment_status="verified" (pending rows are unpaid).
+  // Live-course subscriptions are NOT in ws_package_course_subscription, so the
+  // subscriptions tab must union them in separately.
+  //
+  // Kept keyed on the SUBSCRIPTION (not the order, unlike the package/course and
+  // test-series tabs) because the emitted `lc_`-prefixed `_id` IS the subscription id,
+  // and the receipt + tracking resolvers below look rows up by it. Since 2026-08-25
+  // subscription rows are 1:1 with orders, so this still yields exactly one row per
+  // purchase — a renewal now appears as its own line instead of folding away.
+  //
+  // "Purchased" is the ORDER's status, not the old `payment_status` column: an
+  // abandoned checkout no longer creates a subscription row at all, and the backfill
+  // gave every legacy row an order carrying its original state. The `orderId: null`
+  // branch is the safety net for rows the backfill has not reached yet — drop it
+  // together with the payment_status column (see the drop DDL).
+  liveSubscriptionPurchasedWhere: (customerId: number) => ({
+    customerId,
+    OR: [
+      { order: { status: "complete" } },
+      { orderId: null, paymentStatus: "verified" },
+    ],
+  }),
   listLiveSubscriptions: (customerId: number, take: number) =>
     prisma.liveCourseSubscription.findMany({
-      where: { customerId, paymentStatus: "verified" },
+      where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId),
       orderBy: { id: "desc" },
       take,
     }),
   countLiveSubscriptions: (customerId: number) =>
-    prisma.liveCourseSubscription.count({ where: { customerId, paymentStatus: "verified" } }),
+    prisma.liveCourseSubscription.count({ where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) }),
   liveCoursesByIds: (ids: number[]) =>
     ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
 
@@ -208,17 +225,27 @@ export const clientPurchaseHistoryRepository = {
         packageCourseSubscriptionTracking: { select: { status: true, created_at: true, updated_at: true } },
       },
     }),
-  /** verified live-course sub (AWB + status are inline columns; address is a separate table). */
+  /** purchased live-course sub (AWB + status are inline columns; address is a separate table). */
   liveSubscriptionForTracking: (subId: number, customerId: number) =>
-    prisma.liveCourseSubscription.findFirst({ where: { id: subId, customerId, paymentStatus: "verified" } }),
+    prisma.liveCourseSubscription.findFirst({
+      where: { id: subId, ...clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) },
+    }),
   /** delivery address for a live sub (customer_shipping_id → ws_customer_address). */
   customerAddressById: (id: number) =>
     prisma.customerAddress.findFirst({ where: { id }, select: { name: true, phone: true, city: true, address: true, pincode: true } }),
 
   // ── live-course receipt (single subscription, ownership-scoped) ──────────────
-  /** verified live-course sub (single-table carries payment fields inline). */
+  /**
+   * Purchased live-course sub WITH its order. The receipt is built almost entirely
+   * from payment fields, which moved to the order on 2026-08-25 — `order` is included
+   * so the caller can read them from there, falling back to the subscription's own
+   * (legacy) columns for rows the backfill has not reached.
+   */
   liveSubscriptionForReceipt: (subId: number, customerId: number) =>
-    prisma.liveCourseSubscription.findFirst({ where: { id: subId, customerId, paymentStatus: "verified" } }),
+    prisma.liveCourseSubscription.findFirst({
+      where: { id: subId, ...clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) },
+      include: { order: true },
+    }),
   liveCourseForReceipt: (id: number) =>
     prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true } }),
   /** live-course plan row carrying duration (DAYS — see live-course-order.service). */

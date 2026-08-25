@@ -318,7 +318,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
         notes: { kind: "live-course", liveCourseId: String(planSql.liveCourseId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
       });
-      const { subscriptionId } = await createLiveCourseOrderMysql({
+      const { orderId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
         // `discountAmount` is NOT persisted — ws_live_course_subscription.discount_amount
         // was dropped 2026-08-20. originalAmount + paidAmount + walletCoin make it
@@ -327,11 +327,15 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         promocodeSnapshot: codeSnapshot.promocode, refferalcodeSnapshot: codeSnapshot.refferalcode,
         withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });
-      logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+      logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,
         data: omit({
-          subscriptionId: String(subscriptionId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
+          // WIRE CONTRACT: the key stays `subscriptionId`. Since 2026-08-25 checkout
+          // creates an ORDER (no subscription exists until payment verifies), so this
+          // now carries the order id. The app only echoes it back / logs it — verify
+          // is keyed on razorpay_order_id — so the rename stayed server-side.
+          subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
           liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
           plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
           promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,

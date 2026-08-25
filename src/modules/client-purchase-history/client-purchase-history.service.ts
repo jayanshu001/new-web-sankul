@@ -725,26 +725,33 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
     repo.liveCourseForReceipt(sub.liveCourseId),
   ]);
 
-  const paid = Number(sub.paidAmount ?? 0);
-  const subTotal = sub.originalAmount != null ? Number(sub.originalAmount) : paid;
+  // Payment moved to ws_live_course_order on 2026-08-25. The order and the legacy
+  // subscription columns use the SAME field names, so one fallback covers both: new
+  // rows read the order, pre-backfill rows keep reading their own inline columns.
+  // Everything below is unchanged, and so is the receipt.
+  const pay: any = (sub as any).order ?? sub;
+
+  const paid = Number(pay.paidAmount ?? 0);
+  const subTotal = pay.originalAmount != null ? Number(pay.originalAmount) : paid;
   // `discount_amount` was dropped 2026-08-20 — derived from the columns that remain.
   // Same value the column held; the receipt is unchanged.
-  const discount = liveSubDiscountAmount(sub);
+  const discount = liveSubDiscountAmount(pay);
 
   return {
     kind: "live-course" as const,
     receiptId: String(sub.id),
     purchasedAt: sub.createdAt ?? null,
-    paidAt: sub.paidAt ?? null,
-    status: sub.paymentStatus ?? "verified",
+    paidAt: pay.paidAt ?? null,
+    // The order says "complete"; the receipt has always said "verified".
+    status: "verified",
     customer: { id: String(sub.customerId) },
     payment: {
-      // ws_live_course_subscription carries its own payment_method +
-      // bank_transaction_id; this was hardcoded "razorpay" and ignored both.
-      method: formatPaymentMethod(sub.paymentMethod) || "Online",
-      razorpayOrderId: sub.razorpayOrderId ?? null,
-      razorpayPaymentId: sub.razorpayPaymentId ?? null,
-      transactionId: sub.bankTransactionId || null,
+      // The order carries its own payment_method + bank_transaction_id; this was
+      // hardcoded "razorpay" once and ignored both.
+      method: formatPaymentMethod(pay.paymentMethod) || "Online",
+      razorpayOrderId: pay.razorpayOrderId ?? null,
+      razorpayPaymentId: pay.razorpayPaymentId ?? null,
+      transactionId: pay.bankTransactionId || null,
     },
     items: [
       {

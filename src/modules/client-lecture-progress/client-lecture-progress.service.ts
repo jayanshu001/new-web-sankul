@@ -340,7 +340,9 @@ export const reportContainerProgress = async (input: {
       if (!lc) return { ok: false, status: 404, message: "Live course not found." };
     } else {
       const sub = await prisma.liveCourseSubscription.findFirst({
-        where: { customerId: input.customerId, liveCourseId: input.scope.id, status: true, paymentStatus: "verified", endAt: { gt: now } },
+        // `paymentStatus` dropped 2026-08-25 — a live-course subscription row exists
+        // only for a paid order now, so `status` + window IS the entitlement.
+        where: { customerId: input.customerId, liveCourseId: input.scope.id, status: true, endAt: { gt: now } },
         select: { id: true },
       });
       if (!sub) return { ok: false, status: 403, message: "No active subscription for this lecture." };
@@ -399,7 +401,7 @@ export const reportLiveSessionProgress = async (input: {
   if (!liveCourseIds.length) return { ok: false, status: 404, message: "Live session not found." };
 
   const sub = await prisma.liveCourseSubscription.findFirst({
-    where: { customerId: input.customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", endAt: { gt: now } },
+    where: { customerId: input.customerId, liveCourseId: { in: liveCourseIds }, status: true, endAt: { gt: now } },
     select: { liveCourseId: true },
   });
   if (!sub) return { ok: false, status: 403, message: "No active subscription for this live course." };
@@ -587,7 +589,7 @@ export const listMyLearningProgress = async (
     liveIds.length ? prisma.liveCourse.findMany({ where: { id: { in: liveIds } }, select: { id: true, name: true, image: true, educatorId: true } }) : [],
     courseIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds }, status: true, endAt: { gt: now } }, select: { courseId: true, endAt: true } }) : [],
     packageIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in: packageIds }, status: true, endAt: { gt: now } }, select: { packageId: true, endAt: true } }) : [],
-    liveIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveIds }, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } }) : [],
+    liveIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveIds }, status: true, endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } }) : [],
     containerTotals(courseIds, packageIds, liveIds),
     completedCounts(customerId, "courseId", courseIds),
     completedCounts(customerId, "packageId", packageIds),
@@ -869,7 +871,7 @@ export const buildResumeNextCardSql = async (input:
   const links = await prisma.liveSessionCourse.findMany({ where: { liveSessionId: input.liveSessionId }, select: { liveCourseId: true } });
   const liveCourseIds = links.map((l) => l.liveCourseId);
   if (!liveCourseIds.length) return null;
-  const sub = await prisma.liveCourseSubscription.findFirst({ where: { customerId: input.customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } });
+  const sub = await prisma.liveCourseSubscription.findFirst({ where: { customerId: input.customerId, liveCourseId: { in: liveCourseIds }, status: true, endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } });
   const liveCourseId = sub?.liveCourseId ?? liveCourseIds[0];
   const [lc, rollup] = await Promise.all([
     prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { id: true, name: true, image: true, educatorId: true } }),

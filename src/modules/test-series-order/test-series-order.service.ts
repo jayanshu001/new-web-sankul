@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
 
@@ -91,21 +91,22 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
     orderBy: { endAt: "desc" },
   });
 
+  // ONE ORDER = ONE SUBSCRIPTION ROW. `existingActive` only places the window: a
+  // renewal starts where the current entitlement ends, otherwise now. The existing
+  // row is never touched — it keeps its own price and its own order_id.
+  const startAt =
+    existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
+      ? existingActive.endAt
+      : now;
+  const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
+
   const result = await prisma.$transaction(async (tx) => {
     const o = await tx.testSeriesOrder.update({ where: { id: order.id }, data: { status: "complete", razorpayPaymentId, updatedAt: now } });
-    if (existingActive) {
-      const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
-      const sub = await tx.testSeriesSubscription.update({
-        where: { id: existingActive.id },
-        data: { endAt: newEndAt, price: num(existingActive.price) + orderPrice, orderId: o.id, ...(o.promocodeId ? { promocodeId: o.promocodeId } : {}) },
-      });
-      return { sub, o };
-    }
-    const startAt = now;
-    const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
     const sub = await tx.testSeriesSubscription.create({
       // created_at has no DB default (introspected legacy table) — set it or the row is
       // invisible to created_at-windowed reads (admin dashboard, purchase history).
+      // `price` is THIS order's amount, never a running total: the row is its own
+      // purchase record, so summing would double-count it against its own order.
       data: { orderId: o.id, customerId: o.customerId, testSeriesId: o.testSeriesId, planId: o.planId, price: orderPrice, startAt, endAt, paymentType: "online", promocodeId: o.promocodeId ?? null, status: true, createdAt: now, updatedAt: now },
     });
     return { sub, o };

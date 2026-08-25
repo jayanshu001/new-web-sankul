@@ -1067,8 +1067,9 @@ export type GrantWrite = {
   bankTransactionId?: string | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
-  // extend=true → top up the customer's existing active subscription for this test
-  // series instead of creating a fresh row (falls back to create if none).
+  // extend=true → record a NEW subscription row that CONTINUES from the customer's
+  // existing active subscription for this test series (the prior row is left
+  // untouched). No existing active sub → behaves as a fresh grant.
   extend?: boolean;
   // Acting admin id (resolved server-side from the JWT) → audit columns.
   actingAdminId?: number | null;
@@ -1114,8 +1115,10 @@ export const grantSubscription = async (
       },
     });
 
-    // Subscription Type = Extend: append the plan's duration onto the customer's
-    // existing active subscription; fall back to a fresh row when none exists.
+    // Subscription Type = Extend: read the customer's current active subscription so
+    // this grant can continue from where it ends. ONE ORDER = ONE SUBSCRIPTION ROW —
+    // the existing row is NOT modified. It previously was, which repointed its
+    // order_id at the extension's order and orphaned the original purchase.
     const existing = data.extend
       ? await tx.testSeriesSubscription.findFirst({
           where: { customerId: data.customerId, testSeriesId, status: true, endAt: { gte: now } },
@@ -1123,42 +1126,24 @@ export const grantSubscription = async (
         })
       : null;
 
-    if (existing) {
-      const base = existing.endAt && existing.endAt > now ? new Date(existing.endAt) : new Date(now);
-      base.setDate(base.getDate() + durationDays!);
-      const subscription = await tx.testSeriesSubscription.update({
-        where: { id: existing.id },
-        data: {
-          orderId: order.id,
-          planId: data.planId ?? existing.planId,
-          // `price` is deliberately NOT written on extend. It records what the
-          // customer paid for this subscription; a free "Add Days" would zero it
-          // (₹699 → ₹0, unrecoverable — updateSubscriptionSchema cannot set it
-          // back). Note the admin panel sends an explicit `price: 0` on extend, so
-          // a `?? existing.price` guard would NOT be enough — 0 is not nullish.
-          // Ignoring it outright is what lets the shipped frontend stay unchanged.
-          // The ORDER row still records the request amount (0 for a free extend),
-          // which is what distinguishes an admin grant from a paid renewal.
-          endAt: base,
-          ...(data.remarks !== undefined ? { remarks: data.remarks } : {}),
-          // Extend = admin edit of an existing row → stamp updated_by only.
-          ...(data.actingAdminId != null ? { updated_by: data.actingAdminId } : {}),
-          updatedAt: now,
-        },
-      });
-      return { subscription };
-    }
-
-    const endAt = new Date(startAt);
+    // Continue from the live entitlement's end (no overlap, no gap); a lapsed or
+    // absent one starts at the requested/implicit start date.
+    const subStartAt =
+      existing?.endAt && existing.endAt.getTime() > now.getTime() ? new Date(existing.endAt) : startAt;
+    const endAt = new Date(subStartAt);
     endAt.setDate(endAt.getDate() + durationDays!);
+
     const subscription = await tx.testSeriesSubscription.create({
       data: {
         orderId: order.id,
         customerId: data.customerId,
         testSeriesId,
         planId: data.planId ?? null,
+        // This row's OWN price. A free "Add Days" extension is worth 0 here and the
+        // customer's earlier row keeps what it was paid, because we no longer write
+        // to it — so the "0 would wipe ₹699" hazard the fold had cannot arise.
         price,
-        startAt,
+        startAt: subStartAt,
         endAt,
         paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
         remarks: data.remarks ?? null,

@@ -15,8 +15,11 @@ export const adminCustomerDetailsRepository = {
   // ── subscriptions / orders for the customer (newest first) ──────────────────
   packageCourseSubs: (customerId: number) =>
     prisma.packageCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+  // `order` included: payment (paid/original amount, method, gateway refs, code
+  // snapshots) moved to ws_live_course_order on 2026-08-25 — the DTO reads it there,
+  // falling back to this row's legacy columns for pre-backfill rows.
   liveCourseSubs: (customerId: number) =>
-    prisma.liveCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+    prisma.liveCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" }, include: { order: true } }),
   testSeriesSubs: (customerId: number) =>
     prisma.testSeriesSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
   ebookSubs: (customerId: number) =>

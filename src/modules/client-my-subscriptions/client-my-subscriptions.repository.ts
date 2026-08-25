@@ -25,16 +25,19 @@ export const clientMySubscriptionsRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  // live courses: ALL active+verified rows (latest endAt first). Unlike course/
-  // package/ebook, a live-course sub can be LIFETIME (endAt = null) — include
-  // those (they never expire) alongside not-yet-expired rows. Ownership requires
-  // payment_status = "verified" (mirrors admin-live-course activeSubsForCourses).
+  // live courses: ALL active rows (latest endAt first). Unlike course/package/ebook,
+  // a live-course sub can be LIFETIME (endAt = null) — include those (they never
+  // expire) alongside not-yet-expired rows.
+  //
+  // The `payment_status = "verified"` filter was dropped 2026-08-25: payment moved to
+  // ws_live_course_order and a subscription row is now written ONLY for a completed
+  // order, so `status` is the ownership gate. Legacy rows that never verified were
+  // deactivated by the backfill, so they stay excluded.
   activeLiveCourseSubs: (customerId: number, now: Date) =>
     prisma.liveCourseSubscription.findMany({
       where: {
         customerId,
         status: true,
-        paymentStatus: "verified",
         OR: [{ endAt: null }, { endAt: { gt: now } }],
       },
       orderBy: { endAt: "desc" },

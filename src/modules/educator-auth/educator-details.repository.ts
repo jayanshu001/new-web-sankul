@@ -48,6 +48,13 @@ export const educatorDetailsRepository = {
     packageIds.length
       ? prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: packageIds }, status: true }, _count: { _all: true } })
       : Promise.resolve([]),
+  // ⚠ Counts ACTIVE SUBSCRIPTION ROWS, not distinct customers. Since 2026-08-25 a
+  // live-course renewal writes its own row (the continuation window starts when the
+  // current one ends, so both are `status: true`), which means one renewing customer
+  // can contribute 2. The package/course count directly above has always behaved this
+  // way — admin package/course extends have created new rows since long before this —
+  // so the two stay consistent. Switch both to a distinct-customer count together if
+  // that is wanted; doing it for live course alone would make them disagree.
   liveCourseSubCounts: (liveCourseIds: number[]) =>
     liveCourseIds.length
       ? prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: liveCourseIds }, status: true }, _count: { _all: true } })

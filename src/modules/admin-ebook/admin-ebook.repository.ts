@@ -216,62 +216,6 @@ export const adminEbookRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  /** Extend grant: write a fresh COMPLETE order + push out the existing sub's endAt, in one txn. */
-  extendBackendSubscription: (
-    subscriptionId: number,
-    input: {
-      uniqueId: string;
-      customerId: number;
-      ebookId: number;
-      planId: number | null;
-      paymentMethod: string;
-      orderPrice: number;
-      razorpayOrderId: string | null;
-      razorpayPaymentId: string | null;
-      transactionId: string | null;
-      ipAddress: string | null;
-      price: number;
-      endAt: Date;
-      remarks: string | null;
-      // Acting admin id (from the JWT) → updated_by on the extended sub row.
-      actingAdminId?: number | null;
-    }
-  ) =>
-    prisma.$transaction(async (tx) => {
-      const order = await tx.eBookOrder.create({
-        data: {
-          uniqueId: input.uniqueId,
-          userId: input.customerId,
-          orderType: "purchase",
-          planId: input.planId ?? 0,
-          orderPrice: input.orderPrice,
-          paymentMethod: input.paymentMethod as any,
-          gatewayOrderId: input.razorpayOrderId ?? "",
-          gatewayPaymentId: input.razorpayPaymentId ?? null,
-          bankTransactionId: input.transactionId ?? null,
-          ip_address: input.ipAddress,
-          status: "complete",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-      });
-      const subscription = await tx.eBookSubscription.update({
-        where: { id: subscriptionId },
-        data: {
-          orderId: order.id,
-          // `price` deliberately NOT written here — see the matching note in
-          // admin-testseries.service.ts. A free "Add Days" extend sends amount 0,
-          // which would wipe what the customer actually paid.
-          endAt: input.endAt,
-          ...(input.remarks !== null ? { remarks: input.remarks } : {}),
-          // Extend = admin edit of an existing row → stamp updated_by only.
-          ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
-          updatedAt: new Date(),
-        },
-      });
-      return { order, subscription };
-    }),
-
   updateSubscription: (id: number, data: Prisma.EBookSubscriptionUncheckedUpdateInput) =>
     prisma.eBookSubscription.update({ where: { id }, data }),
   updateOrder: (id: number, data: Prisma.EBookOrderUncheckedUpdateInput) =>

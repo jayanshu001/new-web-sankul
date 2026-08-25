@@ -137,7 +137,9 @@ export const entitledScopeFor = async (
       : Promise.resolve([]),
     liveIds.length
       ? prisma.liveCourseSubscription.findMany({
-          where: { customerId, status: true, paymentStatus: "verified", endAt: { gt: now }, liveCourseId: { in: liveIds } },
+          // `paymentStatus` dropped 2026-08-25 — payment lives on ws_live_course_order
+          // and a subscription row exists only for a paid one, so `status` is the gate.
+          where: { customerId, status: true, endAt: { gt: now }, liveCourseId: { in: liveIds } },
           select: { liveCourseId: true },
         })
       : Promise.resolve([]),
@@ -192,7 +194,7 @@ export const isEntitledForScope = async (
   }
   if (scope.kind === "liveCourse") {
     const sub = await prisma.liveCourseSubscription.findFirst({
-      where: { customerId, liveCourseId: id, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { id: true },
+      where: { customerId, liveCourseId: id, status: true, endAt: { gt: now } }, select: { id: true },
     });
     return sub !== null;
   }

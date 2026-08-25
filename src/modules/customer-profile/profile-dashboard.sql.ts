@@ -39,8 +39,10 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
     prisma.liveCourseSubscription.findMany({
       where: {
         customerId,
+        // `status` alone is the entitlement gate now: since 2026-08-25 a live-course
+        // subscription row exists only for a paid order (payment moved to
+        // ws_live_course_order), and the backfill deactivated legacy unverified rows.
         status: true,
-        paymentStatus: "verified",
         OR: [{ endAt: null }, { endAt: { gt: now } }],
       },
       select: { id: true, liveCourseId: true },

@@ -645,17 +645,23 @@ async function loadLiveCourseReceiptFromMysql(
   const custId = Number(customerId);
   if (!Number.isInteger(subId) || subId <= 0) throw new Error("Invalid order id.");
 
-  const sub = await prisma.liveCourseSubscription.findFirst({
+  const row = await prisma.liveCourseSubscription.findFirst({
     where: { id: subId, customerId: custId },
     select: {
       paidAmount: true, originalAmount: true, createdAt: true, paidAt: true,
       paymentStatus: true, razorpayPaymentId: true, razorpayOrderId: true,
       paymentMethod: true, bankTransactionId: true,
-      withMaterial: true, liveCourseId: true, planId: true,
+      withMaterial: true, liveCourseId: true, planId: true, walletCoin: true,
+      // Payment moved to ws_live_course_order on 2026-08-25.
+      order: true,
     },
   });
-  if (!sub) throw new Error("Order not found.");
-  if (sub.paymentStatus && sub.paymentStatus !== "verified" && !sub.razorpayPaymentId) {
+  if (!row) throw new Error("Order not found.");
+  // The order and the legacy subscription columns share field names, so one merge
+  // serves both: new rows read the order, pre-backfill rows their inline columns.
+  const sub: any = { ...row, ...(row.order ?? {}) };
+  const paidOk = row.order ? row.order.status === "complete" : sub.paymentStatus === "verified";
+  if (!paidOk && !sub.razorpayPaymentId) {
     throw new Error("Order has not been paid yet.");
   }
 

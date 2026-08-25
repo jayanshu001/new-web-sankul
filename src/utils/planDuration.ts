@@ -54,9 +54,23 @@ export const computeEndAt = ({
  *     they already paid for and the extension lands after them.
  *   - If it has already lapsed (or has no endAt), the window starts from `now`.
  *
- * This is what makes "extend availability" idempotent at the row level: we
- * update the single existing row's endAt instead of inserting a second row,
- * which is the source of the duplicate "My Subscription" cards.
+ * @deprecated UNUSED as of 2026-08-25 — kept only as documentation of the retired
+ * FOLD model, in which an extension bumped the existing row's `end_at` in place.
+ * Every product now writes ONE ROW PER ORDER: a renewal INSERTS its own subscription
+ * row starting where the previous one ends and leaves the previous row untouched, so
+ * each purchase keeps its own price, plan and dispatch record. Live course was the
+ * last holdout and was converted once it got an order table
+ * (2026-08-25_create_ws_live_course_order.sql).
+ *
+ * Do not reach for this in new code. Compute the start date first
+ * (`existing.endAt > now ? existing.endAt : now`), then call computeEndAt, so the row
+ * records the window it actually covers.
+ *
+ * Its original docstring claimed folding is what prevents duplicate "My Subscription"
+ * cards. That was never true — duplicates are prevented at the READ layer, where
+ * every consumer dedupes per target and keeps the furthest endAt
+ * (client-my-subscriptions.service, profile-dashboard.sql, client-dashboard.service,
+ * client-purchase-history.service).
  *
  * @example
  *   // active sub ending Sep 11, extend by a 3-month plan on Aug 1

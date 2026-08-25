@@ -12,11 +12,11 @@
  *      checks MySQL when the flag is ON, falls back to Mongo-store miss handled
  *      by the caller. (verify-only, read-only.)
  *  - verifyCourseOrderMysql()      — transactional fulfillment (flip order →
- *      complete; extend-or-create the entitlement + tracking); idempotent.
+ *      complete; create this order's entitlement + tracking); idempotent.
  *
  * Flag stays OFF until a separate go-live sign-off.
  */
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import type {
   PromocodeSnapshot,
   ReferralSnapshot,
@@ -189,9 +189,9 @@ export const findCourseOrderForVerify = async (
 /**
  * Fulfill a verified course payment. Idempotent: if the order is already
  * complete, returns the existing entitlement without re-running side effects.
- * Otherwise, in ONE transaction: flips the order → complete and either extends
- * the customer's existing active course subscription (folding window + amount) or
- * creates a fresh subscription + tracking row.
+ * Otherwise, in ONE transaction: flips the order → complete and creates THIS
+ * order's subscription + tracking row. A renewal gets its own row continuing from
+ * the current entitlement's endAt — it never folds onto the existing row.
  *
  * `duration` is DAYS (RESUME_HERE §6) — endAt via planDuration `asDays:true`.
  */
@@ -226,68 +226,50 @@ export const verifyCourseOrderMysql = async (
   const customerId = Number(order.customerIdStr);
   const amount = order.amount ?? 0;
 
-  // Physical-material split + kit resolution (PC_MATERIAL_SUBSCRIPTION_FLOW). The
-  // material portion/kit are only meaningful on a fresh grant — the extend path
-  // just folds window + amount onto an existing row — but we resolve once and pass
-  // through so the tx input is uniform. pcMaterialId is copied from the COURSE.
+  // Physical-material split + kit resolution (PC_MATERIAL_SUBSCRIPTION_FLOW).
+  // Resolved for every purchase, renewals included: each row now carries its own
+  // split and its own kit. pcMaterialId is copied from the COURSE.
   const split = computeMaterialSplit(amount, plan);
   const pcMaterialId = split.withMaterial
     ? await repo.findCoursePcMaterialId(courseId)
     : null;
   const material: MaterialFulfillment = { ...split, pcMaterialId };
 
-  // Upsert-extend: fold onto an existing active verified course subscription.
+  // ONE ORDER = ONE SUBSCRIPTION ROW — a renewal never folds onto the customer's
+  // existing row. We only READ the current entitlement to find where the new window
+  // should start: still active → the new row picks up at its endAt (no overlap, no
+  // gap); lapsed, lifetime or absent → it starts now. The prior row is left exactly
+  // as it was, so its price, plan and dispatch record stay intact and its `order_id`
+  // keeps pointing at the order that actually paid for it.
   const existingActive = await repo.findActiveCourseSub(
     customerId,
     courseId,
     null,
     now
   );
-
-  if (existingActive) {
-    const newEndAt = extendEndAt({
-      currentEndAt: existingActive.endAt,
-      durationMonths: durationDays,
-      asDays: true,
-      now,
-    });
-    const prevAmount = existingActive.amount ? Number(existingActive.amount.toString()) : 0;
-    const result = await repo.verifyCourseTx({
-      orderId: order.id,
-      razorpayPaymentId,
-      customerId,
-      courseId,
-      planId: order.planId,
-      amount,
-      now,
-      material,
-      extend: {
-        existingSubId: existingActive.id,
-        newEndAt,
-        newAmount: prevAmount + amount,
-      },
-    });
-    // Reward the referrer (if this order used a referral code). Idempotent +
-    // non-throwing — a credit failure never blocks the customer's fulfillment.
-    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "course" });
-    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "course" });
-    return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
-  }
-
-  // Fresh grant.
-  const startAt = now;
+  const startAt =
+    existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
+      ? existingActive.endAt
+      : now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
+
   const result = await repo.verifyCourseTx({
     orderId: order.id,
     razorpayPaymentId,
     customerId,
     courseId,
     planId: order.planId,
+    // This purchase's own amount — NOT summed onto the previous row's. Each row is
+    // now its own purchase record, so the money belongs to the row that earned it.
     amount,
     now,
     material,
-    fresh: { startAt, endAt },
+    startAt,
+    endAt,
+    extended: !!existingActive,
   });
+  // Reward the referrer (if this order used a referral code). Idempotent +
+  // non-throwing — a credit failure never blocks the customer's fulfillment.
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "course" });
   await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "course" });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
@@ -350,7 +332,7 @@ export const findPackageOrderForVerify = async (
   return toCourseOrderRow(order);
 };
 
-/** Fulfill a verified PACKAGE payment (fold-or-fresh, idempotent). DAYS duration. */
+/** Fulfill a verified PACKAGE payment (always a new sub row, idempotent). DAYS duration. */
 export const verifyPackageOrderMysql = async (
   order: CourseOrderRow,
   razorpayPaymentId: string,
@@ -377,24 +359,17 @@ export const verifyPackageOrderMysql = async (
     : null;
   const material: MaterialFulfillment = { ...split, pcMaterialId };
 
+  // ONE ORDER = ONE SUBSCRIPTION ROW (see verifyCourseOrderMysql). The existing sub
+  // is read only to place the new window; it is never modified.
   const existingActive = await repo.findActivePackageSub(customerId, packageId, null, now);
-  if (existingActive) {
-    const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
-    const prevAmount = existingActive.amount ? Number(existingActive.amount.toString()) : 0;
-    const result = await repo.verifyPackageTx({
-      orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
-      extend: { existingSubId: existingActive.id, newEndAt, newAmount: prevAmount + amount },
-    });
-    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "package" });
-    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "package" });
-    return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
-  }
-
-  const startAt = now;
+  const startAt =
+    existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
+      ? existingActive.endAt
+      : now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
   const result = await repo.verifyPackageTx({
     orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
-    fresh: { startAt, endAt },
+    startAt, endAt, extended: !!existingActive,
   });
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "package" });
   await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "package" });

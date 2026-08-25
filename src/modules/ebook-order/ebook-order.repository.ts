@@ -111,9 +111,13 @@ export const ebookOrderRepository = {
   /**
    * Transactional ebook fulfillment. Within one $transaction:
    *  1. flip the order → complete + razorpay_payment_id
-   *  2. EITHER extend the active subscription (fold endAt + sum price, point at
-   *     the latest order) OR create a fresh subscription.
-   * `now`/`endAt`/`newEndAt` are computed by the service (DAYS planDuration).
+   *  2. create THIS order's subscription row.
+   *
+   * ONE ORDER = ONE SUBSCRIPTION ROW. A renewal writes its own row starting where
+   * the previous one ends instead of folding onto it, so `price` stays the price
+   * actually paid for that row and `order_id` keeps pointing at the order that
+   * bought it (the fold used to repoint it at the newest order, orphaning the
+   * original purchase). The window is computed by the service (DAYS planDuration).
    */
   verifyEbookTx: (input: {
     orderId: number;
@@ -122,8 +126,9 @@ export const ebookOrderRepository = {
     ebookId: number;
     price: number;
     now: Date;
-    fresh?: { startAt: Date; endAt: Date };
-    extend?: { existingSubId: number; newEndAt: Date; newPrice: number };
+    startAt: Date;
+    endAt: Date;
+    extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
       const order = await tx.eBookOrder.update({
@@ -131,33 +136,20 @@ export const ebookOrderRepository = {
         data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId, updatedAt: input.now },
       });
 
-      if (input.extend) {
-        const sub = await tx.eBookSubscription.update({
-          where: { id: input.extend.existingSubId },
-          data: {
-            endAt: input.extend.newEndAt,
-            price: new Prisma.Decimal(input.extend.newPrice),
-            orderId: input.orderId, // follow the latest paid order
-            updatedAt: input.now,
-          },
-        });
-        return { order, subscription: sub, extended: true as const };
-      }
-
       const sub = await tx.eBookSubscription.create({
         data: {
           orderId: input.orderId,
           customerId: input.customerId,
           ebookId: input.ebookId,
           price: new Prisma.Decimal(input.price),
-          startAt: input.fresh!.startAt,
-          endAt: input.fresh!.endAt,
+          startAt: input.startAt,
+          endAt: input.endAt,
           payment_type: "online",
           status: true,
           createdAt: input.now,
           updatedAt: input.now,
         },
       });
-      return { order, subscription: sub, extended: false as const };
+      return { order, subscription: sub, extended: input.extended };
     }),
 };

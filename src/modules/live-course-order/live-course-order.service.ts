@@ -1,16 +1,24 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
 
 /**
- * Live-course payment write path on SQL (Wave 7). UNLIKE course/package, the
- * live-course design is SINGLE-TABLE — `ws_live_course_subscription` carries BOTH
- * the payment fields (razorpay ids, payment_status) AND the entitlement (start/end,
- * status). So there is no separate order table: createPending writes a pending
- * subscription row; verify flips it to verified (or folds onto an existing active
- * sub and retires this row's window via extend).
+ * Live-course payment write path on SQL.
+ *
+ * Since 2026-08-25 live course has a real order table and follows the same rule as
+ * every other product: THE ORDER OWNS PAYMENT, THE SUBSCRIPTION OWNS ENTITLEMENT,
+ * and ONE ORDER = ONE SUBSCRIPTION ROW. Checkout writes a pending
+ * `ws_live_course_order`; verify flips it to complete and CREATES a subscription row
+ * for it. A renewal gets its own order and its own subscription row starting where
+ * the current entitlement ends — it never folds onto the existing row.
+ *
+ * Before that, the design was SINGLE-TABLE: `ws_live_course_subscription` carried
+ * the payment fields too, checkout wrote a `payment_status='pending'` subscription
+ * row, and a renewal had to fold (bump end_at, retire the pending row) because there
+ * was no second table to record the second payment. Those payment columns still
+ * exist on the subscription for pre-migration rows — new writes do not touch them.
  *
  * ⚠ plan.duration is DAYS (per the live-course controllers + admin-live-course
  * grant — computeEndAt asDays:true). The schema comment saying MONTHS is stale;
@@ -39,20 +47,36 @@ export type LiveCourseVerifyDto = {
   updatedAt: Date | null;
 };
 
-const toVerifyDto = (s: any): LiveCourseVerifyDto => ({
-  _id: String(s.id),
-  customerId: s.customerId,
-  liveCourseId: s.liveCourseId,
-  planId: s.planId ?? null,
-  startAt: s.startAt ?? null,
-  endAt: s.endAt ?? null,
-  status: s.status,
-  paidAmount: s.paidAmount ?? null,
-  paymentStatus: s.paymentStatus ?? null,
-  razorpayOrderId: s.razorpayOrderId ?? null,
-  razorpayPaymentId: s.razorpayPaymentId ?? null,
-  createdAt: s.createdAt ?? null,
-  updatedAt: s.updatedAt ?? null,
+/**
+ * The verify DTO is unchanged on the wire: entitlement fields come from the
+ * subscription, payment fields from the order. `paymentStatus` still reports the
+ * subscription vocabulary ("verified"), NOT the order's "complete" — the field is
+ * part of a shipped response shape and is mapped, not renamed.
+ *
+ * `sub` is null only on the defensive path where an order is complete but its
+ * subscription is missing; the DTO then carries the order's own identity so the
+ * caller still gets a well-formed response.
+ */
+const ORDER_STATUS_TO_PAYMENT_STATUS: Record<string, string> = {
+  pending: "pending",
+  complete: "verified",
+  failed: "failed",
+};
+
+const toVerifyDto = (sub: any | null, order: any): LiveCourseVerifyDto => ({
+  _id: String(sub?.id ?? order.id),
+  customerId: order.customerId,
+  liveCourseId: order.liveCourseId,
+  planId: order.planId ?? null,
+  startAt: sub?.startAt ?? null,
+  endAt: sub?.endAt ?? null,
+  status: sub?.status ?? false,
+  paidAmount: order.paidAmount ?? null,
+  paymentStatus: ORDER_STATUS_TO_PAYMENT_STATUS[order.status] ?? order.status ?? null,
+  razorpayOrderId: order.razorpayOrderId ?? null,
+  razorpayPaymentId: order.razorpayPaymentId ?? null,
+  createdAt: sub?.createdAt ?? order.createdAt ?? null,
+  updatedAt: sub?.updatedAt ?? order.updatedAt ?? null,
 });
 
 /** Read a live-course plan for create-order. Returns null if missing/zero-price. */
@@ -114,8 +138,9 @@ export const liveSubDiscountAmount = (sub: {
 };
 
 /**
- * Create a pending live-course subscription row + return its id. The razorpay
- * order id is set on the row immediately (single-table — no order row to bridge).
+ * Create the pending live-course ORDER row + return its id. Nothing is granted yet:
+ * no subscription row exists until the payment verifies, which is exactly why an
+ * abandoned checkout can no longer leave an unverified row in the entitlement table.
  */
 export const createLiveCourseOrderMysql = async (input: {
   customerId: number;
@@ -146,8 +171,8 @@ export const createLiveCourseOrderMysql = async (input: {
   withMaterial?: boolean;
   customerShippingId?: number | null;
   now: Date;
-}): Promise<{ subscriptionId: number }> => {
-  const sub = await prisma.liveCourseSubscription.create({
+}): Promise<{ orderId: number }> => {
+  const order = await prisma.liveCourseOrder.create({
     data: {
       customerId: input.customerId,
       liveCourseId: input.liveCourseId,
@@ -161,8 +186,8 @@ export const createLiveCourseOrderMysql = async (input: {
       promocode: (input.promocodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
       refferalcode: (input.refferalcodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
       walletCoin: input.coin ?? null,
-      paymentStatus: "pending",
-      status: true,
+      paymentMethod: "online",
+      status: "pending",
       withMaterial: !!input.withMaterial,
       customerShippingId: input.customerShippingId ?? null,
       razorpayOrderId: input.razorpayOrderId,
@@ -170,7 +195,7 @@ export const createLiveCourseOrderMysql = async (input: {
       updatedAt: input.now,
     },
   });
-  return { subscriptionId: sub.id };
+  return { orderId: order.id };
 };
 
 /**
@@ -186,112 +211,123 @@ export const createLiveCourseOrderMysql = async (input: {
  * Returns null for pre-2026-08-20 rows that were never backfilled; creditReferrer
  * treats a null referrer as "nothing to credit" and is a no-op.
  */
-const referrerIdOf = (sub: { refferalcode: unknown }): number | null => {
-  const ref = sub.refferalcode as any;
+const referrerIdOf = (row: { refferalcode: unknown }): number | null => {
+  const ref = row.refferalcode as any;
   const id = ref && typeof ref === "object" ? ref.promoter?.id : null;
   return Number.isInteger(id) && id > 0 ? (id as number) : null;
 };
 
-/** Owner lookup for verify (the pending sub owning this razorpay order id). */
+/** Owner lookup for verify (the order owning this razorpay order id). */
 export const findLiveCourseOrderForVerify = async (
   razorpayOrderId: string,
   customerId: number
-) => prisma.liveCourseSubscription.findFirst({ where: { razorpayOrderId, customerId } });
+) => prisma.liveCourseOrder.findFirst({ where: { razorpayOrderId, customerId } });
 
 /**
- * Verify fulfillment. Idempotent: if already verified, returns the row as-is.
- * If the customer has another active sub for this live course, FOLD this purchase
- * onto it (extend endAt by plan duration DAYS, sum paid) and retire this pending
- * row (mark verified but it carries no fresh window). Else flip this row to a
- * fresh verified grant (start=now, end=now+durationDays).
+ * Verify fulfillment. Idempotent: an order that is no longer "pending" returns its
+ * existing subscription untouched.
+ *
+ * Otherwise, in ONE transaction: the order flips to "complete" and a NEW
+ * subscription row is created for it. A renewal continues from the customer's
+ * current entitlement (`startAt = existing.endAt` when that is still in the future,
+ * else now) and leaves that row alone — the pre-2026-08-25 behaviour folded the
+ * window onto it and retired the pending row instead, which is why a renewal's
+ * payment had nowhere of its own to live.
+ *
+ * `duration` is DAYS — see [[project_plan_duration_unit]].
  */
 export const verifyLiveCourseOrderMysql = async (
-  pending: any,
+  order: any,
   razorpayPaymentId: string,
   now: Date = new Date()
 ): Promise<LiveCourseVerifyDto> => {
-  if (pending.paymentStatus && pending.paymentStatus !== "pending") {
-    return toVerifyDto(pending); // idempotent
+  // Idempotency: the order already ran. Return the subscription it produced.
+  if (order.status && order.status !== "pending") {
+    const existingSub = await prisma.liveCourseSubscription.findFirst({ where: { orderId: order.id } });
+    return toVerifyDto(existingSub, order);
   }
+
   const plan = await prisma.liveCoursePlan.findFirst({
-    where: { id: pending.planId ?? 0 },
+    where: { id: order.planId ?? 0 },
     select: { duration: true },
   });
   const durationDays = plan?.duration ?? 0;
-  const amount = pending.paidAmount ?? 0;
+  const amount = order.paidAmount ?? 0;
 
-  // Existing active sub for the same live course (excluding this pending row).
+  // The customer's current entitlement for this live course, read ONLY to place the
+  // new window. `endAt: null` is a lifetime grant, which cannot be continued from —
+  // it never ends — so such a row falls through to `now` like a lapsed one.
   const existingActive = await prisma.liveCourseSubscription.findFirst({
     where: {
-      customerId: pending.customerId,
-      liveCourseId: pending.liveCourseId,
+      customerId: order.customerId,
+      liveCourseId: order.liveCourseId,
       status: true,
-      paymentStatus: "verified",
-      id: { not: pending.id },
       OR: [{ endAt: null }, { endAt: { gte: now } }],
     },
     orderBy: { endAt: "desc" },
   });
-
-  if (existingActive) {
-    const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
-    const result = await prisma.$transaction(async (tx) => {
-      const ext = await tx.liveCourseSubscription.update({
-        where: { id: existingActive.id },
-        data: {
-          endAt: newEndAt,
-          paidAmount: (existingActive.paidAmount ?? 0) + amount,
-          updatedAt: now,
-        },
-      });
-      // Retire this pending row: mark verified, no fresh window (folded into ext). This
-      // retired row is the EXTENSION's purchase-history row, so a with-material extension
-      // ships a new kit → give it its own shipment AWB (its id, synthetic AWB) so it's
-      // trackable, mirroring the fresh-grant path.
-      await tx.liveCourseSubscription.update({
-        where: { id: pending.id },
-        data: {
-          paymentStatus: "verified", razorpayPaymentId, paidAt: now, status: false, updatedAt: now,
-          ...(pending.withMaterial ? { trackingId: pending.id, trackingStatus: "pending" } : {}),
-        },
-      });
-      return ext;
-    });
-    await creditReferrer({ referrerId: referrerIdOf(pending), buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
-    await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
-    return toVerifyDto(result);
-  }
-
-  // Fresh grant on this row.
-  const startAt = now;
+  const startAt =
+    existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
+      ? existingActive.endAt
+      : now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
-  const updated = await prisma.liveCourseSubscription.update({
-    where: { id: pending.id },
-    data: {
-      paymentStatus: "verified", razorpayPaymentId, paidAt: now, startAt, endAt, status: true, updatedAt: now,
-      // Auto-allocate a shipment AWB for with-material orders (mirrors the SQL
-      // book/package verify path). The sub id is the synthetic AWB (below the
-      // Tirupati threshold → generic trackingUrl); status starts "pending".
-      ...(pending.withMaterial ? { trackingId: pending.id, trackingStatus: "pending" } : {}),
-    },
+
+  const sub = await prisma.$transaction(async (tx) => {
+    await tx.liveCourseOrder.update({
+      where: { id: order.id },
+      data: { status: "complete", razorpayPaymentId, paidAt: now, updatedAt: now },
+    });
+
+    const created = await tx.liveCourseSubscription.create({
+      data: {
+        orderId: order.id,
+        customerId: order.customerId,
+        liveCourseId: order.liveCourseId,
+        planId: order.planId ?? null,
+        startAt,
+        endAt,
+        status: true,
+        // Material choice is made at checkout and rides along on the order; the
+        // entitlement row copies it so dispatch + access checks stay row-local.
+        withMaterial: !!order.withMaterial,
+        customerShippingId: order.customerShippingId ?? null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    // Auto-allocate a shipment AWB for with-material purchases (mirrors the SQL
+    // book/package verify path). The SUBSCRIPTION id is the synthetic AWB — the same
+    // id space historical live AWBs used, so nothing collides with a legacy row.
+    // It can only be set after the insert, hence the second write.
+    if (order.withMaterial) {
+      return tx.liveCourseSubscription.update({
+        where: { id: created.id },
+        data: { trackingId: created.id, trackingStatus: "pending" },
+      });
+    }
+    return created;
   });
-  await creditReferrer({ referrerId: referrerIdOf(pending), buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
-  await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
-  return toVerifyDto(updated);
+
+  // Referral credit + wallet debit are keyed to the ORDER id (the payment record).
+  // Both are idempotent and non-throwing — neither may block fulfilment.
+  await creditReferrer({ referrerId: referrerIdOf(order), buyerId: order.customerId, orderId: order.id, paidAmount: amount, source: "liveCourse" });
+  await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.walletCoin, source: "liveCourse" });
+  return toVerifyDto(sub, { ...order, status: "complete", razorpayPaymentId, paidAt: now });
 };
 
 /**
  * Webhook fulfillment (paymentWebhook). The webhook arrives independently of the
- * client /verify call; same fold-or-fresh logic, keyed by razorpayOrderId only.
- * Idempotent + safe to run before or after /verify. Returns null if no SQL sub
- * owns this order id (→ caller falls through to Mongo).
+ * client /verify call; same fulfilment, keyed by razorpayOrderId ALONE (the razorpay
+ * payload carries no customer). Idempotent + safe to run before or after /verify.
+ * Returns null if no SQL order owns this id (→ caller falls through).
  */
 export const fulfillLiveCourseWebhookMysql = async (
   razorpayOrderId: string,
   razorpayPaymentId: string,
   now: Date = new Date()
 ): Promise<LiveCourseVerifyDto | null> => {
-  const pending = await prisma.liveCourseSubscription.findFirst({ where: { razorpayOrderId } });
-  if (!pending) return null;
-  return verifyLiveCourseOrderMysql(pending, razorpayPaymentId, now);
+  const order = await prisma.liveCourseOrder.findFirst({ where: { razorpayOrderId } });
+  if (!order) return null;
+  return verifyLiveCourseOrderMysql(order, razorpayPaymentId, now);
 };

@@ -3,7 +3,7 @@ import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { ReportSource } from "../../utils/reportStream";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
 import { parseMaterialCategoryRefs } from "./admin-live-course.refs";
@@ -349,27 +349,45 @@ const subCodeInfo = (r: {
   return { code: "", promoterName: "", promoterId: null, promocodeId: null, codeType: null };
 };
 
+/**
+ * Payment for a subscription row. Since 2026-08-25 it lives on ws_live_course_order;
+ * the order and the legacy subscription columns share field names, so this fallback
+ * covers both — new rows read the order, pre-backfill rows their own inline columns.
+ */
+const payOf = (row: any, orders: Map<number, any>): any =>
+  (row.orderId != null ? orders.get(row.orderId) : null) ?? row;
+
+/** Order "complete" ↔ the subscription vocabulary this DTO has always emitted. */
+const payStatusOf = (pay: any): string | null =>
+  pay?.status === "complete" ? "verified"
+  : pay?.status === "pending" ? "pending"
+  : pay?.status === "failed" ? "failed"
+  : (pay?.paymentStatus ?? null);
+
 const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null))])).map((p) => [p.id, p]));
+  const orders = new Map((await repo.ordersByIds([...new Set(rows.map((r) => (r as any).orderId).filter((x): x is number => x != null))])).map((o) => [o.id, o]));
   return rows.map((r) => {
     const c = custs.get(r.customerId);
     const name = c ? splitFullName(c.fullName) : null;
     const course = courses.get(r.liveCourseId);
     const plan = r.planId != null ? plans.get(r.planId) : undefined;
+    const pay = payOf(r, orders);
     return {
       _id: String(r.id),
       customerId: c && name ? { _id: String(c.id), firstName: name.firstName, lastName: name.lastName, phoneNumber: c.phoneNumber, emailAddress: c.emailAddress ?? null } : idStrOrNull(r.customerId),
       liveCourseId: course ? { _id: String(course.id), name: course.name, image: course.image ?? null } : idStrOrNull(r.liveCourseId),
       planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStrOrNull(r.planId),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, status: r.status,
-      paidAmount: r.paidAmount ?? 0, paymentStatus: r.paymentStatus ?? null, paidAt: r.paidAt ?? null,
+      // Payment fields come from the order now (2026-08-25); the DTO is unchanged.
+      paidAmount: pay.paidAmount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay.paidAt ?? null,
       // The purchase-time snapshot OBJECTS, not the bare ids — same contract as
       // ws_package_course_order. Exactly one is ever non-null. Additive: promocodeId /
       // referrerId were never in this DTO, so nothing that existed here changed shape.
-      promocode: (r.promocode as unknown) ?? null,
-      refferalcode: (r.refferalcode as unknown) ?? null,
+      promocode: (pay.promocode as unknown) ?? null,
+      refferalcode: (pay.refferalcode as unknown) ?? null,
       createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
     };
   });
@@ -471,16 +489,19 @@ export const listSubscriptions = async (q: SubReportQuery & {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null))])).map((p) => [p.id, p]));
+  // Payment moved to ws_live_course_order (2026-08-25) — load it for this page.
+  const orders = new Map((await repo.ordersByIds([...new Set(rows.map((r) => (r as any).orderId).filter((x): x is number => x != null))])).map((o) => [o.id, o]));
 
   const data = rows.map((r) => {
     const course = courses.get(r.liveCourseId);
     const plan = r.planId != null ? plans.get(r.planId) : undefined;
+    const pay = payOf(r, orders);
     const base = reportRow({
       cust: r.customerId ? custs.get(r.customerId) : undefined,
       product: course ? { _id: String(course.id), type: "liveCourse" as const, name: course.name, image: course.image ?? null } : null,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
-      amount: r.paidAmount != null ? Number(r.paidAmount) : 0,
-      paymentMethod: r.razorpayOrderId ? "online" : "backend",
+      amount: pay.paidAmount != null ? Number(pay.paidAmount) : 0,
+      paymentMethod: pay.razorpayOrderId ? "online" : "backend",
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
@@ -490,7 +511,7 @@ export const listSubscriptions = async (q: SubReportQuery & {
     // STRING there, so it is the code string here too. The full frozen objects ride
     // alongside under `promocodeSnapshot` / `refferalcodeSnapshot` for callers that
     // want the promoter/plan/percentage detail without a second request.
-    const code = subCodeInfo(r);
+    const code = subCodeInfo(pay);
     return {
       id: r.id,
       ...base,
@@ -499,8 +520,8 @@ export const listSubscriptions = async (q: SubReportQuery & {
       promoterName: code.promoterName || null,
       promoterId: code.promoterId,
       codeType: code.codeType,
-      promocodeSnapshot: (r.promocode as unknown) ?? null,
-      refferalcodeSnapshot: (r.refferalcode as unknown) ?? null,
+      promocodeSnapshot: (pay.promocode as unknown) ?? null,
+      refferalcodeSnapshot: (pay.refferalcode as unknown) ?? null,
     };
   });
 
@@ -705,74 +726,101 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   else return { ok: false, code: "duration", msg: "durationDays is required (or supply planId)." };
   if (endAt.getTime() <= startAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
-  // Subscription Type = Extend: top up the customer's existing active subscription
-  // for this live course. The payment is still recorded (an extend is a paid txn),
-  // so the method + reference ids + paid amount are written onto the row too.
+  // ONE ORDER = ONE SUBSCRIPTION ROW (2026-08-25). An extension is read-only against
+  // the customer's current entitlement — it only decides where the new window starts
+  // — and then writes its own order + its own subscription row. Previously it bumped
+  // `end_at` on the existing row and accumulated `paid_amount` into it, because live
+  // course had no order table to record the second payment in.
   const existing = v.extend === true ? await repo.findActiveSubscription(customerId, liveCourseId, now) : null;
-  if (existing) {
-    const newEnd = v.durationDays != null
-      ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationDays, asDays: true, now })
+  const grantStartAt =
+    existing?.endAt && existing.endAt.getTime() > now.getTime() ? existing.endAt : startAt;
+  // Recompute the window off the continuation start. An explicit endAt from the
+  // admin still wins — it is an absolute instruction, not a duration.
+  const grantEndAt = v.endAt
+    ? endAt
+    : v.durationDays != null
+      ? computeEndAt({ startAt: grantStartAt, durationMonths: v.durationDays, asDays: true })
       : v.durationMonths != null
-        ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationMonths, now })
+        ? computeEndAt({ startAt: grantStartAt, durationMonths: v.durationMonths })
         : plan
-          ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration, asDays: true, now })
+          ? computeEndAt({ startAt: grantStartAt, durationMonths: plan.duration, asDays: true })
           : endAt;
-    const updated = await repo.updateSubscription(existing.id, {
-      endAt: newEnd,
-      planId,
-      paidAt: now,
-      // ACCUMULATE, never replace. `v.amount ?? existing.paidAmount` was safe only
-      // while every caller omitted `amount` — an explicit `amount: 0` is not nullish,
-      // so it would have zeroed what the customer paid (the same defect fixed for
-      // test-series/ebook). Dropping the field outright isn't right here either:
-      // live courses have NO order table, so this row IS the payment record and a
-      // paid extension would vanish. Summing keeps both properties and matches the
-      // client purchase path (live-course-order.service.ts), which already does
-      // `paidAmount: (existingActive.paidAmount ?? 0) + amount`.
-      // Free "Add Days" sends no amount ⇒ + 0 ⇒ the stored total is untouched.
-      paidAmount: (existing.paidAmount ?? 0) + (v.amount ?? 0),
-      paymentMethod: v.paymentMethod ?? "cash",
-      razorpayOrderId: v.razorpayOrderId ?? null,
-      razorpayPaymentId: v.razorpayPaymentId ?? null,
-      bankTransactionId: v.bankTransactionId ?? null,
-      ...(v.remarks !== undefined ? { remarks: v.remarks } : {}),
-      // Extend = admin edit of an existing row → stamp updated_by only.
-      ...(v.actingAdminId != null ? { updated_by: v.actingAdminId } : {}),
-    });
-    return { ok: true, created: false, data: (await hydrateSubs([updated]))[0] };
-  }
-  // Standardized payment section: amount → paid_amount; granular method +
-  // reference ids persist inline (no sibling order table for live courses).
+  if (grantEndAt.getTime() <= grantStartAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
+
   const shippingId = v.customerShippingId != null ? parseLiveId(v.customerShippingId) : null;
-  const sub = await repo.createSubscription({
-    customerId, liveCourseId, planId, startAt, endAt, status: true,
+
+  // The order carries the payment for THIS grant — its own amount, never a running
+  // total. The old extend path summed into the existing row's paid_amount precisely
+  // because that row was also the payment record; each order now owns its own.
+  const order = await repo.createOrder({
+    customerId,
+    liveCourseId,
+    planId,
     paidAmount: v.amount ?? 0,
-    paymentStatus: "verified",
     paymentMethod: v.paymentMethod ?? "cash",
     razorpayOrderId: v.razorpayOrderId ?? null,
     razorpayPaymentId: v.razorpayPaymentId ?? null,
     bankTransactionId: v.bankTransactionId ?? null,
+    status: "complete",
+    paidAt: now,
     withMaterial: !!v.withMaterial,
     customerShippingId: shippingId,
     remarks: v.remarks ?? null,
-    paidAt: now,
+    // Admin-initiated manual grant → both audit columns = the acting admin.
+    created_by: v.actingAdminId ?? null,
+    updated_by: v.actingAdminId ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const sub = await repo.createSubscription({
+    orderId: order.id,
+    customerId, liveCourseId, planId, startAt: grantStartAt, endAt: grantEndAt, status: true,
+    withMaterial: !!v.withMaterial,
+    customerShippingId: shippingId,
+    remarks: v.remarks ?? null,
     // Admin-initiated manual grant → both audit columns = the acting admin.
     created_by: v.actingAdminId ?? null,
     updated_by: v.actingAdminId ?? null,
     createdAt: now, updatedAt: now,
   });
-  return { ok: true, created: true, data: (await hydrateSubs([sub]))[0] };
+  // `created` reports whether this STARTED a new entitlement or continued one, which
+  // is what the controller's "granted" vs "extended" message keys off. Both cases
+  // write a new row, so it can no longer be inferred from what was written.
+  return { ok: true, created: !existing, data: (await hydrateSubs([sub]))[0] };
 };
 
 export const updateSubscription = async (id: number, v: { status?: boolean; paymentStatus?: string; startAt?: string; endAt?: string; actingAdminId?: number | null }): Promise<"not_found" | "bad_start" | "bad_end" | any> => {
-  if (!(await repo.findSubscriptionById(id))) return "not_found";
+  const current = await repo.findSubscriptionById(id);
+  if (!current) return "not_found";
   const data: any = { updatedAt: new Date() };
   // Admin edit → stamp updated_by (created_by untouched).
   if (v.actingAdminId != null) data.updated_by = v.actingAdminId;
   if (v.status !== undefined) data.status = v.status;
-  if (v.paymentStatus !== undefined) data.paymentStatus = v.paymentStatus;
   if (v.startAt !== undefined) { const dt = new Date(v.startAt); if (isNaN(dt.getTime())) return "bad_start"; data.startAt = dt; }
   if (v.endAt !== undefined) { const dt = new Date(v.endAt); if (isNaN(dt.getTime())) return "bad_end"; data.endAt = dt; }
+
+  if (v.paymentStatus !== undefined) {
+    // `payment_status` used to live on this row AND gate access — marking a
+    // subscription "failed" revoked it. Payment moved to the order on 2026-08-25 and
+    // the entitlement reads no longer consult it, so writing the legacy column alone
+    // would silently stop revoking anything. Two things keep the old outcome:
+    //   1. the ORDER's status is corrected, so reports/receipts/history agree, and
+    //   2. `status` follows it — anything other than "verified" deactivates the row,
+    //      which IS the entitlement gate now.
+    // An explicit `status` in the same request still wins; it is the more specific
+    // instruction.
+    data.paymentStatus = v.paymentStatus;
+    if (v.status === undefined) data.status = v.paymentStatus === "verified";
+    if ((current as any).orderId != null) {
+      await repo.updateOrder((current as any).orderId, {
+        status: v.paymentStatus === "verified" ? "complete" : v.paymentStatus === "pending" ? "pending" : "failed",
+        updatedAt: new Date(),
+        ...(v.actingAdminId != null ? { updated_by: v.actingAdminId } : {}),
+      });
+    }
+  }
+
   const updated = await repo.updateSubscription(id, data);
   return (await hydrateSubs([updated]))[0];
 };
@@ -1406,7 +1454,10 @@ export const listMyLiveCoursesForClient = async (
       plan: p ? { _id: String(p.id), name: p.name, duration: p.duration, price: p.price } : null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
-      paymentStatus: s.paymentStatus,
+      // These rows are already gated to PURCHASED subscriptions by the query, so the
+      // answer is "verified" — the legacy column is only consulted for pre-backfill
+      // rows, which still carry it (payment moved to the order on 2026-08-25).
+      paymentStatus: s.paymentStatus ?? "verified",
       active,
       daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
       progress: {

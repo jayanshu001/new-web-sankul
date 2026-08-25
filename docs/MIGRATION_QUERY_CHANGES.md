@@ -15,6 +15,280 @@
 
 ---
 
+## 2026-08-25 (f) — Live course gets an order table; the fold model is fully retired
+
+> **NEW TABLE + write-path change + read repointing. DDL + BACKFILL REQUIRED.**
+> Phase 2 of two — completes 2026-08-25 (e). API response shapes unchanged.
+
+**DDL:** `docs/migration/schema-changes/2026-08-25_create_ws_live_course_order.sql`
+(new `ws_live_course_order` + `ws_live_course_subscription.order_id`, both guarded).
+**Backfill:** `scripts/backfill-live-course-orders.ts` (dry-run by default, `--apply`
+to write, idempotent, PK-batched + resumable).
+**Deferred:** `2026-08-25_live_course_subscription_drop_payment_columns.sql` — **do
+NOT apply yet**; its header lists the preconditions and the fallbacks to delete first.
+
+### Why
+
+Live course was the only product without an order table: the subscription row WAS the
+order (checkout inserted `payment_status='pending'`, verify flipped it to
+`'verified'`). That is exactly why its renewals had to FOLD — bump `end_at` on the
+existing row and retire the pending one — since there was no second table to hold the
+second payment. With the order table it now follows the same rule as everything else:
+**ONE ORDER = ONE SUBSCRIPTION ROW**, and **the order owns payment, the subscription
+owns entitlement**.
+
+### The split
+
+Moved to `ws_live_course_order`: `paid_amount`, `original_amount`, `wallet_coin`,
+`promocode`/`refferalcode` snapshots, `payment_method`, `razorpay_order_id`,
+`razorpay_payment_id`, `bank_transaction_id`, `paid_at`, plus `status`
+(`pending|complete|failed` — the ws_test_series_order vocabulary, NOT the
+subscription's `verified`).
+
+Stays on the subscription: `start_at`, `end_at`, `status`, `with_material`,
+`customer_shipping_id`, `tracking_id`, `tracking_status`, `remarks`, audit columns.
+`with_material`/`customer_shipping_id`/`remarks` exist on both on purpose — the order
+records what was BOUGHT, the subscription what was GRANTED; copied forward at
+fulfilment, not shared.
+
+### Writes
+
+- **Checkout** (`createLiveCourseOrderMysql`) writes a pending ORDER. No subscription
+  row exists until payment verifies, so an abandoned checkout can no longer leave an
+  unverified row sitting in the entitlement table.
+- **Verify** (`verifyLiveCourseOrderMysql`) flips the order to `complete` and CREATES
+  the subscription row. Renewal → its own row starting at the current entitlement's
+  `end_at`. The old row is never touched. Idempotency now keys on the order's status
+  and returns the subscription it produced.
+- **Admin grant** (`admin-live-course.service.grantSubscription`) writes an order +
+  a subscription row, extension or not. It no longer accumulates `paid_amount` into
+  an existing row — that only existed because the row was also the payment record.
+- The with-material AWB is still the SUBSCRIPTION id (same id space as historical
+  live AWBs, so nothing collides); it is set in a second write inside the same txn
+  because the id is only known after the insert.
+- **Wire contract kept:** create-order still responds with the key `subscriptionId`;
+  it now carries the ORDER id. Verify is keyed on `razorpay_order_id`, and the app
+  only echoes the value back, so the rename stayed server-side.
+
+### Reads — two groups
+
+**Entitlement reads dropped the `payment_status = "verified"` filter entirely** (13
+sites): client-lecture-note, profile-dashboard.sql, exam-countdown.client (×2),
+client-lecture-progress (×4), client-search, client-my-subscriptions.repository,
+client-category-video (×2), client-material, plus admin-live-course.repository's
+`activeSubsForCourses` / `ownedCourseIds` / `activeSubscribersForCourses` /
+`findActiveSubscription`. `status` (+ the endAt window) IS the gate now.
+
+> ⚠ **This is only safe because of backfill step 3.** Pre-migration abandoned
+> checkouts left `pending` rows with `status = true`. Without deactivating them they
+> would become live entitlements the moment this code deploys — someone who abandoned
+> a payment would get the course free. Run the backfill BEFORE deploying.
+
+**Payment / history / revenue reads repointed to the order:**
+- `admin-dashboard`: `liveCourseRevenue` aggregate, the `seriesFor` raw-SQL revenue
+  chart (`ws_live_course_order` / `status='complete'`), and recent purchases.
+- `plan-popularity` + `admin-live-course.purchaseCounts`: sales counts.
+- `client-purchase-history`: stays keyed on the SUBSCRIPTION (the emitted `lc_` id is
+  the subscription id and the receipt/tracking resolvers look rows up by it), but
+  "purchased" is now the linked order's status. The receipt reads payment via a
+  `sub.order ?? sub` merge — the order repeats the same field names, so both eras
+  produce identical output.
+- `admin-live-course` DTO + report: `payOf`/`payStatusOf` helpers, `ordersByIds`
+  hydration; `aggSubs` sums orders + the legacy inline column for un-backfilled rows
+  (disjoint sets, so no double-count).
+- `admin-customer-details`, `libs/core/generate.ts` live receipt: same merge pattern.
+- `utils/planUsage`: the `livePlan` count now counts ORDERS of every status (a pending
+  checkout must still pin the plan — it no longer writes a subscription row, so
+  counting subscriptions alone would let an in-flight purchase's plan be deleted).
+
+### Behaviour preserved deliberately
+
+`PUT /admin/live-courses/subscriptions/:id` accepts `paymentStatus`, which used to
+gate access — marking a sub "failed" revoked it. Since the entitlement reads no longer
+consult that column, writing it alone would silently stop revoking anything. The
+handler now also corrects the linked ORDER's status and lets `status` follow
+(`verified` → true, anything else → false), unless the caller passed `status`
+explicitly. Same outcome as before.
+
+### Known consequence (not a regression, called out deliberately)
+
+`educator-details.repository.liveCourseSubCounts` counts active subscription ROWS, so
+one renewing customer can contribute 2 (both rows are `status: true` — the
+continuation starts when the current window ends). The package/course count beside it
+has behaved this way for as long as admin extends have created new rows, so the two
+stay consistent. Switching to a distinct-customer count should be done for both at
+once; doing it for live course alone would make them disagree.
+
+### Verified on staging
+
+DDL applied, backfill run (1 legacy row → 1 order, linked; second run a no-op), and an
+admin `extend: true` grant asserted end-to-end: existing row untouched and still
+pointing at its original order; exactly one new subscription + one new order; new
+window continues from the old `end_at` with no gap or overlap; the new order carries
+that purchase's own ₹259 rather than a running total; no payment written to the
+subscription row. `yarn typecheck` green.
+
+`utils/planDuration.extendEndAt` is now **unused by all application code** and marked
+`@deprecated` — the fold model it backed no longer exists anywhere.
+
+---
+
+## 2026-08-25 (e) — Subscription extend writes a NEW row per order (6 of 8 paths); fold retired
+
+> **Write-path change. NO DDL, NO backfill, NO API response-shape change.**
+> Phase 1 of two. Live-course still folds — see "Not done" below.
+
+**The defect.** "Extend / renew" behaved differently depending on which surface you hit.
+Only ONE of the eight extend paths created a new subscription row; the other seven
+`UPDATE`d the customer's existing row in place. Verified path by path before changing
+anything:
+
+| Path | Before | Now |
+|---|---|---|
+| admin course/package (`POST /admin/subscriptions`) | **new row** (already correct) | unchanged |
+| admin ebook (`POST /admin/ebooks/subscriptions`) | update in place | **new row** |
+| admin test-series (`POST /admin/test-series/:id/grant`) | update in place | **new row** |
+| client verify — course (`commerce-order`) | fold | **new row** |
+| client verify — package (`commerce-order`) | fold | **new row** |
+| client verify — test-series (`test-series-order`) | fold | **new row** |
+| client verify — ebook (`ebook-order`) | fold | **new row** |
+| admin + client live-course | fold | **still folds (Phase 2)** |
+
+**The rule now:** ONE ORDER = ONE SUBSCRIPTION ROW. The existing active sub is read
+*only* to place the window — `startAt = existing.endAt > now ? existing.endAt : now`
+(no overlap, no gap; lapsed/lifetime/absent → `now`) — and is never written to.
+
+**What the fold was silently costing (all fixed by this change):**
+- **`order_id` was repointed.** A folded row's `order_id` was reassigned to the newest
+  order, orphaning the original purchase. `client-purchase-history.repository`
+  resolves ebook history rows and receipts by `eBookSubscription.orderId` (lines 157,
+  169) — older orders had no matching sub, so their `startAt` came back null. Now every
+  order has its own row.
+- **Money was ambiguous.** Client course/package/ts/ebook *summed* the amount onto the
+  old row; admin ebook/test-series deliberately *skipped* `price` because a free
+  "Add Days" (`price: 0`) would have wiped a real ₹699 (the 2026-08-18 workaround).
+  Both hacks are gone: each row carries the amount of the order that created it, and a
+  free extension is genuinely worth 0 *on its own row* while the earlier row keeps what
+  it was paid.
+- **Material split / dispatch were skipped on extend.** The fold branch never wrote
+  `course_amount` / `material_amount`, so an extension's money was untracked against the
+  split. Both verify txns now run the same create for every purchase, so a with-material
+  renewal gets its own split *and* its own tracking row.
+
+**Why this is safe on the read side (checked, not assumed):**
+- **No unique constraint** on (customer, target) in any of the four subscription models
+  — only plain `@@index`. Multiple rows were already legal, and admin course/package has
+  been producing them all along.
+- **Every consumer already dedupes per target keeping the furthest `endAt`:**
+  `client-my-subscriptions.service` (:20 course/package, :66 live, :102 ebook),
+  `profile-dashboard.sql` `countActiveSubscriptions` (:57),
+  `client-dashboard.service` `resolveOwnedEndAt` (:89),
+  `client-purchase-history.service` (:88, :178, :620, :791).
+  So a stack of rows still presents as ONE card showing the extended date.
+- **Purchase history is order-based** for package/course, test-series and ebook — each
+  renewal was already meant to be its own line. The legacy union only pulls subs with
+  `order_id IS NULL`, and new rows always carry one, so nothing double-lists.
+- Readers filter `status + endAt`, never `startAt`, so the future-dated continuation row
+  counts as active immediately — same as the existing admin course/package behaviour.
+
+**Files:**
+- `commerce-order.repository.ts` — `verifyCourseTx` / `verifyPackageTx`: the
+  `if (input.extend)` branch is deleted; input takes `{ startAt, endAt, extended }`
+  instead of `fresh?` / `extend?`. Both cases run one create.
+- `commerce-order.service.ts` — `verifyCourseOrderMysql` / `verifyPackageOrderMysql`:
+  compute the window, stop summing `amount`, drop the `extendEndAt` import.
+- `test-series-order.service.ts` — `verifyOrderMysql`: fold branch → create.
+- `ebook-order.repository.ts` + `ebook-order.service.ts` — `verifyEbookTx`: same.
+- `admin-ebook.service.ts` + `.repository.ts` — extend now reuses
+  `createBackendSubscription`; the dead `extendBackendSubscription` txn is removed.
+- `admin-testseries.service.ts` — `grantSubscription`: fold branch → create.
+- `utils/planDuration.ts` — `extendEndAt` docstring rescoped: it now backs live-course
+  ONLY, and the "duplicate My Subscription cards" claim is corrected (that is handled at
+  the read layer, not by folding).
+
+**Visible behaviour change (intended):** admin subscription lists for **ebook** and
+**test-series** now show one row per purchase after a renewal, matching how course /
+package have always behaved. Client-facing responses are unchanged in shape; a renewal's
+verify response now returns the NEW subscription `_id` rather than the pre-existing one.
+
+**Not done — Phase 2 (live-course).** `ws_live_course_order` does not exist: the
+subscription row *is* the order (`paid_amount`, `payment_method`, razorpay ids,
+`promocode`/`refferalcode` JSON snapshots, `wallet_coin`, `original_amount`,
+`tracking_id` all live on `ws_live_course_subscription`), the pending row doubles as the
+order at checkout, and purchase history lists *retired* sub rows under the `lc_` prefix.
+Agreed design for that phase: **the order owns payment, the subscription owns
+entitlement** — those columns move to the new table, sub keeps window/status/material.
+Needs DDL + a legacy-union or backfill for existing live purchases (17 files reference
+`liveCourseSubscription`). Until then the two live-course paths keep folding and
+`extendEndAt` keeps its current behaviour.
+
+## 2026-08-25 (d) — ws_course.purchase pinned to paid ('1'); a course can never be free
+
+**Files:** `docs/migration/schema-changes/2026-08-25_ws_course_purchase_always_paid.sql`,
+`prisma/schema.prisma` (model `Course`), `src/modules/admin-course/admin-course.service.ts`
+
+**Business rule (confirmed 2026-08-25):** a course is never a free product. "Free" on this
+platform means videos / materials / tests / ebooks / books — never a course.
+
+### Why the column was KEPT rather than dropped
+
+`ws_course.purchase enum('0','1')` is the sole source of the `isPaid` boolean on six
+response shapes: `catalog-course.transformer.ts:72` (`/client/courses` list + detail),
+`admin-course.service.ts:50`, `client-dashboard.service.ts:149`,
+`client-search.service.ts:107`, `educator-details.transformer.ts:23`,
+`exam-countdown.client.ts:107`. `isPaid` must remain in all six regardless, so dropping the
+column would only relocate the answer into six hardcoded `true`s — no contract change, no
+simplification, and a DDL + backfill to undo the first time a free demo course is wanted.
+
+### DDL (`2026-08-25_ws_course_purchase_always_paid.sql`) — applied on staging, PENDING on prod
+
+1. `UPDATE ws_course SET purchase='1' WHERE purchase='0' OR purchase IS NULL` — NULL is
+   included because it was already *read* as paid (`toIsPaid`: `v !== "no"`, mirroring the
+   old Mongo `isPaid:true` default); this makes storage agree with the read.
+2. `ALTER TABLE ws_course MODIFY COLUMN purchase ENUM('0','1') NOT NULL DEFAULT '1'` — so any
+   INSERT omitting the column (this API, a legacy admin, a manual query) lands on paid.
+
+Order matters: step 2 fails in strict mode while NULL rows exist. Both steps are idempotent
+(the UPDATE matches nothing on re-run; the MODIFY is guarded by an information_schema check).
+ws_course is a small catalog table — a single unbatched UPDATE is safe here, unlike the
+2026-08-06 ws_customer incident.
+
+### Code
+
+- `prisma/schema.prisma`: `Course.purchase` gains `@default(yes)`. Left **nullable on
+  purpose** so the schema is valid before *and* after the DDL lands on a given environment —
+  a non-nullable field shipped ahead of the DDL would throw on any NULL row. Tighten later.
+- `admin-course.service.ts:178` (create) now writes `purchase: "yes"` unconditionally, and
+  the update path (`:210`) no longer writes `purchase` at all. `isPaid` stays in
+  `course.validation.ts` and is still accepted — it is simply ignored, so an admin panel
+  still sending it gets 200 rather than a 422 regression.
+
+### Response contracts — unchanged
+
+`isPaid` is still present everywhere it was; it is now always `true` for courses, which was
+already the case for 100% of live rows (staging: 4/4 `'1'`, 0 free).
+
+### Side effects worth knowing
+
+- **`GET /client/free-courses` default mode is permanently empty.** `client-free.service.ts:417`
+  filters `purchase:'no'` for the free branch, and the free branch deliberately adds no
+  packages (`packageWhere = null`) — so `?type=free` returns `{data:[],total:0}` by rule, not
+  by accident, and is cached 24h per user. Only `?type=paid` is live. Retiring the endpoint
+  needs the RN app to stop calling it first (`free.controller.ts:231` names the fields it
+  reads); tracked separately.
+- **`resolveFreeCategoryIds` free-course branch (`client-trending.service.ts:100`) now always
+  resolves empty**, contributing nothing to the free-videos OR in `/client/free-dashboard`.
+  That dashboard has no course section at all, so nothing regresses.
+- **Fixes a latent `not`-excludes-NULL bug.** `buildCourseWhere` (`admin-course.repository.ts:334`)
+  filters `isPaid=true` as `purchase: { not: "no" }`, which in Prisma 5 + MySQL silently drops
+  NULL rows. With the column NOT NULL that class of miss is gone.
+- **Pre-existing, unfixed:** `client-search.service.ts:107` compares `r.purchase !== "0"`, but
+  Prisma yields the enum *names* (`"no"`/`"yes"`), never `"0"`. The comparison is therefore
+  always true — harmless under the new invariant (every course is paid), but wrong if the rule
+  is ever reversed. Left alone deliberately; fix it alongside any future free-course work.
+
+---
+
 ## 2026-08-25 (c) — ws_customer_access_token is now AUTHORITATIVE for customer sessions
 
 **Files:** `src/middlewares/authenticate.ts`,

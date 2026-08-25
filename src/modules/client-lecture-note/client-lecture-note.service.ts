@@ -62,7 +62,9 @@ export const authorizeLive = async (
   if (!liveCourseIds.length) return { error: "Notes are only available for subscribed live courses.", status: 403 };
 
   const ok = await prisma.liveCourseSubscription.findFirst({
-    where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", endAt: { gt: new Date() } },
+    // No `paymentStatus` filter: since 2026-08-25 a live-course subscription row
+    // exists only for a paid order, so `status` + the window IS the entitlement.
+    where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, endAt: { gt: new Date() } },
     select: { liveCourseId: true },
   });
   if (!ok) return { error: "Active subscription required to take notes.", status: 403 };

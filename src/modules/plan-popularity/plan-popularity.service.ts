@@ -80,8 +80,12 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
     plans = rows.map((p) => ({ id: p.id, productId: p.liveCourseId, price: p.price }));
     const ids = plans.map((p) => p.id);
     if (ids.length) {
-      const grouped = await prisma.liveCourseSubscription.groupBy({
-        by: ["planId"], where: { planId: { in: ids }, paymentStatus: "verified" }, _count: { _all: true },
+      // Counted off the ORDER table since 2026-08-25, matching every other scope
+      // above (which already count orders). Popularity is a SALES measure, so a
+      // renewal should count as a sale — under the old single-table read it folded
+      // into the existing subscription row and was never counted at all.
+      const grouped = await prisma.liveCourseOrder.groupBy({
+        by: ["planId"], where: { planId: { in: ids }, status: "complete" }, _count: { _all: true },
       });
       paid = new Map(grouped.map((g) => [g.planId as number, g._count._all]));
     }

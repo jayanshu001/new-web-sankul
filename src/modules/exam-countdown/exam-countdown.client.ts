@@ -124,9 +124,11 @@ const loadLiveCourses = async (ids: number[], customerId: number | null) => {
   const [courses, plans, subAgg, ownedSubs] = await Promise.all([
     prisma.liveCourse.findMany({ where: { id: { in: ids } } }),
     prisma.liveCoursePlan.findMany({ where: { liveCourseId: { in: ids }, status: true }, orderBy: { price: "asc" } }),
-    prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: ids }, status: true, paymentStatus: "verified" }, _count: { _all: true } }),
+    // `paymentStatus` dropped 2026-08-25: a live-course subscription row now exists
+    // only for a paid order, so `status` is the gate (payment lives on the order).
+    prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: ids }, status: true }, _count: { _all: true } }),
     customerId
-      ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } })
+      ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } })
       : Promise.resolve([] as any[]),
   ]);
   const subByCourse = new Map<number, number>();

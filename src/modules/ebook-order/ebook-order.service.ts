@@ -14,7 +14,7 @@
  *
  * Flag OFF until go-live sign-off.
  */
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import type {
   PromocodeSnapshot,
   ReferralSnapshot,
@@ -132,41 +132,26 @@ export const verifyEbookOrderMysql = async (
   const customerId = Number(order.customerIdStr);
   const price = order.orderPrice ?? 0;
 
-  // Upsert-extend on an active subscription for this ebook.
+  // ONE ORDER = ONE SUBSCRIPTION ROW. The active sub is read only to place the new
+  // window (renewal continues from its endAt); it is never modified, so its price
+  // and order_id survive the renewal untouched.
   const existingActive = await repo.findActiveEbookSub(customerId, ebookId, now);
-
-  if (existingActive) {
-    const newEndAt = extendEndAt({
-      currentEndAt: existingActive.endAt,
-      durationMonths: durationDays,
-      asDays: true,
-      now,
-    });
-    const prevPrice = existingActive.price ? Number(existingActive.price.toString()) : 0;
-    const result = await repo.verifyEbookTx({
-      orderId: order.id,
-      razorpayPaymentId,
-      customerId,
-      ebookId,
-      price,
-      now,
-      extend: { existingSubId: existingActive.id, newEndAt, newPrice: prevPrice + price },
-    });
-    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: price, source: "ebook" });
-    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "ebook" });
-    return toEbookOrderDto(result.order, ebookId);
-  }
-
-  const startAt = now;
+  const startAt =
+    existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
+      ? existingActive.endAt
+      : now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
   const result = await repo.verifyEbookTx({
     orderId: order.id,
     razorpayPaymentId,
     customerId,
     ebookId,
+    // This order's own price — not a running total across renewals.
     price,
     now,
-    fresh: { startAt, endAt },
+    startAt,
+    endAt,
+    extended: !!existingActive,
   });
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: price, source: "ebook" });
   await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "ebook" });

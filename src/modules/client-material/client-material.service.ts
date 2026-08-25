@@ -201,9 +201,10 @@ export const getPurchasedMaterialIds = async (
     courseIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { courseId: true } }) : [],
     packageIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in: packageIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { packageId: true } }) : [],
     // Live-course entitlement predicate is the one used everywhere else
-    // (client-search, exam-countdown, lecture-progress): active + verified, and
-    // a null endAt means lifetime.
-    liveCourseIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { liveCourseId: true } }) : [],
+    // (client-search, exam-countdown, lecture-progress): active, and a null endAt
+    // means lifetime. `paymentStatus` dropped 2026-08-25 — payment moved to
+    // ws_live_course_order and a sub row exists only for a paid order.
+    liveCourseIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { liveCourseId: true } }) : [],
   ]);
   const ownedCourseSet = new Set(ownedCourses.map((r) => r.courseId!));
   const ownedPackageSet = new Set(ownedPackages.map((r) => r.packageId!));

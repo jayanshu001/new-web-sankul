@@ -172,7 +172,10 @@ export const createCourse = async (d: CourseWriteInput) => {
       courseEducatorId: d.courseEducatorId ?? 0,
       videoCategoryId: d.videoCategoryId ?? null,
       pcMaterialId: d.pcMaterialId ?? null,
-      purchase: d.isPaid === false ? "no" : "yes",
+      // A course is NEVER free (business rule, 2026-08-25) — always paid,
+      // whatever `isPaid` the caller sends. The DB backs this with NOT NULL
+      // DEFAULT '1'; see 2026-08-25_ws_course_purchase_always_paid.sql.
+      purchase: "yes",
       is_featured: d.isPopular ? "yes" : "no",
       status: d.status ?? true,
       // C6: embedded examCountdown attachments → JSON int[] columns.
@@ -204,7 +207,8 @@ export const updateCourse = async (id: number, d: CourseWriteInput): Promise<"no
   if (d.courseEducatorId !== undefined) data.courseEducatorId = d.courseEducatorId;
   if (d.videoCategoryId !== undefined) data.videoCategoryId = d.videoCategoryId;
   if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId;
-  if (d.isPaid !== undefined) data.purchase = d.isPaid === false ? "no" : "yes";
+  // `isPaid` is accepted but never written — a course cannot be made free.
+  // Kept in the validator so an admin panel still sending it gets 200, not 422.
   if (d.isPopular !== undefined) data.is_featured = d.isPopular ? "yes" : "no";
   if (d.status !== undefined) data.status = d.status;
   // C6: embedded examCountdown attachments → JSON int[] columns.
