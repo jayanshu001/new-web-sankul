@@ -9,6 +9,7 @@ import {
   SERVICE_UNAVAILABLE_MESSAGE,
   SERVICE_UNAVAILABLE_RETRY_SECONDS,
 } from "../utils/dbAvailability";
+import { sanitizeClientMessage } from "../utils/errorSanitizer";
 
 /** Shape of errors you throw from your code */
 export interface AppError extends Error {
@@ -74,10 +75,12 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   // used to send. Only applies when the thrown error carried no explicit status
   // — an intentional `new HttpError(...)` always wins.
   //
-  // This ALSO closes a leak: the raw message is echoed to the client below, and
-  // a Prisma connection error's message embeds the failing invocation and its
-  // compiled file path (`dist/modules/.../x.repository.js:116`). Normalising it
-  // keeps that out of the response.
+  // It also gives the right SIGNAL for a deploy window: a Prisma connection
+  // error is transient, so 503 + Retry-After tells the client to come back,
+  // where 500 says "this request will never work". (The leak in that error's
+  // text — it embeds the failing invocation and its compiled file path,
+  // `dist/modules/.../x.repository.js:116` — is handled for every 5xx a few
+  // lines down by `sanitizeClientMessage`, not just for this case.)
   const dbUnavailable =
     !Number.isInteger(appErr.statusCode) && isDatabaseUnavailableError(appErr);
 
@@ -87,9 +90,21 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
       ? (appErr.statusCode as number)
       : 500;
 
-  const message = dbUnavailable
+  // Two distinct messages from here on, and mixing them up is the whole bug:
+  //
+  //   rawMessage    — what actually happened. Goes to the log, the alert email
+  //                   and the email de-dupe key. Never leaves the server.
+  //   clientMessage — what the caller is allowed to read. For any 5xx that
+  //                   looks like a driver/stack/path string this collapses to
+  //                   "Internal Server Error", so a deploy window shows users a
+  //                   plain server error instead of a Prisma invocation dump.
+  //                   4xx wording is deliberate and passes through untouched.
+  const rawMessage = appErr.message ?? "Internal Server Error";
+
+  const clientMessage = dbUnavailable
     ? SERVICE_UNAVAILABLE_MESSAGE
-    : appErr.message ?? "Internal Server Error";
+    : sanitizeClientMessage(rawMessage, statusCode);
+
   const errorObject = appErr.errorObject ?? null;
 
   if (dbUnavailable && !res.headersSent) {
@@ -100,9 +115,10 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   try {
     logger.error("API Error", {
       traceId: (req as any).traceId,
-      // The RAW message — `message` above may have been normalised to the
-      // generic 503 text for the client, which must never blind the logs.
-      message: appErr.message ?? "Internal Server Error",
+      // The RAW message — `clientMessage` above may have been normalised to the
+      // generic 503/500 text for the client, which must never blind the logs.
+      message: rawMessage,
+      ...(clientMessage !== rawMessage ? { clientMessage } : {}),
       ...(dbUnavailable ? { cause: "DATABASE_UNAVAILABLE" } : {}),
       statusCode,
       method: req.method,
@@ -121,18 +137,29 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
     // Avoid logger crashes from non‑serializable req.body etc.
   }
 
-  // Ensure JSON response and avoid sending twice
+  // Ensure JSON response and avoid sending twice.
+  //
+  // Envelope matches utils/httpResponse.ts `failure()` — `code`/`data`/`messages`
+  // used to be missing here, so a 500 from this handler was the ONE error shape
+  // in the API without them, and clients reading `res.data.code` got `undefined`
+  // during exactly the outage this handler exists for.
   if (!res.headersSent) {
     res.status(statusCode).json({
       success: false,
-      message,
+      code: statusCode,
+      data: dbUnavailable ? { reason: "SERVICE_UNAVAILABLE" } : {},
+      message: clientMessage,
+      messages: {},
     });
   }
 
   // Fire-and-forget email for 5xx only — debounced to 1 per unique error per
   // minute, cluster-wide via Redis SET NX EX.
   if (statusCode >= 500) {
-    const shouldSend = await acquireEmailCooldown(statusCode, message);
+    // Keyed on the RAW message: keying on the sanitised one would collapse every
+    // distinct 5xx in the system into the single signature "Internal Server
+    // Error" and silently drop all but one alert per minute.
+    const shouldSend = await acquireEmailCooldown(statusCode, rawMessage);
     if (!shouldSend) return;
 
     const emailTo = "ranavinit6834@gmail.com";
@@ -141,7 +168,8 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
       <html>
         <body>
           <h1>Server Error Notification</h1>
-          <p><strong>Message:</strong> ${escapeHtml(message)}</p>
+          <p><strong>Message:</strong> ${escapeHtml(rawMessage)}</p>
+          <p><strong>Sent to client:</strong> ${escapeHtml(clientMessage)}</p>
           <p><strong>Status Code:</strong> ${statusCode}</p>
           <pre>${escapeHtml(JSON.stringify(errorObject, null, 2))}</pre>
           <pre>${escapeHtml(appErr.stack ?? "")}</pre>
@@ -154,7 +182,7 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
         emailError instanceof Error ? emailError.message : String(emailError);
       logger.error("Failed to send error notification email", {
         emailError: emailMsg,
-        originalError: message,
+        originalError: rawMessage,
       });
     });
   }

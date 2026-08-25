@@ -36,6 +36,26 @@ export const customerAuthRepository = {
     }),
 
   /**
+   * Does this customer still have a live token row?
+   *
+   * This is what makes ws_customer_access_token AUTHORITATIVE for customer
+   * sessions: `authenticate` rejects a request whose customer has no live row,
+   * so deleting/flagging the rows actually signs the device out instead of
+   * only blocking the next refresh. Previously the table was invisible to the
+   * request path entirely.
+   *
+   * `findFirst` + `select: { id }`, not `count`: we only need existence, and
+   * this way MySQL stops at the first match. Fully covered by
+   * idx_cust_access_token_live (customer_id, active, deleted, expires_at) —
+   * without that index this would full-scan on EVERY authenticated request.
+   */
+  findLiveTokenId: (customerId: number, now: Date) =>
+    prisma.customerAccessToken.findFirst({
+      where: { customerId, active: true, deleted: false, expires_at: { gt: now } },
+      select: { id: true },
+    }),
+
+  /**
    * Create a stub customer for a brand-new phone.
    * `state`/`district` are NOT NULL with no default in MySQL → default to 0.
    */

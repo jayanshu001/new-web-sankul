@@ -15,6 +15,7 @@ import {
   captureCrashContextMiddleware,
 } from "./utils/crashReporter";
 import { metricsMiddleware } from "./middlewares/metricsMiddleware";
+import { responseSanitizer } from "./middlewares/responseSanitizer";
 import { renderMetrics } from "./utils/metrics";
 import {
   livenessHandler,
@@ -276,6 +277,19 @@ app.use((req, _res, next) => {
 
 // --- Crash context AFTER parsers, BEFORE routes ----------------------------
 app.use(captureCrashContextMiddleware());
+
+// --- 5xx message sanitiser -------------------------------------------------
+//
+// Mounted BEFORE every route so the patched `res.json` is in place by the time
+// any handler answers. It rewrites `message` ONLY on responses with status >=
+// 500, so a deploy/DB blip shows "Internal Server Error" instead of a Prisma
+// invocation + compiled file path. 2xx/4xx bodies pass through untouched.
+//
+// This is the net for the ~540 controller catch blocks that answer with
+// `res.status(500).json({ message: error.message })` directly and therefore
+// never reach errorHandler at the bottom of this file. The raw text is still
+// logged — see middlewares/responseSanitizer.ts.
+app.use(responseSanitizer);
 
 // --- Health/Index ----------------------------------------------------------
 app.get("/index.php", async (_req, res) => res.json({ Project: "WebSankul-API" }));

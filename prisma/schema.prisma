@@ -388,6 +388,10 @@ model CustomerAccessToken {
   created_at   DateTime
   expires_at   DateTime
 
+  // Backs the per-request liveness probe in authenticate.ts, the refresh-flow
+  // lookup, and the is_login anti-join. Equality columns first, range last.
+  // DDL: docs/migration/schema-changes/2026-08-25_customer_access_token_customer_index.sql
+  @@index([customerId, active, deleted, expires_at], map: "idx_cust_access_token_live")
   @@map("ws_customer_access_token")
 }
 

@@ -15,6 +15,243 @@
 
 ---
 
+## 2026-08-25 (c) — ws_customer_access_token is now AUTHORITATIVE for customer sessions
+
+**Files:** `src/middlewares/authenticate.ts`,
+`src/modules/customer-auth/customer-auth.repository.ts` (+`findLiveTokenId`),
+`src/client/auth/auth.service.ts` (refresh write order), `prisma/schema.prisma`.
+**DDL:** `2026-08-25_customer_access_token_customer_index.sql` — **applied on staging,
+PENDING on production. This one is not optional — see below.**
+
+Follow-on from 2026-08-25 (b). Support deleted every token row for a customer and the
+app kept working, because nothing on the request path had ever read that table:
+`authenticate` validated a customer purely from the JWT signature, the Redis revocation
+cutoff, and the account gate. Deleting rows only blocked the next refresh.
+
+### Change
+
+The customer gate — already a Redis-cached (30s) DB read on every authenticated request
+— now also resolves "does this customer still have a live token row?":
+
+```ts
+const [row, liveToken] = await Promise.all([
+  customerAuthRepository.getAuthStateById(numId),
+  customerAuthRepository.findLiveTokenId(numId, new Date()),   // NEW
+]);
+```
+
+No live row → `401` + `data.reason = "SESSION_REVOKED"`. Reuses the existing reason code,
+so no frontend change is required. Deleting or flagging the rows — by logout, account
+deletion, or a manual DB edit — now signs the device out within ≤30s (the gate TTL),
+instead of leaving it working until the token expired up to 7 days later.
+
+Customer surface only; the gate has always been customer-only. Educator/promoter keep
+their Redis single-device pointer; admin is intentionally multi-device (see 2026-08-25 b).
+
+### ⚠ The index is a hard prerequisite
+
+`ws_customer_access_token` had **only a PRIMARY KEY on `id`** — verified with SHOW INDEX
+on staging. No FK constraint exists, so MySQL never auto-created one on `customer_id`.
+Shipping this code without the DDL means a **full table scan on every authenticated API
+call**, on a table that only ever grows.
+
+`idx_cust_access_token_live (customer_id, active, deleted, expires_at)` — equality
+columns first, range column last. Verified on staging:
+
+```
+EXPLAIN … type=range  key=idx_cust_access_token_live  rows=1  Extra="Using where; Using index"
+```
+
+Covering index, one row examined, zero table access.
+
+The same index also fixes two pre-existing full scans nobody had noticed:
+`findActiveTokenByRefresh` (every refresh call), and the `findStaleLoggedInIds` anti-join
+— the same query shape implicated in the 2026-08-06 "Server has closed the connection"
+incident, which was made keyset-paginated then while its join column stayed unindexed.
+
+### Negative results are deliberately NOT cached
+
+`getCustomerGate` now caches only when `hasLiveToken` is true. There is a sub-millisecond
+window inside the refresh flow where a healthy customer legitimately has no live row;
+caching a `false` sampled from inside it would 401 a healthy session for a full 30
+seconds, and every client treats 401 as "log out". A miss costs one covering-index lookup
+on a request that is about to be rejected anyway. This mirrors the existing rule that a
+missing customer row is never cached.
+
+### Refresh write order reversed
+
+`refreshCustomerToken` now **creates the new row before retiring the old one**. Under the
+old order the customer had zero live rows for a few milliseconds mid-refresh — which was
+harmless when nothing read the table, and becomes a self-inflicted logout now that
+`authenticate` does. The mirror risk (both rows briefly live, so a duplicate parallel
+refresh could reuse the old token once) is benign and the frontend contract already
+forbids parallel refreshes.
+
+### QA
+
+`yarn typecheck` green; `prisma generate` re-run after the `@@index` hand-edit (no
+`db:pull`). Verified end-to-end against staging with a real Express instance + real
+Redis: customer with a live row → `200`; customer whose rows were removed → `401
+SESSION_REVOKED`; positive result cached in Redis; negative confirmed absent from the
+cache.
+
+---
+
+## 2026-08-25 (b) — Plain logout now actually invalidates the live access token
+
+**Files:** `src/client/auth/auth.service.ts` (`logoutCustomer`),
+`src/educator/auth/educator.auth.service.ts` (`educatorLogout`),
+`src/promoter/auth/promoter.auth.service.ts` (`promoterLogout`),
+`src/admin/auth/admin.auth.service.ts` (comment only).
+**DDL:** none. **Backfill:** none. **No schema/index change.**
+
+Client report: *"When a user's token status is deleted, the token should also be
+invalidated on the client side. Currently the client-side token remains active."*
+Confirmed — and it is a query-contract issue, which is why it is logged here.
+
+### Root cause
+
+`ws_customer_access_token.active/deleted` is **never read on the request path**.
+`authenticate.ts` validates an access token from three things only: the JWT signature
+(key ring), the Redis revocation cutoff (`libs/tokenRevocation.ts`), and the customer
+account gate. There is no query anywhere that filters that table by the `token` column.
+
+So `deactivateTokens()` — which is all plain logout did — blocks only the **refresh**
+path (`findActiveTokenByRefresh` requires `active = true, deleted = false`). The access
+token already on the device kept authorising every endpoint until it expired on its own:
+**7 days** for customers, 1 day for staff surfaces.
+
+`revokeAllTokensForUser` — the only thing that kills a live access token — was called
+from exactly ONE place in the codebase: `middlewares/logoutAllDevices.ts`. Plain
+`DELETE /auth/logout` never called it on any surface.
+
+### Fix
+
+Each plain-logout service now writes the revocation cutoff **first**, before the DB
+flags, so a later teardown failure still leaves the token revoked:
+
+```ts
+await revokeAllTokensForUser("customer", String(customerId));
+await customerAuthRepository.deactivateTokens(numId);
+await customerAuthRepository.markLoggedOut(numId);
+```
+
+Next request from that device → `401` + `data.reason = "SESSION_REVOKED"`. Fail-open by
+design: Redis unreachable logs and returns false rather than throwing, so a Redis blip
+cannot make logout fail.
+
+### Admin is deliberately excluded
+
+Admin is the one surface where concurrent sessions are intentional — `adminLogin` does
+**not** call `deactivateAllTokens`, and the single-device pointer check in
+`authenticate.ts` is commented out on purpose. The cutoff is coarse (one per USER), so
+calling it in `logoutAdmin` would sign an admin out of every other machine. Killing a
+single device needs per-token revocation (a `jti` claim), which does not exist yet.
+Accepted consequence: an admin access token stays valid until expiry (1 day);
+`/admin/auth/logout-all-devices` remains the "kill everything" endpoint. Documented in a
+comment at the call site so it is not "fixed" into a regression later.
+
+By contrast educator/promoter login already calls `deactivateAllTokens` AND their
+single-device Redis pointer check is active, so they were single-session already — the
+change closes the gap there with no behavioural difference.
+
+### ⚠ Trap for anyone extending this to the LOGIN path
+
+Do **not** copy this line into a login flow to get "new login logs out the old device".
+`isRevoked` compares `iat * 1000 < cutoffMs`, and JWT `iat` is truncated to whole
+seconds. Revoke at `…:00.500` and mint in the same second → the new token's
+`iat * 1000` is `…:00.000`, which is **less than** the cutoff, so the freshly issued
+token is revoked on issue and the user cannot use the app at all. Such a change must
+floor the cutoff: `Math.floor(Date.now() / 1000) * 1000`.
+
+### QA
+
+`yarn typecheck` green. Verified against the live `ws-redis` container: pre-logout
+`isRevoked(oldToken) = false`; post-logout `= true`; a token minted seconds later
+`= false` (re-login works); same-second mint `= true`, confirming the trap above.
+Frontend contract appended to `docs/client/REFRESH_TOKEN_GUIDE.md` — `SESSION_REVOKED`
+is terminal and must not trigger a refresh attempt.
+
+---
+
+## 2026-08-25 — 5xx responses never carry an internal (Prisma/driver) error string
+
+**Files:** `src/utils/errorSanitizer.ts` (new), `src/middlewares/responseSanitizer.ts`
+(new), `src/middlewares/errorHandler.ts`, `src/app.ts`, `.env.example`.
+**DDL:** none. **Backfill:** none. **No query, schema, index or transformer change** —
+this is purely how a DB/infra failure is *reported* to the caller.
+
+Logged here because the symptom is a database one: during a deploy (PM2 reload,
+`prisma generate`, a DDL being applied, MySQL briefly unreachable) the client was shown
+the raw Prisma text, e.g.
+
+```
+Invalid `prisma.customer.findMany()` invocation in
+/var/www/api/dist/modules/customer/customer.repository.js:116:24
+
+Can't reach database server at `10.0.0.4:3306`
+```
+
+That leaks the deploy path, DB host and port, and makes a 40-second deploy look like a
+product outage.
+
+### Why it needed a choke point, not a sweep
+
+`errorHandler` only sees errors that are **thrown**. ~540 sites across ~78 controllers
+catch and answer directly — `res.status(500).json({ success: false, message: error.message })`
+— and never reach it. Rewriting 540 call sites is neither reviewable nor future-proof, so
+the fix patches the one function they all funnel through.
+
+### What changed
+
+- **`utils/errorSanitizer.ts`** — `sanitizeClientMessage(message, status)`. 4xx is
+  returned untouched (deliberate, user-facing wording). 5xx collapses to
+  `INTERNAL_ERROR_MESSAGE` ("Internal Server Error") when the text matches an internal
+  fingerprint: `prisma`, a Prisma code (`\bP\d{4}\b` — P1001/P2024/…), a stack frame,
+  a `src|dist|node_modules` path, `file.js:116`, `ECONN*`/`ERR_*`, `ER_*`/`SQLSTATE`/
+  `unknown column`/`duplicate entry`/`deadlock found`, redis/bullmq/mongo/mysql by name,
+  raw JS failures (`TypeError`, `Cannot read properties of…`, `is not a function`), an
+  `ip:port`, a URI, multi-line, or >200 chars. Curated 5xx sentences
+  ("Failed to list subscriptions.") pass through unchanged.
+- **`middlewares/responseSanitizer.ts`** — patches `res.json` for status ≥ 500 only,
+  mounted in `app.ts` before every route. Also strips `stack`/`errorObject`/`detail`/
+  `details`/`cause` (no endpoint sends them today; this keeps it that way). The raw text
+  is logged with the traceId, so triage loses nothing.
+- **`middlewares/errorHandler.ts`** — splits `rawMessage` (log, alert email, **email
+  de-dupe key**) from `clientMessage` (response). The de-dupe key had to stay raw: keyed
+  on the sanitised text, every distinct 5xx in the system would share the signature
+  "Internal Server Error" and all but one alert per minute would be dropped.
+  The DB-unreachable → **503 + `Retry-After: 5` + `SERVICE_UNAVAILABLE_MESSAGE`** path
+  (`utils/dbAvailability.ts`) is unchanged.
+
+### Response-shape note
+
+The global error handler previously answered `{ success, message }` only — the one error
+shape in the API missing `code`/`data`/`messages`. It now emits the standard
+`utils/httpResponse.ts` envelope, so a client reading `res.data.code` on a 500 no longer
+gets `undefined` during exactly the outage this handler exists for. Additive; every other
+endpoint's shape is untouched.
+
+### Config
+
+Both optional, both default off (deliberately **not** keyed off `NODE_ENV` —
+`ecosystem.config.cjs` defaults to `NODE_ENV=development`, so a server started without
+`--env production` would silently opt back into leaking):
+
+- `EXPOSE_ERROR_DETAILS=true` — keep raw 5xx messages (local debugging only).
+- `STRICT_5XX_MESSAGES=true` — collapse *every* 5xx message, curated ones included.
+
+### QA
+
+`yarn typecheck` green. Verified against a live Express instance: Prisma dump →
+`Internal Server Error`; curated 500 → unchanged; 503 DB-unavailable → unchanged;
+200/404/422 → byte-identical. Frontend contract: `docs/client/ERROR_RESPONSES.md`.
+
+Not covered (out of Node's reach): the seconds the process is genuinely down, where the
+reverse proxy answers with HTML rather than JSON.
+
+---
+
 ## 2026-08-24 (c) — Notifications: per-customer read state + broadcast signup cut-off
 
 **Files:** `src/modules/client-notification/client-notification.service.ts`,

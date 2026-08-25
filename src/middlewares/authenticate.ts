@@ -12,7 +12,7 @@ import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbA
 // Per-request customer gate state, cached briefly in Redis so the live DB read
 // doesn't fire on every authenticated request. Busted on block/delete; the
 // short TTL is the fallback for direct-DB edits that bypass the app.
-type CustomerGate = { deleted: boolean; disabled: boolean };
+type CustomerGate = { deleted: boolean; disabled: boolean; hasLiveToken: boolean };
 const CUSTOMER_GATE_TTL_SECONDS = 30;
 const customerGateKey = (id: string) => `customer_gate:${id}`;
 
@@ -35,14 +35,30 @@ const getCustomerGate = async (id: string): Promise<CustomerGate | null> => {
   let gate: CustomerGate | null = null;
   const numId = Number(id);
   if (Number.isInteger(numId) && numId > 0) {
-    const row = await customerAuthRepository.getAuthStateById(numId);
-    gate = row ? { deleted: !!row.isAccountDeleted, disabled: !row.status } : null;
+    // Both reads in one round trip — this runs on every authenticated customer
+    // request, so the two queries must not serialize.
+    const [row, liveToken] = await Promise.all([
+      customerAuthRepository.getAuthStateById(numId),
+      customerAuthRepository.findLiveTokenId(numId, new Date()),
+    ]);
+    gate = row
+      ? { deleted: !!row.isAccountDeleted, disabled: !row.status, hasLiveToken: !!liveToken }
+      : null;
   }
 
   try {
-    // Only cache a concrete result; a missing row stays uncached so a freshly
-    // created/restored account isn't shadowed by a negative cache entry.
-    if (gate) await redisClient.set(key, JSON.stringify(gate), "EX", CUSTOMER_GATE_TTL_SECONDS);
+    // Only cache a POSITIVE result — a concrete row that still has a live token.
+    //
+    // A missing customer row stays uncached so a freshly created/restored
+    // account isn't shadowed by a negative cache entry. `hasLiveToken: false`
+    // stays uncached for a sharper reason: there is a sub-millisecond window
+    // inside the refresh flow where the customer legitimately has no live row.
+    // Caching a false from inside that window would 401 a healthy session for a
+    // full 30 seconds, and every app treats a 401 as "log out". Re-reading costs
+    // one index lookup on a request that is about to be rejected anyway.
+    if (gate && gate.hasLiveToken) {
+      await redisClient.set(key, JSON.stringify(gate), "EX", CUSTOMER_GATE_TTL_SECONDS);
+    }
   } catch {
     // Best-effort cache; ignore write failures.
   }
@@ -140,6 +156,20 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       if (gate.disabled) {
         return failure(res, "Your account has been disabled. Please contact support.", 401, {}, {
           reason: "ACCOUNT_DISABLED",
+        });
+      }
+      // The token table is AUTHORITATIVE for customer sessions. A signature-valid
+      // token whose rows have been deleted or flagged (logout, account deletion,
+      // a manual DB edit by support) is rejected here — previously nothing on
+      // this path read those rows, so the device kept working until the token
+      // expired on its own, up to 7 days later.
+      //
+      // Reuses SESSION_REVOKED rather than inventing a reason code: it means the
+      // same thing to the app (terminal, clear storage, go to login) and needs no
+      // frontend change.
+      if (!gate.hasLiveToken) {
+        return failure(res, "Session was revoked. Please log in again.", 401, {}, {
+          reason: "SESSION_REVOKED",
         });
       }
     }

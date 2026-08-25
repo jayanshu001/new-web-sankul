@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { redisClient } from "../../config/redis";
 import { isDatabaseUnavailableError } from "../../utils/dbAvailability";
+import { revokeAllTokensForUser } from "../../libs/tokenRevocation";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
 import {
   toCustomerProfileDto,
@@ -318,6 +319,23 @@ export async function logoutCustomer(customerId: string, traceId?: string): Prom
   message: string;
 }> {
   logger.info("logoutCustomer service invoked", { traceId, customerId });
+  // Kill the token that is ALREADY on the device.
+  //
+  // `deactivateTokens`/`deactivateAllTokens` below only flags the DB rows, and
+  // nothing on the request path reads them: `authenticate` validates an access
+  // token by signature + this Redis cutoff + the account gate, never by a lookup
+  // in ws_*_access_token. So without this line "logout" only blocked the REFRESH
+  // call — the access token already in the app kept opening every endpoint until
+  // it expired on its own (7 days for customers, 1 day for the staff surfaces).
+  // That is exactly the bug the client reported. `/logout-all-devices` always did
+  // this; plain logout never did.
+  //
+  // Fail-open by design (see libs/tokenRevocation.ts): if Redis is unreachable it
+  // logs and returns false rather than throwing, so a Redis blip can't make
+  // logout fail. Called FIRST so a later teardown failure still leaves the token
+  // revoked.
+  await revokeAllTokensForUser("customer", String(customerId));
+
   const numId = Number(customerId);
   if (Number.isInteger(numId) && numId > 0) {
     await customerAuthRepository.deactivateTokens(numId);
@@ -357,8 +375,6 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
       return { ok: false, message: "User not found or disabled." };
     }
 
-    await customerAuthRepository.deactivateToken(dbToken.id);
-
     const idStr = String(row.id);
     const newToken = jwt.sign(
       { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
@@ -371,12 +387,28 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
       { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
     );
 
+    // ORDER MATTERS — insert the new row BEFORE retiring the old one.
+    //
+    // `authenticate` now rejects a customer with no live token row, so the old
+    // "deactivate, then create" order left a window of a few milliseconds in
+    // which this customer had ZERO live rows. A concurrent request landing in
+    // that window would have been answered 401 SESSION_REVOKED and every app
+    // treats that as "log out" — a healthy session destroyed by its own
+    // refresh. Creating first means the count never drops to zero.
+    //
+    // The cost is the mirror window where BOTH rows are briefly live, so a
+    // parallel duplicate refresh could use the old token twice. That is benign
+    // (both rows belong to the same customer, `hasLiveToken` is true either
+    // way) and the frontend contract already says never to fire two refreshes
+    // at once — see docs/client/REFRESH_TOKEN_GUIDE.md.
     await customerAuthRepository.createToken({
       customerId: row.id,
       token: newToken,
       refreshToken: newRefreshToken,
       expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
     });
+
+    await customerAuthRepository.deactivateToken(dbToken.id);
 
     await redisClient.set(
       `customer_session:${idStr}`,

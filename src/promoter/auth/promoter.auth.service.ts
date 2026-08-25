@@ -6,6 +6,7 @@ import {
   verifyRefreshToken,
 } from "../../utils/jwtSigner";
 import logger from "../../utils/logger";
+import { revokeAllTokensForUser } from "../../libs/tokenRevocation";
 import { promoterAuthRepository as repo } from "../../modules/promoter-auth/promoter-auth.repository";
 import {
   toPromoterAuthDto,
@@ -84,6 +85,23 @@ export async function promoterRefresh(refreshToken: string, traceId?: string) {
 
 export async function promoterLogout(promoterId: string, traceId?: string) {
   logger.info("promoterLogout service invoked", { traceId, promoterId });
+
+  // Kill the token that is ALREADY on the device.
+  //
+  // `deactivateTokens`/`deactivateAllTokens` below only flags the DB rows, and
+  // nothing on the request path reads them: `authenticate` validates an access
+  // token by signature + this Redis cutoff + the account gate, never by a lookup
+  // in ws_*_access_token. So without this line "logout" only blocked the REFRESH
+  // call — the access token already in the app kept opening every endpoint until
+  // it expired on its own (7 days for customers, 1 day for the staff surfaces).
+  // That is exactly the bug the client reported. `/logout-all-devices` always did
+  // this; plain logout never did.
+  //
+  // Fail-open by design (see libs/tokenRevocation.ts): if Redis is unreachable it
+  // logs and returns false rather than throwing, so a Redis blip can't make
+  // logout fail. Called FIRST so a later teardown failure still leaves the token
+  // revoked.
+  await revokeAllTokensForUser("promoter", String(promoterId));
 
   const id = parsePromoterId(promoterId);
   if (id) await repo.deactivateAllTokens(id);

@@ -249,6 +249,20 @@ export async function logoutAdmin(adminId: string, traceId?: string) {
   logger.info("logoutAdmin service invoked", { traceId, adminId });
 
   try {
+    // NOTE: deliberately does NOT write a token-revocation cutoff, unlike the
+    // customer/educator/promoter logouts.
+    //
+    // Admins are the one surface where multiple concurrent sessions are
+    // intentional: `adminLogin` does not deactivate prior tokens, and the
+    // single-device pointer check in authenticate.ts is commented out on
+    // purpose. `revokeAllTokensForUser` is coarse — one cutoff per USER — so
+    // calling it here would sign an admin out of every other machine the moment
+    // they logged out of one. Killing just this device needs per-token
+    // revocation (a `jti` claim), which we don't have.
+    //
+    // Consequence, accepted: this admin's access token stays valid until it
+    // expires (1 day). `/admin/auth/logout-all-devices` is the endpoint for
+    // "kill everything now".
     const id = parseAdminId(adminId);
     if (id) await adminAuthRepository.deactivateAllTokens(id);
     await redisClient.del(`admin_session:${adminId}`);

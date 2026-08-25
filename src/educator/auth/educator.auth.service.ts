@@ -6,6 +6,7 @@ import {
   verifyRefreshToken,
 } from "../../utils/jwtSigner";
 import logger from "../../utils/logger";
+import { revokeAllTokensForUser } from "../../libs/tokenRevocation";
 import { educatorAuthRepository as repo } from "../../modules/educator-auth/educator-auth.repository";
 import {
   toEducatorDto,
@@ -115,6 +116,23 @@ export async function educatorLogout(educatorId: string, traceId?: string) {
   logger.info("educatorLogout service invoked", { traceId, educatorId });
 
   // ─── MySQL branch ───────────────────────────────────────────────────────
+  // Kill the token that is ALREADY on the device.
+  //
+  // `deactivateTokens`/`deactivateAllTokens` below only flags the DB rows, and
+  // nothing on the request path reads them: `authenticate` validates an access
+  // token by signature + this Redis cutoff + the account gate, never by a lookup
+  // in ws_*_access_token. So without this line "logout" only blocked the REFRESH
+  // call — the access token already in the app kept opening every endpoint until
+  // it expired on its own (7 days for customers, 1 day for the staff surfaces).
+  // That is exactly the bug the client reported. `/logout-all-devices` always did
+  // this; plain logout never did.
+  //
+  // Fail-open by design (see libs/tokenRevocation.ts): if Redis is unreachable it
+  // logs and returns false rather than throwing, so a Redis blip can't make
+  // logout fail. Called FIRST so a later teardown failure still leaves the token
+  // revoked.
+  await revokeAllTokensForUser("educator", String(educatorId));
+
   const id = parseEducatorId(educatorId);
   if (id) await repo.deactivateAllTokens(id);
   await redisClient.del(`educator_session:${educatorId}`);
