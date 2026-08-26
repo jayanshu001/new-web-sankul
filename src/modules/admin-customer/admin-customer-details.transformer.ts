@@ -73,18 +73,19 @@ export const toPackageDto = (
 
 // ── Live course subscription ───────────────────────────────────────────────────
 type LiveSub = {
-  id: number; liveCourseId: number; planId: number | null; paidAmount: number | null;
-  // `discount_amount` was dropped 2026-08-20; originalAmount + walletCoin are what
-  // the discount is now derived from (see liveSubDiscountAmount).
-  originalAmount: number | null; walletCoin: number | null;
-  paymentStatus: string | null; status: boolean | null;
+  id: number; liveCourseId: number; planId: number | null;
+  status: boolean | null;
   startAt: Date | null; endAt: Date | null;
   /**
-   * The payment row. Present since 2026-08-25, when paid/original amount, wallet coin
-   * and the rest moved off the subscription. It repeats the same field names, so the
-   * DTO reads `order ?? s` and both eras produce identical output.
+   * The payment row — the ONLY source of payment since 2026-08-25, when paid/original
+   * amount, wallet coin and payment_status moved off the subscription and were
+   * dropped from it. `discount_amount` went earlier (2026-08-20); the discount is
+   * derived from originalAmount + walletCoin (see liveSubDiscountAmount).
+   *
+   * REQUIRED, not optional: a caller that forgets `include: { order: true }` would
+   * otherwise silently emit paidAmount/discountAmount as null. Keep it a compile error.
    */
-  order?: { paidAmount: number | null; originalAmount: number | null; walletCoin: number | null; status: string | null } | null;
+  order: { paidAmount: number | null; originalAmount: number | null; walletCoin: number | null; status: string | null } | null;
 };
 
 export const toLiveCourseDto = (
@@ -94,20 +95,19 @@ export const toLiveCourseDto = (
   now: Date
 ) => {
   const live = liveCourses.get(s.liveCourseId);
-  // Payment lives on the order since 2026-08-25; fall back to this row's own legacy
-  // columns for rows the backfill has not reached.
-  const pay = s.order ?? s;
+  // Payment lives on the order since 2026-08-25 and nowhere else.
+  const pay = s.order;
   return {
     _id: String(s.id),
     liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image }),
     planId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
-    paidAmount: pay.paidAmount ?? null,
+    paidAmount: pay?.paidAmount ?? null,
     // Derived, not stored — the DTO field is unchanged. Null (not 0) when no promo
     // was applied, matching what the dropped column held for those rows.
-    discountAmount: pay.originalAmount != null ? liveSubDiscountAmount(pay) : null,
-    paymentStatus: s.order
-      ? (s.order.status === "complete" ? "verified" : s.order.status ?? "pending")
-      : s.paymentStatus ?? (s.status ? "verified" : "pending"),
+    discountAmount: pay?.originalAmount != null ? liveSubDiscountAmount(pay) : null,
+    paymentStatus: pay
+      ? (pay.status === "complete" ? "verified" : pay.status ?? "pending")
+      : (s.status ? "verified" : "pending"),
     startAt: s.startAt,
     endAt: s.endAt,
     isActive: isActiveOf(s.status, s.endAt, now),

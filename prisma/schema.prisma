@@ -1928,35 +1928,14 @@ model LiveCourseSubscription {
   startAt           DateTime? @map("start_at")
   endAt             DateTime? @map("end_at")
   status            Boolean   @default(true)
-  // Purchase-time SNAPSHOT of the redeemed code, mirroring
-  // ws_package_course_order.promocode / .refferalcode byte for byte (see
-  // modules/order-code-snapshot). Exactly one is ever set. Frozen JSON, not a join:
-  // promocode percentages are editable and plans get repriced, so commission and the
-  // reported discount must reflect the terms in force at purchase.
-  //
-  // These REPLACED the old promocode_id / referrer_id int columns, dropped 2026-08-20.
-  // The referral credit at payment-verify now reads the referring customer from
-  // $.refferalcode.promoter.id (live-course-order.service referrerIdOf).
-  // DDL: 2026-08-20_live_course_subscription_code_snapshot.sql (add)
-  //    + 2026-08-20_live_course_subscription_drop_code_ids.sql (drop)
-  promocode         Json?
-  refferalcode      Json?
-  walletCoin        Int?      @map("wallet_coin")
-  originalAmount    Int?      @map("original_amount")
-  // NOTE: there is no `discountAmount` — the column was dropped 2026-08-20 as
-  // derivable. The write path sets paid = original - discount - coin, so the promo
-  // discount is `originalAmount - paidAmount - (walletCoin ?? 0)`, and originalAmount
-  // is non-null exactly when a promo was applied. Both API readers (live-course
-  // receipt, admin customer-details DTO) compute it; their responses are unchanged.
-  // DDL: 2026-08-20_live_course_subscription_drop_discount_amount.sql
-  paidAmount        Int?      @map("paid_amount")
-  paymentStatus     String?   @map("payment_status")
-  paymentMethod     String?   @map("payment_method")
-  razorpayOrderId   String?   @map("razorpay_order_id")
-  razorpayPaymentId String?   @map("razorpay_payment_id")
-  bankTransactionId String?   @map("bank_transaction_id")
+  // NO PAYMENT COLUMNS LIVE HERE. The order owns payment, the subscription owns
+  // entitlement (2026-08-25). `promocode`/`refferalcode` snapshots, `wallet_coin`,
+  // `original_amount`, `paid_amount`, `payment_status`, `payment_method`, the
+  // razorpay/bank references and `paid_at` all moved to LiveCourseOrder and were
+  // dropped from this table by
+  // 2026-08-25_live_course_subscription_drop_payment_columns.sql.
+  // Read them through `order`; there is no legacy fallback left to read.
   remarks           String?
-  paidAt            DateTime? @map("paid_at")
   // Material fulfillment (lightweight, mirrors Mongo LiveCourseSubscription):
   // withMaterial marks a shipping order; customerShippingId is the chosen
   // delivery address (ws_customer_address.id).
@@ -1975,7 +1954,9 @@ model LiveCourseSubscription {
   created_by        Int?
   updated_by        Int?
 
-  @@index([createdAt, paymentStatus], name: "idx_lcs_created_payment")
+  // Replaced idx_lcs_created_payment when payment_status was dropped — the admin
+  // dashboard and the subscription reports still window on created_at.
+  @@index([createdAt], name: "idx_lcs_created")
   @@map("ws_live_course_subscription")
 }
 

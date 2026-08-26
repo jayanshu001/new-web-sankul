@@ -1,5 +1,15 @@
 -- 2026-08-25 — ws_live_course_subscription: drop the payment columns
 --
+-- ⚠⚠ STATUS 2026-08-26: ALREADY APPLIED ON PRODUCTION, ahead of the code step below.
+-- That combination 500'd every read of ws_live_course_subscription (Prisma kept
+-- selecting the dropped columns) until the code was caught up on 2026-08-26 — see
+-- MIGRATION_QUERY_CHANGES "Live-course payment columns: code caught up with the drop".
+-- The "remove the code that still reads these columns" list further down is DONE; the
+-- fallbacks it names no longer exist. Confirm `order_id IS NULL` is 0 per environment
+-- before applying this anywhere it has not run yet.
+--
+-- Original header follows.
+--
 -- ⚠⚠ DO NOT APPLY THIS YET. ⚠⚠
 --
 -- This is the SECOND half of the live-course order split and is deliberately kept

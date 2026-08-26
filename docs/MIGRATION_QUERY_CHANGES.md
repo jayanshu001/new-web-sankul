@@ -15,6 +15,133 @@
 
 ---
 
+## 2026-08-26 — Live-course payment columns: code caught up with the drop (prod outage fix)
+
+> **NO DDL. Code-only.** This is the "remove the code that still reads these columns"
+> step from `2026-08-25_live_course_subscription_drop_payment_columns.sql`, done AFTER
+> that DDL had already been applied to production. API response shapes unchanged.
+
+### What broke
+
+`2026-08-25_live_course_subscription_drop_payment_columns.sql` — the file whose header
+says **DO NOT APPLY THIS YET** — was applied on production while `schema.prisma` still
+declared the dropped columns. Prisma builds its SELECT list from the schema, so EVERY
+read of `LiveCourseSubscription` emitted them and MySQL rejected the statement:
+
+```
+1054  Unknown column 'ws_live_course_subscription.promocode' in 'field list'
+```
+
+500s on `GET /client/purchase-history/subscriptions`, `GET /client/my-subscriptions`,
+and every other reader of that table (profile dashboard, lecture-progress,
+client-search, client-material, client-category-video, lecture-notes, exam-countdown,
+admin dashboard / customer-details / live-course, educator details, plan-popularity,
+live-course checkout + verify). `utils/prismaSchemaDrift.ts` classified it correctly as
+`DDL_MISSING` in the logs — the DB was ahead of the code, not behind.
+
+### Schema
+
+`model LiveCourseSubscription` lost the 11 dropped fields: `promocode`, `refferalcode`,
+`walletCoin`, `originalAmount`, `paidAmount`, `paymentStatus`, `paymentMethod`,
+`razorpayOrderId`, `razorpayPaymentId`, `bankTransactionId`, `paidAt`. `@@index` moved
+from `idx_lcs_created_payment` (createdAt, paymentStatus) to `idx_lcs_created`
+(createdAt), matching what the DDL left behind. Nothing else changed; `remarks`,
+`with_material`, `customer_shipping_id`, tracking and audit columns stay.
+
+### Reads repointed to the order
+
+Every pre-backfill fallback is gone — the order is the only payment source:
+
+- `client-purchase-history.repository.liveSubscriptionPurchasedWhere` → `order.status =
+  "complete"` only (the `{ orderId: null, paymentStatus: "verified" }` branch dropped).
+- `admin-live-course.repository.LIVE_SUB_PURCHASED` → same.
+- `admin-live-course.repository.aggSubs` → revenue from `liveCourseOrder` only; the
+  `fromLegacy` half that summed the subscription's own column is gone.
+- `admin-live-course.repository` reports: `subSortCol` became `subOrderBy`, so
+  `sortBy=amount` sorts via `{ order: { paidAmount } }`; the `paymentMethod`
+  online/backend filter moved to `{ order: { razorpayOrderId … } }`.
+- `admin-live-course.service`: `payOf` lost its `?? row` fallback and is now typed
+  `LiveCourseOrder | null` rather than `any` — the `?? row` had been guaranteeing a
+  non-null return, so every call site needed `pay?.` and `subCodeInfo(pay ?? {})`; the
+  return type is what makes a missed one a compile error. `payStatusOf` lost its
+  `?? pay.paymentStatus` tail, and the my-courses card emits the literal `"verified"`
+  (rows are already gated to a complete order).
+- `client-purchase-history.service`: new `livePayStatus()` maps order `complete` →
+  `verified`; `amount` and the razorpay ids read from `s.order`.
+- `admin-customer-details.transformer.toLiveCourseDto` reads `s.order` only.
+- `libs/core/generate.ts` live-course receipt selects only the four non-payment columns
+  it needs plus `order`.
+
+### Queries gaining `include: { order: true }`
+
+Payment now lives one join away, so these reads join it (one JOIN, no N+1):
+`client-purchase-history.repository` `listLiveSubscriptions` + `liveSubscriptionForTracking`;
+`admin-live-course.repository` `listSubsByWhere` + `listSubsPageKeyset`;
+`admin-customer-details.repository` `pageLiveCourseSubs`.
+
+> `pageLiveCourseSubs` was a live bug caught by this change: it never joined the order,
+> so once the legacy fallback was removed the admin customer live-course list would have
+> reported `paidAmount`/`discountAmount` as `null`. `LiveSub.order` in the transformer is
+> now REQUIRED (not optional) so a caller that forgets the join is a compile error.
+
+### Two silent-wrong-value fixes (not 500s)
+
+- `getLiveCourseReceiptMysql` used `const pay: any = (sub as any).order ?? sub` — an
+  `any` cast the compiler could not check. With the columns gone that fallback renders a
+  receipt of zeros; it now returns null when the order is missing.
+- `admin-customer-details.transformer` had the same `s.order ?? s` shape.
+
+### Verification
+
+`yarn typecheck` green. Every query touched was replayed against staging with Prisma
+query logging on: 10 statements hit `ws_live_course_subscription`, none reference any of
+the 11 dropped columns, so none can raise 1054 on the post-drop schema.
+
+### Performance
+
+Measured on a synthetic 400k-subscription / 400k-order set (staging has 2 rows, so it
+proves nothing). Old vs new query shapes, same data, p50:
+
+| Path | Old | New |
+|---|---|---|
+| purchase-history live list | 0.50 ms | 1.15 ms (extra `include` round trip) |
+| purchase-history live count | 0.49 ms | 0.50 ms |
+| my-subscriptions active live subs | 0.57 ms (p95 1.89) | 0.48 ms (p95 0.58) |
+| admin report `sortBy=amount` | 102 ms | **317 ms** |
+
+Client paths are a wash or better — `my-subscriptions` improved because the row is 11
+columns narrower and no longer drags two JSON blobs (`promocode`/`refferalcode`) through
+every read. `include: { order: true }` is a SECOND query, not a join (Prisma splits
+relation loads), which is why the list costs one extra round trip rather than a wider row.
+
+**`sortBy=amount` on the admin subscriptions report is a real ~3× regression** and is the
+one thing here that got worse. `orderBy: { order: { paidAmount } }` emits
+`LEFT JOIN … ORDER BY orderby_1.paid_amount`, and a LEFT JOIN cannot be sorted from the
+joined table's index — MySQL materializes all rows and filesorts. Adding a relation
+filter makes it WORSE (767 ms): Prisma emits a SECOND join aliased `j1` for the filter,
+so the sort join stays LEFT and there are now two. `isNot: null` does not help either —
+Prisma renders it as `NOT (ws_live_course_subscription.order_id IS NULL)`, a predicate on
+the LEFT table, which does not null-reject the joined one.
+
+The only fast plan is a single INNER JOIN plus an index on `ws_live_course_order.paid_amount`
+(0.6 ms — MySQL drives from the order table in index order and does a covering `ref`
+lookup back through `idx_lcs_order`). Without that index an INNER JOIN is 91 ms; the index
+alone with a LEFT JOIN buys nothing. Prisma cannot express that plan for an optional
+relation, so closing this needs either a raw-SQL path for that one sort, a required
+relation, or driving the query from `liveCourseOrder`. Not done here — `sortBy=amount` is
+an opt-in admin sort, the default `createdAt` sort is unaffected.
+
+### Still open
+
+`ws_live_course_subscription.order_id IS NULL` must be 0 in every environment — if the
+backfill did not run before the drop, those rows' payment history is unrecoverable and
+they now read as unpurchased everywhere.
+
+`sortBy=amount` on the admin live-course subscriptions report (above) — needs
+`idx_lco_paid_amount` plus a query that can use it.
+
+---
+
 ## 2026-08-25 (f) — Live course gets an order table; the fold model is fully retired
 
 > **NEW TABLE + write-path change + read repointing. DDL + BACKFILL REQUIRED.**

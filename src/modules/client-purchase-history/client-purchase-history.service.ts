@@ -13,6 +13,15 @@ export const parsePhId = (id: string): number | null => {
 
 const RECEIPT_BASE = "/api/v1/client/purchase-history";
 
+/**
+ * Live-course ORDER status → the subscription vocabulary this API has always emitted.
+ * Payment moved to ws_live_course_order on 2026-08-25 and the subscription's own
+ * `payment_status` column was dropped, so the order is the only source. Defaults to
+ * "verified": every caller here is already gated to a completed order.
+ */
+const livePayStatus = (order: { status: string } | null | undefined): string =>
+  order == null || order.status === "complete" ? "verified" : order.status;
+
 // Carrier key derived from the AWB range (same threshold buildTrackingUrl routes on):
 // at/above the Tirupati INITIAL_Number → "tirupati", below → "mahavir". null when no
 // AWB has been allocated. Books return courier:null on SQL; we surface the derived key
@@ -154,7 +163,7 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       withMaterial,
       status: withMaterial ? (s.trackingStatus ?? null) : null,
       tracking,
-      amount: s.paidAmount != null ? Number(s.paidAmount) : null,
+      amount: s.order?.paidAmount != null ? Number(s.order.paidAmount) : null,
       purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
@@ -162,9 +171,10 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       meta: {
         liveCourseId: s.liveCourseId != null && s.liveCourseId > 0 ? String(s.liveCourseId) : null,
         planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        // live-course single-table DOES carry razorpay ids (unlike the package sub).
-        razorpayOrderId: s.razorpayOrderId ?? null,
-        razorpayPaymentId: s.razorpayPaymentId ?? null,
+        // The razorpay ids are surfaced here (unlike the package sub); they live on
+        // the live-course ORDER since 2026-08-25.
+        razorpayOrderId: s.order?.razorpayOrderId ?? null,
+        razorpayPaymentId: s.order?.razorpayPaymentId ?? null,
       },
     };
   });
@@ -362,9 +372,12 @@ export const getSubscriptionTrackingMysql = async (
       to: addrTo(addr),
       consignee: addr?.name ?? null,
       consigneePhone: addr?.phone != null ? String(addr.phone) : null,
-      bookedAt: sub.paidAt ?? sub.createdAt ?? null,
-      currentStatus: status ?? sub.paymentStatus ?? null,
-      orderStatus: sub.paymentStatus ?? "verified",
+      // Payment instant + state come off the ORDER since 2026-08-25. The row is
+      // already gated to a completed order by liveSubscriptionPurchasedWhere, so the
+      // mapped state is "verified" — the same value this DTO has always emitted.
+      bookedAt: sub.order?.paidAt ?? sub.createdAt ?? null,
+      currentStatus: status ?? livePayStatus(sub.order),
+      orderStatus: livePayStatus(sub.order),
       shippedAt: null,
       deliveredAt: null,
       history: status ? [{ status, location: null, note: null, at: sub.updatedAt ?? sub.createdAt ?? null }] : [],
@@ -712,10 +725,10 @@ export const getCourseReceiptBySubMysql = async (subId: number, customerId: numb
   };
 };
 
-// ── live-course receipt (SQL, single-table) ──────────────────────────────────
-// UNLIKE course/package, ws_live_course_subscription carries payment inline, so
-// this receipt has FULL parity: real razorpay ids, paidAt, and the discount split
-// (original_amount → subTotal, discount_amount → discount, paid_amount → grandTotal).
+// ── live-course receipt (SQL) ────────────────────────────────────────────────
+// UNLIKE course/package, this receipt has FULL parity: real razorpay ids, paidAt,
+// and the discount split (original_amount → subTotal, derived discount, paid_amount
+// → grandTotal). All of it reads from the ORDER (2026-08-25).
 export const getLiveCourseReceiptMysql = async (subId: number, customerId: number) => {
   const sub = await repo.liveSubscriptionForReceipt(subId, customerId);
   if (!sub) return null;
@@ -725,11 +738,12 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
     repo.liveCourseForReceipt(sub.liveCourseId),
   ]);
 
-  // Payment moved to ws_live_course_order on 2026-08-25. The order and the legacy
-  // subscription columns use the SAME field names, so one fallback covers both: new
-  // rows read the order, pre-backfill rows keep reading their own inline columns.
-  // Everything below is unchanged, and so is the receipt.
-  const pay: any = (sub as any).order ?? sub;
+  // Payment moved to ws_live_course_order on 2026-08-25 and the subscription's own
+  // payment columns were dropped, so the order is the only source. No fallback: a
+  // receipt for an unlinked row would silently render zeros, which is worse than
+  // reporting it as unavailable.
+  const pay = sub.order;
+  if (!pay) return null;
 
   const paid = Number(pay.paidAmount ?? 0);
   const subTotal = pay.originalAmount != null ? Number(pay.originalAmount) : paid;

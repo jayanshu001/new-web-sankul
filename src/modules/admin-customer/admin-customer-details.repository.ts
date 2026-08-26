@@ -72,8 +72,10 @@ export const adminCustomerDetailsRepository = {
 
   countLiveCourseSubs: (customerId: number, status?: boolean) =>
     prisma.liveCourseSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),
+  // `order` carries every payment field the DTO renders (2026-08-25) — without the
+  // join this list would report paidAmount/discountAmount as null.
   pageLiveCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
-    prisma.liveCourseSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+    prisma.liveCourseSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take, include: { order: true } }),
 
   countTestSeriesSubs: (customerId: number, status?: boolean) =>
     prisma.testSeriesSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),

@@ -28,23 +28,22 @@ export const clientPurchaseHistoryRepository = {
   // subscription rows are 1:1 with orders, so this still yields exactly one row per
   // purchase — a renewal now appears as its own line instead of folding away.
   //
-  // "Purchased" is the ORDER's status, not the old `payment_status` column: an
-  // abandoned checkout no longer creates a subscription row at all, and the backfill
-  // gave every legacy row an order carrying its original state. The `orderId: null`
-  // branch is the safety net for rows the backfill has not reached yet — drop it
-  // together with the payment_status column (see the drop DDL).
+  // "Purchased" is the ORDER's status. The old `payment_status` column is gone
+  // (2026-08-25_live_course_subscription_drop_payment_columns.sql) and the backfill
+  // gave every legacy row an order carrying its original state, so there is no
+  // pre-backfill branch left — an unlinked row is not a purchase.
   liveSubscriptionPurchasedWhere: (customerId: number) => ({
     customerId,
-    OR: [
-      { order: { status: "complete" } },
-      { orderId: null, paymentStatus: "verified" },
-    ],
+    order: { status: "complete" },
   }),
+  // `order` is included because the listing emits `amount` + the razorpay ids, all of
+  // which moved off the subscription on 2026-08-25.
   listLiveSubscriptions: (customerId: number, take: number) =>
     prisma.liveCourseSubscription.findMany({
       where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId),
       orderBy: { id: "desc" },
       take,
+      include: { order: true },
     }),
   countLiveSubscriptions: (customerId: number) =>
     prisma.liveCourseSubscription.count({ where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) }),
@@ -229,6 +228,8 @@ export const clientPurchaseHistoryRepository = {
   liveSubscriptionForTracking: (subId: number, customerId: number) =>
     prisma.liveCourseSubscription.findFirst({
       where: { id: subId, ...clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) },
+      // `bookedAt` / the order status in the tracking DTO come off the order now.
+      include: { order: true },
     }),
   /** delivery address for a live sub (customer_shipping_id → ws_customer_address). */
   customerAddressById: (id: number) =>

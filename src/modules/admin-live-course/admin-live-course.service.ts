@@ -10,7 +10,15 @@ import { parseMaterialCategoryRefs } from "./admin-live-course.refs";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
-import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
+import type { LiveCourse, LiveCourseOrder, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
+
+/**
+ * A subscription row read WITH its order. Payment left the subscription on
+ * 2026-08-25, so any DTO carrying amount / gateway ids / code snapshots needs this
+ * shape, not a bare LiveCourseSubscription. `order` is nullable only because the FK
+ * is — the backfill linked every historical row.
+ */
+type LiveSubWithOrder = LiveCourseSubscription & { order: LiveCourseOrder | null };
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
@@ -350,19 +358,19 @@ const subCodeInfo = (r: {
 };
 
 /**
- * Payment for a subscription row. Since 2026-08-25 it lives on ws_live_course_order;
- * the order and the legacy subscription columns share field names, so this fallback
- * covers both — new rows read the order, pre-backfill rows their own inline columns.
+ * Payment for a subscription row. Since 2026-08-25 it lives on ws_live_course_order
+ * and NOWHERE else — the subscription's own payment columns were dropped, so an
+ * unlinked row simply has no payment to report.
  */
-const payOf = (row: any, orders: Map<number, any>): any =>
-  (row.orderId != null ? orders.get(row.orderId) : null) ?? row;
+const payOf = (row: any, orders: Map<number, LiveCourseOrder>): LiveCourseOrder | null =>
+  (row.orderId != null ? orders.get(row.orderId) ?? null : null);
 
 /** Order "complete" ↔ the subscription vocabulary this DTO has always emitted. */
 const payStatusOf = (pay: any): string | null =>
   pay?.status === "complete" ? "verified"
   : pay?.status === "pending" ? "pending"
   : pay?.status === "failed" ? "failed"
-  : (pay?.paymentStatus ?? null);
+  : null;
 
 const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
@@ -382,12 +390,12 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
       planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStrOrNull(r.planId),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, status: r.status,
       // Payment fields come from the order now (2026-08-25); the DTO is unchanged.
-      paidAmount: pay.paidAmount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay.paidAt ?? null,
+      paidAmount: pay?.paidAmount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay?.paidAt ?? null,
       // The purchase-time snapshot OBJECTS, not the bare ids — same contract as
       // ws_package_course_order. Exactly one is ever non-null. Additive: promocodeId /
       // referrerId were never in this DTO, so nothing that existed here changed shape.
-      promocode: (pay.promocode as unknown) ?? null,
-      refferalcode: (pay.refferalcode as unknown) ?? null,
+      promocode: (pay?.promocode as unknown) ?? null,
+      refferalcode: (pay?.refferalcode as unknown) ?? null,
       createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
     };
   });
@@ -500,8 +508,8 @@ export const listSubscriptions = async (q: SubReportQuery & {
       cust: r.customerId ? custs.get(r.customerId) : undefined,
       product: course ? { _id: String(course.id), type: "liveCourse" as const, name: course.name, image: course.image ?? null } : null,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
-      amount: pay.paidAmount != null ? Number(pay.paidAmount) : 0,
-      paymentMethod: pay.razorpayOrderId ? "online" : "backend",
+      amount: pay?.paidAmount != null ? Number(pay.paidAmount) : 0,
+      paymentMethod: pay?.razorpayOrderId ? "online" : "backend",
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
@@ -511,7 +519,7 @@ export const listSubscriptions = async (q: SubReportQuery & {
     // STRING there, so it is the code string here too. The full frozen objects ride
     // alongside under `promocodeSnapshot` / `refferalcodeSnapshot` for callers that
     // want the promoter/plan/percentage detail without a second request.
-    const code = subCodeInfo(pay);
+    const code = subCodeInfo(pay ?? {});
     return {
       id: r.id,
       ...base,
@@ -520,8 +528,8 @@ export const listSubscriptions = async (q: SubReportQuery & {
       promoterName: code.promoterName || null,
       promoterId: code.promoterId,
       codeType: code.codeType,
-      promocodeSnapshot: (pay.promocode as unknown) ?? null,
-      refferalcodeSnapshot: (pay.refferalcode as unknown) ?? null,
+      promocodeSnapshot: (pay?.promocode as unknown) ?? null,
+      refferalcodeSnapshot: (pay?.refferalcode as unknown) ?? null,
     };
   });
 
@@ -546,13 +554,16 @@ const LIVE_SUB_EXPORT_BATCH = 5000;
 // Promocode + Promoter Name are populated as of 2026-08-20: they come from the row's
 // own snapshot columns, so they still cost NO extra query.
 const buildSubExportRow = (
-  r: LiveCourseSubscription,
+  r: LiveSubWithOrder,
   cust: { id: number; fullName: string | null; phoneNumber: string | null; emailAddress: string | null } | undefined,
   course: { id: number; name: string } | undefined,
   now: Date
 ) => {
-  const method = r.razorpayOrderId ? "online" : "backend";
-  const code = subCodeInfo(r);
+  // Payment (amount, gateway ids, code snapshots) comes off the ORDER since
+  // 2026-08-25; the subscription no longer carries any of it.
+  const pay = r.order;
+  const method = pay?.razorpayOrderId ? "online" : "backend";
+  const code = subCodeInfo(pay ?? {});
   return {
     _id: String(r.id),
     promocode: code.code,
@@ -563,18 +574,18 @@ const buildSubExportRow = (
     courseName: course?.name ?? "",
     startAt: r.startAt ?? null,
     endAt: r.endAt ?? null,
-    amount: r.paidAmount != null ? Number(r.paidAmount) : 0,
+    amount: pay?.paidAmount != null ? Number(pay.paidAmount) : 0,
     paymentMethod: method,
     activationType: method,
-    razorpayOrderId: r.razorpayOrderId ?? "",
-    razorpayPaymentId: r.razorpayPaymentId ?? "",
+    razorpayOrderId: pay?.razorpayOrderId ?? "",
+    razorpayPaymentId: pay?.razorpayPaymentId ?? "",
     status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
   };
 };
 
 // Map one keyset batch of raw subscription rows to export rows (resolve the
 // customer/course maps for just that batch).
-const mapSubExportBatch = async (rows: LiveCourseSubscription[], now: Date) => {
+const mapSubExportBatch = async (rows: LiveSubWithOrder[], now: Date) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   return rows.map((r) => buildSubExportRow(r, r.customerId ? custs.get(r.customerId) : undefined, courses.get(r.liveCourseId), now));
@@ -1454,10 +1465,10 @@ export const listMyLiveCoursesForClient = async (
       plan: p ? { _id: String(p.id), name: p.name, duration: p.duration, price: p.price } : null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
-      // These rows are already gated to PURCHASED subscriptions by the query, so the
-      // answer is "verified" — the legacy column is only consulted for pre-backfill
-      // rows, which still carry it (payment moved to the order on 2026-08-25).
-      paymentStatus: s.paymentStatus ?? "verified",
+      // These rows are already gated to PURCHASED subscriptions by the query
+      // (LIVE_SUB_PURCHASED → order.status = "complete"), so the answer is always
+      // "verified". Kept as a literal field so the DTO shape is unchanged.
+      paymentStatus: "verified",
       active,
       daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
       progress: {

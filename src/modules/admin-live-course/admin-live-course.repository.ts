@@ -7,19 +7,16 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  *
  * Payment moved from ws_live_course_subscription to ws_live_course_order on
  * 2026-08-25, so the old `payment_status = "verified"` test became the linked
- * order's `status = "complete"`. The second branch covers rows the backfill has not
- * reached yet (order_id still NULL), which still carry the legacy column — remove it
- * when that column is dropped.
+ * order's `status = "complete"`. The legacy column has since been dropped and every
+ * historical row was linked to an order by the backfill, so the order is the only
+ * source — an unlinked row is not a purchase.
  *
  * NOTE this is a PURCHASE test, not an ACTIVE-ENTITLEMENT test. Callers that want a
  * live entitlement filter on `status: true` (+ the endAt window) and do not need this
  * at all: since 2026-08-25 a subscription row is only ever written for a paid order.
  */
 const LIVE_SUB_PURCHASED = {
-  OR: [
-    { order: { status: "complete" } },
-    { orderId: null, paymentStatus: "verified" },
-  ],
+  order: { status: "complete" },
 } satisfies Prisma.LiveCourseSubscriptionWhereInput;
 
 /**
@@ -132,8 +129,11 @@ export const adminLiveCourseRepository = {
   // fragment) with reportFilters.andWhere, then passes it here. amount/revenue =
   // paid_amount; paymentMethod derives from razorpay_order_id presence.
   buildSubBaseWhere: (opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput => buildSubWhere(opts),
+  // `order` is included because the report/export rows read payment off it — it is
+  // the only place paid_amount / razorpay ids / the code snapshots live since
+  // 2026-08-25. One extra JOIN, no N+1.
   listSubsByWhere: (where: Prisma.LiveCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
-    prisma.liveCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
+    prisma.liveCourseSubscription.findMany({ where, orderBy: subOrderBy(sortBy, sortDir), skip, take, include: { order: true } }),
   // Keyset page for the UNBOUNDED export: id DESC, rows strictly older than the last
   // id seen — no deep OFFSET, so the caller can walk the full filtered set (lakhs) in
   // O(take) pages with no row cap. See the service export iterator.
@@ -142,26 +142,24 @@ export const adminLiveCourseRepository = {
       where: beforeId ? { AND: [where, { id: { lt: beforeId } }] } : where,
       orderBy: { id: "desc" },
       take,
+      include: { order: true },
     }),
   /**
    * Report summary: row count + revenue for a filtered set of subscriptions.
    *
-   * The count still comes from the subscriptions (that is what the report lists), but
-   * revenue is summed across TWO sources since payment moved on 2026-08-25:
-   *   - orders linked to the matching subscriptions (every row written since), and
-   *   - the legacy inline column, for pre-backfill rows whose order_id is still NULL.
-   * The two sets are disjoint by construction, so adding them cannot double-count.
-   * Drop the second half together with the payment_status/paid_amount columns.
+   * The count still comes from the subscriptions (that is what the report lists);
+   * revenue comes from the ORDERS linked to them, the only place paid_amount lives
+   * since 2026-08-25. The pre-backfill half that summed the subscription's own
+   * (now dropped) column is gone.
    */
   aggSubs: async (where: Prisma.LiveCourseSubscriptionWhereInput) => {
-    const [counted, fromOrders, fromLegacy] = await Promise.all([
+    const [counted, fromOrders] = await Promise.all([
       prisma.liveCourseSubscription.aggregate({ where, _count: { _all: true } }),
       prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: where } }, _sum: { paidAmount: true } }),
-      prisma.liveCourseSubscription.aggregate({ where: { AND: [where, { orderId: null }] }, _sum: { paidAmount: true } }),
     ]);
     return {
       _count: counted._count,
-      _sum: { paidAmount: (fromOrders._sum.paidAmount ?? 0) + (fromLegacy._sum.paidAmount ?? 0) },
+      _sum: { paidAmount: fromOrders._sum.paidAmount ?? 0 },
     };
   },
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
@@ -464,11 +462,13 @@ export interface SubReportFilter {
   customerIdsIn?: number[];
 }
 
-function subSortCol(sortBy: string): string {
-  if (sortBy === "startAt" || sortBy === "start_at") return "startAt";
-  if (sortBy === "endAt" || sortBy === "end_at") return "endAt";
-  if (sortBy === "amount") return "paidAmount";
-  return "createdAt";
+// `amount` sorts through the ORDER — paid_amount left the subscription on
+// 2026-08-25. Everything else is still a column on the subscription itself.
+function subOrderBy(sortBy: string, sortDir: "asc" | "desc"): Prisma.LiveCourseSubscriptionOrderByWithRelationInput {
+  if (sortBy === "startAt" || sortBy === "start_at") return { startAt: sortDir };
+  if (sortBy === "endAt" || sortBy === "end_at") return { endAt: sortDir };
+  if (sortBy === "amount") return { order: { paidAmount: sortDir } };
+  return { createdAt: sortDir };
 }
 
 // Base where for the reports list: everything EXCEPT the normalized status
@@ -479,8 +479,11 @@ function buildSubWhere(opts: SubReportFilter): Prisma.LiveCourseSubscriptionWher
   const where: Prisma.LiveCourseSubscriptionWhereInput = {};
   if (opts.customerId !== undefined) where.customerId = opts.customerId;
   if (opts.liveCourseId !== undefined) where.liveCourseId = opts.liveCourseId;
-  if (opts.paymentMethod === "online") where.razorpayOrderId = { not: null };
-  else if (opts.paymentMethod === "backend") where.razorpayOrderId = null;
+  // razorpay_order_id lives on the ORDER since 2026-08-25. A relation filter on an
+  // optional to-one also requires the order to exist, which is the intent: an
+  // unlinked row has no payment method to report either way.
+  if (opts.paymentMethod === "online") where.order = { razorpayOrderId: { not: null } };
+  else if (opts.paymentMethod === "backend") where.order = { razorpayOrderId: null };
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
