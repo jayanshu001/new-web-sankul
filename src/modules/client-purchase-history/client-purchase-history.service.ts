@@ -69,25 +69,50 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
   const grandTotal = pcTotal + liveTotal + tsTotal + olTotal + olTsTotal;
   if (!pcOrders.length && !liveSubs.length && !tsOrders.length && !olSubs.length && !olTsSubs.length) return { data: [], pagination: { total: grandTotal, page, limit, totalPages: 0 } };
 
-  // Resolve the order's plan → course/package target (title, badge, kind).
-  const plans = new Map((await repo.pcPlansByIds([...new Set(pcOrders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
-  // Course/package/test-series ids come from BOTH the order plans and the order-less
-  // subs (which carry course_id/package_id/test_series_id directly).
+  // ── name/window resolution: THREE dependency rounds, not eight round trips ──────
+  // These lookups used to `await` one at a time. Only three of them actually depend on
+  // an earlier result (order → plan → course/package → type), so the rest were paying
+  // a full DB round trip each for nothing. Grouped by real dependency depth:
+  //
+  //   round 1  plans, liveCourses, testSeries, tracking   — need only the stage-A rows
+  //   round 2  courses, packages, tsSubs                  — need plans / testSeries
+  //   round 3  types, pcSubs                              — need packages / courses
+  //
+  // Keep new lookups in the shallowest round they belong to; adding one to a later
+  // round costs a round trip even when nothing in it is a dependency.
+
+  // test-series ids come from the stage-A rows directly (no plan hop), so this is
+  // available before round 1 — that is what lets testSeries load in round 1.
+  const tsIds = new Set<number>([...tsOrders.map((o) => o.testSeriesId), ...olTsSubs.map((s) => s.testSeriesId)].filter((x): x is number => x != null && x > 0));
+
+  const [plans, liveCourses, testSeries, trackingByOrder] = await Promise.all([
+    // Resolve the order's plan → course/package target (title, badge, kind).
+    repo.pcPlansByIds([...new Set(pcOrders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((p) => [p.id, p]))),
+    repo.liveCoursesByIds([...new Set(liveSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((c) => [c.id, c]))),
+    repo.testSeriesByIds([...tsIds]).then((r) => new Map(r.map((t) => [t.id, t]))),
+    // Shipment tracking rows are keyed by the ORDER that created them (material orders).
+    repo.pcTrackingByOrderIds(pcOrders.map((o) => o.id)).then((r) => new Map(r.map((t) => [t.orderId, t]))),
+  ]);
+
+  // Course/package ids come from BOTH the order plans and the order-less subs (which
+  // carry course_id/package_id directly).
   const courseIds = new Set<number>([...[...plans.values()].map((p) => p.courseId), ...olSubs.map((s) => s.courseId)].filter((x): x is number => x != null && x > 0));
   const packageIds = new Set<number>([...[...plans.values()].map((p) => p.packageId), ...olSubs.map((s) => s.packageId)].filter((x): x is number => x != null && x > 0));
-  const tsIds = new Set<number>([...tsOrders.map((o) => o.testSeriesId), ...olTsSubs.map((s) => s.testSeriesId)].filter((x): x is number => x != null && x > 0));
-  const courses = new Map((await repo.coursesByIds([...courseIds])).map((c) => [c.id, c]));
-  const packages = new Map((await repo.packagesByIds([...packageIds])).map((p) => [p.id, p]));
-  const types = new Map((await repo.packageTypesByIds([...new Set([...packages.values()].map((p) => p.packageTypeId).filter((x): x is number => x != null && x > 0))])).map((t) => [t.id, t]));
-  const liveCourses = new Map((await repo.liveCoursesByIds([...new Set(liveSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  const testSeries = new Map((await repo.testSeriesByIds([...tsIds])).map((t) => [t.id, t]));
 
-  // Shipment tracking rows are keyed by the ORDER that created them (material orders).
-  const trackingByOrder = new Map((await repo.pcTrackingByOrderIds(pcOrders.map((o) => o.id))).map((t) => [t.orderId, t]));
+  const [courses, packages, tsSubs] = await Promise.all([
+    repo.coursesByIds([...courseIds]).then((r) => new Map(r.map((c) => [c.id, c]))),
+    repo.packagesByIds([...packageIds]).then((r) => new Map(r.map((p) => [p.id, p]))),
+    // Test-series validity window per order (fold-aware, same as package/course).
+    repo.tsSubsForSeries(customerId, [...testSeries.keys()]),
+  ]);
+
   // Decorate each order with the entitlement window from its subscription. Fresh orders
   // map by order_id; extension orders (folded, no own sub) fall back to the customer's
   // latest active sub for the same course/package.
-  const pcSubs = await repo.pcSubsForTargets(customerId, [...courses.keys()], [...packages.keys()]);
+  const [types, pcSubs] = await Promise.all([
+    repo.packageTypesByIds([...new Set([...packages.values()].map((p) => p.packageTypeId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((t) => [t.id, t]))),
+    repo.pcSubsForTargets(customerId, [...courses.keys()], [...packages.keys()]),
+  ]);
   const subByOrder = new Map(pcSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
   const latestSubByKey = new Map<string, (typeof pcSubs)[number]>();
   for (const s of pcSubs) {
@@ -179,8 +204,7 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
     };
   });
 
-  // Test-series validity window per order (fold-aware, same as package/course).
-  const tsSubs = await repo.tsSubsForSeries(customerId, [...testSeries.keys()]);
+  // `tsSubs` was fetched in round 2 above (it only needs `testSeries`).
   const tsSubByOrder = new Map(tsSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
   const latestTsSubByTs = new Map<number, (typeof tsSubs)[number]>();
   for (const s of tsSubs) {

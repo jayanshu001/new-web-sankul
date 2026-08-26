@@ -15,6 +15,71 @@
 
 ---
 
+## 2026-08-26 (b) — purchase-history subscriptions: three indexes + parallel lookup rounds
+
+> **DDL + code. Response shape unchanged (verified byte-identical).**
+> `GET /api/v1/client/purchase-history/subscriptions` — reported at 8–10s in production.
+
+**DDL:** `docs/migration/schema-changes/2026-08-26_purchase_history_indexes.sql`
+(three guarded `ADD KEY`s; purely additive, safe to apply before the code).
+Declared in `schema.prisma` on PackageCourseSubscription / PackageCourseOrder /
+PackageCourseSubscriptionTracking so the schema matches the DB.
+
+### What the request actually did
+
+One request = **19 SQL queries**: 11 in a `Promise.all`, then 8 issued strictly one at a
+time, then an in-memory merge/sort/slice across five sources. Measured with Prisma query
+logging against staging (561k-row `ws_package_course_subscription`).
+
+### The three index problems
+
+1. **`countOrderlessSubs` — 713 ms cold / 32 ms warm, 96% of stage A.**
+   `WHERE customer_id=? AND status=1 AND order_id IS NULL`. The only usable index was
+   `idx_pcs_customer_status_endat (customer_id, status, end_at)` — `order_id` is not in
+   it, so MySQL resolved customer+status from the index and then read **every matching
+   row off disk** (~16,400 for a heavy customer) purely to test `order_id`.
+   New `idx_pcs_customer_status_order (customer_id, status, order_id, id)` makes it
+   `Using index` — index-only, zero row reads. **713 ms → 1.45 ms.**
+
+2. **`ws_package_course_order` had NO index on `customer_id`** — only PRIMARY and
+   UNIQUE(unique_id). `listPurchaseOrders` + `countPurchaseOrders` both full-scanned it,
+   twice per request, so their cost was the table's size rather than the customer's.
+   Measured on a 500k-row synthetic copy: list **134 ms → 0.7 ms**, count **62 ms → 0.5 ms**.
+   ⚠ The Prisma field is `userId` but the column is `customer_id`; the tracking table's
+   `orderId` is a column literally named `` `order` `` (reserved word).
+
+3. **`ws_package_course_subscription_tracking` had only a PK** — `WHERE order IN (...)`
+   full-scanned it, twice per request (list + the tracking endpoint). Now `idx_pcst_order`.
+
+### The serialization
+
+Stage B's 8 lookups each `await`ed the previous one. Only three have a real dependency
+(order → plan → course/package → type). Regrouped into **three rounds by dependency
+depth** — round 1 plans/liveCourses/testSeries/tracking, round 2 courses/packages/tsSubs,
+round 3 types/pcSubs. `tsIds` moved above round 1 (it comes from stage-A rows, not from
+plans), which is what lets `testSeries` load in round 1. **8 round trips → 3.**
+
+### Result
+
+`listSubscriptions()` end-to-end on staging: heavy customer (19,333 subs) **82 ms p50**,
+light customer **5.4 ms p50**. Output verified **byte-identical** to the previous
+implementation across 12 customer/page combinations (4 customers × 3 page windows).
+
+### Known remaining, NOT changed
+
+`pcSubsForTargets` has **no `take`** — it loads every matching subscription to build two
+maps (sub-by-order, latest-sub-per-target). On staging's synthetic heavy customer that is
+**12,576 rows / 100 ms**; on a realistic customer it is a handful, which is why the light
+customer lands at 5.4 ms. It is a latent unbounded read rather than a live prod problem —
+fixing it properly means splitting it into an order-id lookup plus a greatest-n-per-group
+query for the fallback window, which changes query semantics and needs its own pass.
+
+Also unaddressed: `overFetch = skip + take` pulls `skip+take` rows from **each** of five
+sources before the in-memory merge, so deep pages degrade (page 50 = 1,000 rows per
+source to return 20). And the route has no `cacheRoute`.
+
+---
+
 ## 2026-08-26 — Live-course payment columns: code caught up with the drop (prod outage fix)
 
 > **NO DDL. Code-only.** This is the "remove the code that still reads these columns"

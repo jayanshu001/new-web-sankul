@@ -1371,6 +1371,9 @@ model PackageCourseOrder {
   packageCourseSubscriptionTracking PackageCourseSubscriptionTracking[]
   RefferalTransaction               RefferalTransaction[]
 
+  /// This table had NO index on customer_id — purchase-history scanned it whole, twice
+  /// per request (list + count). DDL: 2026-08-26_purchase_history_indexes.sql
+  @@index([userId, status, id], name: "idx_pco_user_status_id")
   @@map("ws_package_course_order")
 }
 
@@ -1413,6 +1416,12 @@ model PackageCourseSubscription {
   @@index([customerId, status, endAt], name: "idx_pcs_customer_status_endat")
   // Package-detail Subscription tab: filter package_id, sort created_at DESC.
   @@index([packageId, createdAt], name: "idx_pcs_package_created")
+  /// Purchase-history's order-less list + count (customer_id, status, order_id IS NULL).
+  /// order_id must be IN the index or MySQL reads every matching row just to test it —
+  /// that was ~16k row reads to return one number. Trailing `id` covers ORDER BY id DESC.
+  /// Does NOT replace idx_pcs_customer_status_endat (that serves the end_at range reads).
+  /// DDL: 2026-08-26_purchase_history_indexes.sql
+  @@index([customerId, status, orderId, id], name: "idx_pcs_customer_status_order")
   @@map("ws_package_course_subscription")
 }
 
@@ -1425,6 +1434,9 @@ model PackageCourseSubscriptionTracking {
   updated_at                DateTime?
   packageCourseSubscription PackageCourseSubscription[]
 
+  /// Looked up by order id on every purchase-history page; the table had only a PK.
+  /// The column is literally named `order`. DDL: 2026-08-26_purchase_history_indexes.sql
+  @@index([orderId], name: "idx_pcst_order")
   @@map("ws_package_course_subscription_tracking")
 }
 
