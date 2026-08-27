@@ -19,8 +19,12 @@ const RECEIPT_BASE = "/api/v1/client/purchase-history";
  * `payment_status` column was dropped, so the order is the only source. Defaults to
  * "verified": every caller here is already gated to a completed order.
  */
+// 'cancel' is the ws_package_course_order spelling this table adopted 2026-08-27 for
+// what it stored as 'failed'; the wire value stays "failed".
 const livePayStatus = (order: { status: string } | null | undefined): string =>
-  order == null || order.status === "complete" ? "verified" : order.status;
+  order == null || order.status === "complete" ? "verified"
+  : order.status === "cancel" ? "failed"
+  : order.status;
 
 // Carrier key derived from the AWB range (same threshold buildTrackingUrl routes on):
 // at/above the Tirupati INITIAL_Number → "tirupati", below → "mahavir". null when no
@@ -48,6 +52,21 @@ const TS_ID_PREFIX = "ts_";
 const PCS_ID_PREFIX = "pcs_";
 const TSS_ID_PREFIX = "tss_";
 
+/**
+ * Pick one entitlement window out of the rows an order owns: the row pointing at the
+ * order's own plan target, newest `end_at` first. `courseId` wins over `packageId` for
+ * the same reason the row builder prefers it — a plan carrying both is a course plan.
+ * Returns undefined when the order owns no row for that target (legacy folded
+ * extension), which is what hands over to the per-target fallback.
+ */
+type PcWindow = { orderId: number | null; courseId: number | null; packageId: number | null; startAt: Date | null; endAt: Date | null };
+const pickWindowForTarget = (rows: readonly PcWindow[] | undefined, courseId: number | null, packageId: number | null): PcWindow | undefined => {
+  if (!rows?.length) return undefined;
+  const matches = rows.filter((s) => (courseId ? s.courseId === courseId : packageId ? s.packageId === packageId : true));
+  if (!matches.length) return undefined;
+  return matches.reduce((best, s) => ((s.endAt?.getTime() ?? 0) > (best.endAt?.getTime() ?? 0) ? s : best));
+};
+
 export const listSubscriptions = async (customerId: number, skip: number, take: number, page: number, limit: number) => {
   const overFetch = skip + take;
   // Package/course + test-series list from their ORDER tables so each purchase (incl.
@@ -74,25 +93,43 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
   // an earlier result (order → plan → course/package → type), so the rest were paying
   // a full DB round trip each for nothing. Grouped by real dependency depth:
   //
-  //   round 1  plans, liveCourses, testSeries, tracking   — need only the stage-A rows
-  //   round 2  courses, packages, tsSubs                  — need plans / testSeries
-  //   round 3  types, pcSubs                              — need packages / courses
+  //   round 1  plans, liveCourses, testSeries, tracking, ownSubs — need only stage-A rows
+  //   round 2  courses, packages, tsSubs                         — need plans / testSeries
+  //   round 3  types (+ the legacy window fallback, usually skipped) — need packages / plans
   //
   // Keep new lookups in the shallowest round they belong to; adding one to a later
-  // round costs a round trip even when nothing in it is a dependency.
+  // round costs a round trip even when nothing in it is a dependency. `ownSubs` moved
+  // UP to round 1 on 2026-08-27: keying the window on order_id instead of on the page's
+  // course/package targets removed its dependency on rounds 1–2 entirely.
 
   // test-series ids come from the stage-A rows directly (no plan hop), so this is
   // available before round 1 — that is what lets testSeries load in round 1.
   const tsIds = new Set<number>([...tsOrders.map((o) => o.testSeriesId), ...olTsSubs.map((s) => s.testSeriesId)].filter((x): x is number => x != null && x > 0));
 
-  const [plans, liveCourses, testSeries, trackingByOrder] = await Promise.all([
+  const pcOrderIds = pcOrders.map((o) => o.id);
+
+  const [plans, liveCourses, testSeries, trackingByOrder, ownSubs] = await Promise.all([
     // Resolve the order's plan → course/package target (title, badge, kind).
     repo.pcPlansByIds([...new Set(pcOrders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((p) => [p.id, p]))),
     repo.liveCoursesByIds([...new Set(liveSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((c) => [c.id, c]))),
     repo.testSeriesByIds([...tsIds]).then((r) => new Map(r.map((t) => [t.id, t]))),
     // Shipment tracking rows are keyed by the ORDER that created them (material orders).
-    repo.pcTrackingByOrderIds(pcOrders.map((o) => o.id)).then((r) => new Map(r.map((t) => [t.orderId, t]))),
+    repo.pcTrackingByOrderIds(pcOrderIds).then((r) => new Map(r.map((t) => [t.orderId, t]))),
+    // Validity window for the orders that own a subscription row — one indexed seek
+    // per order id, NOT a scan of the customer's whole entitlement history.
+    repo.pcSubsByOrderIds(customerId, pcOrderIds),
   ]);
+  // Grouped, not keyed 1:1 — a customer CAN carry more than one active row against the
+  // same order_id in legacy data, and the old code let whichever row the driver returned
+  // last silently win. Pick the row that matches the order's own plan target, newest
+  // window first, so the choice is deterministic.
+  const subsByOrder = new Map<number, PcWindow[]>();
+  for (const s of ownSubs) {
+    const k = s.orderId as number;
+    const bucket = subsByOrder.get(k);
+    if (bucket) bucket.push(s);
+    else subsByOrder.set(k, [s]);
+  }
 
   // Course/package ids come from BOTH the order plans and the order-less subs (which
   // carry course_id/package_id directly).
@@ -106,16 +143,29 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
     repo.tsSubsForSeries(customerId, [...testSeries.keys()]),
   ]);
 
-  // Decorate each order with the entitlement window from its subscription. Fresh orders
-  // map by order_id; extension orders (folded, no own sub) fall back to the customer's
-  // latest active sub for the same course/package.
-  const [types, pcSubs] = await Promise.all([
+  // LEGACY window fallback, scoped to the orders that actually need it. A pre-2026-08-25
+  // validity extension folded onto the entitlement subscription and owns no row of its
+  // own, so its window comes from the customer's latest active sub for the same target.
+  // Only those orders contribute a target here, so a page of SQL-native purchases issues
+  // neither query — and each target column is queried separately so both can seek an
+  // index (a single OR over the two cannot; that was the unbounded read).
+  const fbCourseIds = new Set<number>();
+  const fbPackageIds = new Set<number>();
+  for (const o of pcOrders) {
+    if (subsByOrder.has(o.id)) continue;
+    const plan = o.planId ? plans.get(o.planId) : null;
+    if (plan?.courseId && plan.courseId > 0) fbCourseIds.add(plan.courseId);
+    else if (plan?.packageId && plan.packageId > 0) fbPackageIds.add(plan.packageId);
+  }
+
+  const [types, fbCourseSubs, fbPackageSubs] = await Promise.all([
     repo.packageTypesByIds([...new Set([...packages.values()].map((p) => p.packageTypeId).filter((x): x is number => x != null && x > 0))]).then((r) => new Map(r.map((t) => [t.id, t]))),
-    repo.pcSubsForTargets(customerId, [...courses.keys()], [...packages.keys()]),
+    repo.pcSubsByCourseIds(customerId, [...fbCourseIds]),
+    repo.pcSubsByPackageIds(customerId, [...fbPackageIds]),
   ]);
-  const subByOrder = new Map(pcSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
-  const latestSubByKey = new Map<string, (typeof pcSubs)[number]>();
-  for (const s of pcSubs) {
+  // Same keying rule as before the split: a sub carrying BOTH ids keys on the course.
+  const latestSubByKey = new Map<string, (typeof fbCourseSubs)[number]>();
+  for (const s of [...fbCourseSubs, ...fbPackageSubs]) {
     const key = s.courseId ? `c:${s.courseId}` : s.packageId ? `p:${s.packageId}` : null;
     if (!key) continue;
     const cur = latestSubByKey.get(key);
@@ -140,7 +190,7 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
         : null;
     // Validity window (cumulative on the entitlement sub) for this purchase's card.
     const win =
-      subByOrder.get(o.id) ??
+      pickWindowForTarget(subsByOrder.get(o.id), courseId, packageId) ??
       (courseId ? latestSubByKey.get(`c:${courseId}`) : packageId ? latestSubByKey.get(`p:${packageId}`) : null) ??
       null;
     return {
@@ -174,9 +224,11 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
     // Live-course carries with_material inline (no plan flag); the AWB + status are
     // inline columns (allocated at verify for material orders) — no separate table.
     const withMaterial = !!s.withMaterial;
+    // `s.tracking` is the column (renamed from tracking_id on 2026-08-27 to match
+    // ws_package_course_subscription.tracking); the DTO key stays `trackingId`.
     const tracking =
-      withMaterial && s.trackingId != null
-        ? { trackingId: String(s.trackingId), courier: courierForAwb(s.trackingId) }
+      withMaterial && s.tracking != null
+        ? { trackingId: String(s.tracking), courier: courierForAwb(s.tracking) }
         : null;
     return {
       _id: `${LIVE_ID_PREFIX}${s.id}`,
@@ -186,9 +238,11 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       thumbnail: lc?.image || null,
       badge: "Live",
       withMaterial,
-      status: withMaterial ? (s.trackingStatus ?? null) : null,
+      // Dispatch status lives on the tracking row since 2026-08-27 (c).
+      status: withMaterial ? ((s as any).trackingRow?.status ?? null) : null,
       tracking,
-      amount: s.order?.paidAmount != null ? Number(s.order.paidAmount) : null,
+      // `amount` = ws_live_course_order.discount_price (2026-08-27 package shape).
+      amount: s.order?.amount != null ? Number(s.order.amount) : null,
       purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
@@ -385,13 +439,13 @@ export const getSubscriptionTrackingMysql = async (
     const sub = await repo.liveSubscriptionForTracking(subId, customerId);
     // Trackable only for with-material orders (AWB allocated at verify for those).
     if (!sub || !sub.withMaterial) return null;
-    const addr = sub.customerShippingId != null ? await repo.customerAddressById(sub.customerShippingId) : null;
-    const status = sub.trackingStatus ?? null;
+    const addr = sub.shipping != null ? await repo.customerAddressById(sub.shipping) : null;
+    const status = (sub as any).trackingRow?.status ?? null;
     return {
       orderId: String(sub.id),
       receiptId: String(sub.id),
-      awb: sub.trackingId != null ? Number(sub.trackingId) : null,
-      courier: courierForAwb(sub.trackingId),
+      awb: sub.tracking != null ? Number(sub.tracking) : null,
+      courier: courierForAwb(sub.tracking),
       from: { city: null, hub: null },
       to: addrTo(addr),
       consignee: addr?.name ?? null,
@@ -399,7 +453,9 @@ export const getSubscriptionTrackingMysql = async (
       // Payment instant + state come off the ORDER since 2026-08-25. The row is
       // already gated to a completed order by liveSubscriptionPurchasedWhere, so the
       // mapped state is "verified" — the same value this DTO has always emitted.
-      bookedAt: sub.order?.paidAt ?? sub.createdAt ?? null,
+      // `paid_at` was dropped 2026-08-27 — `updated_at` is the order's paid-at (verify
+      // stamped both with the same `now`), which is how the package receipt reads it.
+      bookedAt: sub.order?.updatedAt ?? sub.createdAt ?? null,
       currentStatus: status ?? livePayStatus(sub.order),
       orderStatus: livePayStatus(sub.order),
       shippedAt: null,
@@ -645,14 +701,27 @@ export const getCourseReceiptMysql = async (orderId: number, customerId: number)
   const plan = order.planId ? (await repo.pcPlansByIds([order.planId]))[0] : null;
   const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
   const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
-  const [course, pkg, subs] = await Promise.all([
+  const [course, pkg, ownSubs] = await Promise.all([
     courseId ? repo.courseForReceipt(courseId) : Promise.resolve(null),
     packageId ? repo.packageForReceipt(packageId) : Promise.resolve(null),
-    repo.pcSubsForTargets(customerId, courseId ? [courseId] : [], packageId ? [packageId] : []),
+    // Fresh purchase → the subscription row THIS order created (indexed seek on
+    // order_id). Same bounded lookup the list uses; the old target-scoped read
+    // loaded every active subscription the customer owns for this course/package.
+    repo.pcSubsByOrderIds(customerId, [order.id]),
   ]);
+  // Legacy folded extension: no own row, so fall back to the latest active sub for the
+  // same target. The fallback query is issued ONLY when the order owns no row.
+  const ownWin = pickWindowForTarget(ownSubs, courseId, packageId);
+  const fallbackSubs = ownWin
+    ? []
+    : courseId
+      ? await repo.pcSubsByCourseIds(customerId, [courseId])
+      : packageId
+        ? await repo.pcSubsByPackageIds(customerId, [packageId])
+        : [];
   const win =
-    subs.find((s) => s.orderId === order.id) ??
-    subs
+    ownWin ??
+    fallbackSubs
       .filter((s) => (courseId ? s.courseId === courseId : s.packageId === packageId))
       .sort((a, b) => (b.endAt?.getTime() ?? 0) - (a.endAt?.getTime() ?? 0))[0] ??
     null;
@@ -769,17 +838,21 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
   const pay = sub.order;
   if (!pay) return null;
 
-  const paid = Number(pay.paidAmount ?? 0);
-  const subTotal = pay.originalAmount != null ? Number(pay.originalAmount) : paid;
-  // `discount_amount` was dropped 2026-08-20 — derived from the columns that remain.
-  // Same value the column held; the receipt is unchanged.
+  const paid = Number(pay.amount ?? 0);
+  // `price` is the plan list price and is written on EVERY order since 2026-08-27
+  // (package semantics). It used to be `original_amount`, set only on a promo — for
+  // those rows subTotal fell back to `paid`, which equalled the list price anyway,
+  // so this line's value is unchanged either way.
+  const subTotal = pay.originalPrice != null ? Number(pay.originalPrice) : paid;
+  // Stored in `code_discount` since 2026-08-27; liveSubDiscountAmount still derives
+  // it for older rows. Same value the dropped column held; the receipt is unchanged.
   const discount = liveSubDiscountAmount(pay);
 
   return {
     kind: "live-course" as const,
     receiptId: String(sub.id),
     purchasedAt: sub.createdAt ?? null,
-    paidAt: pay.paidAt ?? null,
+    paidAt: pay.updatedAt ?? null,
     // The order says "complete"; the receipt has always said "verified".
     status: "verified",
     customer: { id: String(sub.customerId) },

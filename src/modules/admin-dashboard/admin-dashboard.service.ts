@@ -46,8 +46,10 @@ const testSeriesRevenue = async (w: Win) => {
 // via payment_status. Each purchase is now its own completed order, which also means
 // a renewal is finally counted as its own sale instead of vanishing into a folded row.
 const liveCourseRevenue = async (w: Win) => {
-  const agg = await prisma.liveCourseOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" }, _sum: { paidAmount: true }, _count: { _all: true } });
-  return { revenue: num(agg._sum.paidAmount), count: agg._count._all };
+  const agg = await prisma.liveCourseOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" }, _sum: { amount: true }, _count: { _all: true } });
+  // `amount` = ws_live_course_order.discount_price (the charged amount), renamed
+  // from paid_amount when the table took the package shape (2026-08-27).
+  return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
 
 // ── time-series buckets (HOUR / DAYOFMONTH / MONTH, IST) ──────────────────────
@@ -149,7 +151,11 @@ export const fetchDashboardData = async (opts: {
     seriesFor("ws_test_series_subscription", "price", tot, unit),
     // Order table + its "complete" vocabulary (was ws_live_course_subscription /
     // payment_status='verified' before the 2026-08-25 split).
-    seriesFor("ws_live_course_order", "paid_amount", tot, unit, "AND status = 'complete'"),
+    // RAW SQL — the column name is a string, so `yarn typecheck` cannot catch a rename.
+    // `paid_amount` became `discount_price` when the table took the
+    // ws_package_course_order shape (2026-08-27). Keep this in step with the Prisma
+    // field `amount` used by liveCourseRevenue above.
+    seriesFor("ws_live_course_order", "discount_price", tot, unit, "AND status = 'complete'"),
     prisma.customer.findMany({ where: { isAccountDeleted: false }, select: { id: true, fullName: true, phoneNumber: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),

@@ -6,6 +6,7 @@ import { computePromoDiscount } from "../promocode/applies-to";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
+import { getClientIp } from "../../utils/clientIp";
 import logger from "../../utils/logger";
 import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
@@ -320,10 +321,22 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
       const { orderId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
-        // `discountAmount` is NOT persisted — ws_live_course_subscription.discount_amount
-        // was dropped 2026-08-20. originalAmount + paidAmount + walletCoin make it
-        // derivable (liveSubDiscountAmount). It is still echoed in the response below.
-        amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: walletUsage.coin, originalAmount,
+        amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: walletUsage.coin,
+        // Since 2026-08-27 this table has the ws_package_course_order columns, so the
+        // four values this checkout already computed but had nowhere to put are
+        // persisted — same wiring as createPackageOrderMysql:
+        //   receiptId  → unique_id      (the id already returned to the client)
+        //   rzpOrder   → razorpay_order (the full gateway response)
+        //   discountAmount → code_discount (stored now, no longer derived)
+        //   referrerIdNum  → referrer_id   (was only inside the refferalcode snapshot)
+        // `originalAmount` stays null when no promo ran; the service falls back to the
+        // charged amount so `price` is ALWAYS the list price, as on package.
+        originalAmount,
+        uniqueId: receiptId,
+        razorpayOrderPayload: JSON.stringify(rzpOrder),
+        codeDiscount: discountAmount ?? 0,
+        referrerId: referrerIdNum,
+        ipAddress: getClientIp(req, 255),
         promocodeSnapshot: codeSnapshot.promocode, refferalcodeSnapshot: codeSnapshot.refferalcode,
         withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });

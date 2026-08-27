@@ -79,13 +79,16 @@ type LiveSub = {
   /**
    * The payment row — the ONLY source of payment since 2026-08-25, when paid/original
    * amount, wallet coin and payment_status moved off the subscription and were
-   * dropped from it. `discount_amount` went earlier (2026-08-20); the discount is
-   * derived from originalAmount + walletCoin (see liveSubDiscountAmount).
+   * dropped from it.
+   *
+   * 2026-08-27: the columns took their ws_package_course_order names —
+   * `amount` (discount_price, charged), `originalPrice` (price, list) and
+   * `codeDiscount` (code_discount), which is the discount STORED rather than derived.
    *
    * REQUIRED, not optional: a caller that forgets `include: { order: true }` would
    * otherwise silently emit paidAmount/discountAmount as null. Keep it a compile error.
    */
-  order: { paidAmount: number | null; originalAmount: number | null; walletCoin: number | null; status: string | null } | null;
+  order: { amount: number | null; originalPrice: number | null; codeDiscount: number | null; wsCoin: number | null; promocode: unknown; refferalcode: unknown; status: string | null } | null;
 };
 
 export const toLiveCourseDto = (
@@ -101,12 +104,17 @@ export const toLiveCourseDto = (
     _id: String(s.id),
     liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image }),
     planId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
-    paidAmount: pay?.paidAmount ?? null,
-    // Derived, not stored — the DTO field is unchanged. Null (not 0) when no promo
-    // was applied, matching what the dropped column held for those rows.
-    discountAmount: pay?.originalAmount != null ? liveSubDiscountAmount(pay) : null,
+    paidAmount: pay?.amount ?? null,
+    // The DTO field is unchanged: null (not 0) when NO code was applied, matching
+    // what the dropped column held for those rows.
+    //
+    // The gate used to be `originalAmount != null`, which worked only because
+    // original_amount was written ONLY on a promo. `price` is now written on every
+    // order (package semantics), so the gate is the code snapshots themselves —
+    // exactly the condition under which original_amount used to be set.
+    discountAmount: pay && (pay.promocode != null || pay.refferalcode != null) ? liveSubDiscountAmount(pay) : null,
     paymentStatus: pay
-      ? (pay.status === "complete" ? "verified" : pay.status ?? "pending")
+      ? (pay.status === "complete" ? "verified" : pay.status === "cancel" ? "failed" : pay.status ?? "pending")
       : (s.status ? "verified" : "pending"),
     startAt: s.startAt,
     endAt: s.endAt,

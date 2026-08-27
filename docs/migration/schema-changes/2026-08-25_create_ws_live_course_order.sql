@@ -1,5 +1,13 @@
 -- 2026-08-25 — ws_live_course_order: give live courses a real order table
 --
+-- ⚠ SUPERSEDED BY 2026-08-27_live_course_order_match_package_shape.sql, which
+-- reshapes this table to match ws_package_course_order column for column (renames,
+-- 7 added columns, 3 type changes, 5 drops). That file is self-contained: on a
+-- database that never got THIS file it creates the table in the final shape and adds
+-- ws_live_course_subscription.order_id itself. Applying both in date order is also
+-- correct. Do not "fix" this file — it is the record of what was applied on
+-- 2026-08-25, and everything below describes the shape as it was then.
+--
 -- WHY. Live course was the ONLY product without an order table. The subscription
 -- row doubled as the order: checkout INSERTed a `payment_status='pending'` row into
 -- ws_live_course_subscription, and verify flipped that same row to 'verified'. That

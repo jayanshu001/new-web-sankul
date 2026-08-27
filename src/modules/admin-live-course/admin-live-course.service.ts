@@ -7,10 +7,15 @@ import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
 import { parseMaterialCategoryRefs } from "./admin-live-course.refs";
-import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
+import { andWhere, statusWhere, normalizeStatus, reportRow, blankStrToNull, decToNum, rowHasMaterial, trackingToNumber } from "../../utils/reportFilters";
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCourseOrder, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
+// VALUE import (the type-only line above cannot supply the Decimal constructor).
+import { Prisma as PrismaRuntime } from "@prisma/client";
+// The shared course/material money split — the same helper ws_package_course_subscription
+// has always used, so a live-course grant books the split identically.
+import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 
 /**
  * A subscription row read WITH its order. Payment left the subscription on
@@ -366,10 +371,14 @@ const payOf = (row: any, orders: Map<number, LiveCourseOrder>): LiveCourseOrder 
   (row.orderId != null ? orders.get(row.orderId) ?? null : null);
 
 /** Order "complete" ↔ the subscription vocabulary this DTO has always emitted. */
+// The order's enum → the shipped wire vocabulary. 'cancel' is the
+// ws_package_course_order spelling this table adopted on 2026-08-27 for what it used
+// to store as 'failed'; both keys map to "failed" so the response is unchanged and
+// rows written before the enum change still resolve.
 const payStatusOf = (pay: any): string | null =>
   pay?.status === "complete" ? "verified"
   : pay?.status === "pending" ? "pending"
-  : pay?.status === "failed" ? "failed"
+  : pay?.status === "cancel" || pay?.status === "failed" ? "failed"
   : null;
 
 const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
@@ -390,7 +399,10 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
       planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStrOrNull(r.planId),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, status: r.status,
       // Payment fields come from the order now (2026-08-25); the DTO is unchanged.
-      paidAmount: pay?.paidAmount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay?.paidAt ?? null,
+      // `amount` = ws_live_course_order.discount_price (the charged amount) and
+      // `updatedAt` is the order's paid-at since `paid_at` was dropped 2026-08-27 —
+      // verify wrote both with the same timestamp, so neither DTO value changes.
+      paidAmount: pay?.amount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay?.updatedAt ?? null,
       // The purchase-time snapshot OBJECTS, not the bare ids — same contract as
       // ws_package_course_order. Exactly one is ever non-null. Additive: promocodeId /
       // referrerId were never in this DTO, so nothing that existed here changed shape.
@@ -408,8 +420,11 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
 // normalized active|expired|inactive (not the raw boolean); paymentMethod is the
 // coarse online|backend (online = razorpay_order_id present). amount = paid_amount.
 
-// Param contract shared by the list + its CSV/Excel exports (docs/backend-requests/
-// live-course-report-detailed-export.md). All string-typed (query params).
+// Param contract shared by the list + its CSV/Excel exports. All string-typed
+// (query params). ⚠ `startFrom`/`endTo` are half-open here (no startTo/endFrom) and
+// are parsed with a bare `new Date()` rather than parseDayBoundIst — a bare
+// YYYY-MM-DD would read as UTC midnight and drop the last 5.5h. Harmless while the
+// screen exposes neither filter; fix both before wiring them up.
 export interface SubReportQuery {
   liveCourseId?: string; customerId?: string; status?: string; paymentMethod?: string;
   activationType?: string; dateFrom?: string; dateTo?: string; startFrom?: string; endTo?: string;
@@ -471,6 +486,127 @@ const resolveSubFilter = async (
   return { listWhere, sortBy, sortDir };
 };
 
+// ── Live Course Report: the columns the DTO used to drop ──────────────────────
+// Until 2026-08-27 this report emitted 13 fewer keys than the Subscription report,
+// so those columns rendered "—" on every row. They were never missing DATA: the
+// live-course tables adopted the package shape on 2026-08-25/27, and `listSubsByWhere`
+// already joins the order — ten of the thirteen were sitting in memory at the line
+// that built the DTO. The other three (educator / shipping / activated-by) take one
+// batched lookup each, exactly as admin-subscription does.
+//
+// list + export share these two helpers so the screen and the downloaded file can
+// never disagree.
+
+type ReportAddress = { id: number; userId: number | null; address: string | null; address_2: string | null; city: string | null; pincode: number | string | null; alternate_phone: any };
+type SubReportExtras = {
+  educators: Map<number, { id: number; name: string | null }>;
+  /** keyed `<addressId>:<customerId>` — see resolveReportAddresses. */
+  shippings: Map<string, ReportAddress>;
+  admins: Map<string, { firstName: string | null; lastName: string | null }>;
+};
+
+/**
+ * Resolve the delivery address behind each subscription's `shipping` id.
+ *
+ * `shipping` is a ws_customer_shipping.id by contract — but the live-course checkout
+ * never adopted `resolveShippingIdForAddress` the way the package path did: it
+ * validates the id against the ADDRESS BOOK and stores it raw
+ * (live-course-payment.controller `customerAddressRepository.findActiveOwned` →
+ * `customerShippingId`). So live-course rows written to date point at
+ * ws_customer_address instead, and a shipping-only lookup came back empty on exactly
+ * the rows that HAVE an address. Try shipping first, fall back to the address book.
+ *
+ * Every hit is verified against the SUBSCRIPTION'S OWN customer before it is keyed.
+ * The two id spaces are disjoint today and nothing enforces that; an unverified
+ * fallback would be one collision away from printing another customer's address on
+ * an admin report. A row that fails the check is dropped (column renders "—") rather
+ * than guessed at.
+ */
+const resolveReportAddresses = async (
+  wanted: { shippingId: number; customerId: number }[]
+): Promise<Map<string, ReportAddress>> => {
+  const out = new Map<string, ReportAddress>();
+  if (!wanted.length) return out;
+  const ids = [...new Set(wanted.map((w) => w.shippingId))];
+  const [ships, addrs] = await Promise.all([repo.shippingsByIds(ids), repo.addressesByIds(ids)]);
+  const shipById = new Map(ships.map((r) => [r.id, r as ReportAddress]));
+  const addrById = new Map(addrs.map((r) => [r.id, r as ReportAddress]));
+  for (const w of wanted) {
+    const hit = shipById.get(w.shippingId) ?? addrById.get(w.shippingId);
+    if (!hit) continue;
+    if (hit.userId != null && hit.userId !== w.customerId) continue; // never cross customers
+    out.set(`${w.shippingId}:${w.customerId}`, hit);
+  }
+  return out;
+};
+
+/** One batched lookup per relation for a page/batch of subscription rows. */
+const hydrateSubReportExtras = async (
+  rows: LiveSubWithOrder[],
+  courses: Map<number, { id: number; educatorId?: number | null }>
+): Promise<SubReportExtras> => {
+  const educatorIds = [...new Set(rows.map((r) => courses.get(r.liveCourseId)?.educatorId).filter((x): x is number => x != null && x > 0))];
+  // The subscription's own address wins; fall back to the order's (same column
+  // meaning on both tables — ws_customer_shipping.id, NEVER ws_customer_address.id).
+  const wantedAddresses = rows
+    .map((r) => ({ shippingId: (r.shipping ?? r.order?.shipping) as number | null, customerId: r.customerId }))
+    .filter((w): w is { shippingId: number; customerId: number } => w.shippingId != null && w.shippingId > 0);
+  const adminIds = [...new Set(rows.map((r) => r.created_by).filter((x): x is number => x != null && x > 0))];
+  const [educators, shippings, admins] = await Promise.all([
+    repo.educatorsByIds(educatorIds),
+    resolveReportAddresses(wantedAddresses),
+    repo.adminUsersByIds(adminIds),
+  ]);
+  return {
+    educators: new Map(educators.map((e) => [e.id, e])),
+    shippings,
+    // ws_users PK is BigInt — key by string so the lookup can't miss on 1n !== 1.
+    admins: new Map(admins.map((a) => [String(a.id), a])),
+  };
+};
+
+/** The report columns themselves. Key names + types mirror admin-subscription.service. */
+const subReportColumns = (r: LiveSubWithOrder, pay: LiveCourseOrder | null | undefined, x: SubReportExtras, course?: { educatorId?: number | null }) => {
+  const educatorId = course?.educatorId ?? null;
+  const educator = educatorId != null ? x.educators.get(educatorId) ?? null : null;
+  const shipId = r.shipping ?? pay?.shipping ?? null;
+  const ship = shipId != null ? x.shippings.get(`${shipId}:${r.customerId}`) ?? null : null;
+  const admin = r.created_by != null ? x.admins.get(String(r.created_by)) ?? null : null;
+  const adminName = admin ? `${admin.firstName ?? ""} ${admin.lastName ?? ""}`.trim() : "";
+  return {
+    // courier tracking (allocated at verify for material subs); null until assigned
+    trackingId: trackingToNumber(r.tracking),
+    educatorName: educator?.name ?? null,
+    educatorId: educator?.id ?? null,
+    // amounts / coins — the split the shared computeMaterialSplit books at verify
+    courseAmount: decToNum(r.courseAmount),
+    materialAmount: decToNum(r.materialAmount),
+    wsCoin: pay?.wsCoin ?? null,
+    // ⚠ The GATEWAY (razorpay|bank|cash|free|…), lowercased — NOT online/backend.
+    // That is `paymentMethod`, which `base` already carries and which the table
+    // renders in its own Activation Type column. Conflating them makes the two
+    // columns duplicates and hides which gateway actually took the money.
+    orderMethod: pay?.paymentMethod ? String(pay.paymentMethod).toLowerCase() : null,
+    materialType: rowHasMaterial(r) ? "With Material" : "Without Material",
+    // No SQL source for "Activation Type" — same null the Subscription report emits.
+    activationType: null as string | null,
+    razorpayOrderId: pay ? blankStrToNull(pay.razorpayOrderId) : null,
+    razorpayPaymentId: pay ? blankStrToNull(pay.razorpayPaymentId) : null,
+    bankTransactionId: pay ? blankStrToNull(pay.bankTransactionId) : null,
+    shipping: ship
+      ? {
+          address: ship.address ?? null,
+          address2: ship.address_2 ?? null,
+          city: ship.city ?? null,
+          pincode: ship.pincode ?? null,
+          alternatePhone: ship.alternate_phone != null ? String(ship.alternate_phone) : null,
+        }
+      : null,
+    remarks: r.remarks ?? null,
+    activatedBy: adminName || null,
+  };
+};
+
 export const listSubscriptions = async (q: SubReportQuery & {
   page: number; limit: number;
 }): Promise<
@@ -497,18 +633,20 @@ export const listSubscriptions = async (q: SubReportQuery & {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null))])).map((p) => [p.id, p]));
-  // Payment moved to ws_live_course_order (2026-08-25) — load it for this page.
-  const orders = new Map((await repo.ordersByIds([...new Set(rows.map((r) => (r as any).orderId).filter((x): x is number => x != null))])).map((o) => [o.id, o]));
+  // Payment is NOT re-fetched: `listSubsByWhere` already does include:{order:true},
+  // so the order row is in memory on `r.order` (the export path has always read it
+  // that way). The separate ordersByIds round-trip this used to make was redundant.
+  const extra = await hydrateSubReportExtras(rows, courses);
 
   const data = rows.map((r) => {
     const course = courses.get(r.liveCourseId);
     const plan = r.planId != null ? plans.get(r.planId) : undefined;
-    const pay = payOf(r, orders);
+    const pay = r.order;
     const base = reportRow({
       cust: r.customerId ? custs.get(r.customerId) : undefined,
       product: course ? { _id: String(course.id), type: "liveCourse" as const, name: course.name, image: course.image ?? null } : null,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
-      amount: pay?.paidAmount != null ? Number(pay.paidAmount) : 0,
+      amount: pay?.amount != null ? Number(pay.amount) : 0,
       paymentMethod: pay?.razorpayOrderId ? "online" : "backend",
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
@@ -530,6 +668,11 @@ export const listSubscriptions = async (q: SubReportQuery & {
       codeType: code.codeType,
       promocodeSnapshot: (pay?.promocode as unknown) ?? null,
       refferalcodeSnapshot: (pay?.refferalcode as unknown) ?? null,
+      // ── Report columns, key-for-key with the Subscription report ─────────────
+      // Both feed ONE frontend normalizer and ONE table, so a renamed or retyped
+      // key here surfaces as a silently blank column. Unknown is ALWAYS null,
+      // never "" and never 0 (the table prints a literal 0 for a zero amount).
+      ...subReportColumns(r, pay, extra, course),
     };
   });
 
@@ -545,18 +688,23 @@ export const listSubscriptions = async (q: SubReportQuery & {
 // (id DESC, no deep OFFSET) and mapped per batch so memory stays bounded (lakhs OK).
 const LIVE_SUB_EXPORT_BATCH = 5000;
 
-// One flat export row per subscription. Only fields the list already fetches (raw
-// ws_live_course_subscription row + customer/course maps) are populated; columns
-// the live-course subscription doesn't expose (educator/shipping/remarks/material
-// split/ws-coin) stay empty — no extra Prisma joins are invented
-// (docs/backend-requests/live-course-report-detailed-export.md).
+// One flat export row per subscription — the same 27 columns the screen renders,
+// built from the SAME `subReportColumns` helper so the download can never disagree
+// with the table.
+//
+// The old note here claimed educator/shipping/remarks/material-split/ws-coin had no
+// source on a live-course subscription. That stopped being true when the live-course
+// tables adopted the package shape (2026-08-25 order split, 2026-08-27 course_amount /
+// material_amount / pc_material_id / tracking): ten of those values ride on the row and
+// its included order, the other three cost one batched lookup per 5000-row batch.
 //
 // Promocode + Promoter Name are populated as of 2026-08-20: they come from the row's
 // own snapshot columns, so they still cost NO extra query.
 const buildSubExportRow = (
   r: LiveSubWithOrder,
   cust: { id: number; fullName: string | null; phoneNumber: string | null; emailAddress: string | null } | undefined,
-  course: { id: number; name: string } | undefined,
+  course: { id: number; name: string; educatorId?: number | null } | undefined,
+  extra: SubReportExtras,
   now: Date
 ) => {
   // Payment (amount, gateway ids, code snapshots) comes off the ORDER since
@@ -574,12 +722,16 @@ const buildSubExportRow = (
     courseName: course?.name ?? "",
     startAt: r.startAt ?? null,
     endAt: r.endAt ?? null,
-    amount: pay?.paidAmount != null ? Number(pay.paidAmount) : 0,
+    amount: pay?.amount != null ? Number(pay.amount) : 0,
     paymentMethod: method,
     activationType: method,
     razorpayOrderId: pay?.razorpayOrderId ?? "",
     razorpayPaymentId: pay?.razorpayPaymentId ?? "",
     status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+    // The 13 report columns, from the one helper the list DTO uses. A spreadsheet
+    // cell wants "" where the JSON wants null — the column getters below do that
+    // conversion, so the values stay identical to the screen's.
+    cols: subReportColumns(r, pay, extra, course),
   };
 };
 
@@ -588,7 +740,9 @@ const buildSubExportRow = (
 const mapSubExportBatch = async (rows: LiveSubWithOrder[], now: Date) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
-  return rows.map((r) => buildSubExportRow(r, r.customerId ? custs.get(r.customerId) : undefined, courses.get(r.liveCourseId), now));
+  // Educator / shipping / activated-by, batched per 5000-row page like the rest.
+  const extra = await hydrateSubReportExtras(rows, courses);
+  return rows.map((r) => buildSubExportRow(r, r.customerId ? custs.get(r.customerId) : undefined, courses.get(r.liveCourseId), extra, now));
 };
 
 // Walk the entire filtered set in keyset batches (no cap). `filter` is the resolved
@@ -616,8 +770,12 @@ const fmtExportDate = (d: Date | string | null | undefined): string => {
   return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
 };
 
-// Column order mirrors the detailed subscription report table. Values not exposed
-// by a live-course subscription render as an empty string (per the request doc).
+// Column order mirrors the detailed subscription report table — the client reconciles
+// the two files column for column, so the 27 headers and their order are fixed.
+// `cell` turns the DTO's null (= unknown) into the blank a spreadsheet expects.
+const cell = (v: string | number | null | undefined): string | number => (v == null ? "" : v);
+// "Package Name" stays blank by design: a live course is not a package. The column
+// exists only because one table is shared across four reports.
 const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buildSubExportRow>) => string | number }[] = [
   { header: "Subscription ID", get: (i) => i._id },
   { header: "Customer Name", get: (i) => i.customerName },
@@ -625,26 +783,29 @@ const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buil
   { header: "Email", get: (i) => i.email },
   { header: "Course Name", get: (i) => i.courseName },
   { header: "Package Name", get: () => "" },
-  { header: "Educator Name", get: () => "" },
+  { header: "Educator Name", get: (i) => cell(i.cols.educatorName) },
   { header: "Promocode", get: (i) => i.promocode },
   { header: "Promoter Name", get: (i) => i.promoterName },
   { header: "Start Date", get: (i) => fmtExportDate(i.startAt) },
   { header: "End Date", get: (i) => fmtExportDate(i.endAt) },
   { header: "Amount", get: (i) => i.amount },
-  { header: "Course Amount", get: () => "" },
-  { header: "Material Amount", get: () => "" },
-  { header: "Ws Coin", get: () => "" },
-  { header: "Material Type", get: () => "" },
+  { header: "Course Amount", get: (i) => cell(i.cols.courseAmount) },
+  { header: "Material Amount", get: (i) => cell(i.cols.materialAmount) },
+  { header: "Ws Coin", get: (i) => cell(i.cols.wsCoin) },
+  { header: "Material Type", get: (i) => cell(i.cols.materialType) },
+  // Activation channel (online|backend) — distinct from Order Method below.
   { header: "Activation Type", get: (i) => i.activationType },
-  { header: "Order Method", get: (i) => i.paymentMethod },
+  // The GATEWAY off the order. This used to repeat `paymentMethod`, which made
+  // Activation Type and Order Method duplicate columns in the downloaded file.
+  { header: "Order Method", get: (i) => cell(i.cols.orderMethod) },
   { header: "Order Id", get: (i) => i.razorpayOrderId },
   { header: "Payment Id", get: (i) => i.razorpayPaymentId },
-  { header: "Bank Transaction Id", get: () => "" },
-  { header: "Address", get: () => "" },
-  { header: "City", get: () => "" },
-  { header: "Pincode", get: () => "" },
-  { header: "Remarks", get: () => "" },
-  { header: "Activated By", get: () => "" },
+  { header: "Bank Transaction Id", get: (i) => cell(i.cols.bankTransactionId) },
+  { header: "Address", get: (i) => cell(i.cols.shipping?.address) },
+  { header: "City", get: (i) => cell(i.cols.shipping?.city) },
+  { header: "Pincode", get: (i) => cell(i.cols.shipping?.pincode) },
+  { header: "Remarks", get: (i) => cell(i.cols.remarks) },
+  { header: "Activated By", get: (i) => cell(i.cols.activatedBy) },
   { header: "Status", get: (i) => i.status },
 ];
 
@@ -759,36 +920,54 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   if (grantEndAt.getTime() <= grantStartAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
   const shippingId = v.customerShippingId != null ? parseLiveId(v.customerShippingId) : null;
+  // The entitled material kit, copied off the live course — the twin of the package
+  // path's findCoursePcMaterialId / findPackagePcMaterialId.
+  const liveCourseForGrant = await repo.liveCourseMaterialKit(liveCourseId);
 
   // The order carries the payment for THIS grant — its own amount, never a running
   // total. The old extend path summed into the existing row's paid_amount precisely
   // because that row was also the payment record; each order now owns its own.
+  // 2026-08-27: the order carries only the ws_package_course_order columns.
+  // `with_material`, `remarks`, `created_by` and `updated_by` are NOT on it — the
+  // subscription created just below already stores all four, which is where every
+  // reader takes them from. `paid_at` is gone too; `updated_at` is the paid-at.
   const order = await repo.createOrder({
     customerId,
     liveCourseId,
     planId,
-    paidAmount: v.amount ?? 0,
+    orderType: "purchase",
+    amount: v.amount ?? 0,
+    // A manual grant has no list price of its own — the granted amount IS the price,
+    // and no code was redeemed, so the discount is 0.
+    originalPrice: v.amount ?? 0,
+    codeDiscount: 0,
     paymentMethod: v.paymentMethod ?? "cash",
     razorpayOrderId: v.razorpayOrderId ?? null,
     razorpayPaymentId: v.razorpayPaymentId ?? null,
     bankTransactionId: v.bankTransactionId ?? null,
     status: "complete",
-    paidAt: now,
-    withMaterial: !!v.withMaterial,
-    customerShippingId: shippingId,
-    remarks: v.remarks ?? null,
-    // Admin-initiated manual grant → both audit columns = the acting admin.
-    created_by: v.actingAdminId ?? null,
-    updated_by: v.actingAdminId ?? null,
+    shipping: shippingId,
     createdAt: now,
     updatedAt: now,
   });
 
+  // The ws_package_course_subscription columns (2026-08-27). A manual grant redeems
+  // no promocode, so there is no promoter to attribute; `payment_type` is "backend"
+  // unless the admin recorded a gateway id, which is the same rule the live-course
+  // report already uses for activationType.
+  const grantAmount = v.amount ?? 0;
+  const grantMaterial = computeMaterialSplit(grantAmount, plan);
   const sub = await repo.createSubscription({
     orderId: order.id,
     customerId, liveCourseId, planId, startAt: grantStartAt, endAt: grantEndAt, status: true,
     withMaterial: !!v.withMaterial,
-    customerShippingId: shippingId,
+    shipping: shippingId,
+    pcMaterialId: liveCourseForGrant?.pcMaterialId ?? null,
+    amount: grantAmount,
+    courseAmount: grantMaterial.courseAmount,
+    materialAmount: grantMaterial.materialAmount,
+    paidAmount: new PrismaRuntime.Decimal(grantAmount),
+    payment_type: v.razorpayOrderId ? "online" : "backend",
     remarks: v.remarks ?? null,
     // Admin-initiated manual grant → both audit columns = the acting admin.
     created_by: v.actingAdminId ?? null,
@@ -824,10 +1003,13 @@ export const updateSubscription = async (id: number, v: { status?: boolean; paym
     data.paymentStatus = v.paymentStatus;
     if (v.status === undefined) data.status = v.paymentStatus === "verified";
     if ((current as any).orderId != null) {
+      // The ORDER carries no audit columns — ws_package_course_order has none, so
+      // neither does this table since 2026-08-27. `updated_by` is stamped on the
+      // SUBSCRIPTION above (`data.updated_by`), which is where it was always read.
       await repo.updateOrder((current as any).orderId, {
-        status: v.paymentStatus === "verified" ? "complete" : v.paymentStatus === "pending" ? "pending" : "failed",
+        // "failed" on the wire is 'cancel' in the column (package enum, 2026-08-27).
+        status: v.paymentStatus === "verified" ? "complete" : v.paymentStatus === "pending" ? "pending" : "cancel",
         updatedAt: new Date(),
-        ...(v.actingAdminId != null ? { updated_by: v.actingAdminId } : {}),
       });
     }
   }
@@ -1402,6 +1584,61 @@ export const getLiveCourseDetailForClient = async (
 };
 
 // ── listMyLiveCourses — SQL ──────────────────────────────────────────────────
+
+// endAt sort key: a lifetime entitlement (endAt null) never expires → Infinity.
+const subEndKey = (endAt: Date | null | undefined) => (endAt ? endAt.getTime() : Infinity);
+
+/**
+ * Collapse a customer's live-course subscription rows to ONE row per live course.
+ *
+ * Extend/renew CREATES a new subscription row (one order = one row) — that is the
+ * table's contract and it stays untouched. But "My live courses" is an
+ * ENTITLEMENT view, not an order history: after an in-app Extend Validity the
+ * student must still see a single card whose validity simply moved further out,
+ * not a second copy of the same course.
+ *
+ * Merge rule per course: the winning row is the strongest entitlement
+ * (currently-active beats lapsed, then furthest endAt) — it carries the plan and
+ * subscriptionId — while the card's window is widened to the whole span: the
+ * EARLIEST start of the group and the FURTHEST end among the equally-strong rows
+ * (lifetime, endAt null, wins outright). Same "furthest endAt per course" collapse
+ * getDaysLeftMap already does, so the card's daysLeft matches every other surface.
+ */
+const mergeLiveSubsPerCourse = <
+  T extends { id: number; liveCourseId: number | null; startAt: Date | null; endAt: Date | null; status: boolean | null }
+>(rows: T[], now: Date): T[] => {
+  // Rank: is this row a live entitlement right now? Only the "all" filter can mix
+  // ranks — the active/expired filters already return one kind.
+  const rank = (s: T) => (s.status === true && (s.endAt == null || s.endAt.getTime() >= now.getTime()) ? 1 : 0);
+
+  const groups = new Map<string, T[]>();
+  const order: string[] = []; // preserve the repository's createdAt-desc ordering
+  for (const s of rows) {
+    // Rows with no course attached can't be merged into anything — keep them as-is.
+    const key = s.liveCourseId != null && s.liveCourseId > 0 ? `l:${s.liveCourseId}` : `s:${s.id}`;
+    const g = groups.get(key);
+    if (g) g.push(s);
+    else { groups.set(key, [s]); order.push(key); }
+  }
+
+  return order.map((key) => {
+    const g = groups.get(key) as T[];
+    if (g.length === 1) return g[0];
+
+    const top = Math.max(...g.map(rank));
+    const pool = g.filter((s) => rank(s) === top);
+    const winner = pool.reduce((best, s) => (subEndKey(s.endAt) > subEndKey(best.endAt) ? s : best));
+
+    const starts = g.map((s) => s.startAt).filter((d): d is Date => d != null);
+    const startAt = starts.length ? new Date(Math.min(...starts.map((d) => d.getTime()))) : null;
+    const endAt = pool.some((s) => s.endAt == null)
+      ? null
+      : new Date(Math.max(...pool.map((s) => (s.endAt as Date).getTime())));
+
+    return { ...winner, startAt, endAt };
+  });
+};
+
 export const listMyLiveCoursesForClient = async (
   customerId: number,
   filterStatus: string,
@@ -1409,7 +1646,7 @@ export const listMyLiveCoursesForClient = async (
   q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
 ) => {
   const now = new Date();
-  const subs = await repo.myLiveCourseSubs(customerId, filterStatus, now);
+  const subs = mergeLiveSubsPerCourse(await repo.myLiveCourseSubs(customerId, filterStatus, now), now);
   const courseIds = [...new Set(subs.map((s) => s.liveCourseId).filter((n): n is number => n != null))];
   const planIds = [...new Set(subs.map((s) => s.planId).filter((n): n is number => n != null))];
   const [courses, plans] = await Promise.all([
@@ -2434,6 +2671,15 @@ export const getScheduleForClient = async (
 // ── GET /my/schedule (owned courses' schedule folders) — SQL ──────────────────
 // Mirrors the Mongo listMyScheduleByCategory contract: for every owned live
 // course (active/lifetime verified sub), its active schedule folders + daysLeft.
+//
+// ONLY courses that actually have a timetable are listed. This is a home-screen
+// NAVIGATION list: every row here must lead somewhere, and the nav DTO strips
+// `entryCount` (see the controller), so the app cannot tell an empty folder from
+// a full one and would render a dead end. A folder counts as a real timetable
+// only when it is visible (status !== false) AND holds at least one entry — an
+// entry-less folder is an admin shell, not a schedule. A course with no such
+// folder is dropped entirely, and empty folders are dropped from the courses
+// that stay, so `scheduleFolders` is never a list of dead ends.
 export const listMyScheduleForClient = async (customerId: number) => {
   const now = new Date();
   const ownedIds = await repo.ownedCourseIds(customerId, now);
@@ -2445,27 +2691,33 @@ export const listMyScheduleForClient = async (customerId: number) => {
     }),
     getDaysLeftMap(customerId, ownedIds),
   ]);
-  const liveCourses = courses.map((c) => {
-    const folders = jArr(c.scheduleFolders)
-      .filter((f: any) => f.status !== false)
-      .slice()
-      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-      .map((f: any) => ({
-        _id: String(f._id),
-        title: f.title,
-        image: f.image ?? null,
-        order: f.order ?? 0,
-        entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
-      }));
-    const key = String(c.id);
-    return {
-      _id: String(c.id),
-      name: c.name,
-      image: c.image,
-      scheduleFolders: folders,
-      daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
-    };
-  });
+  const liveCourses = courses
+    .map((c) => {
+      const folders = jArr(c.scheduleFolders)
+        .filter((f: any) => f.status !== false)
+        .slice()
+        .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+        .map((f: any) => ({
+          _id: String(f._id),
+          title: f.title,
+          image: f.image ?? null,
+          order: f.order ?? 0,
+          entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
+        }))
+        .filter((f) => f.entryCount > 0);
+      const key = String(c.id);
+      return {
+        _id: String(c.id),
+        name: c.name,
+        image: c.image,
+        scheduleFolders: folders,
+        daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
+      };
+    })
+    // No timetable → not a schedule row. `totalLiveCourses` counts what is
+    // returned, so the FE's empty state fires on 0 instead of on a list of
+    // courses that open nothing.
+    .filter((c) => c.scheduleFolders.length > 0);
   return { liveCourses, totalLiveCourses: liveCourses.length };
 };
 

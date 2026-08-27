@@ -65,12 +65,13 @@ export const toTestSeriesSubDto = (row: any, customers: Map<number, any>, series
 /**
  * Recent live-course purchases. Fed a `ws_live_course_order` row since 2026-08-25
  * (payment moved off the subscription), so `status` arrives as the order vocabulary
- * string "complete"/"pending"/"failed" rather than the subscription's boolean.
+ * string "complete"/"pending"/"cancel" rather than the subscription's boolean.
  * Normalised here so the response field stays the boolean it has always been.
+ * `row.amount` is discount_price — the same column the package/course rows above use.
  */
 export const toLiveCourseSubDto = (row: any, customers: Map<number, any>, courses: Map<number, any>) => ({
   _id: String(row.id),
-  paidAmount: num(row.paidAmount),
+  paidAmount: num(row.amount),
   status: typeof row.status === "boolean" ? row.status : row.status === "complete",
   createdAt: row.createdAt ?? null,
   customerId: toCustomerRef(row.customerId != null ? customers.get(row.customerId) : null),

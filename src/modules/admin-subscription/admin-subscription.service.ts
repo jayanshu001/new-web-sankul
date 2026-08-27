@@ -7,7 +7,7 @@ import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
 import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
-import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
+import { andWhere, statusWhere, normalizeStatus, reportRow, blankStrToNull, decToNum, rowHasMaterial, trackingToNumber } from "../../utils/reportFilters";
 import { PaymentMethod } from "../../shared/enums";
 
 // Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
@@ -48,23 +48,9 @@ const promoCodeOf = (j: any): string | null => {
   return null;
 };
 
-const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
-const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
-
-// Single source of truth for "with material" on a subscription row. Two signals
-// exist and must never disagree: legacy Mongo-migrated rows carry a `pc_material_id`
-// FK, while SQL-created admin grants carry only a `material_amount` (the create path
-// deliberately writes material_amount and never pc_material_id — see
-// createCourseSubscription). Either signal means the buyer took the physical
-// material, so the "With Material" label can never contradict a nonzero
-// materialAmount. Used by the report label, the single-detail flag, AND the
-// hasMaterial report filter (repository) so all three agree.
-const rowHasMaterial = (r: { pcMaterialId?: number | null; materialAmount?: any }): boolean =>
-  (r.pcMaterialId != null && r.pcMaterialId > 0) || Number(r.materialAmount ?? 0) > 0;
-// bigint `tracking` (courier AWB, ~1.19e11) → number, matching the Subscriptions
-// management list (commerce-subscription transformer). Guard the >2^53 case → null.
-const trackingToNumber = (v: bigint | null | undefined): number | null =>
-  v == null ? null : v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
+// blankStrToNull / decToNum / rowHasMaterial / trackingToNumber moved to
+// utils/reportFilters on 2026-08-27 — the Live Course report emits the same columns
+// and the two must not drift. Imported above.
 const customerRef = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | undefined) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);

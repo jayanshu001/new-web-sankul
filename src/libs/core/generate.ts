@@ -649,6 +649,11 @@ async function loadLiveCourseReceiptFromMysql(
     where: { id: subId, customerId: custId },
     select: {
       createdAt: true, withMaterial: true, liveCourseId: true, planId: true,
+      // `amount` is the subscription's mirror of the order's charged amount. It is
+      // selected ONLY so a legacy row whose order the backfill never reached still
+      // prints a total — when `order` exists the spread below shadows it with
+      // ws_live_course_order.discount_price, which is the authoritative figure.
+      amount: true,
       // Every payment field the receipt renders moved to ws_live_course_order on
       // 2026-08-25 and was dropped from the subscription.
       order: true,
@@ -668,7 +673,18 @@ async function loadLiveCourseReceiptFromMysql(
     prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
   ]);
 
-  const rawAmount = sub.paidAmount != null ? Number(sub.paidAmount) : sub.originalAmount != null ? Number(sub.originalAmount) : 0;
+  // The amount actually charged: ws_live_course_order.discount_price, which the spread
+  // above surfaces as `sub.amount` (falling back to the subscription's own mirrored
+  // `amount` for an order-less legacy row). Same field the package/course invoice
+  // renders (`ord.amount` in loadCourseReceiptFromOrderMysql) and the same one the
+  // purchase-history list and JSON receipt emit.
+  //
+  // ⚠ This USED to read `sub.paidAmount ?? sub.originalAmount`, and both were dead:
+  // `original_amount` was dropped from ws_live_course_subscription on 2026-08-25 and
+  // `paid_amount` is on the subscription but was never in the select above — neither
+  // name exists on ws_live_course_order, so the spread could not supply them either.
+  // Every live-course invoice therefore printed ₹0.00 / "Zero Rupees Only".
+  const rawAmount = sub.amount != null ? Number(sub.amount) : 0;
 
   // Was hardcoded to "Online", so a bank/cash-settled live course printed the
   // wrong method AND an empty id. ws_live_course_subscription carries both its own
@@ -682,7 +698,10 @@ async function loadLiveCourseReceiptFromMysql(
     razorpayPaymentId: liveRef.paymentId,
     paymentIdLabel: liveRef.paymentIdLabel,
     receipt: sub.razorpayOrderId || String(subId),
-    createdDate: formatDate(sub.paidAt ?? sub.createdAt ?? undefined),
+    // `sub.createdAt` is the ORDER's created_at (shadowed by the spread), which is the
+    // payment instant — the same source the package/course invoice prints. There is no
+    // `paid_at` to prefer any more: it was dropped from both tables on 2026-08-27.
+    createdDate: formatDate(sub.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",
     userPhone: customer?.phoneNumber || "-",
     userEmailAddress: customer?.emailAddress || "-",

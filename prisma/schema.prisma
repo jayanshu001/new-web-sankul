@@ -204,7 +204,7 @@ model ImageNotification {
 }
 
 model TermsAndConditions {
-  id Int @id @default(autoincrement())
+  id                             Int     @id @default(autoincrement())
   // MySQL enum('book','pendrive','referral code') — Prisma types it loosely as
   // String; writes MUST use an accepted value (see TERMS_MODULES) or MySQL rejects
   // the row with error 1265. UNIQUE because the client resolves a module with a
@@ -552,21 +552,21 @@ model RefferalProgram {
 }
 
 model RefferalTransaction {
-  id          Int                       @id @default(autoincrement()) @map("id")
-  orderId     Int?                      @map("order_id")
-  source      String?                   @map("source") @db.VarChar(20)
-  order       PackageCourseOrder?       @relation(fields: [orderId], references: [id])
-  customerId  Int                       @map("customer_id")
-  customer    Customer?                 @relation(fields: [customerId], references: [id])
-  bankAccount Json?                     @map("bank_account")
-  description String                    @map("description") @db.VarChar(150)
-  coin        Int                       @map("coin")
-  type        RefferalTransactionType   @map("type")
-  status      RefferalTransactionStatus @map("status")
-  providerRef String?                   @map("provider_ref") @db.VarChar(255)
-  failureReason String?                 @map("failure_reason") @db.VarChar(500)
-  createdAt   DateTime?                 @map("created_at")
-  updatedAt   DateTime?                 @map("updated_at")
+  id            Int                       @id @default(autoincrement()) @map("id")
+  orderId       Int?                      @map("order_id")
+  source        String?                   @map("source") @db.VarChar(20)
+  order         PackageCourseOrder?       @relation(fields: [orderId], references: [id])
+  customerId    Int                       @map("customer_id")
+  customer      Customer?                 @relation(fields: [customerId], references: [id])
+  bankAccount   Json?                     @map("bank_account")
+  description   String                    @map("description") @db.VarChar(150)
+  coin          Int                       @map("coin")
+  type          RefferalTransactionType   @map("type")
+  status        RefferalTransactionStatus @map("status")
+  providerRef   String?                   @map("provider_ref") @db.VarChar(255)
+  failureReason String?                   @map("failure_reason") @db.VarChar(500)
+  createdAt     DateTime?                 @map("created_at")
+  updatedAt     DateTime?                 @map("updated_at")
 
   @@map("ws_refferal_transaction")
 }
@@ -574,37 +574,37 @@ model RefferalTransaction {
 // ****************************BOOK MODULE******************************
 
 model Book {
-  id               Int             @id @default(autoincrement())
-  name             String
-  thumbnail        String?
-  author           String?
-  image            String?
-  description      String?
+  id                       Int             @id @default(autoincrement())
+  name                     String
+  thumbnail                String?
+  author                   String?
+  image                    String?
+  description              String?
   // Per-book T&C, mirroring `ws_ebook.terms_and_conditions`. Nullable here because
   // it was added to an existing table (2026-08-18); the DTO coerces null → "" so the
   // client shape matches the ebook's non-null string.
-  termsAndConditions String?       @map("terms_and_conditions") @db.Text
-  demo_url         String?
-  demoFileName     String?         @map("demo_file_name")
-  weight           Int?
-  pages            Int?
-  dynamic_link     String?
-  list_price       Int
-  discounted_price Int
-  isTrending       Boolean         @default(false) @map("is_trending")
-  shipping_price   Int
-  order_by         Int?
-  language         String          @default("Gujarati")
-  is_magazine      Boolean         @default(false)
-  isCombo          Boolean         @default(false) @map("is_combo")
-  active           Boolean         @default(true) @map("status")
-  created_at       DateTime?
-  updated_at       DateTime?
-  bookCartItem     BookCartItem[]
-  bookOrderItem    BookOrderItem[]
-  courseBook       CourseBook[]
-  examCountdownIds         Json? @map("exam_countdown_ids")
-  examCountdownCategoryIds Json? @map("exam_countdown_category_ids")
+  termsAndConditions       String?         @map("terms_and_conditions") @db.Text
+  demo_url                 String?
+  demoFileName             String?         @map("demo_file_name")
+  weight                   Int?
+  pages                    Int?
+  dynamic_link             String?
+  list_price               Int
+  discounted_price         Int
+  isTrending               Boolean         @default(false) @map("is_trending")
+  shipping_price           Int
+  order_by                 Int?
+  language                 String          @default("Gujarati")
+  is_magazine              Boolean         @default(false)
+  isCombo                  Boolean         @default(false) @map("is_combo")
+  active                   Boolean         @default(true) @map("status")
+  created_at               DateTime?
+  updated_at               DateTime?
+  bookCartItem             BookCartItem[]
+  bookOrderItem            BookOrderItem[]
+  courseBook               CourseBook[]
+  examCountdownIds         Json?           @map("exam_countdown_ids")
+  examCountdownCategoryIds Json?           @map("exam_countdown_category_ids")
 
   @@map("ws_book")
 }
@@ -730,26 +730,26 @@ model ExamCategory {
 }
 
 model Exam {
-  id                Int                @id @default(autoincrement())
-  name              String             @map("title")
+  id                Int                 @id @default(autoincrement())
+  name              String              @map("title")
   description       String?
   type              ExamType
-  ExamCategory      ExamCategory?      @relation(fields: [examCategoryId], references: [id])
-  examCategoryId    Int?               @map("exam_category_id")
-  isPaid            Boolean            @map("is_paid")
+  ExamCategory      ExamCategory?       @relation(fields: [examCategoryId], references: [id])
+  examCategoryId    Int?                @map("exam_category_id")
+  isPaid            Boolean             @map("is_paid")
   time              Int
-  numberOfQuestions Int                @map("questions")
-  positiveMarks     Decimal            @map("positive_marks")
-  negativeMarks     Decimal            @map("negative_marks")
-  solution          String?            @map("solution_pdf")
-  solutionName      String?            @map("solution_pdf_name")
-  startAt           DateTime?          @map("start_date")
-  endAt             DateTime?          @map("end_date")
+  numberOfQuestions Int                 @map("questions")
+  positiveMarks     Decimal             @map("positive_marks")
+  negativeMarks     Decimal             @map("negative_marks")
+  solution          String?             @map("solution_pdf")
+  solutionName      String?             @map("solution_pdf_name")
+  startAt           DateTime?           @map("start_date")
+  endAt             DateTime?           @map("end_date")
   status            Boolean
   order_by          Int
   send_push         Boolean
-  createAt          DateTime?          @map("created_at")
-  updatedAt         DateTime?          @map("updated_at")
+  createAt          DateTime?           @map("created_at")
+  updatedAt         DateTime?           @map("updated_at")
   examQuestion      ExamQuestion[]
   examResultDetail  ExamResultDetail[]
   examResult        ExamResult[]
@@ -1002,33 +1002,33 @@ model MaterialCategoryLiveCourse {
 // ****************************E-BOOK MODULE******************************
 
 model EBook {
-  id                 Int                       @id @default(autoincrement())
-  name               String
-  thumbnail          String
-  image              String
-  description        String?
-  termsAndConditions String                    @map("terms_and_conditions")
-  author             String?
-  publisher          String?
-  orderby            Int                       @map("order_by")
-  isTrending         Boolean                   @default(false) @map("is_trending")
-  language           EBookLanguage
-  bookDemoUrl        String                    @map("demo_url")
-  bookUrl            String                    @map("book_url")
-  bookFileName       String?                   @map("book_file_name") @db.VarChar(500)
-  demoFileName       String?                   @map("demo_file_name") @db.VarChar(500)
-  bookUploadStatus   String?                   @map("book_upload_status") @db.VarChar(20)
-  demoUploadStatus   String?                   @map("demo_upload_status") @db.VarChar(20)
-  bookUploadProgress Int                       @default(0) @map("book_upload_progress")
-  demoUploadProgress Int                       @default(0) @map("demo_upload_progress")
-  shareableLink      String                    @map("link")
-  active             Boolean                   @map("status")
-  createdAt          DateTime?                 @map("created_at")
-  updatedAt          DateTime?                 @map("updated_at")
-  plans              PackageCourseEbookPrice[]
-  eBookSubscription  EBookSubscription[]
-  examCountdownIds         Json? @map("exam_countdown_ids")
-  examCountdownCategoryIds Json? @map("exam_countdown_category_ids")
+  id                       Int                       @id @default(autoincrement())
+  name                     String
+  thumbnail                String
+  image                    String
+  description              String?
+  termsAndConditions       String                    @map("terms_and_conditions")
+  author                   String?
+  publisher                String?
+  orderby                  Int                       @map("order_by")
+  isTrending               Boolean                   @default(false) @map("is_trending")
+  language                 EBookLanguage
+  bookDemoUrl              String                    @map("demo_url")
+  bookUrl                  String                    @map("book_url")
+  bookFileName             String?                   @map("book_file_name") @db.VarChar(500)
+  demoFileName             String?                   @map("demo_file_name") @db.VarChar(500)
+  bookUploadStatus         String?                   @map("book_upload_status") @db.VarChar(20)
+  demoUploadStatus         String?                   @map("demo_upload_status") @db.VarChar(20)
+  bookUploadProgress       Int                       @default(0) @map("book_upload_progress")
+  demoUploadProgress       Int                       @default(0) @map("demo_upload_progress")
+  shareableLink            String                    @map("link")
+  active                   Boolean                   @map("status")
+  createdAt                DateTime?                 @map("created_at")
+  updatedAt                DateTime?                 @map("updated_at")
+  plans                    PackageCourseEbookPrice[]
+  eBookSubscription        EBookSubscription[]
+  examCountdownIds         Json?                     @map("exam_countdown_ids")
+  examCountdownCategoryIds Json?                     @map("exam_countdown_category_ids")
 
   @@map("ws_ebook")
 }
@@ -1039,17 +1039,17 @@ model EBook {
 // only); extended 2026-06-13 with media/sender/push columns to match the Mongo
 // PackageChat contract (see src/modules/package-chat).
 model PackageChat {
-  id         Int                 @id @default(autoincrement())
-  packageId  Int                 @map("package_id")
-  package    Package?            @relation(fields: [packageId], references: [id])
+  id         Int                   @id @default(autoincrement())
+  packageId  Int                   @map("package_id")
+  package    Package?              @relation(fields: [packageId], references: [id])
   message    String
-  mediaUrl   String?             @map("media_url")
+  mediaUrl   String?               @map("media_url")
   mediaType  PackageChatMediaType? @map("media_type")
   senderType PackageChatSenderType @default(admin) @map("sender_type")
-  senderId   String?             @map("sender_id") // admin ObjectId (admin auth stays Mongo)
-  pushSent   Boolean             @default(false) @map("push_sent")
-  createdAt  DateTime?           @map("created_at")
-  updatedAt  DateTime?           @map("updated_at")
+  senderId   String?               @map("sender_id") // admin ObjectId (admin auth stays Mongo)
+  pushSent   Boolean               @default(false) @map("push_sent")
+  createdAt  DateTime?             @map("created_at")
+  updatedAt  DateTime?             @map("updated_at")
 
   @@map("ws_package_chat")
 }
@@ -1178,19 +1178,19 @@ model PackageVideoCategoryRelation {
 // ****************************COURSE MODULE******************************
 
 model CourseEducator {
-  id              Int                     @id @default(autoincrement())
+  id              Int                   @id @default(autoincrement())
   name            String
   image           String?
   about           String
-  email           String                  @map("email_address")
+  email           String                @map("email_address")
   password        String
   view            Int
   status          Boolean
-  deleted         Boolean                 @default(false)
-  lastSeenAt      DateTime?               @map("last_seen_at") @db.Date
-  emailVerifiedAt DateTime?               @map("email_verified_at") @db.Date
-  createdAt       DateTime?               @map("created_at")
-  updatedAt       DateTime?               @map("updated_at")
+  deleted         Boolean               @default(false)
+  lastSeenAt      DateTime?             @map("last_seen_at") @db.Date
+  emailVerifiedAt DateTime?             @map("email_verified_at") @db.Date
+  createdAt       DateTime?             @map("created_at")
+  updatedAt       DateTime?             @map("updated_at")
   course          Course[]
   accessTokens    EducatorAccessToken[]
 
@@ -1261,8 +1261,8 @@ model Course {
   courseBook                CourseBook[]
   plans                     PackageCourseEbookPrice[]
   packageCourseSubscription PackageCourseSubscription[]
-  examCountdownIds          Json? @map("exam_countdown_ids")
-  examCountdownCategoryIds  Json? @map("exam_countdown_category_ids")
+  examCountdownIds          Json?                       @map("exam_countdown_ids")
+  examCountdownCategoryIds  Json?                       @map("exam_countdown_category_ids")
 
   @@map("ws_course")
 }
@@ -1422,6 +1422,15 @@ model PackageCourseSubscription {
   /// Does NOT replace idx_pcs_customer_status_endat (that serves the end_at range reads).
   /// DDL: 2026-08-26_purchase_history_indexes.sql
   @@index([customerId, status, orderId, id], name: "idx_pcs_customer_status_order")
+  /// Purchase-history's LEGACY window fallback (folded pre-2026-08-25 extensions that
+  /// own no subscription row) looks a target up per customer. Kept as two separate
+  /// keys because the read is two separate queries: one `course_id IN (…)` and one
+  /// `package_id IN (…)`. A single OR over both columns can seek NEITHER — it falls
+  /// back to the (customer_id, status) prefix and reads every subscription the
+  /// customer owns, which was 16,773 rows to render 20 cards.
+  /// DDL: 2026-08-27_purchase_history_subscription_target_indexes.sql
+  @@index([customerId, status, courseId], name: "idx_pcs_customer_status_course")
+  @@index([customerId, status, packageId], name: "idx_pcs_customer_status_package")
   @@map("ws_package_course_subscription")
 }
 
@@ -1475,13 +1484,13 @@ model EBookOrder {
 }
 
 model EBookSubscription {
-  id         Int         @id @default(autoincrement())
-  eBookOrder EBookOrder? @relation(fields: [orderId], references: [id])
-  orderId    Int?        @map("order_id")
-  customer   Customer?   @relation(fields: [customerId], references: [id])
-  customerId Int?        @map("customer_id")
-  eBook      EBook?      @relation(fields: [ebookId], references: [id])
-  ebookId    Int?        @map("ebook_id")
+  id           Int                           @id @default(autoincrement())
+  eBookOrder   EBookOrder?                   @relation(fields: [orderId], references: [id])
+  orderId      Int?                          @map("order_id")
+  customer     Customer?                     @relation(fields: [customerId], references: [id])
+  customerId   Int?                          @map("customer_id")
+  eBook        EBook?                        @relation(fields: [ebookId], references: [id])
+  ebookId      Int?                          @map("ebook_id")
   price        Decimal
   startAt      DateTime?                     @map("start_at")
   endAt        DateTime?                     @map("end_at")
@@ -1501,7 +1510,7 @@ model EBookSubscription {
 // ****************************PROMOTION MODULE******************************
 
 model Promoter {
-  id           Int                     @id @default(autoincrement())
+  id           Int                   @id @default(autoincrement())
   full_name    String?
   email        String?
   password     String?
@@ -1509,7 +1518,7 @@ model Promoter {
   image        String?
   status       Boolean
   is_delete    Boolean
-  lastSeenAt   DateTime?               @map("last_seen_at") @db.Date
+  lastSeenAt   DateTime?             @map("last_seen_at") @db.Date
   created_at   DateTime?
   updated_at   DateTime?
   promocode    Promocode[]
@@ -1519,13 +1528,13 @@ model Promoter {
 }
 
 model PromoterAccessToken {
-  id           Int       @id @default(autoincrement())
-  promoter     Promoter  @relation(references: [id], fields: [promoterId])
-  promoterId   Int       @map("promoter_id")
-  token        String    @db.Text
-  refreshToken String?   @map("refresh_token") @db.Text
-  active       Boolean   @default(true)
-  deleted      Boolean   @default(false)
+  id           Int      @id @default(autoincrement())
+  promoter     Promoter @relation(references: [id], fields: [promoterId])
+  promoterId   Int      @map("promoter_id")
+  token        String   @db.Text
+  refreshToken String?  @map("refresh_token") @db.Text
+  active       Boolean  @default(true)
+  deleted      Boolean  @default(false)
   created_at   DateTime
   expires_at   DateTime
 
@@ -1650,17 +1659,17 @@ model OfflineBatch {
 }
 
 model OfflineEnquiry {
-  id            Int          @id @default(autoincrement())
-  userId        Int?         @map("customer_id")
-  customer      Customer?    @relation(fields: [userId], references: [id])
-  name          String       @map("name")
-  email         String       @map("email")
-  mobile        BigInt       @map("mobile")
-  qualification String       @map("qualification")
-  otherQualification String? @map("other_qualification") @db.VarChar(255)
-  batchId       Int          @map("batch_id")
-  batch         OfflineBatch @relation(fields: [batchId], references: [id])
-  createdAt     DateTime?    @map("created_at")
+  id                 Int          @id @default(autoincrement())
+  userId             Int?         @map("customer_id")
+  customer           Customer?    @relation(fields: [userId], references: [id])
+  name               String       @map("name")
+  email              String       @map("email")
+  mobile             BigInt       @map("mobile")
+  qualification      String       @map("qualification")
+  otherQualification String?      @map("other_qualification") @db.VarChar(255)
+  batchId            Int          @map("batch_id")
+  batch              OfflineBatch @relation(fields: [batchId], references: [id])
+  createdAt          DateTime?    @map("created_at")
 
   @@map("ws_offline_enquiry")
 }
@@ -1700,21 +1709,21 @@ model Inquiry {
 // columns (roles come from the spatie pivots below). `status`/`is_dark` are
 // stored as enum('0','1') in MySQL; mapped to Boolean via @db column type.
 model AdminUser {
-  id              BigInt              @id @default(autoincrement()) @db.UnsignedBigInt
-  firstName       String              @map("first_name") @db.VarChar(255)
-  lastName        String?             @map("last_name") @db.VarChar(100)
-  email           String              @unique @db.VarChar(255)
-  image           String              @db.VarChar(255)
-  emailVerifiedAt DateTime?           @map("email_verified_at")
-  password        String              @db.VarChar(255)
-  lastLoginDate   DateTime?           @map("last_login_date")
-  lastLoginIp     String?             @map("last_login_ip") @db.VarChar(255)
-  lastSeenAt      DateTime?           @map("last_seen_at")
-  status          AdminStatusFlag     @default(active)
-  rememberToken   String?             @map("remember_token") @db.VarChar(100)
-  isDark          AdminDarkFlag       @default(light) @map("is_dark")
-  createdAt       DateTime?           @map("created_at")
-  updatedAt       DateTime?           @map("updated_at")
+  id              BigInt             @id @default(autoincrement()) @db.UnsignedBigInt
+  firstName       String             @map("first_name") @db.VarChar(255)
+  lastName        String?            @map("last_name") @db.VarChar(100)
+  email           String             @unique @db.VarChar(255)
+  image           String             @db.VarChar(255)
+  emailVerifiedAt DateTime?          @map("email_verified_at")
+  password        String             @db.VarChar(255)
+  lastLoginDate   DateTime?          @map("last_login_date")
+  lastLoginIp     String?            @map("last_login_ip") @db.VarChar(255)
+  lastSeenAt      DateTime?          @map("last_seen_at")
+  status          AdminStatusFlag    @default(active)
+  rememberToken   String?            @map("remember_token") @db.VarChar(100)
+  isDark          AdminDarkFlag      @default(light) @map("is_dark")
+  createdAt       DateTime?          @map("created_at")
+  updatedAt       DateTime?          @map("updated_at")
   accessTokens    AdminAccessToken[]
 
   @@map("ws_users")
@@ -1823,6 +1832,12 @@ model LiveCourse {
   ordered                  Int       @default(0)
   shareableLink            String?   @map("shareable_link")
   withMaterial             String?   @map("with_material")
+  /// The material kit a purchase of this live course entitles — the exact twin of
+  /// ws_course.pc_material_id / ws_package.pc_material_id (FK → ws_package_course_material).
+  /// Copied onto ws_live_course_subscription.pc_material_id at verify. Admin
+  /// live-course create/update does not expose it yet.
+  /// DDL: 2026-08-27_live_course_subscription_match_package_shape.sql
+  pcMaterialId             Int?      @map("pc_material_id")
   withoutMaterial          String?   @map("without_material")
   classType                String    @default("live") @map("class_type")
   status                   Boolean   @default(true)
@@ -1877,119 +1892,212 @@ model LiveCoursePlan {
 /// course had no order table and the subscription carried both, which is why a
 /// renewal had nowhere to record its own payment. Those columns still exist on
 /// LiveCourseSubscription for pre-migration rows; new writes go here.
-/// DDL: 2026-08-25_create_ws_live_course_order.sql
+///
+/// SHAPE = ws_package_course_order, COLUMN FOR COLUMN (2026-08-27). The table was
+/// originally built by copying types out of ws_live_course_subscription, which made
+/// it a third order shape; it now mirrors the PackageCourseOrder standard, plus
+/// `live_course_id` (package derives its product through plan_id — live course
+/// cannot, because ws_live_course_plan is a separate table with an overlapping id
+/// space). Two deliberate deviations, both documented in the DDL header:
+///   * `customer_id` is `int NOT NULL`, not package's legacy `varchar(255)`.
+///   * Prisma field names stay camelCase and razorpay-prefixed; package's
+///     `OrigianalPrice` typo and `gateway*` aliases are NOT reproduced. The COLUMN
+///     names — which is what "same schema" means — are identical.
+/// DDL: 2026-08-27_live_course_order_match_package_shape.sql
 model LiveCourseOrder {
-  id                Int       @id @default(autoincrement())
-  customerId        Int       @map("customer_id")
-  liveCourseId      Int       @map("live_course_id")
-  planId            Int?      @map("plan_id")
-
-  // Whole rupees (int, not Decimal) — matches ws_live_course_subscription, which
-  // these columns were moved from. `originalAmount` is the pre-promo price and is
-  // set ONLY when a promo was applied; that is what keeps the discount derivable
-  // (liveSubDiscountAmount = original - paid - walletCoin).
-  paidAmount        Int?      @map("paid_amount")
-  originalAmount    Int?      @map("original_amount")
-  walletCoin        Int?      @map("wallet_coin")
+  id            Int     @id @default(autoincrement())
+  /// Business key = the receipt id checkout generates and returns to the client
+  /// (`live-<epoch>-<rand>`). Mirrors ws_package_course_order.unique_id.
+  uniqueId      String? @map("unique_id")
+  customerId    Int     @map("customer_id")
+  liveCourseId  Int     @map("live_course_id")
+  paymentMethod String  @map("payment_method")
+  orderType     String  @default("purchase") @map("order_type")
+  /// enum('app','web'), NOT NULL DEFAULT 'app'. Left to the DB default: this
+  /// codebase has no app-vs-web signal on the request, and ws_package_course_order
+  /// does not write it either. Declared so it is at least readable.
+  generateFrom  String  @default("app") @map("generate_from")
 
   // Frozen purchase-time snapshots, exactly one ever set (see modules/order-code-snapshot).
-  promocode         Json?
-  refferalcode      Json?
+  promocode    Json?
+  refferalcode Json?
+  /// The referring CUSTOMER, denormalised out of the refferalcode snapshot — the
+  /// column ws_package_course_order has and the referral credit keys on.
+  referrerId   Int?  @map("referrer_id")
 
-  paymentMethod     String?   @map("payment_method")
-  razorpayOrderId   String?   @map("razorpay_order_id")
-  razorpayPaymentId String?   @map("razorpay_payment_id")
-  bankTransactionId String?   @map("bank_transaction_id")
+  planId   Int? @map("plan_id")
+  /// Dispatch address = ws_customer_shipping.id, NEVER a ws_customer_address.id.
+  /// Same column name and same rule as ws_package_course_order.shipping.
+  shipping Int?
 
-  /// "pending" | "complete" | "failed" — ws_test_series_order vocabulary, NOT the
-  /// subscription's "verified". The backfill maps verified → complete.
-  status            String    @default("pending")
-  paidAt            DateTime? @map("paid_at")
+  /// Plan LIST price, always written. `price` on package; was `original_amount`
+  /// here, written only when a promo applied.
+  originalPrice Float? @map("price")
+  /// Promo/referral discount in whole rupees, 0 when no code. Stored, not derived —
+  /// `code_discount` on package. It replaces the old "original_amount IS NULL means
+  /// no promo" signal (see liveSubDiscountAmount).
+  codeDiscount  Int    @default(0) @map("code_discount")
+  wsCoin        Int    @default(0) @map("ws_coin")
+  /// Amount actually charged (post-promo, post-coin) — `discount_price` on package.
+  amount        Int?   @map("discount_price")
 
-  // Chosen at checkout, before any subscription exists; copied onto the sub at verify.
-  withMaterial       Boolean   @default(false) @map("with_material")
-  customerShippingId Int?      @map("customer_shipping_id")
+  razorpayOrderId   String? @map("razorpay_order_id")
+  razorpayPaymentId String? @map("razorpay_payment_id")
+  /// Full Razorpay order response as a JSON string — `razorpay_order` on package.
+  razorpayOrder     String? @map("razorpay_order")
+  ipAddress         String? @map("ip_address")
+  bankTransactionId String? @map("bank_transaction_id")
 
-  remarks           String?
-  createdAt         DateTime? @map("created_at")
-  updatedAt         DateTime? @map("updated_at")
-  created_by        Int?
-  updated_by        Int?
+  /// enum('cancel','complete','pending') — the ws_package_course_order vocabulary.
+  /// 'cancel' replaced the old 'failed'; both API readers map it back to the wire
+  /// value "failed", so no response changed.
+  status    String    @default("pending")
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
 
   /// Normally exactly one — the entitlement this order paid for. A list, not a
   /// single row, only because Prisma models the inverse side of an optional FK that way.
-  subscriptions     LiveCourseSubscription[]
+  subscriptions LiveCourseSubscription[]
+  /// Dispatch rows for this order's material kit (2026-08-27 (c)).
+  tracking      LiveCourseSubscriptionTracking[]
 
+  @@index([uniqueId], name: "lco_unique_id")
   @@index([razorpayOrderId], name: "idx_lco_razorpay_order")
   @@index([customerId, liveCourseId], name: "idx_lco_customer_course")
   @@index([createdAt, status], name: "idx_lco_created_status")
   @@map("ws_live_course_order")
 }
 
+/// SHAPE = ws_package_course_subscription (2026-08-27). Renames, the 8 columns it
+/// was missing, and the same value logic. Four documented deviations, all in the DDL
+/// header of 2026-08-27_live_course_subscription_match_package_shape.sql:
+///   * `live_course_id` — the product FK; package uses package_id/course_id.
+///   * `plan_id`, NOT package's `pcb_id`. Both ORDER tables already say `plan_id`,
+///     so `pcb_id` is the outlier, not the standard.
+///   * `customerId`/`status` keep NOT NULL (package has them nullable, but 0 of
+///     561k rows use it — the type is identical, only the constraint differs).
+///   * `withMaterial`/`trackingStatus` stay — package expresses these through
+///     pc_material_id and its separate tracking table, which live course has not got.
 model LiveCourseSubscription {
-  id                Int       @id @default(autoincrement())
-  customerId        Int       @map("customer_id")
-  liveCourseId      Int       @map("live_course_id")
-  planId            Int?      @map("plan_id")
+  id                 Int                             @id @default(autoincrement())
+  customerId         Int                             @map("customer_id")
+  liveCourseId       Int                             @map("live_course_id")
+  planId             Int?                            @map("plan_id")
+  /// The material kit this purchase entitles, copied off `ws_live_course` at verify
+  /// — the same flow as package (ws_course/ws_package.pc_material_id). NULL until a
+  /// live course has a kit configured.
+  pcMaterialId       Int?                            @map("pc_material_id")
   // The order that paid for this row. NULL only on pre-2026-08-25 rows that the
   // backfill has not reached. DDL: 2026-08-25_create_ws_live_course_order.sql
-  orderId           Int?      @map("order_id")
+  orderId            Int?                            @map("order_id")
   /// Purchase history gates live rows on `order.status = "complete"` rather than the
   /// legacy `payment_status`, so an abandoned checkout never lists as a purchase.
-  order             LiveCourseOrder? @relation(fields: [orderId], references: [id])
-  startAt           DateTime? @map("start_at")
-  endAt             DateTime? @map("end_at")
-  status            Boolean   @default(true)
+  order              LiveCourseOrder?                @relation(fields: [orderId], references: [id])
+  startAt            DateTime?                       @map("start_at")
+  endAt              DateTime?                       @map("end_at")
+  /// Charged amount, mirrored from the order so the subscription reports stand alone
+  /// (`ws_package_course_subscription.amount`). `courseAmount + materialAmount`
+  /// always sums back to exactly this.
+  amount             Float?
+  /// The digital half of `amount`; equals `amount` when the plan carries no material.
+  courseAmount       Float?                          @map("course_amount")
+  /// The physical half — the RESIDUAL of (amount − courseAmount), null with no
+  /// material. Computed by the shared `computeMaterialSplit` (commerce-order.service).
+  materialAmount     Float?                          @map("material_amount")
+  status             Boolean                         @default(true)
   // NO PAYMENT COLUMNS LIVE HERE. The order owns payment, the subscription owns
   // entitlement (2026-08-25). `promocode`/`refferalcode` snapshots, `wallet_coin`,
-  // `original_amount`, `paid_amount`, `payment_status`, `payment_method`, the
-  // razorpay/bank references and `paid_at` all moved to LiveCourseOrder and were
-  // dropped from this table by
-  // 2026-08-25_live_course_subscription_drop_payment_columns.sql.
+  // `original_amount`, `payment_status`, `payment_method`, the razorpay/bank
+  // references and `paid_at` all moved to LiveCourseOrder and were dropped from this
+  // table by 2026-08-25_live_course_subscription_drop_payment_columns.sql.
   // Read them through `order`; there is no legacy fallback left to read.
-  remarks           String?
+  //
+  // `paidAmount` below is NOT one of those: it is the decimal(10,2) column
+  // ws_package_course_subscription carries (the legacy int of the same name was
+  // dropped with the rest). It mirrors the order and is a REPORTING convenience.
+  remarks            String?
+  payment_type       PackageCourseEbookPaymentType   @default(online)
+  /// Promoter attribution, denormalised out of the order's frozen promocode snapshot
+  /// (`$.promoterId` / `$.promotedPackageCourseEbook[0].promoterPercentage`) — the
+  /// same two paths modules/promoter-data reads. A REFERRAL snapshot yields null:
+  /// its earner is a CUSTOMER, not a ws_promoter.
+  promoterId         Int?                            @map("promoter_id")
+  promoterPercentage Decimal?                        @map("promoter_percentage")
+  paidAmount         Decimal?                        @map("paid_amount")
   // Material fulfillment (lightweight, mirrors Mongo LiveCourseSubscription):
-  // withMaterial marks a shipping order; customerShippingId is the chosen
-  // delivery address (ws_customer_address.id).
-  withMaterial       Boolean   @default(false) @map("with_material")
-  customerShippingId Int?      @map("customer_shipping_id")
-  // Shipment tracking for the material kit (mirrors ws_book_order.tracking_id +
-  // ws_package_course_subscription.tracking). Unlike package/course there is no
-  // separate live tracking table — the AWB + flat status live inline. Allocated at
-  // payment-verify for with-material subs; trackingId is a synthetic AWB (below the
-  // Tirupati threshold → generic trackingUrl), consistent with SQL book AWBs.
-  trackingId         BigInt?   @map("tracking_id")
-  trackingStatus     String?   @map("tracking_status")
-  createdAt         DateTime? @map("created_at")
-  updatedAt         DateTime? @map("updated_at")
+  // withMaterial marks a shipping order; shipping is the chosen delivery address
+  // (ws_customer_shipping.id — NEVER ws_customer_address.id).
+  withMaterial       Boolean                         @default(false) @map("with_material")
+  shipping           Int?
+  /// Shipment tracking for the material kit — a row in
+  /// ws_live_course_subscription_tracking, the twin of
+  /// ws_package_course_subscription_tracking (2026-08-27 (c)). The status used to be
+  /// an inline `tracking_status` column; it now lives on the tracking row, exactly as
+  /// it does for package/course.
+  ///
+  /// ⚠ `tracking` is BOTH the FK to that row AND the AWB number the courier layer
+  /// routes on (`courierForAwb` compares it to the Tirupati threshold) — the same
+  /// double duty ws_package_course_subscription.tracking does. Allocated at
+  /// payment-verify, for with-material subs only.
+  trackingRow        LiveCourseSubscriptionTracking? @relation(fields: [tracking], references: [id])
+  tracking           BigInt?
+  createdAt          DateTime?                       @map("created_at")
+  updatedAt          DateTime?                       @map("updated_at")
   // Audit: acting admin on manual grant/edit (see subscription audit backend-request).
-  created_by        Int?
-  updated_by        Int?
+  created_by         Int?
+  updated_by         Int?
 
   // Replaced idx_lcs_created_payment when payment_status was dropped — the admin
   // dashboard and the subscription reports still window on created_at.
   @@index([createdAt], name: "idx_lcs_created")
+  /// Mirrors idx_pcs_promoter — promoter dashboard filters promoter_id, sorts created_at.
+  @@index([promoterId, createdAt], name: "idx_lcs_promoter")
   @@map("ws_live_course_subscription")
 }
 
+/// Shipment status trail for a live-course material purchase. Column-for-column twin
+/// of PackageCourseSubscriptionTracking — same 5 columns, same index, same semantics.
+///
+/// ⚠ `order` IS THE ORDER ID (ws_live_course_order.id), NOT the subscription id. The
+/// column name reads like a sort order and the row hangs off the entitlement, which is
+/// what makes this easy to get wrong; the reference table stores the ORDER id (see the
+/// verifyCourseTx comment in commerce-order.repository.ts) and so does this one.
+///
+/// ⚠ The PK doubles as the AWB — LiveCourseSubscription.tracking points here AND is
+/// what the courier layer treats as the tracking number.
+/// DDL: 2026-08-27_live_course_subscription_tracking.sql
+model LiveCourseSubscriptionTracking {
+  id              BigInt                   @id @default(autoincrement())
+  LiveCourseOrder LiveCourseOrder?         @relation(fields: [orderId], references: [id])
+  orderId         Int                      @map("order")
+  status          String                   @default("pending")
+  created_at      DateTime?
+  updated_at      DateTime?
+  subscriptions   LiveCourseSubscription[]
+
+  /// Looked up by order id on every purchase-history page.
+  @@index([orderId], name: "idx_lcst_order")
+  @@map("ws_live_course_subscription_tracking")
+}
+
 model LiveSession {
-  id                       Int       @id @default(autoincrement())
-  title                    String?
-  subject                  String?
-  educatorId               Int?      @map("educator_id")
-  scheduledAt              DateTime? @map("scheduled_at")
-  endAt                    DateTime? @map("end_at")
-  status                   String    @default("SCHEDULED")
-  streamId                 String?   @map("stream_id")
-  notifiedStreamId         String?   @map("notified_stream_id")
-  rtmpUrl                  String?   @map("rtmp_url")
-  hlsUrl                   String?   @map("hls_url")
-  hlsUrls                  Json?     @map("hls_urls")
-  recordings               Json?
-  mp4Recordings            Json?     @map("mp4_recordings")
-  recordingTargetFolderId  Int?      @map("recording_target_folder_id")
-  createdAt                DateTime? @map("created_at")
-  updatedAt                DateTime? @map("updated_at")
+  id                      Int       @id @default(autoincrement())
+  title                   String?
+  subject                 String?
+  educatorId              Int?      @map("educator_id")
+  scheduledAt             DateTime? @map("scheduled_at")
+  endAt                   DateTime? @map("end_at")
+  status                  String    @default("SCHEDULED")
+  streamId                String?   @map("stream_id")
+  notifiedStreamId        String?   @map("notified_stream_id")
+  rtmpUrl                 String?   @map("rtmp_url")
+  hlsUrl                  String?   @map("hls_url")
+  hlsUrls                 Json?     @map("hls_urls")
+  recordings              Json?
+  mp4Recordings           Json?     @map("mp4_recordings")
+  recordingTargetFolderId Int?      @map("recording_target_folder_id")
+  createdAt               DateTime? @map("created_at")
+  updatedAt               DateTime? @map("updated_at")
 
   @@map("ws_live_session")
 }
@@ -2061,11 +2169,11 @@ model LivePoll {
 }
 
 model LivePollOption {
-  id          Int    @id @default(autoincrement())
-  pollId      Int    @map("poll_id")
-  optionIndex Int    @map("option_index")
+  id          Int     @id @default(autoincrement())
+  pollId      Int     @map("poll_id")
+  optionIndex Int     @map("option_index")
   text        String?
-  votes       Int    @default(0)
+  votes       Int     @default(0)
 
   @@map("ws_live_poll_option")
 }

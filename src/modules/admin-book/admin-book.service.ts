@@ -345,6 +345,14 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
     name: it.name ?? book?.name ?? null,
     qty: it.qty,
     price: it.price,
+    // PER-UNIT shipping charge, same basis as the sibling `price` — 0 when the
+    // order qualified for free shipping (the waiver is baked into the stored
+    // value at checkout) or the legacy JSON snapshot carried none. The report
+    // renders one row per line, so the order-level sum on the parent row cannot
+    // stand in for this: painting it onto every line multiply-counts shipping on
+    // any multi-book order. Matches what the export already emits per line, and
+    // what the customer-facing toMyItemDto has always returned.
+    shippingPrice: it.shippingPrice ?? 0,
     // Per-book unit weight (from the hydrated book row); null when unknown.
     weight: book?.weight ?? null,
   };
@@ -442,7 +450,10 @@ const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
   return rows.map((r) => {
     const lineItems = itemsByOrder.get(r.id) ?? [];
     // Derive report totals from the line items: total weight = Σ(unit weight × qty)
-    // over books with a known weight; shipping price = Σ per-line shipping charge.
+    // over books with a known weight; shipping price = Σ(unit shipping × qty).
+    // Both scale by qty because both stored values are PER UNIT — this is the
+    // total shipping actually charged on the order, the figure that reconciles
+    // against ws_book_order.amount (= Σ (price + shipping) × qty at checkout).
     let totalWeight = 0;
     let anyWeight = false;
     let shippingPrice = 0;
@@ -452,7 +463,7 @@ const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
         totalWeight += bk.weight * it.qty;
         anyWeight = true;
       }
-      shippingPrice += it.shippingPrice ?? 0;
+      shippingPrice += (it.shippingPrice ?? 0) * it.qty;
     }
     return { row: r, lineItems, books, totalWeight: anyWeight ? totalWeight : null, shippingPrice: lineItems.length ? shippingPrice : null };
   });
@@ -566,7 +577,9 @@ const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrd
         price: it.price,
         shippingPrice: it.shippingPrice ?? "",
         qty: it.qty,
-        totalPrice: it.price * it.qty,
+        // (unit price + unit shipping) × qty — the same arithmetic checkout used
+        // to build ws_book_order.amount, so this column now sums back to it.
+        totalPrice: (it.price + (it.shippingPrice ?? 0)) * it.qty,
         weight: bk?.weight ?? "",
       });
     }

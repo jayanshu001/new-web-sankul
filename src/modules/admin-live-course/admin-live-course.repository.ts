@@ -148,18 +148,22 @@ export const adminLiveCourseRepository = {
    * Report summary: row count + revenue for a filtered set of subscriptions.
    *
    * The count still comes from the subscriptions (that is what the report lists);
-   * revenue comes from the ORDERS linked to them, the only place paid_amount lives
-   * since 2026-08-25. The pre-backfill half that summed the subscription's own
+   * revenue comes from the ORDERS linked to them, the only place the charged amount
+   * lives since 2026-08-25. The pre-backfill half that summed the subscription's own
    * (now dropped) column is gone.
+   *
+   * The column is `discount_price` (Prisma `amount`) since the table took the
+   * ws_package_course_order shape on 2026-08-27; the returned key stays `paidAmount`
+   * so the caller's DTO is untouched.
    */
   aggSubs: async (where: Prisma.LiveCourseSubscriptionWhereInput) => {
     const [counted, fromOrders] = await Promise.all([
       prisma.liveCourseSubscription.aggregate({ where, _count: { _all: true } }),
-      prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: where } }, _sum: { paidAmount: true } }),
+      prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: where } }, _sum: { amount: true } }),
     ]);
     return {
       _count: counted._count,
-      _sum: { paidAmount: fromOrders._sum.paidAmount ?? 0 },
+      _sum: { paidAmount: fromOrders._sum.amount ?? 0 },
     };
   },
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
@@ -182,6 +186,9 @@ export const adminLiveCourseRepository = {
    * subscription, and each grant/extension is its own order.
    */
   createOrder: (data: Prisma.LiveCourseOrderUncheckedCreateInput) => prisma.liveCourseOrder.create({ data }),
+  /** The material kit configured on a live course → the subscription's pc_material_id. */
+  liveCourseMaterialKit: (id: number) =>
+    prisma.liveCourse.findFirst({ where: { id }, select: { pcMaterialId: true } }),
   /** Payment rows behind a page of subscriptions (admin DTO / report hydration). */
   ordersByIds: (ids: number[]) =>
     ids.length ? prisma.liveCourseOrder.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
@@ -205,10 +212,41 @@ export const adminLiveCourseRepository = {
   customersByIds: (ids: number[]) =>
     ids.length ? prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }) : Promise.resolve([]),
   customerExists: (id: number) => prisma.customer.findUnique({ where: { id }, select: { id: true } }),
+  // `educatorId` feeds the report's Educator Name column (→ educatorsByIds).
   coursesByIds: (ids: number[]) =>
-    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, educatorId: true } }) : Promise.resolve([]),
   plansByIds: (ids: number[]) =>
     ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
+
+  // ── report-column hydration (Live Course Report) ─────────────────────────────
+  // One batched lookup each, mirroring admin-subscription.repository so the two
+  // reports resolve the same columns from the same tables in the same way.
+  //  ws_live_course.educator_id → Educator Name
+  educatorsByIds: (ids: number[]) =>
+    ids.length ? prisma.courseEducator.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : Promise.resolve([]),
+  //  subscription.shipping → Address / City / Pincode.
+  //
+  //  ⚠ By column contract this is a ws_customer_shipping.id, and that is what the
+  //  package path snapshots (resolveShippingIdForAddress). The LIVE-COURSE checkout
+  //  never got that fix: live-course-payment.controller validates the incoming id
+  //  against the ADDRESS BOOK (customerAddressRepository.findActiveOwned) and stores
+  //  it raw, so live-course rows written to date hold a ws_customer_address.id. The
+  //  two tables are disjoint id spaces, so a shipping-only lookup silently misses and
+  //  the report's Address/City/Pincode came back blank on exactly the rows that HAVE
+  //  an address. Both tables carry identical columns, so the reader tries shipping
+  //  first and falls back to the address book — see resolveReportAddresses.
+  //
+  //  `userId` is selected so the caller can verify the row belongs to the
+  //  subscription's customer: the id spaces are disjoint today but nothing enforces
+  //  that, and a collision must never surface another customer's address.
+  shippingsByIds: (ids: number[]) =>
+    ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, userId: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
+  //  Fallback for the above — same columns, address-book table.
+  addressesByIds: (ids: number[]) =>
+    ids.length ? prisma.customerAddress.findMany({ where: { id: { in: ids } }, select: { id: true, userId: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
+  //  subscription.created_by → admin/staff name (Activated By); ws_users PK is BigInt.
+  adminUsersByIds: (ids: number[]) =>
+    ids.length ? prisma.adminUser.findMany({ where: { id: { in: ids.map((i) => BigInt(i)) } }, select: { id: true, firstName: true, lastName: true } }) : Promise.resolve([]),
 
   // ── sessions for a course (many-to-many join) ────────────────────────────────
   sessionsForCourse: async (liveCourseId: number, opts: { status?: string; upcoming?: boolean; search?: string; now: Date; skip: number; take: number }) => {
@@ -467,7 +505,7 @@ export interface SubReportFilter {
 function subOrderBy(sortBy: string, sortDir: "asc" | "desc"): Prisma.LiveCourseSubscriptionOrderByWithRelationInput {
   if (sortBy === "startAt" || sortBy === "start_at") return { startAt: sortDir };
   if (sortBy === "endAt" || sortBy === "end_at") return { endAt: sortDir };
-  if (sortBy === "amount") return { order: { paidAmount: sortDir } };
+  if (sortBy === "amount") return { order: { amount: sortDir } };
   return { createdAt: sortDir };
 }
 

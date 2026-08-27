@@ -10,11 +10,19 @@
  * payment columns it already carries.
  *
  * WHAT IT DOES, per subscription with `order_id IS NULL`:
- *   1. INSERT a ws_live_course_order carrying that row's payment columns verbatim
+ *   1. INSERT a ws_live_course_order carrying that row's payment columns
  *      (paid/original amount, wallet coin, code snapshots, method, gateway + bank
- *      references, paid_at, material flags, remarks, audit columns).
+ *      references).
  *      `payment_status` maps to the order vocabulary: verified→complete,
- *      failed→failed, anything else (including NULL)→pending.
+ *      failed→cancel, anything else (including NULL)→pending.
+ *
+ *      ⚠ 2026-08-27: the order table took the ws_package_course_order shape, so this
+ *      no longer copies `paid_at`, `with_material`, `remarks`, `created_by` or
+ *      `updated_by` — those columns are gone from the order. Nothing is lost: the
+ *      subscription this order is being created FOR already holds all five, and
+ *      `paid_at` becomes `updated_at` (the paid-at on every order table). The list
+ *      price also moves into `price` on every row, with the discount materialised
+ *      into `code_discount` instead of being derived from a NULL original.
  *   2. UPDATE the subscription's `order_id` to point at it.
  *   3. If the row was NEVER a completed purchase (payment_status ≠ 'verified'), also
  *      set `status = false`.
@@ -48,8 +56,9 @@ const APPLY = process.argv.includes("--apply");
 const BATCH = 500;
 
 /** Subscription payment_status → order status. NULL/unknown is treated as unpaid. */
-const toOrderStatus = (paymentStatus: string | null): "complete" | "failed" | "pending" =>
-  paymentStatus === "verified" ? "complete" : paymentStatus === "failed" ? "failed" : "pending";
+// 'cancel' (not 'failed') — the ws_package_course_order enum, adopted 2026-08-27.
+const toOrderStatus = (paymentStatus: string | null): "complete" | "cancel" | "pending" =>
+  paymentStatus === "verified" ? "complete" : paymentStatus === "failed" ? "cancel" : "pending";
 
 async function main() {
   const pending = await prisma.liveCourseSubscription.count({ where: { orderId: null } });
@@ -90,28 +99,34 @@ async function main() {
             customerId: s.customerId,
             liveCourseId: s.liveCourseId,
             planId: s.planId,
-            paidAmount: s.paidAmount,
-            originalAmount: s.originalAmount,
-            walletCoin: s.walletCoin,
+            orderType: "purchase",
+            amount: s.paidAmount,
+            // `price` is the list price on EVERY order now. The legacy row set
+            // original_amount only when a promo ran, so fall back to what was paid —
+            // with no promo those are the same number.
+            originalPrice: s.originalAmount ?? s.paidAmount ?? 0,
+            // The discount the legacy shape left implicit, materialised.
+            codeDiscount:
+              s.originalAmount != null
+                ? Math.max(0, Number(s.originalAmount) - Number(s.paidAmount ?? 0) - Number(s.walletCoin ?? 0))
+                : 0,
+            wsCoin: s.walletCoin ?? 0,
             // Copied as-is. `?? undefined` leaves a JSON column untouched (SQL NULL)
             // rather than writing the JSON literal `null`, which every JSON_EXTRACT
             // path in the reports would then miss.
             promocode: (s.promocode as any) ?? undefined,
             refferalcode: (s.refferalcode as any) ?? undefined,
-            paymentMethod: s.paymentMethod,
+            paymentMethod: s.paymentMethod ?? "online",
             razorpayOrderId: s.razorpayOrderId,
             razorpayPaymentId: s.razorpayPaymentId,
             bankTransactionId: s.bankTransactionId,
             status,
-            paidAt: s.paidAt,
-            withMaterial: s.withMaterial,
-            customerShippingId: s.customerShippingId,
-            remarks: s.remarks,
+            shipping: s.customerShippingId,
             // Preserve the original purchase instant — reports window on it.
             createdAt: s.createdAt,
-            updatedAt: s.updatedAt,
-            created_by: s.created_by,
-            updated_by: s.updated_by,
+            // The order's paid-at. Prefer the legacy paid_at so a receipt keeps the
+            // instant it always showed; fall back to the row's own updated_at.
+            updatedAt: s.paidAt ?? s.updatedAt,
           },
         });
         await tx.liveCourseSubscription.update({

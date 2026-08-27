@@ -136,3 +136,35 @@ export function reportRow(input: {
     createdAt: input.createdAt,
   };
 }
+
+// ── shared report CELL helpers ────────────────────────────────────────────────
+// Lifted out of admin-subscription.service on 2026-08-27 when the Live Course
+// report started emitting the same columns. Both reports feed ONE frontend
+// normalizer and ONE table component, so a divergence here shows up as a silently
+// blank column rather than an error — keep exactly one implementation.
+
+/** "" → null. The report renders `—` for null and a literal empty cell for "". */
+export const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
+
+/** Prisma Decimal|number|null → number|null (never 0 for "unknown"). */
+export const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
+
+/**
+ * Single source of truth for "with material" on a subscription row. Two signals
+ * exist and must never disagree: legacy Mongo-migrated rows carry a `pc_material_id`
+ * FK, while SQL-created admin grants carry only a `material_amount` (the create path
+ * deliberately writes material_amount and never pc_material_id — see
+ * createCourseSubscription). Either signal means the buyer took the physical
+ * material, so the "With Material" label can never contradict a nonzero
+ * materialAmount. Used by the report label, the single-detail flag, AND the
+ * hasMaterial report filter (repository) so all three agree.
+ */
+export const rowHasMaterial = (r: { pcMaterialId?: number | null; materialAmount?: any }): boolean =>
+  (r.pcMaterialId != null && r.pcMaterialId > 0) || Number(r.materialAmount ?? 0) > 0;
+
+/**
+ * bigint `tracking` (courier AWB, ~1.19e11) → number, matching the Subscriptions
+ * management list (commerce-subscription transformer). Guard the >2^53 case → null.
+ */
+export const trackingToNumber = (v: bigint | null | undefined): number | null =>
+  v == null ? null : v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;

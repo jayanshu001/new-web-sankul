@@ -1,4 +1,9 @@
 -- 2026-08-25 — ws_live_course_subscription: drop the payment columns
+-- ⚠ 2026-08-27: this file's drops are now ALSO performed (guarded) by
+-- 2026-08-27_live_course_subscription_match_package_shape.sql, because it was applied
+-- on PROD but never on STAGING and the two environments had diverged. Applying either
+-- file, or both in any order, converges to the same shape. Do not "fix" this file.
+--
 --
 -- ⚠⚠ STATUS 2026-08-26: ALREADY APPLIED ON PRODUCTION, ahead of the code step below.
 -- That combination 500'd every read of ws_live_course_subscription (Prisma kept

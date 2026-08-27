@@ -15,6 +15,884 @@
 
 ---
 
+## 2026-08-27 (k) — Live Course Report Address/City/Pincode: `shipping` points at the WRONG TABLE
+
+> **Read-side fix for a write-side defect. No DDL, no data change.** Follow-up to (j),
+> which shipped the columns but could not populate these three.
+
+**Symptom.** After (j), Address / City / Pincode were still blank — including on a
+subscription that demonstrably HAS a delivery address (staging sub 57, Live Course 2,
+`shipping = 95801`).
+
+**Cause — the live-course checkout writes an address-book id into a shipping-table FK.**
+`ws_live_course_subscription.shipping` and `ws_live_course_order.shipping` are
+`ws_customer_shipping.id` by contract, exactly like `ws_package_course_order.shipping`, and
+the package path snapshots the address into that table via `resolveShippingIdForAddress`.
+**The live-course path never adopted it:** `live-course-payment.controller.ts:263` validates
+the incoming id against the ADDRESS BOOK (`customerAddressRepository.findActiveOwned`,
+`ws_customer_address`) and then stores it raw as `customerShippingId`.
+
+The two id spaces are disjoint on staging (`ws_customer_address` 95791–95801,
+`ws_customer_shipping` 96240–96246), so a shipping-only lookup misses **silently** — the
+report shows "—" rather than failing. Id 95801 is an address row (Yug / Goa / 344434).
+
+**Fix (read side).** `resolveReportAddresses` in `admin-live-course.service` tries
+`ws_customer_shipping` first and falls back to `ws_customer_address`; both tables carry
+identical columns, so one shape covers either. **Every hit is verified against the
+subscription's own `customer_id`** before it is keyed (`<addressId>:<customerId>`) — the id
+spaces are disjoint today and nothing enforces that, and an unverified fallback would be one
+collision away from printing another customer's address on an admin report. A row failing the
+check is dropped, not guessed.
+
+**⚠ NOT fixed here — the write path.** Live-course checkout is a payment flow; making it
+snapshot through `resolveShippingIdForAddress` like package does is a separate, deliberate
+change and would also need a backfill for rows already written. Until then every new
+live-course material purchase keeps writing an address-book id, and this reader is what makes
+the column work. Tracked in memory as [[project_order_shipping_id_source]] ("live-course path
+STILL unfixed").
+
+**Verified on staging:** sub 57 now returns
+`shipping: { address: "23423", address2: "243423", city: "Goa", pincode: 344434, alternatePhone: null }`
+— was `null`. The three digital-only subs correctly stay `null` (no address on the row).
+
+### Remaining "—" on that screen are DATA, not code
+
+- **Educator Name** — `ws_live_course.educator_id` is NULL on **all four** staging live
+  courses; nobody has assigned an educator. The lookup itself resolves (ids 20/21/23 →
+  Priyanka Soni / Akram Sherasiya / Harsh Patel).
+- **Activated By / Remarks / Bank Transaction Id / Email** — `created_by` and `remarks` are
+  NULL on a customer self-purchase; `bank_transaction_id` is only set for bank transfers; the
+  customer's `email_address` is `""`. All correct.
+
+### ⚠ Order Method reads "online", not a gateway
+
+`createLiveCourseOrderMysql` hardcodes `paymentMethod: "online"`
+(`live-course-order.service.ts:249`), so `ws_live_course_order.payment_method` only ever holds
+`'online'` or `'free'` — while `ws_package_course_order` holds real gateways
+(`'razorpay'`, `'cash'`, `'free'`). The report column is faithful to the column; the WRITE
+path stores a channel where package stores a gateway, so Order Method duplicates Activation
+Type on paid live-course rows. Not remapped in the reader — that would invent a value the
+table doesn't hold. Fixing it is a payment-flow change (+ a backfill), so it is flagged, not
+done.
+
+---
+
+## 2026-08-27 (j) — Live Course Report: the 13 columns that rendered "—" on every row
+
+> **Code only. No DDL, no backfill, no new column.** Additive DTO keys + 3 batched
+> lookups, and **one query removed**. Closes the frontend handoff
+> `~/websankul/docs/backend-requests/2026-08-27-live-course-report-missing-fields.md`
+> (§1a, §1b, §2, §3 — all shipped).
+
+**This was a stale DTO, not a missing data source.** `GET /admin/live-courses/subscriptions`
+emitted 13 fewer keys than `GET /admin/subscriptions`, so Educator Name / Course Amount /
+Material Amount / Ws Coin / Material Type / Order Method / Order Id / Payment Id / Bank
+Transaction Id / Address / City / Pincode / Remarks / Activated By were blank on every row
+of `Reports → Live Course Report`. The live-course tables adopted the package shape on
+2026-08-25 (a) and 2026-08-27 (b)/(c); the report DTO was never updated after, and still
+carried a comment asserting the columns had no source.
+
+### §1a — ten values were already in memory
+
+`listSubsByWhere` does `include: { order: true }`, so the full subscription row AND its
+order were in scope at the line that built the DTO. Added, sourced per the Subscription
+report key-for-key: `courseAmount`, `materialAmount`, `materialType` (via the shared
+`rowHasMaterial`), `remarks`, `trackingId` (BigInt → number, >2^53 → null), and off the
+order `wsCoin`, `orderMethod`, `razorpayOrderId`, `razorpayPaymentId`, `bankTransactionId`.
+
+⚠ **`orderMethod` is the GATEWAY** (`ws_live_course_order.payment_method` — razorpay / bank /
+cash / free), lowercased. It is NOT online|backend — that is `paymentMethod`, which the DTO
+already sent and which the table renders as **Activation Type**.
+
+### §1b — three batched lookups, mirroring admin-subscription.repository
+
+New in `admin-live-course.repository`: `educatorsByIds`, `shippingsByIds`, `adminUsersByIds`
+(ws_users PK is BigInt — keyed by string so the map can't miss on `1n !== 1`), plus
+`educatorId` added to the `coursesByIds` select. One query each per page / per 5000-row
+export batch — no N+1.
+
+- `educatorName` / `educatorId` ← `ws_live_course.educator_id` → `ws_course_educator`
+- `shipping{address,address2,city,pincode,alternatePhone}` ← `ws_live_course_subscription.shipping`,
+  **falling back to `ws_live_course_order.shipping`**. Both are `ws_customer_shipping.id`,
+  NEVER `ws_customer_address.id`.
+- `activatedBy` ← `ws_live_course_subscription.created_by` → `ws_users`, `"first last"` trimmed
+
+### §2 — one query per page removed
+
+`listSubscriptions` re-fetched via `repo.ordersByIds` the very rows `include:{order:true}`
+had already loaded, reaching them through `payOf`. Now reads `r.order` directly, as the
+export path always did — which also drops the `(r as any).orderId` cast. `payOf` +
+`ordersByIds` remain: `hydrateSubs` takes rows WITHOUT the include.
+
+### §3 — the export had the same holes, plus one wrong value
+
+Eleven `LIVE_SUB_EXPORT_COLUMNS` getters were hardcoded `get: () => ""`. They now read the
+same `subReportColumns` object the list DTO spreads, through a `cell()` wrapper that turns
+JSON `null` into the blank a spreadsheet wants — so **screen and download cannot disagree**.
+`Order Method` was emitting `paymentMethod` (online|backend), making it a duplicate of
+Activation Type in the downloaded file; it is now the gateway. The 27 headers and their
+order are unchanged — the client reconciles this file against the Subscription export
+column-for-column. `Package Name` stays deliberately blank (a live course is not a package).
+
+### Shared helpers promoted (so the two reports cannot drift)
+
+`blankStrToNull`, `decToNum`, `rowHasMaterial`, `trackingToNumber` moved from
+`admin-subscription.service` (module-private) to **`utils/reportFilters`** and are imported
+by both. `rowHasMaterial`'s own comment calls itself "single source of truth"; copying it
+would have created a second one. Behaviour identical — pure move.
+
+**Contract:** every key is additive; nothing renamed or retyped. Unknown is **`null`**, never
+`""` and never `0` (the table prints a literal `0` for a zero amount); `shipping` is null as a
+whole when there is no address row. `activationType: null` is deliberate and matches the
+Subscription report — it has no SQL source on either.
+
+**Deploy order:** backend only, ship any time. The admin FE already reads every one of these
+keys and renders "—" while absent, so there is no half-deployed window.
+**Client-app impact:** none — `listSubscriptions` is admin-only; the customer-facing paths
+(`hydrateSubs`, `live-course-order`) are untouched.
+
+**Verified on staging** (`websankul_staging_1`, service called directly):
+
+- All 3 live-course subs now return the columns — e.g. sub 9: `courseAmount 129`,
+  `materialType "Without Material"`, `remarks "Testing"`, `orderMethod "free"` while
+  Activation Type is `"backend"` (the §3 fix, visibly no longer duplicates).
+- **Key parity holds:** "keys on SUBSCRIPTION row but not LIVE COURSE row: []", zero type
+  mismatches on the shared report keys.
+- CSV header still 27 columns in the same order; rows now carry Course Amount / Ws Coin /
+  Material Type / Order Method / Remarks.
+- `shippingsByIds` and `adminUsersByIds` resolve real rows (address+city+pincode; admin
+  names off the BigInt PK). ⚠ `educatorName` is null on every staging row because **every**
+  `ws_live_course.educator_id` is NULL there — the lookup itself was proven separately
+  against real `ws_course_educator` ids (20/21/23 → names), but the end-to-end
+  course→educator hop has no staging data to exercise. Same for `shipping` / `activatedBy`:
+  no material sub and no admin-granted sub exists on staging (`shipping` and `created_by`
+  are NULL on all 3 rows), so those two render null there and are verified only at the
+  lookup level.
+
+---
+
+## 2026-08-27 (i) — live-course PDF invoice printed ₹0.00 on every purchase
+
+> **Code only. No DDL, no backfill.** One added column to an existing `select`, one
+> corrected expression. `GET /api/v1/client/courses/orders/lc_<subId>/invoice`.
+
+### Symptom
+
+Every live-course invoice PDF rendered `₹ 0.00` for the line item, the total and
+"Amount Received", with the words line reading **"Zero Rupees Only"**. Reproduced on
+staging with `lc_57` (customer 472384), whose order is ₹2,497.
+
+The JSON receipt for the SAME row —
+`GET /client/purchase-history/subscriptions/lc_57/receipt` — was correct at ₹2,497
+the whole time, so the two endpoints disagreed about the same purchase.
+
+### Cause — fallout from the 2026-08-25 payment-column move
+
+`loadLiveCourseReceiptFromMysql` (`src/libs/core/generate.ts`) builds its view model as
+`sub = { ...row, ...(row.order ?? {}) }` and then read:
+
+```ts
+const rawAmount = sub.paidAmount != null ? Number(sub.paidAmount)
+                : sub.originalAmount != null ? Number(sub.originalAmount) : 0;
+```
+
+**Both names were dead, from opposite directions:**
+
+- `original_amount` was DROPPED from `ws_live_course_subscription` by
+  `2026-08-25_live_course_subscription_drop_payment_columns.sql`.
+- `paid_amount` still exists on the subscription, but the `select` above only asked for
+  `createdAt / withMaterial / liveCourseId / planId / order` — so Prisma never returned it.
+- Neither name exists on `ws_live_course_order` (it carries `discount_price` → `amount`,
+  `price` → `originalPrice`, `code_discount`, `ws_coin`), so the spread could not supply
+  them either.
+
+Both branches were therefore `undefined`, and `undefined != null` is false → `0`. The
+loader had been updated to read the payment method and razorpay ids through `order`, but
+the amount expression was left pointing at the pre-migration subscription columns. `sub`
+is typed `any`, so nothing failed to compile.
+
+### Fix
+
+`amount` added to the subscription `select`, and the amount read as:
+
+```ts
+const rawAmount = sub.amount != null ? Number(sub.amount) : 0;
+```
+
+The spread makes this **`ws_live_course_order.discount_price`** — the amount actually
+charged — falling back to the subscription's own mirrored `amount` for an order-less
+legacy row. That is the same field `loadCourseReceiptFromOrderMysql` prints for
+package/course (`ord.amount`), the same one the purchase-history list emits, and the same
+one the JSON receipt already used. A promo'd purchase prints the charged figure, not the
+list price (verified on `lc_9`: `price` 259, `code_discount` 130 → invoice ₹129.00).
+
+Also removed the dead `sub.paidAt ??` from `createdDate`: `paid_at` was dropped from both
+tables on 2026-08-27, so it was always `undefined`. The rendered date is unchanged — it
+resolves to the ORDER's `created_at` (shadowed onto `sub` by the spread), which is what
+the package/course invoice prints.
+
+### Verified
+
+All four live-course subscriptions on staging now render their order's `discount_price`:
+
+| id | order | invoice before | invoice after |
+|---|---|---|---|
+| `lc_57` | ₹2,497 | ₹0.00 | ₹2,497.00 |
+| `lc_47` | ₹2,500 | ₹0.00 | ₹2,500.00 |
+| `lc_49` | ₹2,500 | ₹0.00 | ₹2,500.00 |
+| `lc_9`  | ₹129 (₹259 − ₹130 promo) | ₹0.00 | ₹129.00 |
+
+The rest of the PDF was already correct and is unchanged: product name, `(with material)`,
+`60 days` validity, payment method, payment id, receipt no, date.
+
+### Related, NOT changed
+
+An order-less live subscription still fails the paid gate
+(`row.order?.status !== "complete" && !sub.razorpayPaymentId`) and returns 404 "Order has
+not been paid yet." — the razorpay id it falls back on only exists on the order now. That
+is deliberate per the repository contract ("an unlinked row is not a purchase"), but it
+means **`scripts/backfill-live-course-orders.ts` must run before this code reaches an
+environment**, or legacy live-course invoices 404 instead of printing.
+
+---
+
+## 2026-08-27 (h) — purchase-history subscriptions: the last unbounded read is gone
+
+> **DDL + code. Wire response byte-identical** (verified 546 rows / 33 customer-page
+> combinations). `GET /api/v1/client/purchase-history/subscriptions` — still reported at
+> 5–6 s in production after the 2026-08-26 (b) index pass measured 82 ms on staging.
+
+This closes the item 2026-08-26 (b) left open under **"Known remaining, NOT changed"**.
+
+**DDL:** `docs/migration/schema-changes/2026-08-27_purchase_history_subscription_target_indexes.sql`
+(two guarded `ADD KEY`s on `ws_package_course_subscription`; purely additive, safe to
+apply before the code). Declared on `PackageCourseSubscription` in `schema.prisma`.
+
+### The query
+
+`pcSubsForTargets` resolved each order's validity window from the page's course/package
+targets:
+
+```sql
+WHERE customer_id=? AND status=1
+  AND (course_id IN (…) OR package_id IN (…))
+```
+
+Neither side of that `OR` can be seeked. MySQL resolved `(customer_id, status)` from
+`idx_pcs_customer_status_endat` and then read **every active subscription the customer
+owns** to test the `OR`. `EXPLAIN ANALYZE` on staging (customer 472360, 19,655 subs):
+
+```
+-> Filter: (course_id in (…) or package_id in (…))     (actual time=6.75..42 rows=15380)
+    -> Index lookup using idx_pcs_customer_status_endat (customer_id=…, status=1)
+       (actual time=6.73..40.6 rows=16773 loops=1)
+```
+
+**16,773 rows read to decorate 20 cards** — the largest query in the request, and the
+only one whose cost was the customer's whole history rather than the page. It also
+included the ORDER-LESS subs' targets, which never needed a window at all: those rows
+carry their own `start_at`/`end_at`.
+
+### The read is now three bounded lookups
+
+1. **`pcSubsByOrderIds`** — `order_id IN (page order ids)`, rides the existing
+   `idx_pcs_customer_status_order`. Answers every SQL-native purchase, because one order
+   = one subscription row since 2026-08-25. Index range scan *with index condition*, so
+   rows read = rows returned.
+2. **`pcSubsByCourseIds` / `pcSubsByPackageIds`** — the LEGACY fallback for pre-2026-08-25
+   folded validity extensions, which own no subscription row. Issued **only for the
+   orders step 1 came back empty for**, so a page of SQL-native purchases runs neither.
+   Two separate queries, not one `OR`, is what lets each seek — hence the two new keys
+   `idx_pcs_customer_status_course` / `idx_pcs_customer_status_package`.
+
+`pcSubsByOrderIds` no longer depends on the resolved course/package maps, so it moved
+from dependency round 3 up to **round 1**; round 3 is now `packageTypesByIds` plus the
+usually-skipped fallback.
+
+### Measured (staging, `listSubscriptions()` end-to-end, same 11 customers)
+
+| customer | before | after |
+|---|---|---|
+| heavy (19.6k subs), page 1 | 120 ms | 8 ms |
+| heavy, page 2 | 135 ms | 9 ms |
+| heavy, page 5 | 332 ms | 10 ms |
+| light | 5.5 ms | 5.4 ms |
+
+Queries per request: 15 → 14 (13 when the customer has no package/course orders).
+
+### Tie-breaking made deterministic ⚠ changes `extra.startAt`/`extra.endAt` on the receipt
+
+`subByOrder` used to be a 1:1 `Map` built by insertion order, so when a customer carried
+more than one active row against the same `order_id` (493 such pairs on staging) whichever
+row the driver returned last silently won — and it was not even required to point at the
+order's own target. The window is now picked by `pickWindowForTarget`: **the row matching
+the order's own plan target, newest `end_at` first.**
+
+- **`GET /purchase-history/subscriptions`** — no wire change. The controller already
+  strips `startAt`/`endAt` (see the response-slimming pass), and the slimmed output is
+  byte-identical across all 546 rows compared.
+- **`GET /purchase-history/subscriptions/:id/receipt`** — `extra.startAt`/`extra.endAt`
+  can move. 15 of 19 completed staging orders are unchanged; the 4 that move are all
+  improvements:
+  - **plan-less orders (manual grants, `plan_id IS NULL`)** used to render a **blank**
+    validity on the receipt. The old code built `OR: []` from a null course *and* a null
+    package, and Prisma treats an empty `OR` as *match nothing* — so the window was
+    always `null` even though the order owned a perfectly good subscription row. They now
+    show the real window.
+  - the other two are duplicate-`order_id` rows now resolving to the row that actually
+    belongs to the order's target.
+
+### Still not addressed
+
+- `overFetch = skip + take` pulls `skip+take` rows from **each** of five sources before
+  the in-memory merge, so deep pages still degrade (page 50 = 1,000 rows per source to
+  return 20). Fixing it properly means a `UNION ALL` page query — which is raw SQL, and
+  raw SQL bypasses the IST read-shift middleware, so every timestamp would need shifting
+  by hand. Not attempted here.
+- The route still has no `cacheRoute`.
+- The legacy fallback returns every sub the customer holds on the target rather than just
+  the newest; correct and bounded under the fold model (one row per target pre-2026-08-25),
+  but it is a greatest-n-per-group in disguise.
+
+---
+
+## 2026-08-27 (g) — Book Orders report: Total Price now includes shipping; per-line `shippingPrice` exposed
+
+> **Code only. No DDL, no backfill, no query change** — arithmetic + one additive DTO field.
+> Closes the frontend handoff `~/websankul/docs/backend-requests/2026-08-27-book-orders-total-price.md`
+> (§1, §2, §3 — all three shipped).
+
+**The formula is settled by the write path, not by preference.**
+`book-order.service.ts:96-118` builds `ws_book_order.order_price` as
+`Σ(price × qty) + Σ(shipping × qty)` ≡ **`Σ (price + shipping) × qty`**, and persists the
+**per-unit** shipping on the item row (`shippingPrice: shippingWaived ? 0 : b.shipping_price`).
+The free-shipping waiver (`getFreeShippingMin()`) is already baked in as `0`, so the report
+needs no waiver special-casing — the stored value is the truth.
+
+### §1 — export `Total Price` dropped shipping
+
+`admin-book.service.flattenOrdersToExportRows` emitted `it.price * it.qty` while printing
+`it.shippingPrice` in the neighbouring column. Now
+`(it.price + (it.shippingPrice ?? 0)) * it.qty`, so the column sums back to the order's
+`order_price`. Affects `GET /admin/books/orders/export/{csv,excel}`. Header, column order and
+the other 18 columns unchanged; item-less orders still export one row with a blank total.
+
+### §2 — list DTO dropped `items[].shippingPrice` (additive field)
+
+`toOrderItemDto` discarded a value `OrderItemShape` already carried from BOTH sources (child
+`ws_book_order_item.shipping_price` and the legacy `order_items` JSON snapshot). Added
+`shippingPrice: it.shippingPrice ?? 0` — **non-null integer, rupees, PER UNIT**, same basis as
+the sibling `price`. Affects `GET /admin/books/orders/list`.
+
+This mattered more than a missing column: the report renders **one row per book line**, and the
+only shipping figure available was the ORDER-level sum, which the FE was painting onto every
+line of a multi-book order. The list and the export also disagreed (export per-line, screen
+per-order). Admin now matches what the customer-facing `toMyItemDto` /
+`toMyItemDtoPopulated` (`book-order.transformer.ts:124,133`) have always returned.
+
+### §3 — order-level `shippingPrice` sum was missing `× qty` ⚠ changes a displayed value
+
+`enrichOrders` did `shippingPrice += it.shippingPrice ?? 0` while `totalWeight` in the SAME
+loop correctly scaled by `qty`. Since the stored value is per unit, the field under-reported by
+`Σ shipping × (qty − 1)` on every `qty > 1` order. Now `+= (it.shippingPrice ?? 0) * it.qty`,
+so it means "total shipping charged on this order" and reconciles against `order_price`.
+
+**This one changes a number the report already shows** (the handoff asked for confirmation
+before shipping it). Only `qty > 1` orders move; the field is consumed exclusively by
+`toOrderListDto` — no courier/AWB or client path reads it. Revert = restore the `* it.qty` on
+`admin-book.service.ts:466` alone; §1/§2 are independent of it.
+
+**Client-app impact:** none — all three are admin-only surfaces.
+**Deploy order:** backend first; the admin FE change is a pure read of a new field, so a
+half-deployed pair is safe (until the backend ships, the field is simply absent).
+
+**Verified on staging** (`websankul_staging_1`, `listOrders` + `orderExportSource` called
+directly): `items[].shippingPrice` now present on every line; `Σ (price + shipping) × qty`
+equals `amount` on **all 12** orders on page 1; export rows with shipping → `Total Price`
+230 for `200 + 30 × 1` and 345 for `315 + 30 × 1` (were 200 / 315). ⚠ Every book order on
+staging has `qty = 1`, so §3's `× qty` correction could not be exercised against real data —
+it is verified by inspection and by the checkout identity above, not by a run.
+
+---
+
+## 2026-08-27 (f) — `GET /client/live-courses/my/schedule` lists only courses that HAVE a timetable
+
+> **Code only. No DDL, no query change** — same rows read, fewer rows returned.
+
+**Was:** every owned + active live course was returned, including courses whose
+`ws_live_course.schedule_folders` is NULL/`[]` — those came back with
+`scheduleFolders: []`, so the home-screen schedule showed rows that open nothing.
+
+**Now:** a course is listed only when it has at least one **real** timetable, and an
+entry-less folder is dropped from the courses that stay:
+
+| folder state | folder listed | course listed |
+|---|---|---|
+| visible (`status !== false`) with ≥1 entry | ✅ | ✅ |
+| visible, `entries` empty/missing | ❌ | only if another folder qualifies |
+| hidden (`status === false`) | ❌ (unchanged) | only if another folder qualifies |
+| no `schedule_folders` at all | — | ❌ |
+
+**Why entry-less folders count as "no timetable":** entries live INSIDE the folder JSON
+(`getScheduleFolderForClient` reads `folder.entries`), so a folder with none opens an empty
+screen 2. This is a NAVIGATION list and the controller's nav DTO strips `entryCount`
+(`listMyScheduleByCategory` → `omitList(..., ["image","order","entryCount"])`), so the app
+cannot filter dead ends itself.
+
+**Touched:** `admin-live-course.service.listMyScheduleForClient` only — one `.filter()` on
+folders, one on courses. `totalLiveCourses` counts what is actually returned, so the FE
+empty state fires on 0 instead of on a list of unopenable courses.
+`GET /client/live-courses/:id/schedule` (single-course detail) is deliberately NOT filtered —
+an empty timetable there is a valid answer.
+
+**Verified on staging** (`websankul_staging_1`): customer 472370, who owns Live Course 1
+(no `schedule_folders`), now gets `{ liveCourses: [], totalLiveCourses: 0 }` — before, that
+course was listed with an empty folder array. Customer 472384, who owns Live Course 4
+(folder "Const Hybrid", 1 entry), still gets the course with that folder.
+
+---
+
+## 2026-08-27 (e) — exam-countdown package cards get `isPurchased` / `daysLeft` (they were never emitted)
+
+> **Code only. No DDL, no backfill.** One new per-request query per listing.
+
+**Bug:** on `GET /client/exam-countdown/:id/packages` (and its sibling
+`GET /client/exam-countdown-categories/:id/packages`) the `type: "package"` rows carried
+**neither `isPurchased` nor `daysLeft`** — the keys were absent from the JSON entirely,
+so the app read them as false/undefined for every user including buyers. The
+`type: "live-course"` rows in the SAME merged list had both, which is why it looked like
+the fields were "not getting populated".
+
+**Cause:** `exam-countdown.client.ts` → `packageDto()` simply never had those two fields,
+and `loadPackages(ids)` took no `customerId`. Both controllers were already passing
+`userNum` correctly; the service dropped it on the floor
+(`listPackagesByCountdownCategory` even named the parameter `_customerId`).
+
+**Fix:** `loadPackages(ids, customerId)` now resolves entitlement through the canonical
+`getActivePackageSubMap(customerId, ids)`
+(`commerce-subscription` — `ws_package_course_subscription`, `status = 1 AND end_at > NOW()`,
+latest-expiring row wins) — the same map `GET /client/package-categories/:id` builds, so a
+package card reads identically wherever it is rendered. One extra query per listing, for
+the whole page, not per row.
+
+### Also fixed in the same file: lifetime entitlements read as NOT purchased
+
+`liveDto` and `ebookDto` computed `isPurchased: !!endAt`, so an active subscription with
+`end_at IS NULL` (lifetime) — which the ownership queries explicitly match via
+`OR: [{ endAt: null }, ...]` — came back `isPurchased: false`. All three DTOs now share
+`purchaseState(subEndAt, now)`, where `undefined` = no subscription and `null` = lifetime:
+
+| state | `isPurchased` | `daysLeft` |
+|---|---|---|
+| no active subscription (`undefined`) | `false` | `null` |
+| active, has an expiry (`Date`) | `true` | `ceil((endAt - now)/1d)` |
+| active, lifetime (`null`) | `true` | `null` |
+
+Same `!== undefined` discrimination `package-category.service.toCategoryPackageDto` uses.
+
+**Response shape:** package rows GAIN `isPurchased` + `daysLeft` (additive — the controller's
+`ITEM_DROP` never dropped them; the FE card already reads them). Live-course/ebook rows are
+unchanged except that a lifetime owner now correctly reads `true`.
+
+**Caching:** both routes are `cacheRoute({ ttl: 86400, entity: "exam-countdown", scope: "user" })`
+— per-user keys, so the new fields can never leak across users, and
+`verify.controller` already calls `flushUserRouteCache(customerId)` on a successful payment,
+so a fresh purchase flips the card immediately. **On deploy, responses cached before the
+release keep the old field-less shape for up to 24h** — flush the `exam-countdown` entity
+(or the whole route cache) after rollout instead of waiting out the TTL.
+
+**Verified on staging** (`websankul_staging_1`), countdown `1` → package `94`:
+anon → `isPurchased: false, daysLeft: null`; customer `472340` (active sub, `end_at`
+2026-10-11) → `isPurchased: true, daysLeft: 46`.
+
+---
+
+## 2026-08-27 (d) — `GET /client/live-courses/my` collapses extend/renew rows to ONE card per live course
+
+> **Read-shape change only. No DDL, no migration, no new query.** `ws_live_course_subscription`
+> keeps every row exactly as it is — extend/renew still writes a NEW row (one order =
+> one row, 2026-08-25). Only the client-facing *entitlement view* is collapsed.
+
+**Why:** after an in-app **Extend Validity** the student held 2+ active subscription rows
+for the same live course, and `listMyLiveCoursesForClient` mapped rows 1:1 to cards — so
+"My live courses" showed the same course twice instead of one course whose validity moved
+further out. Every other surface already collapsed per course
+(`getDaysLeftMap` → furthest `end_at`, `countActiveSubscriptions` → `dedup(l:<id>)`,
+`client-my-subscriptions.buildLiveCourseCards` → dedup per `liveCourseId`); this one
+endpoint was the outlier.
+
+**Change:** `src/modules/admin-live-course/admin-live-course.service.ts` — new
+`mergeLiveSubsPerCourse(rows, now)` applied to `repo.myLiveCourseSubs(...)` before the
+cards are built. Per `live_course_id` (rows with no course keep their own key):
+
+| field | merged as |
+|---|---|
+| winner row (`subscriptionId`, `plan`, `status`) | strongest entitlement: currently-active beats lapsed, then furthest `end_at` |
+| `startAt` | **earliest** start in the group (the original purchase) |
+| `endAt` | **furthest** end among the equally-strong rows; lifetime (`end_at NULL`) wins outright |
+| `daysLeft` / `active` | derived from the merged `endAt` — now matches `getDaysLeftMap` |
+
+Row order is unchanged (repository `created_at desc`, first appearance of each course wins),
+so search + pagination behave as before — `total` now counts **cards**, not rows, which is
+the point.
+
+**QA:** a customer with an original + an extend row for the same course must return ONE
+entry on `?status=active`, `?status=expired` and `?status=all`; a customer with two
+different courses must still return two. Admin subscription lists, the order tables and
+purchase history are untouched and still show every row/payment separately.
+
+**Response shape:** unchanged. The `/my` card DTO is
+`{ subscriptionId, liveCourse, progress }` — `startAt`/`endAt`/`daysLeft`/`plan`/`active`
+are still dropped by `omitList` in the controller (deliberate FE trim, 2026-07-23), so the
+merge is visible as *one card instead of two*, not as a new date field.
+
+---
+
+## 2026-08-27 (c) — `ws_live_course_subscription_tracking`: live course gets a real shipment-tracking table
+
+> **DDL + code. NO API response shape changes.** Verified end-to-end on staging for both
+> the with-material and digital-only paths.
+
+**DDL:** `docs/migration/schema-changes/2026-08-27_live_course_subscription_tracking.sql`
+(idempotent; creates the table, migrates the inline state, drops `tracking_status`).
+
+### Why
+
+Live course was the only product keeping its dispatch state INLINE on the entitlement
+row — `tracking` (a synthetic AWB) plus `tracking_status`. Every other product keeps it
+in a side table. `ws_package_course_subscription_tracking` is the reference for every
+column here.
+
+This closes the last shape deviation left by 2026-08-27 (b): `tracking_status` had no
+package counterpart *precisely because* package keeps status on the tracking row.
+
+### The table — identical to the reference, column for column
+
+| column | type |
+|---|---|
+| `id` | `bigint NOT NULL AUTO_INCREMENT` (PK) |
+| `` `order` `` | `int NOT NULL` |
+| `status` | `varchar(25) NOT NULL DEFAULT 'pending'` |
+| `created_at` | `timestamp NULL` |
+| `updated_at` | `timestamp NULL` |
+| index | `idx_lcst_order (`order`)` |
+
+Verified against staging: **zero** column differences vs
+`ws_package_course_subscription_tracking`.
+
+### Two things that are easy to get wrong
+
+1. **`order` is the ORDER id, not the subscription id.** The column name reads like a
+   sort order and the row hangs off the entitlement, but the reference table stores
+   `ws_package_course_order.id` (see the `verifyCourseTx` comment in
+   `commerce-order.repository.ts`). Live course stores `ws_live_course_order.id`.
+2. **The PK doubles as the AWB.** `subscription.tracking` is both the FK to this table
+   AND the number the courier layer routes on (`courierForAwb` compares it to the
+   Tirupati threshold). That is why the migration inserts existing rows with an
+   **explicit id** — the current `tracking` value — rather than letting AUTO_INCREMENT
+   assign a new one: an AWB already given to a courier must not change under a shipment
+   in flight. AUTO_INCREMENT is then pushed past the highest migrated id.
+
+### Code
+
+- **Verify** now creates the tracking row **before** the subscription (package order), so
+  its id goes straight onto the row. This **removes the second write**: the AWB used to be
+  the subscription's own id, which could only be known after the insert, forcing an
+  `UPDATE` inside the transaction. Digital-only purchases get no tracking row and keep
+  `tracking` null — same rule as package.
+- **Purchase-history** reads the status through the new `trackingRow` relation instead of
+  the dropped inline column: `listLiveSubscriptions` and `liveSubscriptionForTracking`
+  gained the `include`. The DTO keys (`tracking.trackingId`, `currentStatus`,
+  `orderStatus`) are unchanged.
+
+### Courier routing is unchanged (but worth knowing)
+
+Live AWBs are small integers, so `courierForAwb` routes them to **mahavir** (page link
+only), not Tirupati — `TIRUPATI_INITIAL_NUMBER` is 119400228001. That was already true
+when the AWB was the subscription id, so this is **not** a regression, but live-course
+material shipments have never routed to the Tirupati AWB API. Package's tracking ids sit
+above the threshold (max ~1.194e11) purely because that table is old and its ids grew
+there. If live-course kits are meant to ship via Tirupati, the new table's
+AUTO_INCREMENT needs seeding above the threshold — flagging rather than deciding.
+
+### ⚠ One RAW SQL site the rename broke (fixed)
+
+`admin-dashboard.service.ts` builds its revenue chart with `seriesFor(table, column, …)`
+— the column is a **string**, so `yarn typecheck` cannot see a rename. The live-course
+series still read `paid_amount`, which 2026-08-27 (a) renamed to `discount_price`; the
+admin dashboard 500'd with `1054 Unknown column 'paid_amount'`. Fixed and re-verified
+(the series now returns buckets; the old name correctly 1054s).
+
+**If you rename a column on any of these tables, grep the raw-SQL sites too** —
+`seriesFor(...)` in admin-dashboard and the `$queryRawUnsafe` blocks in
+`modules/promoter-data`. TypeScript covers the Prisma accessors and nothing else.
+
+### Verified on staging
+
+With-material verify: tracking row created with `orderId` = the **order** id (7) not the
+subscription id (50), AWB = the tracking row id, split 13000 → 5000 course + 8000
+material (the exact case `computeMaterialSplit`'s docblock documents). Digital-only
+verify: `tracking` null, no tracking row. Probe rows cleaned up.
+
+### End-to-end read verification (all three 2026-08-27 changes together)
+
+Every endpoint touched by (a), (b) and (c) was exercised against staging — not just
+typechecked. Observed values:
+
+| path | result |
+|---|---|
+| checkout → verify, digital | no tracking row, `tracking` null |
+| checkout → verify, with material | tracking row created, AWB = its id, 13000 → 5000 course + 8000 material |
+| client `listSubscriptions` | `amount 13000`, `withMaterial true`, `status "pending"` (read off the tracking row), `tracking {trackingId:"6", courier:"mahavir"}` — 13 ms |
+| client tracking detail | `awb 6`, `currentStatus "pending"`, `orderStatus "verified"`, history populated — 3 ms |
+| client live receipt | on all 3 real rows; the migrated promo row renders subTotal 259 / discount 130 / grandTotal 129 — unchanged from before the reshape |
+| admin live-course subscriptions | `totalRevenue 129`, row `amount 129`, `paymentMethod "backend"`, `status "active"` — 18 ms |
+| admin dashboard revenue series | buckets `2026-07: 129`, `2026-08: 5000` (the raw-SQL site fixed above) |
+
+`courier: "mahavir"` on every live AWB is the routing caveat noted above — live tracking
+ids are small integers and sit below `TIRUPATI_INITIAL_NUMBER`. Unchanged from the old
+inline-AWB behaviour, but now visible in the tracking DTO.
+
+### Deploy order (strict)
+
+1. Apply the DDL. 2. `yarn prisma:generate` → **RESTART**. 3. Deploy this code.
+The DDL drops `tracking_status`, so it must not lead the code.
+
+---
+
+## 2026-08-27 (b) — `ws_live_course_subscription` adopts the `ws_package_course_subscription` shape
+
+> **DDL + code. NO API response shape changes.** Companion to 2026-08-27 (a), which did
+> the same for the order tables. Verified end-to-end on staging.
+
+**DDL:** `docs/migration/schema-changes/2026-08-27_live_course_subscription_match_package_shape.sql`
+(idempotent; includes the overdue 2026-08-25 drop, the renames, the 8 added columns,
+the `ws_live_course` source column, an index, and the backfill — no separate script).
+
+### ⚠ This file also closes a staging/prod divergence
+
+`2026-08-25_live_course_subscription_drop_payment_columns.sql` ran on **prod** (that is
+what the 2026-08-26 incident was about) but **never on staging** — staging still carried
+all 11 legacy payment columns and `idx_lcs_created_payment`, while `schema.prisma` has
+assumed the post-drop shape since 2026-08-26. Step 1 of the new file is guarded, so it
+no-ops on prod and converges staging. **Precondition:**
+`SELECT COUNT(*) FROM ws_live_course_subscription WHERE order_id IS NULL` must be 0
+(it was, on staging).
+
+### Renames
+
+| was | now | why |
+|---|---|---|
+| `customer_shipping_id` | `shipping` | `ws_package_course_subscription.shipping` |
+| `tracking_id` | `tracking` | `ws_package_course_subscription.tracking` |
+
+Prisma field names follow the columns (`shipping`, `tracking`). The purchase-history DTO
+key stays `trackingId` — only the column accessor moved.
+
+### The 8 added columns and where each value comes from
+
+| column | value logic |
+|---|---|
+| `amount` `double` | the order's `discount_price` (charged amount), mirrored so subscription reports stand alone |
+| `course_amount` `double` | shared **`computeMaterialSplit`** (`commerce-order.service`) — the same helper package has always used |
+| `material_amount` `double` | the RESIDUAL of `amount − course_amount`; null with no material, so the two always sum to `amount` |
+| `paid_amount` `decimal(10,2)` | the charged amount as Decimal (the package column's type) |
+| `payment_type` `enum('backend','online')` | `online` when the order carries a gateway id, `backend` otherwise — the rule the live-course report already uses for `activationType` |
+| `promoter_id` `int` | `$.promoterId` from the order's frozen promocode snapshot |
+| `promoter_percentage` `decimal(10,2)` | `$.promotedPackageCourseEbook[0].promoterPercentage` from the same snapshot |
+| `pc_material_id` `int` | copied off `ws_live_course.pc_material_id` at verify |
+
+The two promoter paths are exactly the ones `modules/promoter-data` already filters the
+package promoter dashboard on, so live-course rows now carry the same attribution — and
+as a **column**, so live-course reports need no `JSON_EXTRACT`. A **referral** snapshot
+deliberately yields null: its earner is a CUSTOMER, not a `ws_promoter`, and crediting
+one as the other would book referral rewards as promoter commission (the same trap
+`subCodeInfo` documents).
+
+### Both write paths fill the new columns
+
+| write path | what it writes |
+|---|---|
+| `verifyLiveCourseOrderMysql` (checkout → payment verify, incl. the Razorpay webhook) | all 8, from the order + plan + live course. `payment_type` resolves to `online` (the order carries a gateway id). |
+| `grantSubscription` (admin manual grant, `admin-live-course.service`) | the same 8, but `promoter_id`/`promoter_percentage` are null — a manual grant redeems no promocode, so there is no promoter to attribute — and `payment_type` is `backend` unless the admin recorded a gateway id. |
+
+Both call the shared `computeMaterialSplit`, so a granted subscription books the
+course/material split identically to a purchased one. New repository accessor
+`adminLiveCourseRepository.liveCourseMaterialKit(id)` supplies the kit id to the grant
+path (the verify path reads it inline).
+
+⚠ `admin-live-course.service` imports `Prisma` **type-only**; the `Decimal` constructor
+needs a value import, added as `PrismaRuntime`. Do not collapse the two.
+
+### `pc_material_id` needed a source — `ws_live_course.pc_material_id` added
+
+On package the kit id is copied off `ws_course.pc_material_id` / `ws_package.pc_material_id`.
+`ws_live_course` had no such column, so the subscription field could only ever have been
+NULL. The DDL adds it (nullable, FK-shaped to `ws_package_course_material`, mirroring the
+other two catalog tables) and verify + grant copy it across.
+**Follow-up:** admin live-course create/update does not expose `pcMaterialId` yet, so no
+live course has a kit configured and the column reads NULL in practice. The plumbing is
+in place; only the admin form field is missing.
+
+### Deliberate deviations (4)
+
+1. **`live_course_id`** — the product FK. Package identifies its product with
+   `package_id`/`course_id`. Must stay.
+2. **`plan_id`, NOT package's `pcb_id`.** `pcb_id` is a legacy name unique to
+   `ws_package_course_subscription`; **both** order tables already say `plan_id`, so
+   `plan_id` is the majority spelling and `pcb_id` is the outlier. Renaming live course
+   *to* the outlier would undo the consistency 2026-08-27 (a) established.
+3. **`customer_id` and `status` keep NOT NULL.** Package has them nullable, but measured
+   on staging **0 of 561,051 rows** have a NULL in either. The underlying types are
+   already identical (`int` / `tinyint`); only the constraint differs, and loosening it
+   would import a defect — a NULL `status` is neither true nor false, and the entitlement
+   gate reads `status = 1`. Tightening *package* is the correct fix and is out of scope
+   (561k-row live table).
+4. **`with_material` and `tracking_status` stay.** Package expresses the first through
+   `pc_material_id`/`material_amount` and the second through its separate
+   `ws_package_course_subscription_tracking` table. Live course has no tracking table —
+   the AWB and its status are inline — so removing them would lose real state.
+
+### Verified on staging
+
+The two tables now differ only by those deviations. A full checkout→verify round trip
+wrote every new column correctly: `amount`/`paidAmount` 259, `course+material == amount`,
+`payment_type` `online`, `promoterId` 7 and `promoterPercentage` 12.50 extracted from a
+snapshot, `shipping`/`tracking` on the renamed columns. `computeMaterialSplit` re-checked
+against all four documented cases (13000/8000 → 5000+8000; 6500/8000 → 100+6400 floor;
+50/8000 → 49+1 fulfilment corner; no-material → full course, null material).
+
+### Deploy order (strict)
+
+1. Apply the DDL (it drops columns on staging — confirm the `order_id IS NULL` count is 0 first).
+2. `yarn prisma:generate` → **RESTART**.
+3. Deploy this code.
+
+---
+
+## 2026-08-27 — `ws_live_course_order` adopts the `ws_package_course_order` shape, column for column
+
+> **DDL + code. NO API response shape changes** — every value that moved is re-sourced
+> or re-mapped so the wire output is identical. Verified against staging.
+
+**DDL:** `docs/migration/schema-changes/2026-08-27_live_course_order_match_package_shape.sql`
+(idempotent + environment-agnostic: creates the table in its FINAL shape where it does
+not exist, migrates it where the 2026-08-25 shape does. Includes the
+`ws_live_course_subscription.order_id` column, so it is sufficient on its own.)
+
+### Why
+
+`ws_live_course_order` was created 2026-08-25 by copying **column types out of
+`ws_live_course_subscription`** (so the backfill could be a straight column-to-column
+move) and the **status vocabulary out of `ws_test_series_order`**. The result was a
+*third* order shape: the same architecture as `ws_package_course_order` (order owns
+payment, subscription owns entitlement) but different column names, types and status
+words. `ws_package_course_order` is the standard; this makes live course match it.
+
+### The four groups of change
+
+**1. Renamed to the package names**
+
+| was | now | note |
+|---|---|---|
+| `original_amount` int | `price` double | package's type; now written on EVERY order |
+| `paid_amount` int | `discount_price` int | the charged amount |
+| `wallet_coin` int NULL | `ws_coin` int NOT NULL DEFAULT 0 | |
+| `customer_shipping_id` int | `shipping` int | still FK → `ws_customer_shipping` |
+
+**2. Added the 7 package columns that were missing** — all seven were already computed
+by the live checkout and simply had nowhere to go:
+
+| column | value logic |
+|---|---|
+| `unique_id` | the `live-<epoch>-<rand>` receipt id checkout already generates and already returns to the client |
+| `order_type` | `'purchase'` (written explicitly, as `createPackageOrderMysql` does) |
+| `generate_from` | DB default `'app'`. **No app-vs-web signal exists on the request** and `ws_package_course_order` does not write it either — declared in Prisma so it is readable, but nothing sets it. |
+| `referrer_id` | `referrerIdNum` from `resolvePromoForPlanSql`; was previously reachable only by digging into the `refferalcode` JSON snapshot |
+| `code_discount` | `discountAmount` from the promo resolve — the discount is **stored** again instead of derived |
+| `razorpay_order` | `JSON.stringify(rzpOrder)`, the full gateway response |
+| `ip_address` | `getClientIp(req, 255)` (`utils/clientIp`, X-Forwarded-For-safe, clamped to the column) |
+
+**3. Types matched to the package standard**
+
+`payment_method` varchar(191) NULL → **varchar(100) NOT NULL**;
+`bank_transaction_id` varchar(191) → **varchar(255)**;
+`status` varchar(20) `pending|complete|failed` → **`enum('cancel','complete','pending')`**.
+
+**4. Dropped the 5 columns package does not have** — no information lost:
+
+| dropped | where the value comes from now |
+|---|---|
+| `paid_at` | `updated_at`. Verify wrote both with the same `now`, and `updated_at` is how the **package** receipt has always sourced `paidAt`. |
+| `with_material` | `ws_live_course_plan.with_material` via `plan_id`. It was never a free checkout choice — the controller set it from that same plan flag. Verify now re-reads it there. Still stored on the subscription. |
+| `remarks`, `created_by`, `updated_by` | already written to `ws_live_course_subscription` by the same `grantSubscription` call. Nothing read the order's copies. |
+
+### The one deliberate deviation
+
+**`customer_id` stays `int NOT NULL`.** On `ws_package_course_order` it is
+`varchar(255)` — Mongo-ObjectId residue the application already does not honour
+(`PackageCourseOrder.userId` has always been declared `Int` in `schema.prisma`).
+Copying the varchar would break `idx_lco_customer_course`, force a CAST on every join
+to `ws_customer` (int PK) and re-import a legacy defect. Narrowing
+`ws_package_course_order.customer_id` to int is the right fix and is **not** done here
+(600k-row live table, separate change).
+
+Prisma **field** names also stay camelCase and razorpay-prefixed — package's
+`OrigianalPrice` typo and `gateway*` aliases are not reproduced. The **column** names,
+which is what "same schema" means, are identical.
+
+### Query / logic changes
+
+- **`liveSubDiscountAmount`** now PREFERS the stored `code_discount` and keeps the
+  `original − paid − coin` derivation as the legacy path for pre-2026-08-27 rows and
+  for the subscription's own dropped columns.
+- **`price` is written on every order** (was: only when a promo ran, where NULL meant
+  "no promo"). `admin-customer-details.transformer` gated `discountAmount` on
+  `originalAmount != null`; that gate is now **"a code snapshot exists"** — the exact
+  condition under which `original_amount` used to be set — so the DTO still emits
+  `null` (not `0`) for a no-code purchase.
+- **`'failed'` → `'cancel'`** in the column. The wire value is **unchanged**: both
+  readers already translated (`ORDER_STATUS_TO_PAYMENT_STATUS` in
+  `live-course-order.service`, `payStatusOf` in `admin-live-course.service`), plus
+  `livePayStatus` in `client-purchase-history.service` and the admin edit write path.
+  Both spellings are accepted on read.
+- **Verify** derives `withMaterial` from the plan (one extra column on a query it
+  already ran — no extra round trip) and writes `updated_at` where it wrote `paid_at`.
+- **Referral credit** reads `order.referrerId ?? referrerIdOf(order)` — column first,
+  snapshot as the fallback for rows written between 2026-08-20 and 2026-08-27.
+- **Aggregates** re-pointed from `_sum: { paidAmount }` to `_sum: { amount }`
+  (`admin-dashboard.service` revenue window, `admin-live-course.repository.aggSubs`).
+  `aggSubs` still RETURNS the key `paidAmount`, so its caller's DTO is untouched.
+
+### Backfill
+
+`scripts/backfill-live-course-orders.ts` updated for the new shape: it no longer copies
+`paid_at`/`with_material`/`remarks`/audit columns (gone from the order), maps
+`payment_status` `failed → cancel`, writes `price` on every row (falling back to the
+paid amount when the legacy `original_amount` was NULL) and materialises
+`code_discount`. The DDL performs the same conversion **in place** for orders that
+already exist, so a database that already ran the backfill needs nothing further.
+
+### Deploy order (strict)
+
+1. Apply the DDL.
+2. `yarn prisma:generate` → **RESTART** the process (`generate` writes into
+   `node_modules` and does not trip `tsx watch` — `utils/prismaSchemaDrift.ts`).
+3. Deploy this code.
+4. `scripts/backfill-live-course-orders.ts` where it has not already run.
+
+The DDL **drops columns**, so it must not lead the code by more than a deploy step: a
+Prisma client that still declares a dropped scalar SELECTs it and 1054s on every read
+— the 2026-08-26 live-course payment incident.
+
+**Verified on staging** (`websankul_staging_1`): the two tables now differ by exactly
+`live_course_id` (present only on live) and `customer_id` (the documented deviation);
+the 2 existing orders converted correctly (a promo row recovered `code_discount` 130
+from `259 − 129 − 0`; a no-promo row took `price` 2500 from its plan). Full-scalar
+`findMany`, `aggregate`, `include: { order: true }` and `groupBy` all execute clean.
+
+---
+
 ## 2026-08-26 (b) — purchase-history subscriptions: three indexes + parallel lookup rounds
 
 > **DDL + code. Response shape unchanged (verified byte-identical).**

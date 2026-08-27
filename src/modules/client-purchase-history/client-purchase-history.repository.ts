@@ -43,7 +43,9 @@ export const clientPurchaseHistoryRepository = {
       where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId),
       orderBy: { id: "desc" },
       take,
-      include: { order: true },
+      // `trackingRow` carries the dispatch status since 2026-08-27 (c) — it moved off
+      // the subscription into ws_live_course_subscription_tracking.
+      include: { order: true, trackingRow: { select: { status: true } } },
     }),
   countLiveSubscriptions: (customerId: number) =>
     prisma.liveCourseSubscription.count({ where: clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) }),
@@ -81,22 +83,51 @@ export const clientPurchaseHistoryRepository = {
   /** flat shipment status rows keyed by the ORDER that created them (material orders only). */
   pcTrackingByOrderIds: (orderIds: number[]) =>
     orderIds.length ? prisma.packageCourseSubscriptionTracking.findMany({ where: { orderId: { in: orderIds } }, select: { id: true, orderId: true, status: true, updated_at: true, created_at: true } }) : Promise.resolve([]),
-  /** entitlement subscriptions (windows) for the given course/package targets, to
-   *  decorate each order row with a validity window. Fresh orders map by order_id;
-   *  extension orders fall back to the latest active sub for the same target. Scoped to
-   *  the page's targets so a customer with many subs doesn't load them all. */
-  pcSubsForTargets: (customerId: number, courseIds: number[], packageIds: number[]) =>
-    courseIds.length || packageIds.length
+  /** Columns the subscriptions list needs off an entitlement subscription (the
+   *  validity window + enough key material to match it back to an order/target). */
+  PC_SUB_WINDOW_SELECT: { id: true, orderId: true, courseId: true, packageId: true, startAt: true, endAt: true } as const,
+  /**
+   * Validity window for the page's OWN orders — the common case since one order =
+   * one subscription row (2026-08-25). `order_id IN (…)` rides
+   * idx_pcs_customer_status_order as an index range scan, so this reads at most one
+   * row per order on the page.
+   *
+   * This REPLACES the old `pcSubsForTargets`, whose `course_id IN (…) OR
+   * package_id IN (…)` could not seek either column: MySQL resolved
+   * (customer_id, status) from the index and then read EVERY active subscription
+   * the customer owns just to test the OR — 16,773 rows to decorate 20 cards on a
+   * heavy staging account. See the 2026-08-27 entry in docs/MIGRATION_QUERY_CHANGES.md.
+   */
+  pcSubsByOrderIds: (customerId: number, orderIds: number[]) =>
+    orderIds.length
       ? prisma.packageCourseSubscription.findMany({
-          where: {
-            customerId,
-            status: true,
-            OR: [
-              ...(courseIds.length ? [{ courseId: { in: courseIds } }] : []),
-              ...(packageIds.length ? [{ packageId: { in: packageIds } }] : []),
-            ],
-          },
-          select: { id: true, orderId: true, courseId: true, packageId: true, startAt: true, endAt: true },
+          where: { customerId, status: true, orderId: { in: orderIds } },
+          select: clientPurchaseHistoryRepository.PC_SUB_WINDOW_SELECT,
+        })
+      : Promise.resolve([]),
+  /**
+   * Fallback window source for LEGACY folded orders — a pre-2026-08-25 validity
+   * extension folded onto the entitlement subscription and owns no row of its own,
+   * so its window has to come from the latest active sub for the same target.
+   *
+   * Split into one query per target column ON PURPOSE. A single `OR` over
+   * course_id/package_id cannot use an index on either (the optimizer picks the
+   * (customer_id, status) prefix and filters row by row); two separate seeks each
+   * ride their own index. Issued only for the orders that came back without a sub,
+   * so on a page of SQL-native purchases neither query runs at all.
+   */
+  pcSubsByCourseIds: (customerId: number, courseIds: number[]) =>
+    courseIds.length
+      ? prisma.packageCourseSubscription.findMany({
+          where: { customerId, status: true, courseId: { in: courseIds } },
+          select: clientPurchaseHistoryRepository.PC_SUB_WINDOW_SELECT,
+        })
+      : Promise.resolve([]),
+  pcSubsByPackageIds: (customerId: number, packageIds: number[]) =>
+    packageIds.length
+      ? prisma.packageCourseSubscription.findMany({
+          where: { customerId, status: true, packageId: { in: packageIds } },
+          select: clientPurchaseHistoryRepository.PC_SUB_WINDOW_SELECT,
         })
       : Promise.resolve([]),
 
@@ -224,12 +255,16 @@ export const clientPurchaseHistoryRepository = {
         packageCourseSubscriptionTracking: { select: { status: true, created_at: true, updated_at: true } },
       },
     }),
-  /** purchased live-course sub (AWB + status are inline columns; address is a separate table). */
+  /** purchased live-course sub. The AWB is `tracking`; its status is on the tracking
+   *  row (ws_live_course_subscription_tracking, 2026-08-27 (c)); address is separate. */
   liveSubscriptionForTracking: (subId: number, customerId: number) =>
     prisma.liveCourseSubscription.findFirst({
       where: { id: subId, ...clientPurchaseHistoryRepository.liveSubscriptionPurchasedWhere(customerId) },
       // `bookedAt` / the order status in the tracking DTO come off the order now.
-      include: { order: true },
+      include: {
+        order: true,
+        trackingRow: { select: { status: true, created_at: true, updated_at: true } },
+      },
     }),
   /** delivery address for a live sub (customer_shipping_id → ws_customer_address). */
   customerAddressById: (id: number) =>

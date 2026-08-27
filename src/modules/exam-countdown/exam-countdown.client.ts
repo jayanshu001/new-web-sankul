@@ -18,6 +18,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { getPurchasedBookIdSet } from "../book-order/book-order.service";
+import { getActivePackageSubMap } from "../commerce-subscription/commerce-subscription.service";
 import { buildLikeTokens } from "../../utils/searchFilter";
 
 const idStr = (v: number | null | undefined): string | null => (v != null ? String(v) : null);
@@ -48,8 +49,18 @@ const matchingIds = async (
   return rows.map((r) => Number(r.id));
 };
 
-// ── package DTO + plans + subscriber count ────────────────────────────────────
-const packageDto = (p: any, plans: any[], subCount: number) => {
+// `undefined` = the customer has no active subscription for this product; an
+// active row that never expires (lifetime) is `null` — purchased, with no
+// daysLeft. Hence every isPurchased below tests `!== undefined` rather than
+// truthiness, which would call a lifetime entitlement "not purchased".
+type SubEndAt = Date | null | undefined;
+const purchaseState = (subEndAt: SubEndAt, now: Date) => ({
+  isPurchased: subEndAt !== undefined,
+  daysLeft: subEndAt ? daysBetween(now, subEndAt) : null,
+});
+
+// ── package DTO + plans + subscriber count + ownership ────────────────────────
+const packageDto = (p: any, plans: any[], subCount: number, subEndAt: SubEndAt, now: Date) => {
   const mine = plans.filter((pl) => pl.packageId === p.id);
   const planDto = (pl: any) => ({
     _id: String(pl.id),
@@ -79,25 +90,35 @@ const packageDto = (p: any, plans: any[], subCount: number) => {
       withoutMaterial: mine.filter((pl) => !pl.withMaterial).map(planDto),
     },
     subscriberCount: subCount,
+    ...purchaseState(subEndAt, now),
   };
 };
 
-const loadPackages = async (ids: number[]) => {
+const loadPackages = async (ids: number[], customerId: number | null) => {
   if (!ids.length) return [];
-  const [packages, plans, subAgg] = await Promise.all([
+  const now = new Date();
+  const [packages, plans, subAgg, ownedByPkg] = await Promise.all([
     prisma.package.findMany({ where: { id: { in: ids } } }),
     prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: ids }, status: true }, orderBy: { duration: "asc" } }),
     prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: ids }, status: true }, _count: { _all: true } }),
+    // Per-customer entitlement, one query for the whole page. Canonical helper
+    // (latest-expiring row wins) — the same map GET /client/package-categories/:id
+    // builds, so a package card agrees wherever it is rendered.
+    getActivePackageSubMap(customerId, ids),
   ]);
   const subByPkg = new Map<number, number>();
   for (const r of subAgg as any[]) if (r.packageId != null) subByPkg.set(r.packageId, r._count._all);
   const byId = new Map(packages.map((p) => [p.id, p]));
   // preserve the matchingIds order (order_by asc)
-  return ids.map((id) => byId.get(id)).filter(Boolean).map((p: any) => packageDto(p, plans, subByPkg.get(p.id) ?? 0));
+  return ids.map((id) => byId.get(id)).filter(Boolean).map((p: any) =>
+    // `has` distinguishes "no subscription" (absent → undefined) from an active
+    // lifetime one (present, value null) — `get` alone cannot.
+    packageDto(p, plans, subByPkg.get(p.id) ?? 0, ownedByPkg.has(p.id) ? ownedByPkg.get(p.id) ?? null : undefined, now)
+  );
 };
 
 // ── live-course DTO + plans + subscriber count + ownership ─────────────────────
-const liveDto = (c: any, plans: any[], subCount: number, endAt: Date | null, now: Date) => ({
+const liveDto = (c: any, plans: any[], subCount: number, subEndAt: SubEndAt, now: Date) => ({
   _id: String(c.id),
   name: c.name,
   description: c.description ?? null,
@@ -114,8 +135,7 @@ const liveDto = (c: any, plans: any[], subCount: number, endAt: Date | null, now
     .filter((pl) => pl.liveCourseId === c.id)
     .map((pl) => ({ _id: String(pl.id), liveCourseId: idStr(pl.liveCourseId), name: pl.name ?? null, duration: pl.duration, price: pl.price, isDefault: pl.isDefault })),
   subscriberCount: subCount,
-  isPurchased: !!endAt,
-  daysLeft: endAt ? daysBetween(now, endAt) : null,
+  ...purchaseState(subEndAt, now),
 });
 
 const loadLiveCourses = async (ids: number[], customerId: number | null) => {
@@ -142,10 +162,9 @@ const loadLiveCourses = async (ids: number[], customerId: number | null) => {
     if (prev !== null && (s.endAt === null || s.endAt > prev)) endByCourse.set(s.liveCourseId, s.endAt ?? null);
   }
   const byId = new Map(courses.map((c) => [c.id, c]));
-  return ids.map((id) => byId.get(id)).filter(Boolean).map((c: any) => {
-    const endAt = endByCourse.has(c.id) ? endByCourse.get(c.id)! : null;
-    return liveDto(c, plans, subByCourse.get(c.id) ?? 0, endByCourse.has(c.id) ? endAt : null, now);
-  });
+  return ids.map((id) => byId.get(id)).filter(Boolean).map((c: any) =>
+    liveDto(c, plans, subByCourse.get(c.id) ?? 0, endByCourse.has(c.id) ? endByCourse.get(c.id) ?? null : undefined, now)
+  );
 };
 
 // ── book + ebook DTOs (merged listing) ────────────────────────────────────────
@@ -170,7 +189,7 @@ const bookDto = (b: any, ownedBookIds: Set<string>) => ({
   daysLeft: null as number | null,
 });
 
-const ebookDto = (e: any, plans: any[], endAt: Date | null, now: Date) => {
+const ebookDto = (e: any, plans: any[], subEndAt: SubEndAt, now: Date) => {
   const ePlans = plans.filter((pl) => pl.ebookId === e.id);
   const isPaid = ePlans.some((pl) => (pl.price ?? 0) > 0);
   return {
@@ -184,9 +203,8 @@ const ebookDto = (e: any, plans: any[], endAt: Date | null, now: Date) => {
     createdAt: e.createdAt ?? null,
     plans: ePlans.map((pl) => ({ _id: String(pl.id), ebookId: idStr(pl.ebookId), name: pl.name ?? null, duration: pl.duration, price: pl.price, isDefault: pl.isDefault })),
     isPaid,
-    isPurchased: !!endAt,
-    subscriptionEndAt: endAt,
-    daysLeft: endAt ? daysBetween(now, endAt) : null,
+    subscriptionEndAt: subEndAt ?? null,
+    ...purchaseState(subEndAt, now),
   };
 };
 
@@ -209,7 +227,7 @@ const loadBooksAndEbooks = async (bookIds: number[], ebookIds: number[], custome
     if (prev !== null && (s.endAt === null || s.endAt > prev)) endByEbook.set(s.ebookId, s.endAt ?? null);
   }
   const booksShaped = books.map((b) => bookDto(b, ownedBookIds));
-  const ebooksShaped = ebooks.map((e) => ebookDto(e, ebookPlans, endByEbook.has(e.id) ? endByEbook.get(e.id)! : null, now));
+  const ebooksShaped = ebooks.map((e) => ebookDto(e, ebookPlans, endByEbook.has(e.id) ? endByEbook.get(e.id) ?? null : undefined, now));
   return [...booksShaped, ...ebooksShaped].sort(
     (a, b) => new Date((b as any).createdAt ?? 0).getTime() - new Date((a as any).createdAt ?? 0).getTime()
   );
@@ -235,13 +253,13 @@ const countdownDto = (e: any) => ({ _id: String(e.id), title: e.title, categoryI
 /** GET /client/exam-countdown-categories/:id/packages */
 export const listPackagesByCountdownCategory = async (
   categoryId: number,
-  _customerId: number | null,
+  customerId: number | null,
   opts: { skip: number; take: number; search?: string | null }
 ) => {
   const category = await findCategory(categoryId);
   if (!category) return null;
   const ids = await matchingIds("ws_package", "exam_countdown_category_ids", categoryId, opts.search ?? null);
-  const all = await loadPackages(ids);
+  const all = await loadPackages(ids, customerId);
   const { list, total } = page(all, opts.skip, opts.take);
   return { category: catDto(category), list, total };
 };
@@ -258,7 +276,7 @@ export const listProductsByCountdown = async (
     matchingIds("ws_package", "exam_countdown_ids", countdownId, opts.search ?? null),
     matchingIds("ws_live_course", "exam_countdown_ids", countdownId, opts.search ?? null, "ordered"),
   ]);
-  const [packages, live] = await Promise.all([loadPackages(pkgIds), loadLiveCourses(liveIds, customerId)]);
+  const [packages, live] = await Promise.all([loadPackages(pkgIds, customerId), loadLiveCourses(liveIds, customerId)]);
   const merged = [
     ...packages.map((p) => ({ ...p, type: "package" as const })),
     ...live.map((c) => ({ ...c, type: "live-course" as const })),
