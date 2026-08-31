@@ -195,7 +195,8 @@ const subscriptionDto = (s: any) => ({
   customerId: s.customerId != null ? String(s.customerId) : null,
   testSeriesId: s.testSeriesId != null ? String(s.testSeriesId) : null,
   planId: s.planId != null ? String(s.planId) : null,
-  price: num(s.price),
+  // WIRE CONTRACT: the DTO key stays `price`; only the column moved to `amount`.
+  price: num(s.amount),
   startAt: s.startAt ?? null,
   endAt: s.endAt ?? null,
   remarks: s.remarks ?? null,
@@ -853,7 +854,7 @@ const enrichSubRows = async (rows: any[], now: Date) => {
     orderIds.length
       ? prisma.testSeriesOrder.findMany({
           where: { id: { in: orderIds } },
-          select: { id: true, paymentMethod: true, razorpayOrderId: true, razorpayPaymentId: true, transactionId: true },
+          select: { id: true, paymentMethod: true, razorpayOrderId: true, razorpayPaymentId: true, bankTransactionId: true },
         })
       : [],
     // Promocode is a direct FK on the subscription row (unlike the subscription
@@ -880,7 +881,7 @@ const enrichSubRows = async (rows: any[], now: Date) => {
       cust: r.customerId != null ? custById.get(r.customerId) : undefined,
       product,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.durationDays ?? null, price: num(plan.price) } : null,
-      amount: num(r.price),
+      amount: num(r.amount),
       paymentMethod: r.paymentType === "backend" ? "backend" : "online",
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null,
@@ -894,7 +895,7 @@ const enrichSubRows = async (rows: any[], now: Date) => {
       orderMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : null,
       razorpayOrderId: blankToNull(order?.razorpayOrderId),
       razorpayPaymentId: blankToNull(order?.razorpayPaymentId),
-      bankTransactionId: blankToNull(order?.transactionId),
+      bankTransactionId: blankToNull(order?.bankTransactionId),
       promocode: promo?.promocode ?? null,
       promocodeId: r.promocodeId ?? null,
       remarks: r.remarks ?? null,
@@ -934,7 +935,7 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
     }),
-    prisma.testSeriesSubscription.aggregate({ where: listWhere, _count: { _all: true }, _sum: { price: true } }),
+    prisma.testSeriesSubscription.aggregate({ where: listWhere, _count: { _all: true }, _sum: { amount: true } }),
     prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("active", now)) }),
     prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("expired", now)) }),
   ]);
@@ -942,7 +943,7 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
   const data = await enrichSubRows(rows, now);
 
   return {
-    summary: { totalCount: total, totalRevenue: num(agg._sum.price ?? 0), activeCount, expiredCount },
+    summary: { totalCount: total, totalRevenue: num(agg._sum.amount ?? 0), activeCount, expiredCount },
     data,
     pagination: { total, page: opts.page, limit: opts.limit, totalPages: Math.ceil(total / opts.limit) },
   };
@@ -1105,10 +1106,16 @@ export const grantSubscription = async (
         planId: data.planId ?? null,
         paymentMethod: data.paymentMethod ?? "cash",
         orderType: "purchase",
-        orderPrice: price,
+        // Business key, minted here too so `unique_id` is never half-populated: a
+        // manual grant is still an order and still gets a receipt id.
+        uniqueId: `ts-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+        // Package names since 2026-08-31. A manual grant has no promo and no wallet
+        // spend, so list price == charged and code_discount / ws_coin are a real 0.
+        amount: Math.round(price),
+        originalPrice: price,
         razorpayOrderId: data.razorpayOrderId ?? null,
         razorpayPaymentId: data.razorpayPaymentId ?? null,
-        transactionId: data.bankTransactionId ?? null,
+        bankTransactionId: data.bankTransactionId ?? null,
         status: "complete",
         createdAt: now,
         updatedAt: now,
@@ -1139,10 +1146,14 @@ export const grantSubscription = async (
         customerId: data.customerId,
         testSeriesId,
         planId: data.planId ?? null,
-        // This row's OWN price. A free "Add Days" extension is worth 0 here and the
-        // customer's earlier row keeps what it was paid, because we no longer write
-        // to it — so the "0 would wipe ₹699" hazard the fold had cannot arise.
-        price,
+        // This row's OWN charge (`price` until 2026-08-31 — renamed onto the package
+        // column name). A free "Add Days" extension is worth 0 here and the customer's
+        // earlier row keeps what it was paid, because we no longer write to it — so
+        // the "0 would wipe ₹699" hazard the fold had cannot arise.
+        amount: price,
+        paidAmount: price,
+        // No promoter attribution on a manual grant: there is no order snapshot to
+        // denormalise from, and a backend grant earns no commission.
         startAt: subStartAt,
         endAt,
         paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
@@ -1221,7 +1232,7 @@ export const getSubscriptionById = async (id: number): Promise<"not_found" | any
       ? prisma.testSeriesPrice.findUnique({ where: { id: sub.planId }, select: { id: true, name: true, durationDays: true, price: true } })
       : null,
     sub.orderId != null
-      ? prisma.testSeriesOrder.findUnique({ where: { id: sub.orderId }, select: { id: true, paymentMethod: true, orderType: true, razorpayOrderId: true, razorpayPaymentId: true, transactionId: true } })
+      ? prisma.testSeriesOrder.findUnique({ where: { id: sub.orderId }, select: { id: true, paymentMethod: true, orderType: true, razorpayOrderId: true, razorpayPaymentId: true, bankTransactionId: true } })
       : null,
   ]);
 
@@ -1253,9 +1264,12 @@ export const getSubscriptionById = async (id: number): Promise<"not_found" | any
     paymentMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : sub.paymentType === "backend" ? "backend" : "online",
     razorpayOrderId: blankToNull(order?.razorpayOrderId),
     razorpayPaymentId: blankToNull(order?.razorpayPaymentId),
-    bankTransactionId: blankToNull(order?.transactionId),
-    price: num(sub.price),
-    paidAmount: num(sub.price),
+    bankTransactionId: blankToNull(order?.bankTransactionId),
+    // WIRE CONTRACT: both keys unchanged. `paidAmount` keeps sourcing from the
+    // charged amount rather than the new paid_amount column — same rule as
+    // admin-customer-details.transformer, which documents why.
+    price: num(sub.amount),
+    paidAmount: num(sub.amount),
     startAt: sub.startAt ?? null,
     endAt: sub.endAt ?? null,
     remarks: sub.remarks ?? null,
@@ -1292,16 +1306,19 @@ const orderDto = (o: any) => ({
   planId: o.planId != null ? String(o.planId) : null,
   paymentMethod: o.paymentMethod,
   orderType: o.orderType,
-  orderPrice: num(o.orderPrice),
-  basePrice: num(o.basePrice),
-  discountAmount: num(o.discountAmount),
+  // WIRE CONTRACT: these five keys predate the 2026-08-31 column rename and are
+  // unchanged. Only the columns behind them moved onto the package names —
+  // order_price → discount_price, base_price → price, discount_amount → code_discount.
+  orderPrice: num(o.amount),
+  basePrice: num(o.originalPrice),
+  discountAmount: num(o.codeDiscount),
   gstAmount: num(o.gstAmount),
   handlingFee: num(o.handlingFee),
   promocodeId: o.promocodeId != null ? String(o.promocodeId) : null,
   razorpayOrderId: o.razorpayOrderId ?? null,
   razorpayPaymentId: o.razorpayPaymentId ?? null,
   ipAddress: o.ipAddress ?? null,
-  transactionId: o.transactionId ?? null,
+  transactionId: o.bankTransactionId ?? null,
   status: o.status,
   createdAt: o.createdAt ?? null,
   updatedAt: o.updatedAt ?? null,

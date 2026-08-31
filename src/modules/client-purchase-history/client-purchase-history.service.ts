@@ -280,7 +280,7 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       withMaterial: false,
       status: null,
       tracking: null,
-      amount: o.orderPrice != null ? Number(o.orderPrice) : null,
+      amount: o.amount != null ? Number(o.amount) : null,
       purchasedAt: o.createdAt ?? null,
       startAt: win?.startAt ?? null,
       endAt: win?.endAt ?? null,
@@ -344,7 +344,7 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       withMaterial: false,
       status: null,
       tracking: null,
-      amount: s.price != null ? Number(s.price) : null,
+      amount: s.amount != null ? Number(s.amount) : null,
       purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
@@ -909,7 +909,7 @@ export const getTestSeriesReceiptMysql = async (orderId: number, customerId: num
       .sort((a, b) => (b.endAt?.getTime() ?? 0) - (a.endAt?.getTime() ?? 0))[0] ??
     null;
 
-  const total = order.orderPrice != null ? Number(order.orderPrice) : 0;
+  const total = order.amount != null ? Number(order.amount) : 0;
 
   return {
     kind: "test-series" as const,
@@ -923,7 +923,7 @@ export const getTestSeriesReceiptMysql = async (orderId: number, customerId: num
       method: formatPaymentMethod(order.paymentMethod) || "Online",
       razorpayOrderId: order.razorpayOrderId ?? null,
       razorpayPaymentId: order.razorpayPaymentId ?? null,
-      transactionId: order.transactionId || null,
+      transactionId: order.bankTransactionId || null,
     },
     items: [
       {
@@ -957,7 +957,7 @@ export const getTestSeriesReceiptBySubMysql = async (subId: number, customerId: 
     sub.planId ? repo.testSeriesPlanForReceipt(sub.planId) : Promise.resolve(null),
     repo.testSeriesForReceipt(sub.testSeriesId),
   ]);
-  const total = sub.price != null ? Number(sub.price) : 0;
+  const total = sub.amount != null ? Number(sub.amount) : 0;
 
   return {
     kind: "test-series" as const,

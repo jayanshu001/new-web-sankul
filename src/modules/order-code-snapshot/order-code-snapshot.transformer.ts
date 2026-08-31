@@ -112,6 +112,53 @@ export const toLiveSnapshotPlan = (
       }
     : null;
 
+/**
+ * A TEST-SERIES plan (ws_test_series_price) in the SAME SnapshotPlan shape, for the
+ * same reason as the live-course variant: a consumer reading
+ * `$.promotedPackageCourseEbook[0].planId.price` must not need to know which of the
+ * three plan tables the purchase came from.
+ *
+ * ebookId / courseId / packageId are 0 — the legacy "not this entity" sentinel — and
+ * the real parent rides in `testSeriesId`, a key that exists ONLY on this variant.
+ * `withMaterial` / `materialPrice` are false / 0 because ws_test_series_price has no
+ * such columns: a test series is digital and never ships a material kit.
+ * `duration` is DAYS here (duration_days), as on a price plan.
+ */
+export const toTestSeriesSnapshotPlan = (
+  p: {
+    id: number;
+    name: string | null;
+    price: unknown;
+    status: boolean;
+    durationDays: number;
+    isDefault: boolean;
+    testSeriesId: number;
+    createdAt: Date | null;
+    updatedAt: Date | null;
+  } | null
+): SnapshotPlan | null =>
+  p
+    ? {
+        id: p.id,
+        name: p.name,
+        // ws_test_series_price.price is decimal(10,2) — Prisma hands back a Decimal
+        // object, which would serialise into the frozen JSON as {s,e,d} internals.
+        // Every other SnapshotPlan carries a plain number, so coerce here.
+        price: Number(p.price ?? 0),
+        status: p.status,
+        ebookId: 0,
+        courseId: 0,
+        duration: p.durationDays,
+        isDefault: p.isDefault,
+        packageId: 0,
+        created_at: iso(p.createdAt),
+        updated_at: iso(p.updatedAt),
+        withMaterial: false,
+        materialPrice: 0,
+        testSeriesId: p.testSeriesId,
+      }
+    : null;
+
 const toSnapshotPromoter = (
   pr: {
     id: number;

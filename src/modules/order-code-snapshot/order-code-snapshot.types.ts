@@ -52,18 +52,20 @@ export type SnapshotPlan = {
   withMaterial: boolean;
   materialPrice: number;
   liveCourseId?: number;
+  testSeriesId?: number;
 };
 
 /**
  * Which plan table a snapshot's `planId` points at — the same discriminator
- * `ws_promoted_package_course_ebook.plan_kind` uses.
+ * `ws_promoted_package_course_ebook.plan_kind` uses, and the same three values
+ * `promo-code.service` already writes and `promocode.validation` already accepts.
  *
- * ⚠ The two tables SHARE an id space and the link row's `pcb_price_id` FK is declared
- * against ws_package_course_ebook_price regardless of kind, so resolving a live-course
- * plan id without this discriminator silently returns an unrelated course/package plan
- * (and, worse, ITS promoter percentage).
+ * ⚠ The three tables SHARE an id space and the link row's `pcb_price_id` FK is
+ * declared against ws_package_course_ebook_price regardless of kind, so resolving a
+ * live-course or test-series plan id without this discriminator silently returns an
+ * unrelated course/package plan (and, worse, ITS promoter percentage).
  */
-export type SnapshotPlanKind = "price" | "livePlan";
+export type SnapshotPlanKind = "price" | "livePlan" | "testSeriesPrice";
 
 /** The promoter who owns the promocode (ws_promoter) — snake_case, as in V1. */
 export type SnapshotPromoter = {

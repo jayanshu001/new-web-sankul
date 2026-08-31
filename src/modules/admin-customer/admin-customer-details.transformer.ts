@@ -124,7 +124,7 @@ export const toLiveCourseDto = (
 
 // ── Test series subscription ───────────────────────────────────────────────────
 type TestSub = {
-  id: number; testSeriesId: number; planId: number | null; price: unknown;
+  id: number; testSeriesId: number; planId: number | null; amount: unknown;
   status: boolean | null; startAt: Date | null; endAt: Date | null;
 };
 
@@ -140,7 +140,9 @@ export const toTestSeriesDto = (
     _id: String(s.id),
     testSeriesId: ref(s.testSeriesId, ts && { name: ts.title, image: ts.thumbnail }),
     planId: price ? { _id: String(s.planId), name: price.name ?? null, duration: price.durationDays, price: dec(price.price) } : null,
-    price: dec(s.price),
+    // WIRE CONTRACT: the DTO key stays `price`; the column became `amount` on
+    // 2026-08-31 when this table took the ws_package_course_subscription names.
+    price: dec(s.amount),
     startAt: s.startAt,
     endAt: s.endAt,
     isActive: isActiveOf(s.status, s.endAt, now),

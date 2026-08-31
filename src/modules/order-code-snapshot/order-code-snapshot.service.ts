@@ -21,7 +21,13 @@
  * caller stores null rather than blocking checkout.
  */
 import { orderCodeSnapshotRepository as repo } from "./order-code-snapshot.repository";
-import { toLiveSnapshotPlan, toPromocodeSnapshot, toReferralSnapshot, toSnapshotPlan } from "./order-code-snapshot.transformer";
+import {
+  toLiveSnapshotPlan,
+  toPromocodeSnapshot,
+  toReferralSnapshot,
+  toSnapshotPlan,
+  toTestSeriesSnapshotPlan,
+} from "./order-code-snapshot.transformer";
 import type {
   OrderCodeSnapshots,
   PromocodeSnapshot,
@@ -40,10 +46,11 @@ export const ORDER_CODE_SNAPSHOT_MODULE = "order-code-snapshot";
 const resolvePlan = async (
   planId: number,
   planKind: SnapshotPlanKind
-): Promise<SnapshotPlan | null> =>
-  planKind === "livePlan"
-    ? toLiveSnapshotPlan(await repo.findLivePlan(planId))
-    : toSnapshotPlan(await repo.findPlan(planId));
+): Promise<SnapshotPlan | null> => {
+  if (planKind === "livePlan") return toLiveSnapshotPlan(await repo.findLivePlan(planId));
+  if (planKind === "testSeriesPrice") return toTestSeriesSnapshotPlan(await repo.findTestSeriesPlan(planId));
+  return toSnapshotPlan(await repo.findPlan(planId));
+};
 
 /**
  * Snapshot a redeemed promocode against the purchased plan. Returns null if the
@@ -62,13 +69,13 @@ export const buildPromocodeSnapshot = async (
     repo.findPlanLink(promocodeId, planId, planKind),
   ]);
   if (!promo) return null;
-  // A "price" link carries its plan on the relation already loaded; a "livePlan" link
-  // cannot (its FK points at the wrong table), so read the live plan separately. No
-  // link at all → a global-discount promocode → no plan to embed.
+  // A "price" link carries its plan on the relation already loaded; a "livePlan" or
+  // "testSeriesPrice" link cannot (its FK points at the wrong table), so read that
+  // plan separately. No link at all → a global-discount promocode → no plan to embed.
   const linkPlan = !link
     ? null
-    : planKind === "livePlan"
-      ? await resolvePlan(planId, "livePlan")
+    : planKind !== "price"
+      ? await resolvePlan(planId, planKind)
       : toSnapshotPlan((link as { packageCourseEbookPrice?: any }).packageCourseEbookPrice ?? null);
   return toPromocodeSnapshot(promo, link, linkPlan);
 };
@@ -107,7 +114,8 @@ export const buildOrderCodeSnapshots = async (input: {
   /**
    * Which plan table `planId` belongs to. Defaults to "price"
    * (ws_package_course_ebook_price) — the course / package / ebook checkouts — so
-   * those callers are unaffected. Live-course checkout MUST pass "livePlan".
+   * those callers are unaffected. Live-course checkout MUST pass "livePlan" and
+   * test-series checkout MUST pass "testSeriesPrice".
    */
   planKind?: SnapshotPlanKind;
 }): Promise<OrderCodeSnapshots> => {
@@ -125,4 +133,38 @@ export const buildOrderCodeSnapshots = async (input: {
     };
   }
   return { promocode: null, refferalcode: null };
+};
+
+/**
+ * Promoter attribution for a subscription's `promoter_id` / `promoter_percentage`
+ * columns, denormalised out of the ORDER's frozen promocode snapshot.
+ *
+ * Lives here because this module owns the snapshot shape: the two JSON paths read
+ * below (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`) are
+ * the same ones `modules/promoter-data` filters the package promoter dashboard on,
+ * and they are documented as load-bearing in order-code-snapshot.types.ts. Keeping
+ * the reader next to the writer is what stops the two drifting apart.
+ *
+ * Shared by live-course (2026-08-27) and test-series (2026-08-31) verify.
+ *
+ * ⚠ A REFERRAL snapshot deliberately yields nothing. In the legacy referral shape the
+ * key `promoter` holds the referring CUSTOMER, not a `ws_promoter` — attributing one
+ * as the other would book customer referral rewards as promoter commission.
+ */
+export const extractPromoterAttribution = (row: {
+  promocode?: unknown;
+}): { promoterId: number | null; promoterPercentage: number | null } => {
+  const promo = row.promocode as any;
+  if (!promo || typeof promo !== "object") return { promoterId: null, promoterPercentage: null };
+
+  const id = promo.promoterId;
+  const pct = Array.isArray(promo.promotedPackageCourseEbook)
+    ? promo.promotedPackageCourseEbook[0]?.promoterPercentage
+    : null;
+  const pctNum = pct != null && pct !== "" ? Number(pct) : null;
+
+  return {
+    promoterId: Number.isInteger(id) && id > 0 ? (id as number) : null,
+    promoterPercentage: pctNum != null && Number.isFinite(pctNum) ? pctNum : null,
+  };
 };

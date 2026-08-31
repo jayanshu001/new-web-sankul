@@ -38,8 +38,8 @@ const bookRevenue = async (w: Win) => {
 // Test-series subscription rows are created ONLY on verify (pending state lives on
 // ws_test_series_order), so every row is a paid purchase — no status filter, sum price.
 const testSeriesRevenue = async (w: Win) => {
-  const agg = await prisma.testSeriesSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end } }, _sum: { price: true }, _count: { _all: true } });
-  return { revenue: num(agg._sum.price), count: agg._count._all };
+  const agg = await prisma.testSeriesSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end } }, _sum: { amount: true }, _count: { _all: true } });
+  return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
 // Revenue comes from the ORDER table (2026-08-25): live course used to be
 // single-table, so this had to sum the subscription and exclude pending/folded rows

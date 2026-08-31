@@ -725,21 +725,21 @@ async function loadTestSeriesReceiptFromSubMysql(
 ): Promise<CourseReceiptData | null> {
   const sub = await prisma.testSeriesSubscription.findFirst({
     where: { id: subId, customerId: custId },
-    select: { price: true, createdAt: true, testSeriesId: true, planId: true, orderId: true, paymentType: true },
+    select: { amount: true, createdAt: true, testSeriesId: true, planId: true, orderId: true, paymentType: true },
   });
   if (!sub) return null;
 
   const [ts, plan, order, customer] = await Promise.all([
     prisma.testSeries.findFirst({ where: { id: sub.testSeriesId }, select: { title: true } }),
     sub.planId ? prisma.testSeriesPrice.findFirst({ where: { id: sub.planId }, select: { durationDays: true } }) : Promise.resolve(null),
-    sub.orderId ? prisma.testSeriesOrder.findFirst({ where: { id: sub.orderId }, select: { paymentMethod: true, razorpayPaymentId: true, razorpayOrderId: true, transactionId: true } }) : Promise.resolve(null),
+    sub.orderId ? prisma.testSeriesOrder.findFirst({ where: { id: sub.orderId }, select: { paymentMethod: true, razorpayPaymentId: true, razorpayOrderId: true, bankTransactionId: true } }) : Promise.resolve(null),
     prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
   ]);
 
-  const rawAmount = sub.price != null ? Number(sub.price) : 0;
+  const rawAmount = sub.amount != null ? Number(sub.amount) : 0;
 
   const tsSubMethod = formatPaymentMethod(String(order?.paymentMethod || sub.paymentType || "Online"));
-  const tsSubRef = resolvePaymentReference(tsSubMethod, order?.razorpayPaymentId, order?.transactionId);
+  const tsSubRef = resolvePaymentReference(tsSubMethod, order?.razorpayPaymentId, order?.bankTransactionId);
 
   return {
     paymentMethod: tsSubMethod,
@@ -767,14 +767,14 @@ async function loadTestSeriesReceiptFromOrderMysql(
     where: { id: ordId, customerId: custId },
     select: {
       id: true,
-      orderPrice: true,
+      amount: true,
       createdAt: true,
       testSeriesId: true,
       planId: true,
       paymentMethod: true,
       razorpayOrderId: true,
       razorpayPaymentId: true,
-      transactionId: true,
+      bankTransactionId: true,
       status: true,
     },
   });
@@ -796,10 +796,10 @@ async function loadTestSeriesReceiptFromOrderMysql(
     }),
   ]);
 
-  const rawAmount = ord.orderPrice != null ? Number(ord.orderPrice) : 0;
+  const rawAmount = ord.amount != null ? Number(ord.amount) : 0;
 
   const tsMethod = formatPaymentMethod(String(ord.paymentMethod || "Online"));
-  const tsRef = resolvePaymentReference(tsMethod, ord.razorpayPaymentId, ord.transactionId);
+  const tsRef = resolvePaymentReference(tsMethod, ord.razorpayPaymentId, ord.bankTransactionId);
 
   return {
     paymentMethod: tsMethod,

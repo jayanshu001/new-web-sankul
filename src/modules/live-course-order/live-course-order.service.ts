@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
+import { extractPromoterAttribution } from "../order-code-snapshot/order-code-snapshot.service";
 import { computeEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
@@ -283,36 +284,11 @@ const referrerIdOf = (row: { refferalcode: unknown }): number | null => {
 
 /**
  * Promoter attribution for the subscription's `promoter_id` / `promoter_percentage`
- * columns, denormalised out of the order's frozen promocode snapshot.
- *
- * The two JSON paths are exactly the ones `modules/promoter-data` already filters the
- * PACKAGE promoter dashboard on (`$.promoterId`,
- * `$.promotedPackageCourseEbook[0].promoterPercentage`), so live-course rows now carry
- * the same attribution package rows do — and it is a COLUMN here, so the live-course
- * reports do not need a JSON_EXTRACT to find it.
- *
- * ⚠ A REFERRAL snapshot deliberately yields nothing. In the legacy referral shape the
- * key `promoter` holds the referring CUSTOMER, not a `ws_promoter` — the same trap
- * `subCodeInfo` in admin-live-course.service documents. Attributing one as the other
- * would book customer referral rewards as promoter commission.
+ * columns. Moved to modules/order-code-snapshot on 2026-08-31 so live-course and
+ * test-series verify share ONE reader of the snapshot's load-bearing JSON paths —
+ * the module that writes the shape now also owns reading it back.
  */
-const promoterAttribution = (row: {
-  promocode?: unknown;
-}): { promoterId: number | null; promoterPercentage: number | null } => {
-  const promo = row.promocode as any;
-  if (!promo || typeof promo !== "object") return { promoterId: null, promoterPercentage: null };
-
-  const id = promo.promoterId;
-  const pct = Array.isArray(promo.promotedPackageCourseEbook)
-    ? promo.promotedPackageCourseEbook[0]?.promoterPercentage
-    : null;
-  const pctNum = pct != null && pct !== "" ? Number(pct) : null;
-
-  return {
-    promoterId: Number.isInteger(id) && id > 0 ? (id as number) : null,
-    promoterPercentage: pctNum != null && Number.isFinite(pctNum) ? pctNum : null,
-  };
-};
+const promoterAttribution = extractPromoterAttribution;
 
 /** Owner lookup for verify (the order owning this razorpay order id). */
 export const findLiveCourseOrderForVerify = async (

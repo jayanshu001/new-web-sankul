@@ -10,6 +10,8 @@ import logger from "../../utils/logger";
 import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
 import * as tsSql from "../../modules/test-series-order/test-series-order.service";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
+import { getClientIp } from "../../utils/clientIp";
 
 // SQL planId is numeric (migrated id-space).
 const applyPromoSqlSchema = z.object({
@@ -239,12 +241,37 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       }
       if (bd.totalAmount < 1) return res.status(400).json({ success: false, message: "Final amount is below the minimum payable. Please contact support." });
 
+      // Frozen purchase-time code snapshot → the order's promocode / refferalcode
+      // columns (added 2026-08-31). `planKind` MUST be "testSeriesPrice": the three
+      // plan tables share an id space and ws_promoted_package_course_ebook.pcb_price_id
+      // is declared against ws_package_course_ebook_price for every kind, so matching
+      // on the plan id alone can snapshot an unrelated plan's promoterPercentage.
+      // Before this column existed, a promoter-linked test-series sale left no
+      // attributable record at all and modules/promoter-data paid out nothing for it.
+      const codeSnapshot = await buildOrderCodeSnapshots({
+        promocodeId: promocodeIdNum,
+        referrerId: referrerIdNum,
+        planId: body.planId,
+        planKind: "testSeriesPrice",
+      });
+
       const receiptId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const rzpOrder = await createRazorpayOrder(rp, {
         amount: Math.round(bd.totalAmount * 100), currency: "INR", receipt: receiptId,
         notes: { kind: "test-series", testSeriesId: String(plan.testSeriesId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
       });
-      const { orderId } = await tsSql.createOrderMysql({ customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd, promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id, referrerId: referrerIdNum, coin: walletUsage.coin });
+      const { orderId } = await tsSql.createOrderMysql({
+        customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd,
+        promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id, referrerId: referrerIdNum, coin: walletUsage.coin,
+        // Four values this handler already had and previously discarded — the table
+        // took the ws_package_course_order shape on 2026-08-31 and now has somewhere
+        // to put them. `ip_address` existed before but nothing ever wrote it.
+        uniqueId: receiptId,
+        razorpayOrderPayload: JSON.stringify(rzpOrder),
+        ipAddress: getClientIp(req, 255),
+        promocodeSnapshot: codeSnapshot.promocode,
+        refferalcodeSnapshot: codeSnapshot.refferalcode,
+      });
       logger.info("createTestSeriesOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
       return res.status(201).json({ success: true, data: omit({
         testSeriesOrderId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: bd.totalAmount, breakdown: bd,

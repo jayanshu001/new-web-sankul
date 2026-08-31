@@ -46,6 +46,10 @@ export const orderCodeSnapshotRepository = {
   findLivePlan: (planId: number) =>
     prisma.liveCoursePlan.findUnique({ where: { id: planId } }),
 
+  /** The purchased TEST-SERIES plan (ws_test_series_price — a third table). */
+  findTestSeriesPlan: (planId: number) =>
+    prisma.testSeriesPrice.findUnique({ where: { id: planId } }),
+
   /**
    * The active referral program. Keyed on name "student" — the same single-row
    * lookup `resolveReferralCode` uses to price the discount, so the snapshot can

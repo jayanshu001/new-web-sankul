@@ -2562,44 +2562,116 @@ model TestSeriesPrice {
   @@map("ws_test_series_price")
 }
 
+/// SHAPE = ws_package_course_order (2026-08-31). The table was created net-new on
+/// 2026-06-18 by snake-casing the Mongoose model's field names, which made it a
+/// SECOND order vocabulary for the same six concepts; it now uses the package names.
+/// Adoption was scoped to columns that carry a real value: `generate_from` and
+/// `shipping` were NOT added (no app/web signal exists anywhere on the request; a
+/// test series is digital and never dispatches material). That rule governs what was
+/// ADDED only — NO column was dropped, `gst_amount` / `handling_fee` included.
+/// Deliberate deviations, all documented in the DDL header:
+///   * `test_series_id` — the product FK; package derives its product through
+///     plan_id, test series cannot (ws_test_series_price is a separate table with an
+///     overlapping id space). Same reason ws_live_course_order keeps live_course_id.
+///   * `promocode_id` — retained. ws_test_series_subscription copies it at verify and
+///     the admin report resolves it to a code string; package has no equivalent only
+///     because it denormalises promoter attribution onto its subscription instead.
+///   * Prisma field names stay camelCase and razorpay-prefixed: package's
+///     `OrigianalPrice` typo and `gateway*` aliases are NOT reproduced. The COLUMN
+///     names — which is what "same naming convention" means — are identical.
+/// DDL: 2026-08-31_test_series_order_match_package_shape.sql
 model TestSeriesOrder {
-  id                Int       @id @default(autoincrement())
-  customerId        Int       @map("customer_id")
-  testSeriesId      Int       @map("test_series_id")
-  planId            Int?      @map("plan_id")
-  paymentMethod     String    @map("payment_method")
-  orderType         String    @default("purchase") @map("order_type")
-  orderPrice        Decimal   @map("order_price") @db.Decimal(10, 2)
-  basePrice         Decimal   @default(0) @map("base_price") @db.Decimal(10, 2)
-  discountAmount    Decimal   @default(0) @map("discount_amount") @db.Decimal(10, 2)
-  gstAmount         Decimal   @default(0) @map("gst_amount") @db.Decimal(10, 2)
-  handlingFee       Decimal   @default(0) @map("handling_fee") @db.Decimal(10, 2)
-  promocodeId       Int?      @map("promocode_id")
-  referrerId        Int?      @map("referrer_id")
-  walletCoin        Int?      @map("wallet_coin")
-  razorpayOrderId   String?   @map("razorpay_order_id")
-  razorpayPaymentId String?   @map("razorpay_payment_id")
-  ipAddress         String?   @map("ip_address")
-  transactionId     String?   @map("transaction_id")
-  status            String    @default("pending")
-  createdAt         DateTime? @map("created_at")
-  updatedAt         DateTime? @map("updated_at")
+  id           Int     @id @default(autoincrement())
+  /// Business key = the receipt id checkout generates and returns to the client
+  /// (`ts-<epoch>-<rand>`). Mirrors ws_package_course_order.unique_id.
+  uniqueId     String? @map("unique_id")
+  customerId   Int     @map("customer_id")
+  testSeriesId Int     @map("test_series_id")
+  orderType    String  @default("purchase") @map("order_type")
+  planId       Int?    @map("plan_id")
 
+  // Frozen purchase-time snapshots, exactly one ever set (see modules/order-code-snapshot).
+  promocode    Json?
+  refferalcode Json?
+  /// The referring CUSTOMER, denormalised out of the refferalcode snapshot — the
+  /// column ws_package_course_order has and the referral credit keys on.
+  referrerId   Int?  @map("referrer_id")
+  /// DEVIATION FROM PACKAGE (deliberate, see above): the FK the subscription copies.
+  promocodeId  Int?  @map("promocode_id")
+
+  /// Plan LIST price, always written. `price` on package; was `base_price` here.
+  originalPrice Float @default(0) @map("price")
+  /// Promo/referral discount in whole rupees, 0 when no code — `code_discount` on
+  /// package; was `discount_amount` here.
+  codeDiscount  Int   @default(0) @map("code_discount")
+  wsCoin        Int   @default(0) @map("ws_coin")
+  /// Amount actually charged (post-promo, post-coin) — `discount_price` on package;
+  /// was `order_price` here.
+  amount        Int   @default(0) @map("discount_price")
+  /// NOT ON ws_package_course_order — retained deliberately. Both have only ever held
+  /// 0 (GST_RATE / HANDLING_FEE are hardcoded 0 in testSeries.controller.ts), and
+  /// dropping them was explicitly declined; they stay declared and written so
+  /// switching either on is a rate change rather than a schema change.
+  gstAmount     Decimal @default(0) @map("gst_amount") @db.Decimal(10, 2)
+  handlingFee   Decimal @default(0) @map("handling_fee") @db.Decimal(10, 2)
+
+  paymentMethod     String  @map("payment_method")
+  razorpayOrderId   String? @map("razorpay_order_id")
+  /// Full Razorpay order response as a JSON string — `razorpay_order` on package.
+  razorpayOrder     String? @map("razorpay_order")
+  razorpayPaymentId String? @map("razorpay_payment_id")
+  /// Bank/manual transaction reference — `bank_transaction_id` on package; was
+  /// `transaction_id` here (the same meaning the column always had).
+  bankTransactionId String? @map("bank_transaction_id")
+  ipAddress         String? @map("ip_address")
+
+  /// enum('cancel','complete','pending') — the ws_package_course_order vocabulary.
+  status    String    @default("pending")
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@index([uniqueId], name: "idx_tso_unique_id")
   @@map("ws_test_series_order")
 }
 
+/// SHAPE = ws_package_course_subscription (2026-08-31), companion to the
+/// TestSeriesOrder reshape. This table was already close: 12 of its 16 columns
+/// carried the package name, and only `price` was actually misnamed.
+/// Deliberate deviations, all documented in the DDL header:
+///   * `plan_id`, NOT package's `pcb_id`. Package is the OUTLIER here — both order
+///     tables and ws_live_course_subscription all say plan_id, and the 2026-08-27
+///     live-course reshape chose plan_id for the same reason.
+///   * `test_series_id` — the product FK; package uses package_id/course_id.
+///   * `promocode_id` — retained (verify copies it off the order, the admin report
+///     resolves it to a code string). NOTHING was dropped.
+///   * pc_material_id / shipping / tracking / course_amount / material_amount NOT
+///     added: a test series is digital, so every one of them would be a column that
+///     is NULL or a duplicate of `amount` on every row.
+/// DDL: 2026-08-31_test_series_subscription_match_package_shape.sql
 model TestSeriesSubscription {
   id           Int       @id @default(autoincrement())
   orderId      Int?      @map("order_id")
   customerId   Int       @map("customer_id")
   testSeriesId Int       @map("test_series_id")
   planId       Int?      @map("plan_id")
-  price        Decimal   @db.Decimal(10, 2)
+  /// Charged amount for THIS row — `amount` on package; was `price` here. Never a
+  /// running total: one order = one subscription row.
+  amount       Float?
   startAt      DateTime? @map("start_at")
   endAt        DateTime? @map("end_at")
   remarks      String?
   paymentType  String    @default("online") @map("payment_type")
   status       Boolean   @default(true)
+  /// Promoter attribution, denormalised out of the ORDER's frozen promocode snapshot
+  /// (`$.promoterId` / `$.promotedPackageCourseEbook[0].promoterPercentage`) — the
+  /// same two paths modules/promoter-data reads. Only fillable since the companion
+  /// file gave ws_test_series_order a `promocode` column. A REFERRAL snapshot yields
+  /// null: its earner is a CUSTOMER, not a ws_promoter.
+  promoterId         Int?     @map("promoter_id")
+  promoterPercentage Decimal? @map("promoter_percentage")
+  /// Reporting mirror of `amount` — the column admin-promoter's commission math reads
+  /// on the package table.
+  paidAmount         Decimal? @map("paid_amount")
   promocodeId  Int?      @map("promocode_id")
   createdAt    DateTime? @map("created_at")
   updatedAt    DateTime? @map("updated_at")
@@ -2608,6 +2680,9 @@ model TestSeriesSubscription {
   updated_by   Int?
 
   @@index([createdAt], name: "idx_tss_created")
+  /// Mirrors idx_pcs_promoter / idx_lcs_promoter — promoter dashboard filters
+  /// promoter_id, sorts created_at.
+  @@index([promoterId, createdAt], name: "idx_tss_promoter")
   @@map("ws_test_series_subscription")
 }
 

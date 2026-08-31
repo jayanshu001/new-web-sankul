@@ -1,4 +1,7 @@
+import { Prisma } from "@prisma/client";
+import type { TestSeriesOrder, TestSeriesSubscription } from "@prisma/client";
 import { prisma } from "../../config/prisma";
+import { extractPromoterAttribution } from "../order-code-snapshot/order-code-snapshot.service";
 import { computeEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
@@ -43,14 +46,48 @@ export const createOrderMysql = async (input: {
   customerId: number; testSeriesId: number; planId: number;
   bd: { basePrice: number; discountAmount: number; gstAmount: number; handlingFee: number; totalAmount: number };
   promocodeId: number | null; razorpayOrderId: string; referrerId?: number | null; coin?: number | null;
+  /**
+   * The four values this checkout already computed but had nowhere to put before the
+   * table took the ws_package_course_order shape (2026-08-31):
+   *   uniqueId             → unique_id      (the receipt id already returned to the client)
+   *   razorpayOrderPayload → razorpay_order (the full gateway response)
+   *   ipAddress            → ip_address     (the column existed but nothing wrote it)
+   *   promocode/refferalcode snapshots → the two json columns
+   * Same wiring as createPackageOrderMysql and createLiveCourseOrderMysql.
+   */
+  uniqueId?: string | null;
+  razorpayOrderPayload?: string | null;
+  ipAddress?: string | null;
+  promocodeSnapshot?: unknown | null;
+  refferalcodeSnapshot?: unknown | null;
 }, now: Date = new Date()): Promise<{ orderId: number }> => {
   const o = await prisma.testSeriesOrder.create({ data: {
     customerId: input.customerId, testSeriesId: input.testSeriesId, planId: input.planId,
+    uniqueId: input.uniqueId ?? null,
     paymentMethod: "razorpay", orderType: "purchase",
-    orderPrice: input.bd.totalAmount, basePrice: input.bd.basePrice, discountAmount: input.bd.discountAmount,
-    gstAmount: input.bd.gstAmount, handlingFee: input.bd.handlingFee, promocodeId: input.promocodeId,
-    referrerId: input.referrerId ?? null, walletCoin: input.coin ?? null,
-    razorpayOrderId: input.razorpayOrderId, status: "pending",
+    // Package names since 2026-08-31: amount = discount_price (charged),
+    // originalPrice = price (plan list), codeDiscount = code_discount, wsCoin = ws_coin.
+    amount: Math.round(input.bd.totalAmount),
+    originalPrice: input.bd.basePrice,
+    codeDiscount: Math.round(input.bd.discountAmount),
+    wsCoin: input.coin ?? 0,
+    // Kept off the package shape on purpose — both are 0 on every path today
+    // (GST_RATE / HANDLING_FEE in testSeries.controller.ts) but stay written so
+    // enabling either is a rate change, not a migration.
+    gstAmount: input.bd.gstAmount,
+    handlingFee: input.bd.handlingFee,
+    promocodeId: input.promocodeId,
+    // `?? Prisma.DbNull` (not `?? null`): on a Json column Prisma reads a bare `null`
+    // as JsonNull — the JSON literal `null` INSIDE the column — whereas DbNull is a
+    // real SQL NULL. promoter-data treats SQL NULL as "no code"; a JSON null would be
+    // a non-empty value that every JSON_EXTRACT path then misses.
+    promocode: (input.promocodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
+    refferalcode: (input.refferalcodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
+    referrerId: input.referrerId ?? null,
+    razorpayOrderId: input.razorpayOrderId,
+    razorpayOrder: input.razorpayOrderPayload ?? null,
+    ipAddress: input.ipAddress ?? null,
+    status: "pending",
     // created_at/updated_at have no DB default (introspected legacy table) — set them
     // or the row reads back null, renders "—" in the admin Orders tab and sorts
     // unpredictably under `orderBy createdAt desc`. Same hazard as the subscription
@@ -70,9 +107,12 @@ export type TsVerifyDto = {
   orderId: number; razorpayOrderId: string | null; razorpayPaymentId: string | null;
 };
 
-const toDto = (sub: any, order: any): TsVerifyDto => ({
+// Typed, NOT `any`: the params used to be `any`, which is how the 2026-08-31
+// `price` → `amount` rename slipped past tsc here and would have made the verify
+// response's `price` read 0 on every purchase. The wire key stays `price`.
+const toDto = (sub: TestSeriesSubscription, order: TestSeriesOrder): TsVerifyDto => ({
   _id: String(sub.id), customerId: sub.customerId, testSeriesId: sub.testSeriesId, planId: sub.planId ?? null,
-  startAt: sub.startAt ?? null, endAt: sub.endAt ?? null, status: sub.status, price: num(sub.price),
+  startAt: sub.startAt ?? null, endAt: sub.endAt ?? null, status: sub.status, price: num(sub.amount),
   orderId: order.id, razorpayOrderId: order.razorpayOrderId ?? null, razorpayPaymentId: order.razorpayPaymentId ?? null,
 });
 
@@ -84,7 +124,7 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
   }
   const plan = order.planId ? await prisma.testSeriesPrice.findFirst({ where: { id: order.planId }, select: { durationDays: true } }) : null;
   const durationDays = plan?.durationDays ?? 0;
-  const orderPrice = num(order.orderPrice);
+  const orderPrice = num(order.amount);
 
   const existingActive = await prisma.testSeriesSubscription.findFirst({
     where: { customerId: order.customerId, testSeriesId: order.testSeriesId, status: true, endAt: { gt: now } },
@@ -100,19 +140,37 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
       : now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
 
+  const promoter = extractPromoterAttribution(order);
+
   const result = await prisma.$transaction(async (tx) => {
     const o = await tx.testSeriesOrder.update({ where: { id: order.id }, data: { status: "complete", razorpayPaymentId, updatedAt: now } });
     const sub = await tx.testSeriesSubscription.create({
       // created_at has no DB default (introspected legacy table) — set it or the row is
       // invisible to created_at-windowed reads (admin dashboard, purchase history).
-      // `price` is THIS order's amount, never a running total: the row is its own
+      // `amount` is THIS order's charge, never a running total: the row is its own
       // purchase record, so summing would double-count it against its own order.
-      data: { orderId: o.id, customerId: o.customerId, testSeriesId: o.testSeriesId, planId: o.planId, price: orderPrice, startAt, endAt, paymentType: "online", promocodeId: o.promocodeId ?? null, status: true, createdAt: now, updatedAt: now },
+      // (`price` until 2026-08-31 — renamed onto the package column name.)
+      data: {
+        orderId: o.id, customerId: o.customerId, testSeriesId: o.testSeriesId, planId: o.planId,
+        amount: orderPrice,
+        // Reporting mirror of `amount`, the column admin-promoter's commission math
+        // reads on the package table.
+        paidAmount: orderPrice,
+        // Promoter attribution denormalised off the order's frozen snapshot — the
+        // same two JSON paths modules/promoter-data reads, resolved once here so the
+        // reports do not need a JSON_EXTRACT. Both null for a referral code (its
+        // earner is a customer, not a ws_promoter) and when no code was applied.
+        promoterId: promoter.promoterId,
+        promoterPercentage:
+          promoter.promoterPercentage != null ? new Prisma.Decimal(promoter.promoterPercentage) : null,
+        startAt, endAt, paymentType: "online", promocodeId: o.promocodeId ?? null,
+        status: true, createdAt: now, updatedAt: now,
+      },
     });
     return { sub, o };
   });
   await creditReferrer({ referrerId: order.referrerId, buyerId: order.customerId, orderId: order.id, paidAmount: orderPrice, source: "testSeries" });
-  await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.walletCoin, source: "testSeries" });
+  await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.wsCoin, source: "testSeries" });
   return toDto(result.sub, result.o);
 };
 

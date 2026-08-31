@@ -15,6 +15,244 @@
 
 ---
 
+## 2026-08-31 (b) — `ws_test_series_subscription` adopts the `ws_package_course_subscription` naming + gains promoter attribution
+
+> **DDL: `2026-08-31_test_series_subscription_match_package_shape.sql` — PENDING on
+> staging and prod.** Apply the ORDER file first: the promoter backfill reads
+> `ws_test_series_order.promocode`, which only exists after it. **Nothing dropped.**
+
+Companion to the order-table entry above. This table was already much closer to the
+standard — **12 of its 16 columns already carried the package name**, and only one was
+actually misnamed.
+
+### 1. Rename — one column
+
+`price` → **`amount`** (`decimal(10,2)` → `double`, package's type). Prisma field
+`amount`. Widening, so no value is at risk.
+
+⚠ **`plan_id` is NOT renamed.** `ws_package_course_subscription` calls it `pcb_id`, but
+**package is the outlier**: both order tables and `ws_live_course_subscription` say
+`plan_id`, and the 2026-08-27 live-course reshape chose `plan_id` for this exact
+reason. Renaming here would spread the legacy name, not the standard.
+
+### 2. Adds — 3 columns, fillable only as of today
+
+`promoter_id`, `promoter_percentage`, `paid_amount`.
+
+The first two are denormalised out of the ORDER's frozen promocode snapshot
+(`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`). **Before the
+companion file gave `ws_test_series_order` a `promocode` column there was no source
+for them**, so adding them earlier would have created exactly the stale columns this
+pair of migrations refuses to create. `paid_amount` mirrors `amount` — the column
+`admin-promoter`'s commission math reads on the package table.
+
+### 3. Not adopted — they would be stale here
+
+`pc_material_id`, `shipping`, `tracking` (a test series is digital — no kit, no
+dispatch, no AWB) and `course_amount` / `material_amount` (the digital/physical split
+of `amount`; with no material one would duplicate `amount` and the other be NULL on
+every row). `package_id`/`course_id` are covered by `test_series_id`.
+
+### 4. Nothing dropped
+
+`promocode_id` stays — verify copies it off the order and the admin report resolves it
+to a code string. Package lacks an equivalent only because it treats the order's JSON
+snapshot as the sole record of the code.
+
+### 5. Type match + index
+
+`payment_type` `varchar(16)` → `enum('backend','online')` (only those two values are
+ever written); `remarks` `varchar(255)` → `text`. New index **`idx_tss_promoter`
+(`promoter_id`, `created_at`)**, mirroring `idx_pcs_promoter` and `idx_lcs_promoter`.
+
+### 6. Shared promoter extractor
+
+`promoterAttribution` was a private const in `live-course-order.service.ts`. It moved
+to `modules/order-code-snapshot` as exported **`extractPromoterAttribution`** so the
+module that WRITES the snapshot shape also owns reading it back, and live-course +
+test-series verify share one reader of those load-bearing JSON paths. Live course now
+imports it; behaviour is unchanged.
+
+### 7. ⚠ Scope honesty — this is the storage half only
+
+`admin-promoter.service.ts` queries **`ws_package_course_subscription` only**. It does
+not read `ws_live_course_subscription` either, despite that table carrying these
+columns since 2026-08-27. So test series is now *ready* for the promoter dashboard on
+the same footing as live course, but will not appear on it until those queries union
+the other product tables — a separate change that would cover both at once.
+
+### 8. API responses unchanged
+
+Every DTO key is preserved. `admin-testseries` `subscriptionDto.price` and the
+subscription-detail `price`/`paidAmount`, `client-testseries` `price`,
+`admin-customer-details` `price`, purchase-history `amount` and the receipt total all
+now read `amount` and emit the same JSON — confirmed at runtime by invoking the real
+verify / admin-orders / admin-subscription-detail builders and diffing their key sets. `paidAmount` deliberately keeps sourcing
+from the charged amount rather than the new `paid_amount` column — the rule
+`admin-customer-details.transformer.ts` already documents.
+
+### ⚠ One regression this rename caused, found and fixed
+
+`toDto` in `test-series-order.service.ts` typed both params `any`, so `sub.price`
+survived the rename **without a compiler error** and silently became `undefined` →
+`num()` → **`0`**. Every `POST /client/payment/verify` for a test series would have
+returned `price: 0`. Both params are now typed `TestSeriesSubscription` /
+`TestSeriesOrder` so the same class of bug cannot recur here.
+
+**The general lesson for the remaining reshapes: `tsc` does NOT protect an `any`-typed
+DTO builder across a column rename.** Grep for `(x: any)` in the modules you touch and
+type them before renaming, or verify the DTO output at runtime.
+
+**Verified on local MySQL:** DDL applied + re-run clean (idempotent); 4 existing rows
+carried across (`price 349.00 → amount 349`, `paid_amount` backfilled); a live
+create→verify round trip wrote `promoterId 130` / `promoterPercentage 12` onto the
+subscription, giving `649 × 12% = 77.88` through the admin-promoter formula. The
+promoter backfill updated 0 historical rows, as documented — no pre-existing order has
+a snapshot.
+
+**Files:** `prisma/schema.prisma` (`TestSeriesSubscription`),
+`modules/test-series-order/test-series-order.service.ts`,
+`modules/admin-testseries/admin-testseries.service.ts`,
+`modules/client-testseries/client-testseries.service.ts`,
+`modules/client-purchase-history/client-purchase-history.service.ts`,
+`modules/admin-customer/admin-customer-details.transformer.ts`,
+`modules/admin-dashboard/admin-dashboard.service.ts`, `libs/core/generate.ts`,
+`modules/order-code-snapshot/order-code-snapshot.service.ts`,
+`modules/live-course-order/live-course-order.service.ts`.
+
+---
+
+## 2026-08-31 — `ws_test_series_order` adopts the `ws_package_course_order` naming (the last non-conforming order table)
+
+> **DDL: `2026-08-31_test_series_order_match_package_shape.sql` — PENDING on staging and prod.**
+> **NO COLUMN IS DROPPED.** Apply the DDL and the code together; a rename is an add
+> plus a drop as far as Prisma is concerned. No backfill script.
+
+**Why.** `ws_test_series_order` was created net-new on 2026-06-18 (Wave 7) by
+snake-casing the field names off `src/models/testSeries/TestSeriesOrder.model.ts`. It
+never looked at `ws_package_course_order`, so it became a **second order vocabulary
+for the same six concepts**; `ws_live_course_order` was the third until 2026-08-27
+folded that one onto the package shape. Test series was the last one out of step.
+
+### 1. Renames — the 5 columns that carried a non-package name
+
+| Concept | Was | Now (package name) | Prisma field |
+|---|---|---|---|
+| Plan LIST price | `base_price` `decimal(10,2)` | `price` `double` | `originalPrice` |
+| Amount charged | `order_price` `decimal(10,2)` | `discount_price` `int` | `amount` |
+| Promo/referral discount | `discount_amount` `decimal(10,2)` | `code_discount` `int` | `codeDiscount` |
+| Coins redeemed | `wallet_coin` `int NULL` | `ws_coin` `int NOT NULL DEFAULT 0` | `wsCoin` |
+| Bank/manual reference | `transaction_id` | `bank_transaction_id` | `bankTransactionId` |
+
+Every one is `ALTER … CHANGE COLUMN`, which carries the existing values across. Prisma
+field names stay clean camelCase — package's `OrigianalPrice` typo and its `gateway*`
+aliases are **not** reproduced, same rule the live-course reshape used.
+
+### 2. Adds — 4 package columns, all of which now carry a real value
+
+The scope rule was **a column is adopted only if a value is available and written**.
+
+* `unique_id` ← the receipt id checkout already generated and returned to the client
+  (`ts-<epoch>-<rand>`) but had nowhere to store. The admin grant path now mints one
+  too, and step 5 backfills historical rows as `ts-legacy-<id>`, so the column is
+  never half-populated.
+* `promocode` / `refferalcode` (json) ← the frozen purchase-time code snapshot.
+* `razorpay_order` ← the full gateway order response, JSON string.
+
+`ip_address` already existed but **nothing ever wrote it**; the checkout now fills it
+via `getClientIp(req, 255)`, so the admin `orderDto.ipAddress` stops being permanently
+null.
+
+### 3. Not adopted — deliberately, because they would be stale columns here
+
+* **`generate_from`** — no app-vs-web signal exists anywhere on the request in this
+  codebase. `ws_package_course_order` does not write it either.
+* **`shipping`** — a test series is 100% digital: no material kit, no dispatch, no
+  `ws_customer_shipping` row to point at (`client-purchase-history` hardcodes
+  `withMaterial: false` for this product).
+
+### 4. Nothing dropped
+
+`gst_amount` and `handling_fee` are the two columns package does not have, and both
+have only ever held 0 — `GST_RATE` and `HANDLING_FEE` are hardcoded `0` in
+`src/client/testSeries/testSeries.controller.ts`. **Dropping them was proposed and
+explicitly declined.** They stay declared on the Prisma model, written on every
+checkout and read by the admin DTO, so enabling GST later is a rate change rather than
+a migration.
+
+### 5. Type match on 4 shared columns
+
+`payment_method` varchar(50)→varchar(100), `ip_address` varchar(45)→varchar(255),
+`order_type` varchar(50)→`enum('purchase')`, `status` varchar(16)→
+`enum('cancel','complete','pending')` — the package vocabulary. Only `pending` and
+`complete` are ever written by this module, so the enum widens rather than constrains.
+
+`created_at`/`updated_at` stay **`datetime`, not package's `timestamp`**: under the
+IST-in-DB storage rule the stored wall clock *is* the value, and `DATETIME` is
+timezone-inert where `TIMESTAMP` is not.
+
+### 6. Two retained deviations from package
+
+* **`test_series_id`** — the product FK. Package derives its product through
+  `plan_id`; test series cannot, because `ws_test_series_price` is a separate table
+  with an id space overlapping `ws_package_course_ebook_price`. Exactly why
+  `ws_live_course_order` keeps `live_course_id`.
+* **`promocode_id`** — retained. `ws_test_series_subscription` copies it at verify and
+  the admin report resolves it to a code string. Package has no equivalent only
+  because it denormalises promoter attribution onto its subscription
+  (`promoter_id`/`promoter_percentage`) instead. Dropping it would make the
+  subscription's promocode link depend on a snapshot that is legitimately null once
+  the promocode row is deleted — trading a populated column for a lossy one.
+  Retiring it belongs to a `ws_test_series_subscription` reshape, not this file.
+
+### 7. Side effect: test-series promoter commission was never attributable
+
+`modules/promoter-data` computes the entire promoter dashboard by JSON-path querying
+the **order's `promocode` column** (`$.promoterId`,
+`$.promotedPackageCourseEbook[0].promoterPercentage`). `ws_test_series_order` had no
+such column, so a promoter-linked test-series sale left **no attributable record at
+all** — even though `planKind: "testSeriesPrice"` links already exist
+(`promo-code.service.ts`, `promocode.validation.ts` both accept it) and admins can
+create them today.
+
+`modules/order-code-snapshot` gained the third plan kind to close this:
+
+* `SnapshotPlanKind` += `"testSeriesPrice"`; `SnapshotPlan` += optional `testSeriesId`.
+* `repository.findTestSeriesPlan` → `ws_test_series_price`.
+* `transformer.toTestSeriesSnapshotPlan` — same `SnapshotPlan` shape, `ebookId`/
+  `courseId`/`packageId` as the legacy `0` sentinel, parent in `testSeriesId`,
+  `withMaterial: false` / `materialPrice: 0` (no such columns on the plan table),
+  `duration` in **days**, and `price` coerced off Prisma's `Decimal` so the frozen JSON
+  holds a number rather than `{s,e,d}` internals.
+* `buildPromocodeSnapshot` now resolves the link plan separately for **any** non-`price`
+  kind rather than special-casing `livePlan`.
+
+⚠ `planKind` remains mandatory: the three plan tables share an id space and
+`ws_promoted_package_course_ebook.pcb_price_id` is declared against
+`ws_package_course_ebook_price` for every kind, so matching on plan id alone can
+snapshot an unrelated plan's `promoterPercentage`.
+
+### 8. API responses are unchanged
+
+The admin order DTO keeps all five money keys — `orderPrice`, `basePrice`,
+`discountAmount`, `gstAmount`, `handlingFee` — and `transactionId`. Only the columns
+behind them moved. Client purchase-history cards, the test-series receipt
+(`libs/core/generate.ts`, both the subscription and the `ts_`-order loader) and the
+admin subscription detail/report read the renamed fields and emit the same JSON.
+
+**Index added:** `idx_tso_unique_id` on `unique_id`, mirroring
+`ws_package_course_order.rorder_unique_id` and `ws_live_course_order.lco_unique_id`.
+
+**Files:** `prisma/schema.prisma` (`TestSeriesOrder`),
+`modules/test-series-order/test-series-order.service.ts`,
+`client/payment/test-series-payment.controller.ts`,
+`modules/admin-testseries/admin-testseries.service.ts`,
+`modules/client-purchase-history/client-purchase-history.service.ts`,
+`libs/core/generate.ts`, `modules/order-code-snapshot/*` (types, repository,
+transformer, service).
+
+---
+
 ## 2026-08-27 (k) — Live Course Report Address/City/Pincode: `shipping` points at the WRONG TABLE
 
 > **Read-side fix for a write-side defect. No DDL, no data change.** Follow-up to (j),
