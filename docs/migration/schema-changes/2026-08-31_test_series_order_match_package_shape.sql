@@ -10,11 +10,11 @@
 --
 -- ws_package_course_order IS THE STANDARD.
 --
--- SCOPE RULE FOR THIS FILE: a column is adopted only if a value is actually
+-- SCOPE RULE FOR THIS FILE: a column earns its place only if a value is actually
 -- AVAILABLE and WRITTEN. Shape parity is not worth a column that is NULL forever, so
--- two package columns are deliberately NOT added (see NOT ADOPTED below). The rule
--- cuts one way only: it governs what this file ADDS, never what it removes. Nothing
--- is dropped (step 7).
+-- two package columns are deliberately NOT added (see NOT ADOPTED below) and the two
+-- test-series columns that were structurally always zero ARE dropped (step 7) — that
+-- drop was explicitly authorised by the table owner.
 --
 -- FOUR GROUPS OF CHANGE
 --   1. RENAMES to the package names (all 5 carry live values today):
@@ -36,9 +36,8 @@
 --        order_type      varchar(50)  → enum('purchase') NOT NULL DEFAULT 'purchase'
 --        ip_address      varchar(45)  → varchar(255)
 --        status          varchar(16)  → enum('cancel','complete','pending')
---   4. DROPS NOTHING. `gst_amount` / `handling_fee` are the two columns package does
---      not have; dropping them was proposed and explicitly declined. They stay
---      declared, written and read exactly as today — see step 7.
+--   4. DROPS the 2 columns package does not have and test series never populated:
+--        gst_amount, handling_fee   (authorised; see step 7 for the evidence + gate)
 --
 -- NOT ADOPTED (deliberate — they would be stale columns here)
 --   * `generate_from`  — there is no app-vs-web signal anywhere on the request in
@@ -95,8 +94,9 @@
 -- live-course payment outage (docs/MIGRATION_QUERY_CHANGES.md). The reverse is just
 -- as true, so the DDL and the deploy go together, not one ahead of the other.
 --
--- ⚠ NO DATA IS DISCARDED. Every one of the 5 renames is an ALTER ... CHANGE COLUMN,
--- which carries the existing values across under the new name. Nothing is dropped.
+-- ⚠ THE 5 RENAMES DISCARD NOTHING — each is an ALTER ... CHANGE COLUMN, which carries
+-- the existing values across under the new name. The only removals are the two
+-- always-zero columns in step 7, gated on the check in that step.
 --
 -- AFTER THIS FILE:
 --   1. yarn prisma:generate   then RESTART the process (generate writes into
@@ -133,11 +133,6 @@ CREATE TABLE IF NOT EXISTS `ws_test_series_order` (
   `ws_coin`             int NOT NULL DEFAULT 0,
   -- Amount actually charged (post-promo, post-coin).
   `discount_price`      int NOT NULL DEFAULT 0,
-  -- NOT ON PACKAGE, retained deliberately (see step 7). Both have only ever held 0 —
-  -- GST_RATE and HANDLING_FEE are hardcoded 0 in testSeries.controller.ts — but they
-  -- stay declared and written so switching either on is a rate change, not a DDL.
-  `gst_amount`          decimal(10,2) NOT NULL DEFAULT 0.00,
-  `handling_fee`        decimal(10,2) NOT NULL DEFAULT 0.00,
   `payment_method`      varchar(100) NOT NULL,
   `razorpay_order_id`   varchar(255) DEFAULT NULL,
   -- Full Razorpay order response, JSON string.
@@ -282,24 +277,48 @@ ALTER TABLE ws_test_series_order
   MODIFY COLUMN `status`         enum('cancel','complete','pending') NOT NULL DEFAULT 'pending';
 
 
--- ══ 7. NO COLUMN IS DROPPED BY THIS FILE ═══════════════════════════════════════
+-- ══ 7. DROP the 2 columns that were always zero ═════════════════════════════════
 --
--- `gst_amount` and `handling_fee` are the two columns ws_package_course_order does
--- not have, and they have only ever held 0 (GST_RATE / HANDLING_FEE are hardcoded 0
--- in src/client/testSeries/testSeries.controller.ts, and computeBreakdown is their
--- only writer). Dropping them was proposed and EXPLICITLY DECLINED — no column comes
--- off ws_test_series_order without the owner's consent.
+-- `gst_amount` and `handling_fee` are the only columns ws_package_course_order does
+-- not have, and neither has ever held anything but 0: `const GST_RATE = 0` and
+-- `const HANDLING_FEE = 0` have been hardcoded in
+-- src/client/testSeries/testSeries.controller.ts since the module was written, and
+-- `computeBreakdown` — their ONLY writer, on both the checkout and admin-grant paths
+-- — therefore returns 0 for both on every code path.
 --
--- They therefore remain fully live, not vestigial: still declared on
--- prisma/schema.prisma TestSeriesOrder, still written on every checkout, still read
--- by admin-testseries.service.ts orderDto. If GST or a handling fee is ever switched
--- on, the columns are already there and already wired.
+-- They were initially retained. The "keep them as a pre-wired GST switch" argument
+-- does not survive scrutiny: ws_package_course_order, ws_ebook_order, ws_book_order
+-- and ws_live_course_order have NO gst/handling columns at all, so enabling GST
+-- platform-wide needs DDL on four other tables regardless. Keeping these two saved
+-- one table in five while preserving the exact inconsistency this file removes.
+-- Dropping them was authorised by the table owner on 2026-08-31.
 --
--- Should that decision ever be revisited, this is the check to run first (a non-zero
--- result means the columns hold real money and must stay regardless):
+-- ⚠ RUN THIS FIRST ON EACH ENVIRONMENT. A non-zero result means the columns hold real
+-- money there and MUST be kept — stop and remove this step:
 --
 --   SELECT COUNT(*) FROM ws_test_series_order
 --    WHERE COALESCE(gst_amount,0) <> 0 OR COALESCE(handling_fee,0) <> 0;
+--
+-- Returned 0 on the local staging copy (min = max = 0.00 on both columns).
+--
+-- NO API RESPONSE CHANGES. admin-testseries.service.ts orderDto keeps emitting the
+-- `gstAmount` and `handlingFee` keys as the literal 0 they always held, and the
+-- checkout response's `breakdown` object is computed in memory by computeBreakdown —
+-- it never read these columns.
+--
+-- ⚠ Deploy WITH the application code, never ahead of it: a Prisma client that still
+-- declares a dropped scalar SELECTs it and 1054s on every read (the 2026-08-26
+-- live-course payment outage).
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_test_series_order' AND COLUMN_NAME='gst_amount');
+SET @ddl := IF(@col=1, 'ALTER TABLE ws_test_series_order DROP COLUMN `gst_amount`', 'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_test_series_order' AND COLUMN_NAME='handling_fee');
+SET @ddl := IF(@col=1, 'ALTER TABLE ws_test_series_order DROP COLUMN `handling_fee`', 'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 
 -- ══ 8. INDEX on the new business key ════════════════════════════════════════════

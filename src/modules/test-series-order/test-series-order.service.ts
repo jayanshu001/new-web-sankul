@@ -71,11 +71,6 @@ export const createOrderMysql = async (input: {
     originalPrice: input.bd.basePrice,
     codeDiscount: Math.round(input.bd.discountAmount),
     wsCoin: input.coin ?? 0,
-    // Kept off the package shape on purpose — both are 0 on every path today
-    // (GST_RATE / HANDLING_FEE in testSeries.controller.ts) but stay written so
-    // enabling either is a rate change, not a migration.
-    gstAmount: input.bd.gstAmount,
-    handlingFee: input.bd.handlingFee,
     promocodeId: input.promocodeId,
     // `?? Prisma.DbNull` (not `?? null`): on a Json column Prisma reads a bare `null`
     // as JsonNull — the JSON literal `null` INSIDE the column — whereas DbNull is a

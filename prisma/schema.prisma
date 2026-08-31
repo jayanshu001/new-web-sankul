@@ -2565,10 +2565,11 @@ model TestSeriesPrice {
 /// SHAPE = ws_package_course_order (2026-08-31). The table was created net-new on
 /// 2026-06-18 by snake-casing the Mongoose model's field names, which made it a
 /// SECOND order vocabulary for the same six concepts; it now uses the package names.
-/// Adoption was scoped to columns that carry a real value: `generate_from` and
-/// `shipping` were NOT added (no app/web signal exists anywhere on the request; a
-/// test series is digital and never dispatches material). That rule governs what was
-/// ADDED only — NO column was dropped, `gst_amount` / `handling_fee` included.
+/// Scoped to columns that carry a real value: `generate_from` and `shipping` were NOT
+/// added (no app/web signal exists anywhere on the request; a test series is digital
+/// and never dispatches material), and `gst_amount` / `handling_fee` were dropped —
+/// GST_RATE and HANDLING_FEE are hardcoded 0 in testSeries.controller.ts, so they were
+/// never anything but zero. The admin DTO still emits both keys as a literal 0.
 /// Deliberate deviations, all documented in the DDL header:
 ///   * `test_series_id` — the product FK; package derives its product through
 ///     plan_id, test series cannot (ws_test_series_price is a separate table with an
@@ -2608,12 +2609,6 @@ model TestSeriesOrder {
   /// Amount actually charged (post-promo, post-coin) — `discount_price` on package;
   /// was `order_price` here.
   amount        Int   @default(0) @map("discount_price")
-  /// NOT ON ws_package_course_order — retained deliberately. Both have only ever held
-  /// 0 (GST_RATE / HANDLING_FEE are hardcoded 0 in testSeries.controller.ts), and
-  /// dropping them was explicitly declined; they stay declared and written so
-  /// switching either on is a rate change rather than a schema change.
-  gstAmount     Decimal @default(0) @map("gst_amount") @db.Decimal(10, 2)
-  handlingFee   Decimal @default(0) @map("handling_fee") @db.Decimal(10, 2)
 
   paymentMethod     String  @map("payment_method")
   razorpayOrderId   String? @map("razorpay_order_id")

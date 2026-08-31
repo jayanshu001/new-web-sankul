@@ -171,14 +171,36 @@ null.
   `ws_customer_shipping` row to point at (`client-purchase-history` hardcodes
   `withMaterial: false` for this product).
 
-### 4. Nothing dropped
+### 4. Dropped — `gst_amount` and `handling_fee`
 
-`gst_amount` and `handling_fee` are the two columns package does not have, and both
-have only ever held 0 — `GST_RATE` and `HANDLING_FEE` are hardcoded `0` in
-`src/client/testSeries/testSeries.controller.ts`. **Dropping them was proposed and
-explicitly declined.** They stay declared on the Prisma model, written on every
-checkout and read by the admin DTO, so enabling GST later is a rate change rather than
-a migration.
+The two columns package does not have. Neither has ever held anything but 0:
+`GST_RATE` and `HANDLING_FEE` are hardcoded `0` in
+`src/client/testSeries/testSeries.controller.ts`, and `computeBreakdown` — their only
+writer, on both the checkout and admin-grant paths — therefore returns 0 every time.
+
+They were **initially retained** at the table owner's instruction, then dropped once
+the "keep them as a pre-wired GST switch" argument was examined and did not hold:
+`ws_package_course_order`, `ws_ebook_order`, `ws_book_order` and
+`ws_live_course_order` have **no gst/handling columns at all**, so enabling GST
+platform-wide needs DDL on four other tables regardless. Keeping these two saved one
+table in five while preserving the exact inconsistency this file exists to remove.
+Drop authorised 2026-08-31.
+
+**Gate, run per environment before applying** — a non-zero result means they hold real
+money there and must be kept:
+
+```sql
+SELECT COUNT(*) FROM ws_test_series_order
+ WHERE COALESCE(gst_amount,0) <> 0 OR COALESCE(handling_fee,0) <> 0;
+```
+
+Returned 0 on the local staging copy (min = max = `0.00` on both).
+
+**No API change.** `admin-testseries.service.ts` `orderDto` still emits `gstAmount` and
+`handlingFee` — now as the literal `0` they always held — and the checkout response's
+`breakdown` object is computed in memory by `computeBreakdown`, so it never read these
+columns. Verified at runtime: the admin orders row still returns all 19 keys with
+`gstAmount: 0` / `handlingFee: 0` as numbers.
 
 ### 5. Type match on 4 shared columns
 
@@ -239,6 +261,13 @@ The admin order DTO keeps all five money keys — `orderPrice`, `basePrice`,
 behind them moved. Client purchase-history cards, the test-series receipt
 (`libs/core/generate.ts`, both the subscription and the `ts_`-order loader) and the
 admin subscription detail/report read the renamed fields and emit the same JSON.
+
+**Result:** `ws_test_series_order` and `ws_package_course_order` are now both 23
+columns, with 16 of the 21 shared columns identical in type and nullability. The
+remaining differences are all deliberate: package-only `generate_from`/`shipping` (no
+value would ever be written), test-series-only `test_series_id` (product FK) and
+`promocode_id` (the subscription copies it), package's legacy `varchar(255)`
+`customer_id`, and `datetime` vs `timestamp` timestamps.
 
 **Index added:** `idx_tso_unique_id` on `unique_id`, mirroring
 `ws_package_course_order.rorder_unique_id` and `ws_live_course_order.lco_unique_id`.

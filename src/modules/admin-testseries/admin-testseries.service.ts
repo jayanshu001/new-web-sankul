@@ -1312,8 +1312,13 @@ const orderDto = (o: any) => ({
   orderPrice: num(o.amount),
   basePrice: num(o.originalPrice),
   discountAmount: num(o.codeDiscount),
-  gstAmount: num(o.gstAmount),
-  handlingFee: num(o.handlingFee),
+  // WIRE CONTRACT: both keys stay in the response. The gst_amount / handling_fee
+  // COLUMNS were dropped on 2026-08-31 — they had only ever held 0, because GST_RATE
+  // and HANDLING_FEE are hardcoded 0 in testSeries.controller.ts. Emitting the same
+  // literal keeps this response byte-identical. If GST is ever switched on, this is
+  // one of the five order tables that would need real columns added.
+  gstAmount: 0,
+  handlingFee: 0,
   promocodeId: o.promocodeId != null ? String(o.promocodeId) : null,
   razorpayOrderId: o.razorpayOrderId ?? null,
   razorpayPaymentId: o.razorpayPaymentId ?? null,
