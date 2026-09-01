@@ -23,10 +23,14 @@ router.get("/", getOfflineDashboard);
 // Centers + batches require an authenticated customer (Bearer token).
 // Center/batch masters are the same for every customer → Tier-1 shared. No
 // dedicated entity tag → "misc", medium TTL. The dashboard "/" is per-user (uncached).
-router.get("/centers", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), listCenters);
-router.get("/batches", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), listBatches);
-router.get("/centers/:id", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), getCenterDetail);
-router.get("/batches/:id", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), getBatchDetail);
+// Shared (identical for every customer) + entity-tagged, so admin centre/batch/
+// city writes sweep these immediately instead of leaving them for the 24h TTL.
+const OFFLINE = { ttl: 86400, entity: "offline" as const, scope: "shared" as const };
+
+router.get("/centers", authenticate, requireRole("customer"), cacheRoute(OFFLINE), listCenters);
+router.get("/batches", authenticate, requireRole("customer"), cacheRoute(OFFLINE), listBatches);
+router.get("/centers/:id", authenticate, requireRole("customer"), cacheRoute(OFFLINE), getCenterDetail);
+router.get("/batches/:id", authenticate, requireRole("customer"), cacheRoute(OFFLINE), getBatchDetail);
 
 // Enquiry accepts both anonymous and authenticated — attach userId when a valid
 // token is present; a stale/invalid token must NOT block this public route.

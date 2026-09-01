@@ -15,7 +15,10 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 // clears only the "plan" tag itself and would leave every catalog/admin-product
 // read stale). "plan" covers course/package/ebook plan rows + their client
 // catalogs; "live-course" covers ws_live_course_plan, whose rows surface in the
-// live-course and package-category listings. test-series reads aren't cached.
-router.post("/recompute", autoFlushGroup("plan", "live-course"), recomputeMostPopular); // POST /api/v1/admin/plan-popularity/recompute
+// live-course and package-category listings; "test-series" covers
+// ws_test_series_price, whose is_most_popular surfaces in the cached client
+// test-series list/detail (those reads were untagged until the "test-series"
+// entity was added, which is why this comment previously read "not cached").
+router.post("/recompute", autoFlushGroup("plan", "live-course", "test-series"), recomputeMostPopular); // POST /api/v1/admin/plan-popularity/recompute
 
 export default router;

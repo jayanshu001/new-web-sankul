@@ -133,7 +133,8 @@ export const createCategory = async (d: CategoryWriteInput) => {
 };
 
 export const updateCategory = async (id: number, d: CategoryWriteInput): Promise<"not_found" | "self_parent" | any> => {
-  if (!(await repo.findCategoryById(id))) return "not_found";
+  const current = await repo.findCategoryById(id);
+  if (!current) return "not_found";
   const data: any = { updated_at: new Date() };
   if (d.parent !== undefined) {
     const p = d.parent ? parseMaterialId(d.parent) ?? ROOT : ROOT;
@@ -142,9 +143,22 @@ export const updateCategory = async (id: number, d: CategoryWriteInput): Promise
   }
   if (d.title !== undefined) {
     data.name = d.title;
-    if (d.slug === undefined) data.slug = slugify(d.title);
   }
-  if (d.slug !== undefined) data.slug = d.slug;
+  // Slug resolution — ORDER MATTERS: a rename must not be overwritten by an
+  // echoed slug. The admin form posts the STORED slug back unchanged on every
+  // save, and the old `if (d.slug !== undefined) data.slug = d.slug` ran LAST,
+  // so it pinned the original slug forever — renaming a category to
+  // "Material Twoooo" left slug "material-one". Comparing the incoming value
+  // against the stored one separates a deliberate edit from that echo.
+  //   * explicit, genuinely-changed slug   → wins
+  //   * echoed (or absent) slug + a rename → re-slug from the new title
+  //   * echoed slug, no rename             → left untouched
+  const slugEchoed = d.slug !== undefined && d.slug === current.slug;
+  if (d.slug !== undefined && !slugEchoed) {
+    data.slug = d.slug;
+  } else if (d.title !== undefined) {
+    data.slug = slugify(d.title);
+  }
   if (d.image !== undefined) data.image = d.image;
   if (d.order !== undefined) data.order_by = d.order;
   if (d.status !== undefined) data.status = d.status;

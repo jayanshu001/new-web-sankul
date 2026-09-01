@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
 import {
   listTestSeries,
   getTestSeriesById,
@@ -34,15 +35,19 @@ const router = Router();
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // --- Literal-prefix routes first so they don't collide with /:id patterns ----
-router.put("/content-categories/:categoryId",       uploadS3.single("icon"), updateContentCategory);
-router.delete("/content-categories/:categoryId",    deleteContentCategory);
+router.put("/content-categories/:categoryId",       autoFlushGroup("test-series"), uploadS3.single("icon"), updateContentCategory);
+router.delete("/content-categories/:categoryId",    autoFlushGroup("test-series"), deleteContentCategory);
 
-router.put("/papers/:linkId",                       updatePaperLink);
-router.delete("/papers/:linkId",                    unlinkPaper);
+router.put("/papers/:linkId",                       autoFlushGroup("test-series"), updatePaperLink);
+router.delete("/papers/:linkId",                    autoFlushGroup("test-series"), unlinkPaper);
 
-router.put("/prices/:priceId",                      updatePrice);
-router.delete("/prices/:priceId",                   deletePrice);
+router.put("/prices/:priceId",                      autoFlushGroup("test-series"), updatePrice);
+router.delete("/prices/:priceId",                   autoFlushGroup("test-series"), deletePrice);
 
+// Subscription writes deliberately carry NO autoFlushGroup: they change one
+// CUSTOMER's entitlement (isPurchased / activeSubscription), not the shared
+// catalog, so the controllers call flushUserRouteCache(customerId) instead —
+// an entity-wide sweep would cold-start every user's cache for a single grant.
 router.get("/subscriptions",                        listSubscriptions);
 // Export routes before `/subscriptions/:subscriptionId` so they aren't matched as an id.
 router.get("/subscriptions/export/csv",             exportSubscriptionsCsv);
@@ -55,20 +60,20 @@ router.get("/orders",                               listOrders);
 
 // --- Test Series CRUD -------------------------------------------------------
 router.get("/",                                     listTestSeries);
-router.post("/",                                    uploadS3.single("thumbnail"), createTestSeries);
+router.post("/",                                    autoFlushGroup("test-series"), uploadS3.single("thumbnail"), createTestSeries);
 router.get("/:id",                                  getTestSeriesById);
-router.put("/:id",                                  uploadS3.single("thumbnail"), updateTestSeries);
-router.delete("/:id",                               deleteTestSeries);
+router.put("/:id",                                  autoFlushGroup("test-series"), uploadS3.single("thumbnail"), updateTestSeries);
+router.delete("/:id",                               autoFlushGroup("test-series"), deleteTestSeries);
 
 // --- Nested under a series --------------------------------------------------
 router.get("/:id/content-categories",               listContentCategories);
-router.post("/:id/content-categories",              uploadS3.single("icon"), createContentCategory);
+router.post("/:id/content-categories",              autoFlushGroup("test-series"), uploadS3.single("icon"), createContentCategory);
 
 router.get("/:id/papers",                           listPapers);
-router.post("/:id/papers",                          linkPaper);
+router.post("/:id/papers",                          autoFlushGroup("test-series"), linkPaper);
 
 router.get("/:id/prices",                           listPrices);
-router.post("/:id/prices",                          createPrice);
+router.post("/:id/prices",                          autoFlushGroup("test-series"), createPrice);
 
 router.post("/:id/grant",                           grantSubscription);
 

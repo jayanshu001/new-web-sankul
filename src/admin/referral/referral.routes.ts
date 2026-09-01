@@ -29,6 +29,8 @@ import {
   deleteFaq,
 } from "./content.controller";
 
+import { autoFlushGroup } from "../../middlewares/autoFlush";
+
 const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
@@ -75,18 +77,19 @@ router.post(
   adjustCustomerRewards
 );
 
-// Terms & Conditions
+// Terms & Conditions — the SAME rcService rows GET /client/referral/terms
+// serves under the "terms" tag, so these writes must sweep it.
 router.get("/terms", listTerms);
-router.post("/terms", createTerm);
+router.post("/terms", autoFlushGroup("terms"), createTerm);
 router.get("/terms/:id", getTerm);
-router.put("/terms/:id", updateTerm);
-router.delete("/terms/:id", deleteTerm);
+router.put("/terms/:id", autoFlushGroup("terms"), updateTerm);
+router.delete("/terms/:id", autoFlushGroup("terms"), deleteTerm);
 
-// FAQs
+// FAQs — likewise paired with GET /client/referral/faqs ("faq" tag).
 router.get("/faqs", listFaqs);
-router.post("/faqs", createFaq);
+router.post("/faqs", autoFlushGroup("faq"), createFaq);
 router.get("/faqs/:id", getFaq);
-router.put("/faqs/:id", updateFaq);
-router.delete("/faqs/:id", deleteFaq);
+router.put("/faqs/:id", autoFlushGroup("faq"), updateFaq);
+router.delete("/faqs/:id", autoFlushGroup("faq"), deleteFaq);
 
 export default router;

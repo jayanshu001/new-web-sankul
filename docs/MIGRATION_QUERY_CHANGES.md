@@ -15,6 +15,292 @@
 
 ---
 
+## 2026-09-01 (d) — Material category rename left the slug pinned to the OLD name
+
+> **No DDL.** `admin-material.service.ts` only. Existing rows keep their current
+> slug; the next title edit re-slugs them.
+
+### Symptom
+
+`PUT /admin/materials/categories/1868` renamed the category to "Material Twoooo",
+but the row kept `slug = "material-one"`.
+
+### Cause — statement order, not a missing re-slug
+
+`updateCategory` already regenerated the slug on rename, but only when `slug` was
+absent from the payload:
+
+```ts
+if (d.title !== undefined) {
+  data.name = d.title;
+  if (d.slug === undefined) data.slug = slugify(d.title);   // ran FIRST
+}
+if (d.slug !== undefined) data.slug = d.slug;               // ran LAST — always won
+```
+
+The admin form posts the **stored** slug back unchanged on every save, so the second
+line overwrote the regenerated value every time. The slug could therefore never change
+after creation, no matter how often the category was renamed.
+
+### Fix
+
+Compare the incoming slug against the stored one to tell a deliberate edit from the
+form's echo (`repo.findCategoryById` was already being called for the existence check;
+its row is now captured instead of discarded):
+
+| Payload | Result |
+|---|---|
+| explicit slug, different from stored | that slug wins |
+| slug echoed (or absent) + title changed | re-slugged from the new title |
+| slug echoed, no title change | left untouched |
+
+### Verification
+
+`yarn typecheck` green, plus all four branches exercised against the real row 1868:
+
+```
+start                              name="Material Twoooo" slug="material-one"
+1. rename + ECHOED slug            slug="material-twoooo"    (was the bug)
+2. rename, slug omitted            slug="material-three"
+3. rename + DELIBERATE slug        slug="custom-hand-picked" (custom preserved)
+4. echoed slug, no rename          slug="custom-hand-picked" (untouched)
+```
+
+Row restored to `name="Material Twoooo"`, slug now `"material-twoooo"`.
+
+### ⚠ Same shape, NOT fixed
+
+`admin-master.service.ts:272` (video-category update) has
+`if (d.slug !== undefined) data.slug = d.slug;` with **no title-based re-slug at all** —
+a video category rename never touches its slug. Left alone as out of scope here; worth
+a follow-up if video category slugs are used anywhere user-facing.
+
+---
+
+## 2026-09-01 (c) — Category flush groups never reached the ADMIN product reads or the `material` tag
+
+> **No DDL, no query-shape change.** `flushGroups.ts` only. Clear existing keys once
+> on deploy: `POST /api/v1/admin/cache/flush`.
+
+### Symptom
+
+Renaming material category 1868 to "Material Twoooo"
+(`PUT /admin/materials/categories/1868`) returned the new name from that endpoint,
+but the old name kept appearing elsewhere.
+
+### Not the write path
+
+`admin/material/material.routes.ts:41` already had `autoFlushGroup("material-category")`,
+and it fired. `ws_material_category.name` in MySQL is `"Material Twoooo"`, and no table
+carries a denormalised copy (checked `material_categories` JSON on ws_material /
+ws_package / ws_course — the column does not exist). The write and the data were fine.
+
+### Root cause — the GROUP was too narrow
+
+`material-category` expanded to
+`[material-category, catalog-package, catalog-course, categories, free]`. Category
+names are **populated, not id-only**, in reads tagged with entities absent from that
+list:
+
+- **`material`** — 8 cached reads render category titles:
+  `client-material.service.ts:311` (`title: c.name`) and
+  `catalog-material.transformer.ts:7` (`title: row.name`). Covers
+  `/client/materials/categories/:id/contents`, `/client/catalog/:type/:id/materials`,
+  `/client/categories/material-categories/:id/materials`, `/admin/materials`(+`/:id`).
+- **`course`** — `admin-course.service.ts` `toCourseDto` embeds
+  `materialCategories[].category {_id, title, image}`, plus populated
+  `courseSubjectCategoryId`, `videoCategoryId` and `examCategories[].category`.
+- **`package`** — `admin-package.service.ts` L149/153/157 embeds the same three refs;
+  L153 is literally `title: r.MaterialCategory.name`.
+
+This is the identical defect that was fixed for `plan`/`price` long ago (their group
+comment already explains why the admin product tags must be included); the category
+groups were never given the same treatment.
+
+### Change — `flushGroups.ts` only
+
+| Group | Added |
+|---|---|
+| `material-category` | `material`, `course`, `package` |
+| `video-category` | `course`, `package` (populated `videoCategoryId` in both DTOs) |
+| `exam-category` | `course`, `package` (populated `examCategories[].category`) |
+| `course-subject-category` | `course` (populated `courseSubjectCategoryId`) |
+| `package-category` | **unchanged** — `admin-package.service.ts:123` emits `packageCategoryId` as a BARE id, never a populated name, so it cannot go stale |
+
+`video` and `exam` were deliberately NOT added to their category groups: those reads
+take `categoryId` only as a filter param and embed no category name.
+
+### Verification
+
+`yarn typecheck` green. Against real Redis, one `autoFlushGroup("material-category")`
+now clears **14/14** cached reads that render a material-category title — across
+`material`, `course`, `package`, `material-category`, `catalog-course`,
+`catalog-package`, `categories` and `free`. Before the change the `material`,
+`course` and `package` keys survived the sweep.
+
+---
+
+## 2026-09-01 (b) — Full route-cache audit: 6 more modules had reads no write could invalidate
+
+> **No DDL, no backfill, no query-shape change.** Route-cache wiring only.
+> On deploy, clear the already-poisoned keys once: `POST /api/v1/admin/cache/flush`.
+
+Follow-up to the test-series entry below, which asked the obvious next question:
+how many other modules have the same defect. Every `cacheRoute` call site and
+every admin write route was audited, in both directions (untagged read; tagged
+read with no flushing writer).
+
+### New entity tags
+
+`offline`, `customer-lookup`, `image-notification`, `contact-department` — each
+verified self-contained (no other cached surface embeds their data), so each group
+is deliberately just itself.
+
+### Newly wired
+
+| Cached client read | Tag | Writer now flushing |
+|---|---|---|
+| `client/offline` — centers, batches, +`/:id` | `offline` | `admin/offline` cities/centers/batches (9) |
+| `client/address/cities/:cityId/centers` | `offline` | same — 2nd entry point to the same centre data |
+| `client/address` — states, cities, educations, characteristic | `customer-lookup` | `admin/address` (6) + `admin/customer-master` (6) |
+| `client/notification/image-notifications` | `image-notification` | `admin/notification` `/images` (3) |
+| `client/inquiry/contactus` | `contact-department` | `admin/inquiry` `/departments` (3) |
+| `client/live-courses` — `/upcoming-sessions`, `/upcoming-batches`, `/:id/sessions` | `live-course` *(already tagged)* | `admin/live` (8) — previously flushed **nothing** |
+| `client/referral` — `/terms`, `/faqs` | `terms` / `faq` *(already tagged)* | `admin/referral` (6) — previously flushed **nothing** |
+
+The `admin/live` row is the most user-visible: creating, editing, starting, ending
+or deleting a live session left the app's upcoming-sessions feed and a course's
+session list stale for up to 24h.
+
+### Two structural traps found
+
+1. **One table, two admin writers.** `prisma.customerTargetGoal` is written by
+   BOTH `admin/goal` (flushed `goal`) and `admin/customer-master/target-goals`
+   (flushed nothing). The latter now flushes the `goal` group too, and `goal`
+   gained `customer-lookup` because `GET /client/address/characteristic` embeds
+   those rows via `getActiveGoals()`.
+2. **One name, two tables.** `admin/offline` `/cities` is `ws_offline_city`;
+   `admin/address` `/cities` is `ws_customer_distict` (districts). Different tags
+   on purpose — merging them would over-flush and hide a real dependency.
+
+### Deliberately left on TTL
+
+`my-subscriptions` (30s) and `notifications/count` (15s) are bounded by short TTLs.
+**`client/app-version/check` has no admin writer at all** — its values come from
+`process.env`, so no route can flush it. ⚠ Changing `ANDROID_STORE_URL` /
+`IOS_APP_STORE_URL` and restarting does NOT clear Redis, so a force-update gate can
+stay stale up to 24h; follow such a change with a manual cache flush.
+
+### Verification
+
+`yarn typecheck` green. Each pairing was then exercised against real Redis using
+the exact key shape `buildKey` emits — 13/13 write→read paths confirmed reachable
+(8 in the first pass, 5 for live-course/referral). Full table in
+`docs/important/CACHING.md`.
+
+---
+
+## 2026-09-01 — Test-series client reads were cached under `misc`, so no admin write could ever invalidate them
+
+> **No DDL, no backfill, no query-shape change.** Route-cache wiring only. The fix is
+> live on deploy, but the **already-poisoned keys must be cleared once**:
+> `POST /api/v1/admin/cache/flush` (no body). After that the new flushes keep it honest.
+
+### Symptom
+
+`GET /api/v1/admin/test-series/1/prices` returned 2 plans; the app's
+`GET /api/v1/client/test-series/1` returned 1. Reported as "auto-flushing of caching
+not getting properly managed".
+
+### Not a data problem — verified first
+
+Both `ws_test_series_price` rows for series 1 are `status = true`:
+
+```
+id=1  name=null        duration_days=60  price=698  status=true
+id=4  name="3 months"  duration_days=25  price=750  status=true  created=2026-09-01
+```
+
+So the client's `where: { testSeriesId, status: true }` filter
+(`client-testseries.service.ts:194`) was **not** what hid the new plan. Admin
+`listPrices` is status-blind and the client is not, but that difference was innocent
+here. The app was being served a stale cached body.
+
+### Root cause — three independent leaks in one module
+
+1. **Reads were untagged.** `src/client/testSeries/testSeries.routes.ts` used
+   `cacheRoute({ ttl: 86400, scope: "user" })` with **no `entity`** on all three GETs
+   (`/`, `/:id`, `/:id/papers`). Per `cacheRoute.ts:141` an untagged route falls back
+   to the `"misc"` bucket, producing keys like
+   `dev:route:v1:misc:GET:/api/v1/client/test-series/1:<uid>:customer:<hash>`.
+   `flushEntity` sweeps by *entity prefix*, so **nothing could ever target these keys**
+   — and there was no `"test-series"` value in the `CacheEntity` union at all. Adding
+   `autoFlush("price")` would NOT have worked: it sweeps `…:price:*`, these live under
+   `…:misc:*`. Because the scope is per-user, a fresh device saw 2 plans instantly
+   while any warm session saw 1 for up to 24h — which is why it looked intermittent.
+2. **Writes flushed nothing.** All 15 admin test-series write routes carried no
+   `autoFlush`/`autoFlushGroup`, and `createPrice`/`updatePrice`/`deletePrice` called
+   no `flushEntity`. This was the largest unflushed write surface in `src/admin`.
+3. **`grantSubscription` never flushed the buyer.** The revoke paths
+   (`updateSubscription`, `deleteSubscription`) already called
+   `flushUserRouteCache(customerId)`; the grant path did not, so an admin-granted
+   customer kept a cached `isPurchased: false` for the full 24h TTL.
+
+Plus: the nightly plan-popularity sweep writes `is_most_popular` on
+`ws_test_series_price` (one of its five scopes) but excluded test-series from its
+flush, on a comment asserting *"test-series reads aren't cached"* — untrue since these
+routes were cached, just unreachably.
+
+### Changes
+
+| File | Change |
+|---|---|
+| `middlewares/flushGroups.ts` | New `"test-series"` `CacheEntity`; `FLUSH_GROUPS["test-series"] = ["test-series"]` |
+| `client/testSeries/testSeries.routes.ts` | All 3 GETs tagged `entity: "test-series"` via a shared `TS` const |
+| `admin/testSeries/testSeries.routes.ts` | `autoFlushGroup("test-series")` on all 12 catalog writes |
+| `admin/testSeries/testSeries.controller.ts` | `flushUserRouteCache(customerN)` added to `grantSubscription` |
+| `admin/plan-popularity/plan-popularity.routes.ts` | `autoFlushGroup("plan", "live-course", "test-series")` |
+| `modules/plan-popularity/plan-popularity.scheduler.ts` | Nightly sweep now includes `resolveFlushGroup("test-series")` |
+
+The group is **self-only by verification, not by omission**: test-series data appears
+in no other cached surface (absent from `client-dashboard`, `free`, `categories` and
+every `catalog-*` response), so a wider fan-out would cold-start caches for nothing.
+
+**Subscription write routes deliberately get NO `autoFlushGroup`** — they change one
+customer's entitlement, not the shared catalog, so they use the per-user
+`flushUserRouteCache` instead. An entity sweep per grant would evict every user.
+
+### Verification
+
+`yarn typecheck` green. Typecheck cannot prove a cache key is reachable, so the sweep
+was exercised against real Redis using the exact key shape `buildKey` emits, for two
+distinct users:
+
+```
+OLD  untagged->"misc": autoFlush("price") deleted 0; stale keys still alive = 2/2
+NEW  group("test-series") -> [test-series]
+NEW  keys before=2/2, deleted=2, alive after=0/2   → PASS
+```
+
+### ⚠ Same defect class, still open in 5 modules
+
+Audited every `cacheRoute` call site. These cached client reads are still untagged
+(`misc`) at a 24h TTL with an admin writer that flushes nothing — full table in
+`docs/important/CACHING.md`:
+
+| Cached client read | Admin writer, no flush |
+|---|---|
+| `client/offline` — `/centers`, `/batches`, `/centers/:id`, `/batches/:id` | `admin/offline` (15 writes) |
+| `client/address` — `/states`, `/cities`, `/cities/:id/centers`, `/educations`, `/characteristic` | `admin/address` (6 writes) |
+| `client/notification/image-notifications` | `admin/notification` (7 writes) |
+| `client/inquiry/contactus` | `admin/inquiry` (4 writes) |
+| `client/app-version/check` | app-version master writes |
+
+`client/my-subscriptions` (30s) and `notifications/count` (15s) are also untagged but
+bounded by short TTLs — acceptable as-is.
+
+---
+
 ## 2026-08-31 (b) — `ws_test_series_subscription` adopts the `ws_package_course_subscription` naming + gains promoter attribution
 
 > **DDL: `2026-08-31_test_series_subscription_match_package_shape.sql` — PENDING on

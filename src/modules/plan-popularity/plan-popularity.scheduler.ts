@@ -27,7 +27,14 @@ async function runOnce(): Promise<void> {
     // flushing every night would needlessly cold-start the whole catalog cache.
     const total = Object.values(changed).reduce((a, b) => a + b, 0);
     if (total > 0) {
-      const entities = [...new Set([...resolveFlushGroup("plan"), ...resolveFlushGroup("live-course")])];
+      const entities = [...new Set([
+        ...resolveFlushGroup("plan"),
+        ...resolveFlushGroup("live-course"),
+        // ws_test_series_price is one of the five popularity scopes, and the
+        // client test-series reads ARE cached (tagged "test-series"), so the
+        // badge needs the same sweep as the other four.
+        ...resolveFlushGroup("test-series"),
+      ])];
       const cleared = await flushEntity(...entities);
       logger.info("[plan-popularity] flushed route cache after recompute", { changedRows: total, cleared });
     }

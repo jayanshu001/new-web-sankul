@@ -33,6 +33,7 @@ export type CacheEntity =
   | "course"
   | "package"
   | "live-course"
+  | "test-series"
   | "exam"
   | "video"
   | "material"
@@ -55,6 +56,14 @@ export type CacheEntity =
   | "terms"
   | "social-link"
   | "current-affair"
+  // Offline centres/batches/cities (ws_offline_*) — the physical-centre catalog.
+  | "offline"
+  // Customer reference lookups: states, districts (ws_customer_distict),
+  // educations and target goals. Shared, slow-moving, read by the profile and
+  // address forms.
+  | "customer-lookup"
+  | "image-notification"
+  | "contact-department"
   // Client-facing catalog cache tags
   | "catalog-ebook"
   | "catalog-book"
@@ -108,17 +117,60 @@ export const FLUSH_GROUPS: Partial<Record<CacheEntity, CacheEntity[]>> = {
   // are built from live courses.
   "live-course": ["live-course", "catalog-course", "client-dashboard", "free", "categories", "package-category", "catalog-package"],
 
+  // Test series: SELF-CONTAINED. Verified — no other cached client surface embeds
+  // test-series data (it is absent from client-dashboard, free, categories and
+  // every catalog-* response), so this group is deliberately just itself. The tag
+  // covers all three cached client reads (list, detail, papers), whose bodies
+  // embed the series row, its content categories, its papers and its price plans
+  // — which is why EVERY admin test-series write flushes the whole tag rather
+  // than trying to be surgical about which sub-resource changed.
+  "test-series": ["test-series"],
+
+  // Offline: the four cached client/offline reads PLUS
+  // GET /client/address/cities/:cityId/centers, which is a second entry point to
+  // the SAME offline centre data (it calls getCentersWithBatchesByCitiesMysql,
+  // the twin of client/offline's listCentersByCity). One tag covers both.
+  offline: ["offline"],
+
+  // Customer lookups: states / districts / educations / target goals. Written
+  // from TWO admin surfaces (admin/address and admin/customer-master), both of
+  // which now flush this tag.
+  "customer-lookup": ["customer-lookup"],
+
+  "image-notification": ["image-notification"],
+  "contact-department": ["contact-department"],
+
   // ── Categories (widest fan-out: embedded as summaries+counts in BOTH package
   //    and course details, plus their own listings and tabs) ─────────────────
-  "video-category": ["video-category", "catalog-package", "catalog-course", "categories", "free"],
-  "material-category": ["material-category", "catalog-package", "catalog-course", "categories", "free"],
-  "exam-category": ["exam-category", "catalog-package", "catalog-course", "catalog-exam", "categories"],
-  "course-subject-category": ["course-subject-category", "catalog-course", "client-dashboard"],
+  // ⚠ These groups must also carry the ADMIN product tags ("course", "package")
+  // and, for material, the sibling content tag ("material"). Same reasoning as
+  // plan/price above, which was fixed long ago while categories were missed:
+  // the admin product DTOs POPULATE category names, they don't just store ids.
+  //   admin-course.service.ts toCourseDto →
+  //     courseSubjectCategoryId: {_id,title}, videoCategoryId: {_id,title},
+  //     materialCategories[].category {_id,title,image}, examCategories[].category
+  //   admin-package.service.ts → the same three refs (L149/153/157), where
+  //     material's `title` is literally MaterialCategory.name
+  // So renaming a category left GET /admin/courses, /admin/courses/:id,
+  // /admin/packages and /admin/packages/:id showing the OLD name for 24h.
+  // "material" is required for material-category specifically because 8 cached
+  // reads tagged "material" render category titles — client-material.service.ts
+  // L311 (`title: c.name`) and catalog-material.transformer.ts (`title: row.name`).
+  "video-category": ["video-category", "catalog-package", "catalog-course", "categories", "free", "course", "package"],
+  "material-category": ["material-category", "catalog-package", "catalog-course", "categories", "free", "material", "course", "package"],
+  "exam-category": ["exam-category", "catalog-package", "catalog-course", "catalog-exam", "categories", "course", "package"],
+  "course-subject-category": ["course-subject-category", "catalog-course", "client-dashboard", "course"],
+  // package-category deliberately NOT extended: admin-package.service.ts L123
+  // emits `packageCategoryId` as a BARE id string, never a populated name — so
+  // renaming a package category cannot stale the package DTO.
   "package-category": ["package-category", "catalog-package", "categories"],
 
   // ── Lookups embedded in product responses ─────────────────────────────────
   "package-type": ["package-type", "catalog-package", "client-dashboard"],
-  goal: ["goal", "catalog-package", "client-dashboard"],
+  // "customer-lookup" is required: admin/goal writes prisma.customerTargetGoal,
+  // and GET /client/address/characteristic embeds those same rows via
+  // getActiveGoals(). Without it, editing a goal leaves that lookup stale.
+  goal: ["goal", "catalog-package", "client-dashboard", "customer-lookup"],
   educator: ["educator", "catalog-course"],
 
   // Plans/prices are embedded in EVERY product response + dashboard buckets.

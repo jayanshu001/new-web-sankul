@@ -619,6 +619,12 @@ export const grantSubscription = async (req: Request, res: Response) => {
     });
     if ("planNotFound" in r) { logger.warn("grantSubscription plan not found", { traceId, planId: data.planId }); return failure(res, "Plan not found.", 404); }
     if ("missingDuration" in r) { logger.warn("grantSubscription missing duration", { traceId, testSeriesId }); return failure(res, "durationDays is required (or supply planId).", 422); }
+    // Mirror of the revoke paths (updateSubscription / deleteSubscription): the
+    // client test-series list + detail cache `isPurchased` / `activeSubscription`
+    // per user for 24h, and the entity sweep can't reach a per-user grant because
+    // the grant changes only THIS customer's view. Without this the buyer keeps
+    // seeing isPurchased:false until their key expires.
+    await flushUserRouteCache(customerN);
     logger.info("grantSubscription success", { traceId, testSeriesId, customerId: data.customerId, subscriptionId: r.subscription._id });
     return success(res, { subscription: r.subscription }, "Subscription granted.", 201);
   } catch (err) {

@@ -15,7 +15,7 @@ const router = Router();
 // Public — list active in-app banner images. Tier-1 shared (no per-user field);
 // no dedicated entity tag → "misc", relies on TTL. The per-user feed + unread
 // count below are NOT cached (live).
-router.get("/image-notifications", cacheRoute({ ttl: 86400, scope: "shared" }), listActiveImageNotifications);
+router.get("/image-notifications", cacheRoute({ ttl: 86400, entity: "image-notification", scope: "shared" }), listActiveImageNotifications);
 
 // Authenticated feed
 router.get("/notifications", authenticate, listMyNotifications);

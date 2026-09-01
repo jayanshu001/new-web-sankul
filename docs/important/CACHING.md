@@ -120,7 +120,8 @@ saved, wishlist, single-video playback (per-request tokens), payments.
   *that buyer's* keys across all entities (not everyone's), so their `isPurchased`
   overlay refreshes immediately. Wired in `payment/verify.controller` (all 6
   product kinds) and the admin grant controllers (course/package, ebook,
-  live-course). This is what lets per-user catalog reads run a 24h TTL safely.
+  live-course, **test-series**). This is what lets per-user catalog reads run a
+  24h TTL safely.
 - **Cart & dashboards** rely on TTL (30s / 60s) — cart also self-flushes on its
   own writes; dashboards just expire fast because notifications aren't flushed.
 - **Manual:** `POST /api/v1/admin/cache/flush { prefix? }` (admin-auth).
@@ -133,6 +134,59 @@ saved, wishlist, single-video playback (per-request tokens), payments.
 4. A write elsewhere (job/webhook) changes this data → `flushEntity(entity)`.
 5. Client read identical for all users → `scope:"shared"`; else `"user"`.
 6. `yarn typecheck` green.
+
+## Audit: read/write cache pairing (completed 2026-09-01)
+
+An untagged `cacheRoute(...)` falls back to the `"misc"` bucket
+(`cacheRoute.ts:141`). Those keys are cacheable but **no `flushEntity` sweep can
+ever reach them** — they only expire on TTL. The mirror defect is a tagged read
+whose admin writer calls no flush. Every `cacheRoute` call site and every admin
+write route was audited for both.
+
+### Fixed
+
+| Cached client read | Tag | Writer now flushing |
+|---|---|---|
+| `client/test-series` — `/`, `/:id`, `/:id/papers` | `test-series` *(new)* | `admin/testSeries` (12 catalog writes) + `flushUserRouteCache` on grant |
+| `client/offline` — `/centers`, `/batches`, `/centers/:id`, `/batches/:id` | `offline` *(new)* | `admin/offline` cities/centers/batches (9) |
+| `client/address/cities/:cityId/centers` | `offline` *(new)* | same — it is a 2nd entry point to the same centre data |
+| `client/address` — `/states`, `/cities`, `/educations`, `/characteristic` | `customer-lookup` *(new)* | `admin/address` (6) + `admin/customer-master` districts/educations (6) |
+| `client/address/characteristic` (goal half) | `customer-lookup` | `admin/goal` (via the extended `goal` group) + `admin/customer-master` target-goals (3) |
+| `client/notification/image-notifications` | `image-notification` *(new)* | `admin/notification` `/images` (3) |
+| `client/inquiry/contactus` | `contact-department` *(new)* | `admin/inquiry` `/departments` (3) |
+| `client/live-courses` — `/upcoming-sessions`, `/upcoming-batches`, `/:id/sessions` | `live-course` (existing) | `admin/live` session writes (8) — **were flushing nothing** |
+| `client/referral` — `/terms`, `/faqs` | `terms` / `faq` (existing) | `admin/referral` terms+faqs (6) — **were flushing nothing** |
+
+Three traps this audit surfaced, all worth remembering:
+
+- **A category group must include the tags of everything that POPULATES its name.**
+  Admin product DTOs embed `{_id, title}` category refs, so `material-category`,
+  `video-category`, `exam-category` and `course-subject-category` all had to gain
+  `course`/`package` (and `material-category` also `material`). Only
+  `package-category` is exempt — it is emitted as a bare id. Same rule the
+  `plan`/`price` groups already follow.
+
+- **The same table can have two admin writers.** `prisma.customerTargetGoal` is
+  written by BOTH `admin/goal` (which flushed) and
+  `admin/customer-master/target-goals` (which did not). Tagging the read is not
+  enough — every writer of that table needs the flush.
+- **The same name can mean two tables.** `admin/offline` `/cities` is
+  `ws_offline_city`; `admin/address` `/cities` is `ws_customer_distict`
+  (districts). They carry different tags on purpose. Do not merge them.
+
+### Deliberately left on TTL
+
+| Route | Why |
+|---|---|
+| `client/my-subscriptions` (30s, user) | short TTL; entitlement writes already call `flushUserRouteCache` |
+| `client/notification/notifications/count` (15s, user) | short TTL, high write rate — tagging would flush constantly |
+| `client/app-version/check` (86400, shared) | **no admin writer exists** — the values come from `process.env` (`ANDROID_STORE_URL`, `IOS_APP_STORE_URL`, package name), so there is no route to hook. ⚠ Changing those env vars and restarting does NOT clear Redis: a force-update gate can stay stale for up to 24h. After changing them, run `POST /api/v1/admin/cache/flush`. |
+| `admin-dashboard` | documented above — aggregates live revenue; 2-min TTL is the accepted trade |
+
+Admin surfaces with writes but **no cached client read to invalidate** (verified,
+correctly unflushed): auth, role, permission, permissionCategory, administrator,
+customer, customer-master (non-lookup routes), subscription, promoter, livechat,
+livepoll, pc-material, uploads, exports, tracking, guards.
 
 ## Limitations (accepted, at admin scale)
 
