@@ -35,6 +35,10 @@ import {
   stopPlanPopularityScheduler,
 } from "./modules/plan-popularity/plan-popularity.scheduler";
 import {
+  initStreamosDeliveryScheduler,
+  stopStreamosDeliveryScheduler,
+} from "./admin/live/streamos.delivery.scheduler";
+import {
   initOtpUnblockScheduler,
   stopOtpUnblockScheduler,
 } from "./modules/customer-auth/otp-unblock.scheduler";
@@ -86,6 +90,13 @@ const buildPreClose =
         });
       }
       try {
+        stopStreamosDeliveryScheduler();
+      } catch (err) {
+        logger.warn("[shutdown] stopStreamosDeliveryScheduler failed", {
+          err: (err as Error).message,
+        });
+      }
+      try {
         stopOtpUnblockScheduler();
       } catch (err) {
         logger.warn("[shutdown] stopOtpUnblockScheduler failed", {
@@ -128,6 +139,10 @@ const startWorkers = async (): Promise<void> => {
   const t2 = Date.now();
   initPlanPopularityScheduler();
   bootMs("plan popularity scheduler", t2);
+
+  const t2b = Date.now();
+  initStreamosDeliveryScheduler();
+  bootMs("streamos delivery scheduler", t2b);
 
   const t3 = Date.now();
   await initExportScheduler();

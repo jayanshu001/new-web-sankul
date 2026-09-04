@@ -1,15 +1,47 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import {
-  createStream as streamosCreateStream,
-  getStreamDetails as streamosGetStreamDetails,
-  endStream as streamosEndStream,
   getUploadedVideoDetails as streamosGetUploadedVideoDetails,
   getOrgDetails as streamosGetOrgDetails,
   updateWebhook as streamosUpdateWebhook,
   enrichMp4Sizes as streamosEnrichMp4Sizes,
   StreamosError,
 } from "./streamos.service";
+// Provider-agnostic StreamOS surface. Dispatches per SESSION (a row's own
+// streamProvider), so legacy sessions keep resolving against the legacy API even
+// after STREAMOS_PROVIDER is flipped to v1. See streamos.provider.ts.
+import {
+  provisionStream as streamosProvision,
+  startStream as streamosStartStream,
+  endStream as streamosEndStream,
+  getDetails as streamosGetDetails,
+  pushCredentialsExpired,
+  providerOf,
+} from "./streamos.provider";
+import { streamosV1ApiKey, streamosV1WebhookSecret } from "../../config/streamos";
+import { verifyStreamosSignature } from "../../utils/streamosSignature";
+import {
+  resolveSession as resolveV1Session,
+  applyEvent as applyV1Event,
+  isForeignEnvironment as isForeignV1Environment,
+} from "./streamos.v1.webhook";
+import { isStreamosV1 } from "../../config/streamos";
+import {
+  registerWebhook as streamosV1RegisterWebhook,
+  getAsset as streamosV1GetAsset,
+  listWebhooks as streamosV1ListWebhooks,
+  type StreamosV1Event,
+} from "./streamos.v1.service";
+
+// The events our recording pipeline depends on. RECORDING_READY stores the asset
+// pointer; TRANSCODING_COMPLETED is the one that actually publishes a playable
+// recording; FAILED stops us advertising a replay that will never exist.
+const REQUIRED_V1_WEBHOOK_EVENTS: StreamosV1Event[] = [
+  "LIVESTREAM_ENDED",
+  "LIVESTREAM_RECORDING_READY",
+  "VIDEO_TRANSCODING_COMPLETED",
+  "VIDEO_TRANSCODING_FAILED",
+];
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -260,7 +292,7 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
       let isLive = false;
       if (row.streamId && (row.status === "CREATED" || row.status === "ENDED")) {
         try {
-          const details = await streamosGetStreamDetails(row.streamId);
+          const details = await streamosGetDetails(row);
           isLive = details.isLive;
 
           const patch: { hlsUrl?: string | null; hlsUrls?: any; recordings?: any; mp4Recordings?: any; status?: string } = {};
@@ -485,15 +517,31 @@ export const provisionLiveSession = async (req: Request, res: Response) => {
     // Already provisioned → return as-is (no second StreamOS stream).
     let updatedSql = rowSql;
     let alreadyProvisioned = false;
+    let credentialsExpired = false;
     if (rowSql.streamId) {
       alreadyProvisioned = true;
+      // v1 ingest credentials live ~24h. A stream provisioned last week still
+      // has an rtmpUrl on the row, but pushing to it fails — so say so here
+      // rather than letting the educator discover it at go-live. /start re-mints.
+      credentialsExpired = pushCredentialsExpired(rowSql.pushExpiresAt);
     } else {
-      const createdSql = await streamosCreateStream(rowSql.title ?? "");
+      // On legacy this mints full encoder credentials (they never expire).
+      // On v1 it only RESERVES the stream — rtmpUrl stays null, because v1 ingest
+      // credentials die ~24h after minting, so issuing them days ahead of a
+      // scheduled class would guarantee a dead URL at go-live. /start mints them.
+      const createdSql = await streamosProvision({
+        title: rowSql.title ?? "",
+        sessionId: rowSql.id,
+        scheduledAt: rowSql.scheduledAt,
+      });
       updatedSql = await adminLiveSql.updateSession(rowSql.id, {
         streamId: createdSql.streamId,
+        streamProvider: createdSql.provider,
+        streamKey: createdSql.streamKey,
+        pushExpiresAt: createdSql.pushExpiresAt,
         rtmpUrl: createdSql.rtmpUrl,
         hlsUrl: createdSql.hlsUrl,
-        hlsUrls: createdSql.hlsUrls ?? null,
+        hlsUrls: createdSql.hlsUrls,
         // status stays SCHEDULED — provisioning does NOT go live.
       });
     }
@@ -506,7 +554,11 @@ export const provisionLiveSession = async (req: Request, res: Response) => {
     return success(
       res,
       { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
-      alreadyProvisioned ? "Live session already provisioned." : "Encoder credentials provisioned."
+      credentialsExpired
+        ? "Live session already provisioned, but its encoder credentials have expired — fresh credentials are minted automatically on Go Live."
+        : alreadyProvisioned
+          ? "Live session already provisioned."
+          : "Encoder credentials provisioned."
     );
   } catch (err) {
     if (err instanceof StreamosError) {
@@ -540,17 +592,46 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
       //
       // Reuse an already-provisioned stream so the rtmpUrl the admin configured in
       // OBS stays valid; only create a new StreamOS stream when unprovisioned.
-      const streamFields = rowSql.streamId
-        ? {}
-        : await (async () => {
-            const createdSql = await streamosCreateStream(rowSql.title ?? "");
-            return {
-              streamId: createdSql.streamId,
-              rtmpUrl: createdSql.rtmpUrl,
-              hlsUrl: createdSql.hlsUrl,
-              hlsUrls: createdSql.hlsUrls ?? null,
-            };
-          })();
+      let streamFields: Record<string, any> = {};
+      let base = rowSql;
+
+      if (!rowSql.streamId) {
+        const createdSql = await streamosProvision({
+          title: rowSql.title ?? "",
+          sessionId: rowSql.id,
+          scheduledAt: rowSql.scheduledAt,
+        });
+        streamFields = {
+          streamId: createdSql.streamId,
+          streamProvider: createdSql.provider,
+          streamKey: createdSql.streamKey,
+          pushExpiresAt: createdSql.pushExpiresAt,
+          rtmpUrl: createdSql.rtmpUrl,
+          hlsUrl: createdSql.hlsUrl,
+          hlsUrls: createdSql.hlsUrls,
+        };
+        base = { ...rowSql, ...streamFields };
+      }
+
+      // v1 mints ingest credentials HERE, not at provision time — they expire
+      // ~24h after minting. This also re-mints when a stream provisioned days
+      // ago has already lapsed. Legacy returns null: its credentials were issued
+      // at provision time and do not expire, so the rtmpUrl the admin already
+      // configured in OBS stays untouched.
+      const minted = await streamosStartStream(base);
+      if (minted) {
+        streamFields = {
+          ...streamFields,
+          streamId: minted.streamId,
+          streamProvider: minted.provider,
+          streamKey: minted.streamKey,
+          pushExpiresAt: minted.pushExpiresAt,
+          rtmpUrl: minted.rtmpUrl,
+          // Keep the existing hlsUrl when v1 doesn't return a fresh one.
+          hlsUrl: minted.hlsUrl ?? base.hlsUrl,
+        };
+      }
+
       const updatedSql = await adminLiveSql.updateSession(rowSql.id, {
         ...streamFields,
         status: "CREATED",
@@ -737,7 +818,11 @@ export const endLiveSession = async (req: Request, res: Response) => {
     const streamId = parseStreamIdParam(req.body?.streamId);
     if (!streamId) return failure(res, "Valid streamId is required.", 422);
 
-    await streamosEndStream(streamId);
+    // Look the session up first: which API to end the stream on is a property of
+    // the SESSION, not of the deploy. An unknown streamId falls through as legacy,
+    // preserving the previous behaviour for rows we can't resolve.
+    const sessionForEnd = await adminLiveSql.findSessionByAnyId(streamId);
+    await streamosEndStream(sessionForEnd ?? { streamId });
 
       const updatedSql = await adminLiveSql.updateByStreamId(streamId, { status: "ENDED" });
 
@@ -778,6 +863,27 @@ export const getUploadedVideoDetails = async (req: Request, res: Response) => {
   try {
     const recordingId = String(req.params.recordingId ?? "").trim();
     if (!recordingId) return failure(res, "recordingId is required.", 422);
+
+    // On v1 a past recording is a LIBRARY ASSET, addressed by asset id. The
+    // legacy `uploadedVideoDetails` endpoint does not exist there.
+    if (isStreamosV1()) {
+      const asset = await streamosV1GetAsset(recordingId);
+      return success(
+        res,
+        {
+          recordingId: asset.publicId,
+          status: asset.status,
+          kind: asset.kind,
+          hlsUrl: asset.hlsManifestUrl,
+          durationSeconds: asset.durationSeconds,
+          sizeBytes: asset.sizeBytes,
+          recordings: asset.renditions
+            .map((r) => ({ quality: r.quality, path: r.url ?? r.dashUrl ?? "" }))
+            .filter((r) => r.path),
+        },
+        "Asset details fetched."
+      );
+    }
 
     const details = await streamosGetUploadedVideoDetails(recordingId);
     return success(res, details, "Uploaded video details fetched.");
@@ -836,9 +942,40 @@ export const updateRecordingWebhook = async (req: Request, res: Response) => {
       return failure(res, "webhook must be a valid URL.", 422);
     }
 
+    // v1 replaces the legacy "one URL" registration with an event SUBSCRIPTION,
+    // and returns a signing secret exactly once. Surface that secret in the
+    // response — it cannot be re-read, and without it in
+    // STREAMOS_WEBHOOK_SIGNING_SECRET every delivery is rejected as unverifiable.
+    if (isStreamosV1()) {
+      const reg = await streamosV1RegisterWebhook({
+        url: webhook,
+        events: REQUIRED_V1_WEBHOOK_EVENTS,
+        description: "WebSankul recording pipeline",
+      });
+      logger.info("updateRecordingWebhook success (v1)", {
+        traceId,
+        webhook,
+        // Never log the secret itself.
+        secretReturned: Boolean(reg.signingSecret),
+      });
+      return success(
+        res,
+        {
+          webhook,
+          provider: "v1",
+          webhookId: reg.publicId,
+          signingSecret: reg.signingSecret,
+          note: reg.signingSecret
+            ? "Store this signingSecret in STREAMOS_WEBHOOK_SIGNING_SECRET and restart. StreamOS will not show it again."
+            : "StreamOS returned no signing secret — deliveries cannot be verified until one is issued.",
+        },
+        "Webhook registered."
+      );
+    }
+
     const result = await streamosUpdateWebhook(webhook);
     logger.info("updateRecordingWebhook success", { traceId, webhook });
-    return success(res, { webhook, upstream: result }, "Webhook updated.");
+    return success(res, { webhook, provider: "legacy", upstream: result }, "Webhook updated.");
   } catch (err) {
     if (err instanceof StreamosError) {
       return failure(res, err.message, err.status);
@@ -862,26 +999,96 @@ export const getRecordingHealth = async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
 
     // Normalize the session snapshot.
-    let snap: { status: string; streamId: string | null; recordingsOnSession: number } | null = null;
+    let snap: {
+      status: string;
+      streamId: string | null;
+      provider: string;
+      recordingsOnSession: number;
+    } | null = null;
     const row = await adminLiveSql.findSessionByAnyId(id);
-    if (row) snap = { status: String(row.status), streamId: row.streamId ?? null, recordingsOnSession: adminLiveSql.hlsRecordingsOf(row).length };
-    if (!snap) return failure(res, "Live session not found.", 404);
+    if (row)
+      snap = {
+        status: String(row.status),
+        streamId: row.streamId ?? null,
+        provider: providerOf(row),
+        recordingsOnSession: adminLiveSql.hlsRecordingsOf(row).length,
+      };
+    if (!snap || !row) return failure(res, "Live session not found.", 404);
+    const isV1Session = snap.provider === "v1";
 
     type Check = { key: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string };
     const checks: Check[] = [];
 
-    // 1) Webhook shared secret configured.
-    const secretSet = STREAMOS_WEBHOOK_SECRET.length > 0;
+    // 1) Webhook secret. The two providers authenticate callbacks differently:
+    //    legacy has no signing at all (we bolt on a ?key= shared secret), while
+    //    v1 signs every delivery with an HMAC secret issued at registration.
+    const secretSet = isV1Session
+      ? streamosV1WebhookSecret().length > 0
+      : STREAMOS_WEBHOOK_SECRET.length > 0;
     checks.push({
       key: "webhookSecret",
-      label: "Webhook secret (STREAMOS_WEBHOOK_SECRET)",
-      status: secretSet ? "ok" : "warn",
-      detail: secretSet ? "Configured." : "Not set — the public webhook is accepted unauthenticated. Set it in production.",
+      label: isV1Session
+        ? "Webhook signing secret (STREAMOS_WEBHOOK_SIGNING_SECRET)"
+        : "Webhook secret (STREAMOS_WEBHOOK_SECRET)",
+      status: secretSet ? "ok" : isV1Session ? "fail" : "warn",
+      detail: secretSet
+        ? "Configured."
+        : isV1Session
+          ? "Not set — StreamOS v1 signs every delivery, so callbacks cannot be verified and will be rejected."
+          : "Not set — the public webhook is accepted unauthenticated. Set it in production.",
     });
 
     // 2) Streamos credentials + 3) webhook registration (orgDetails proves both).
     let webhook: { registeredUrl: string | null; pathOk: boolean; hasKeyParam: boolean } = { registeredUrl: null, pathOk: false, hasKeyParam: false };
-    try {
+    if (isV1Session) {
+      // v1 exposes no orgDetails endpoint, and webhook registration cannot be
+      // read back (only created). Neither check has a data source, so report
+      // that honestly rather than inventing a pass or a failure.
+      checks.push({
+        key: "streamosCreds",
+        label: "StreamOS credentials",
+        status: streamosV1ApiKey() ? "ok" : "fail",
+        detail: streamosV1ApiKey()
+          ? "API key configured. (v1 exposes no org endpoint, so this is not an end-to-end reachability check.)"
+          : "STREAMOS_API_KEY is not set — every v1 call will fail.",
+      });
+      // v1 DOES expose GET /webhooks/, so registration is verifiable — confirm
+      // our URL is subscribed AND that it covers the event that actually
+      // publishes a recording. A webhook registered for the wrong events looks
+      // healthy but never delivers.
+      try {
+        const hooks = await streamosV1ListWebhooks();
+        const ours = hooks.filter((h) => (h.url ?? "").includes("/client/webhook/recording"));
+        if (ours.length === 0) {
+          checks.push({
+            key: "webhookRegistered",
+            label: "Recording webhook registered on StreamOS",
+            status: "fail",
+            detail: hooks.length
+              ? `${hooks.length} webhook(s) registered, none pointing at /client/webhook/recording — recordings have nowhere to land.`
+              : "No webhooks registered on StreamOS — recordings have nowhere to land.",
+          });
+        } else {
+          const events = new Set(ours.flatMap((h) => h.events));
+          const missing = REQUIRED_V1_WEBHOOK_EVENTS.filter((e) => !events.has(e));
+          checks.push({
+            key: "webhookRegistered",
+            label: "Recording webhook registered on StreamOS",
+            status: missing.length ? "warn" : "ok",
+            detail: missing.length
+              ? `Registered (${ours[0].url}) but not subscribed to: ${missing.join(", ")}. VIDEO_TRANSCODING_COMPLETED is the event that publishes a recording.`
+              : `Registered and subscribed to all required events: ${ours[0].url}`,
+          });
+        }
+      } catch (err) {
+        checks.push({
+          key: "webhookRegistered",
+          label: "Recording webhook registered on StreamOS",
+          status: "warn",
+          detail: `Could not read webhook registrations: ${err instanceof StreamosError ? err.message : getErrorMessage(err)}`,
+        });
+      }
+    } else try {
       const org = await streamosGetOrgDetails();
       checks.push({ key: "streamosCreds", label: "Streamos credentials", status: "ok", detail: `Connected to org "${org.name ?? "unknown"}".` });
 
@@ -914,7 +1121,7 @@ export const getRecordingHealth = async (req: Request, res: Response) => {
       key: "sessionState",
       label: "Session state",
       status: "info",
-      detail: `status=${snap.status}, streamId=${snap.streamId ?? "none"}, recordingsOnSession=${snap.recordingsOnSession}`,
+      detail: `provider=${snap.provider}, status=${snap.status}, streamId=${snap.streamId ?? "none"}, recordingsOnSession=${snap.recordingsOnSession}`,
     });
 
     // 5) Does Streamos actually hold the recording for this stream?
@@ -923,10 +1130,24 @@ export const getRecordingHealth = async (req: Request, res: Response) => {
       checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "warn", detail: "Session has no streamId — it was never created on Streamos." });
     } else {
       try {
-        const details = await streamosGetStreamDetails(snap.streamId);
+        const details = await streamosGetDetails(row);
         streamos = { reachable: true, isLive: details.isLive, recordingsOnStreamos: details.recordings.length };
         if (details.isLive) {
-          checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "info", detail: "Stream is still LIVE — recordings are produced after it ends." });
+          checks.push({
+            key: "recordingDelivery",
+            label: "Recording delivery",
+            status: "info",
+            detail: isV1Session
+              ? "Session is marked live locally — recordings are produced after it ends. (v1 reports no liveness signal; this is derived from session status.)"
+              : "Stream is still LIVE — recordings are produced after it ends.",
+          });
+        } else if (details.recordingProcessing) {
+          checks.push({
+            key: "recordingDelivery",
+            label: "Recording delivery",
+            status: "info",
+            detail: "StreamOS holds the recording but it is still transcoding — it becomes playable on VIDEO_TRANSCODING_COMPLETED.",
+          });
         } else if (details.recordings.length === 0) {
           checks.push({ key: "recordingDelivery", label: "Recording delivery", status: snap.status === "READY" ? "ok" : "warn", detail: "No recording on Streamos yet — still processing, or the stream was too short / not recorded." });
         } else if (snap.recordingsOnSession === 0) {
@@ -961,6 +1182,103 @@ export const getRecordingHealth = async (req: Request, res: Response) => {
   }
 };
 
+// ── StreamOS v1 deliveries ───────────────────────────────────────────────────
+// Same public endpoint as the legacy callback; the two are told apart by v1's
+// headers. Keeping one URL means the cutover needs no route change on either side.
+//
+// Contract differences that shape this handler:
+//   - deliveries are HMAC-signed (legacy was unsigned, guarded by our ?key=)
+//   - they retry up to 6× with a stable X-Streamos-Delivery id
+//   - a 2xx is expected within 10 seconds
+const handleV1RecordingWebhook = async (req: Request, res: Response, traceId?: string) => {
+  const event = String(req.headers["x-streamos-event"] ?? "");
+  const deliveryId = String(req.headers["x-streamos-delivery"] ?? "");
+  const signature = req.headers["x-streamos-signature"] as string | undefined;
+
+  // 1) Authenticate. Unlike the legacy path there is no "accept unauthenticated
+  //    and warn" fallback — v1 signs every delivery, so an unverifiable one is
+  //    either a misconfiguration or a forgery, and both must be rejected.
+  const secret = streamosV1WebhookSecret();
+  const verdict = verifyStreamosSignature((req as any).rawBody, signature, secret);
+  if (!verdict.ok) {
+    logger.warn("StreamOS v1 webhook rejected", { traceId, event, deliveryId, reason: verdict.reason });
+    return res.status(401).json({ success: false, message: "Unauthorized." });
+  }
+  // Which payload construction matched. The docs don't say; once a real delivery
+  // tells us, pin it in utils/streamosSignature.ts and drop the other branch.
+  logger.info("StreamOS v1 webhook verified", { traceId, event, deliveryId, scheme: verdict.scheme });
+
+  const body = req.body ?? {};
+
+  // 2) Claim the delivery BEFORE doing any work. Recording handling creates
+  //    Video rows, so a retry that re-ran it would duplicate course content.
+  //    Missing header → fall back to a key derived from the payload so a retry
+  //    still collides instead of processing twice.
+  const claimKey =
+    deliveryId || `${event}:${String(body?.data?.recording?.asset_id ?? body?.data?.video?.id ?? "")}`;
+  if (claimKey) {
+    let firstTime = true;
+    try {
+      firstTime = await adminLiveSql.claimWebhookDelivery(claimKey, event || null);
+    } catch (err) {
+      // A failed claim must not drop the delivery — process it and accept the
+      // (small) duplicate risk rather than losing the recording entirely.
+      logger.error("StreamOS v1 delivery claim failed", { traceId, claimKey, error: getErrorMessage(err) });
+    }
+    if (!firstTime) {
+      logger.info("StreamOS v1 webhook replay ignored", { traceId, event, deliveryId });
+      return res.status(200).json({ success: true, message: "Already processed." });
+    }
+  }
+
+  // 3) Is it even ours? Staging and production share one StreamOS organisation
+  //    and one API key, so this endpoint can receive the OTHER environment's
+  //    recordings. Drop those before correlation — searching for a staging
+  //    session among production's rows risks a wrong-class attachment.
+  if (isForeignV1Environment(body)) {
+    logger.info("StreamOS v1 webhook ignored (other environment)", { traceId, event, deliveryId });
+    return res.status(200).json({ success: true, message: "Acknowledged (other environment)." });
+  }
+
+  // 4) Correlate. See streamos.v1.webhook.resolveSession — the documented
+  //    payloads carry no stream id, so several keys are tried in turn.
+  const session = await resolveV1Session(body);
+  if (!session) {
+    // Ack so StreamOS stops retrying: a payload we cannot attribute will not
+    // become attributable on the 6th attempt. Logged at error — this is the Q1
+    // gap showing up in production and it needs a human.
+    logger.error("StreamOS v1 webhook could not be correlated to a session", {
+      traceId,
+      event,
+      deliveryId,
+      dataKeys: Object.keys(body?.data ?? {}),
+    });
+    return res.status(200).json({ success: true, message: "Acknowledged (no matching session)." });
+  }
+
+  // 5) Apply.
+  const result = await applyV1Event(body, session);
+  if (!result.handled) {
+    logger.warn("StreamOS v1 webhook not applied", { traceId, event, sessionId: session.id, reason: result.reason });
+    return res.status(200).json({ success: true, message: `Acknowledged (${result.reason}).` });
+  }
+
+  // 6) Tell any connected viewers, but only once the recording is playable.
+  if (event === "VIDEO_TRANSCODING_COMPLETED" && session.streamId) {
+    const liveClassId = String(session.streamId);
+    const fresh = await adminLiveSql.findSessionByAnyId(String(session.id));
+    io?.to(roomKey(liveClassId)).emit("recordings_ready", {
+      streamId: session.streamId,
+      liveClassId,
+      status: "READY",
+      recordings: fresh ? adminLiveSql.hlsRecordingsOf(fresh) : [],
+    });
+  }
+
+  logger.info("StreamOS v1 webhook applied", { traceId, event, sessionId: session.id, reason: result.reason });
+  return res.status(200).json({ success: true, message: result.reason });
+};
+
 // POST /api/v1/client/webhook/recording  (public — called by Streamos)
 // Authenticated via the STREAMOS_WEBHOOK_SECRET shared secret, passed either
 // as `?key=` on the URL or in the `x-webhook-secret` header. Without this an
@@ -971,6 +1289,12 @@ export const recordingWebhook = async (req: Request, res: Response) => {
   logger.info("recordingWebhook invoked", { traceId, path: req.originalUrl });
 
   try {
+    // StreamOS v1 deliveries are identified by their own headers. Everything
+    // else falls through to the legacy contract below, unchanged.
+    if (req.headers["x-streamos-event"] || req.headers["x-streamos-signature"]) {
+      return await handleV1RecordingWebhook(req, res, traceId);
+    }
+
     if (STREAMOS_WEBHOOK_SECRET) {
       const provided =
         (typeof req.query.key === "string" ? req.query.key : "") ||

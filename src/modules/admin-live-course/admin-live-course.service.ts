@@ -25,6 +25,7 @@ import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
  */
 type LiveSubWithOrder = LiveCourseSubscription & { order: LiveCourseOrder | null };
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
+import { providerOf, getRecordingByAssetId } from "../../admin/live/streamos.provider";
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
 import { nextOrder } from "../../utils/listOrdering";
@@ -1758,8 +1759,27 @@ interface CachedVodMeta {
  * the caller falls back to the stored webhook recordings — the accessKey never
  * leaves the server; only the resolved CDN URLs reach the client.
  */
-const resolveVodMeta = async (streamId: string): Promise<CachedVodMeta | null> => {
-  const cacheKey = `vodmeta:${streamId}`;
+/** What resolveVodMeta needs off a session row to know where to resolve. */
+type VodSessionRef = {
+  streamId: string | null;
+  streamProvider?: string | null;
+  recordedAssetId?: string | null;
+};
+
+const resolveVodMeta = async (session: VodSessionRef): Promise<CachedVodMeta | null> => {
+  const streamId = String(session.streamId ?? "");
+  if (!streamId) return null;
+
+  const isV1 = providerOf(session) === "v1";
+  // v1 recordings are library ASSETS, addressed by asset id rather than stream
+  // id. Without one there is nothing to resolve yet — the recording either
+  // hasn't landed or is still transcoding; the caller falls back to stored recs.
+  const assetId = session.recordedAssetId ?? null;
+  if (isV1 && !assetId) return null;
+
+  // Namespaced per provider: the two platforms have independent id spaces, so a
+  // shared key could serve a legacy resolution for a v1 id.
+  const cacheKey = isV1 ? `vodmeta:v1:${assetId}` : `vodmeta:${streamId}`;
   try {
     const cached = await redisClient.get(cacheKey);
     if (cached) return JSON.parse(cached) as CachedVodMeta;
@@ -1767,7 +1787,9 @@ const resolveVodMeta = async (streamId: string): Promise<CachedVodMeta | null> =
     /* cache read best-effort */
   }
   try {
-    const meta = await getVodStreamMeta(streamId);
+    const meta = isV1
+      ? await getRecordingByAssetId(String(assetId))
+      : await getVodStreamMeta(streamId);
     const norm = (r: { quality: string; path: string }): VodRec => ({
       quality: r.quality || null,
       file_size: null,
@@ -1821,7 +1843,17 @@ const shapeRecordingLectures = async (
   // VOD-meta-resolved playable URLs per session (get-vod-stream-meta, cached).
   const vodBySession = new Map<number, CachedVodMeta | null>();
   if (sessionIds.length) {
-    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, streamId: true, recordings: true } });
+    const sessions = await prisma.liveSession.findMany({
+      where: { id: { in: sessionIds } },
+      select: {
+        id: true,
+        streamId: true,
+        recordings: true,
+        // Needed to pick the right StreamOS API and address a v1 recording.
+        streamProvider: true,
+        recordedAssetId: true,
+      },
+    });
     for (const s of sessions) recBySession.set(s.id, shapeStoredRecs(s.recordings));
     // Resolve the actually-playable URLs for each session's recording via
     // StreamOS get-vod-stream-meta (cached). Failure-isolated per session — a
@@ -1830,7 +1862,7 @@ const shapeRecordingLectures = async (
       sessions
         .filter((s) => !!s.streamId)
         .map(async (s) => {
-          vodBySession.set(s.id, await resolveVodMeta(String(s.streamId)));
+          vodBySession.set(s.id, await resolveVodMeta(s));
         })
     );
   }

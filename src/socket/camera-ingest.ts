@@ -25,6 +25,7 @@ import logger from "../utils/logger";
 // ws_live_session data the live-class service owns. ffmpeg/RTMP/WebSocket
 // transport stays identical.
 import * as adminLiveSql from "../modules/admin-live/admin-live.service";
+import { pushCredentialsExpired } from "../admin/live/streamos.provider";
 
 const INGEST_PATH = "/ws/camera-ingest";
 const ADMIN_ROLES = new Set(["admin", "super_admin", "editor"]);
@@ -206,6 +207,21 @@ async function startBroadcast(ws: IngestSocket, msg: any) {
   if (!session.rtmpUrl) {
     logger.warn("Camera ingest: start rejected — no rtmpUrl", { streamId });
     send(ws, { type: "error", message: "Session has no rtmpUrl — (re)start it first." });
+    return;
+  }
+  // StreamOS v1 ingest credentials expire ~24h after they are minted, so a
+  // session provisioned days ago still carries an rtmpUrl that the server will
+  // refuse. Fail here with an actionable message instead of handing ffmpeg a
+  // dead URL and surfacing it as an opaque broadcast failure minutes later.
+  if (pushCredentialsExpired(session.pushExpiresAt)) {
+    logger.warn("Camera ingest: start rejected — push credentials expired", {
+      streamId,
+      pushExpiresAt: session.pushExpiresAt,
+    });
+    send(ws, {
+      type: "error",
+      message: "Encoder credentials for this session have expired. Press Go Live again to mint fresh ones.",
+    });
     return;
   }
 

@@ -22,6 +22,8 @@
     "db:import": "powershell -ExecutionPolicy Bypass -File ./scripts/mysql-import.ps1",
     "db:import:sh": "bash ./scripts/mysql-import.sh",
     "db:verify": "tsx scripts/verify-mysql.ts",
+    "verify:streamos": "tsx scripts/verify-streamos-v1.ts",
+    "probe:streamos": "tsx scripts/probe-streamos-v1.ts",
     "db:migrate": "tsx scripts/apply-ddl.ts",
     "docs:migrated-modules": "tsx scripts/generate-migrated-modules.ts",
     "migration:api:auth": "tsx docs/migration/api-tests/mint-jwt.ts",

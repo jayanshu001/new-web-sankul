@@ -16,7 +16,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { prisma } from "../../config/prisma";
 import { s3Config, DO_BUCKET, isOwnBucketUrl } from "../../middlewares/upload";
 import { resolveVideoSource } from "../../utils/videoResolver";
-import { getStreamDetails } from "../../admin/live/streamos.service";
+import { getDetails as getStreamDetails } from "../../admin/live/streamos.provider";
 import { hasActiveCourseSub, hasActivePackageSub } from "../client-lecture/client-lecture.service";
 import { hasAccessToAnyLiveCourse, resolveLivePreviewStateSql } from "../admin-live-course/admin-live-course.service";
 import { hasActiveSub as hasActiveEbookSub } from "../client-ebook-download/client-ebook-download.service";
@@ -205,7 +205,7 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         let hlsUrl = s.hlsUrl, hlsUrls: any = s.hlsUrls;
         if (s.streamId) {
           try {
-            const d = await getStreamDetails(String(s.streamId));
+            const d = await getStreamDetails(s);
             if (d.hlsUrl) hlsUrl = d.hlsUrl;
             if (d.hlsUrls && Object.keys(d.hlsUrls).length) hlsUrls = d.hlsUrls;
           } catch (e) {

@@ -1,9 +1,8 @@
 import { Request, Response } from "express";
-import {
-  getStreamDetails as streamosGetStreamDetails,
-  enrichMp4Sizes as streamosEnrichMp4Sizes,
-  StreamosError,
-} from "../../admin/live/streamos.service";
+import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../../admin/live/streamos.service";
+// Per-session provider dispatch — a legacy session keeps resolving on the legacy
+// API even once STREAMOS_PROVIDER is flipped to v1.
+import { getDetails as streamosGetDetails, StreamosError } from "../../admin/live/streamos.provider";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { signMediaToken } from "../../utils/mediaToken";
@@ -62,7 +61,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
     let hlsUrl = s.hlsUrl, hlsUrls: any = s.hlsUrls, status = s.status, recordings: any = s.recordings;
     if (s.streamId && (status === "CREATED" || status === "ENDED")) {
       try {
-        const details = await streamosGetStreamDetails(s.streamId);
+        const details = await streamosGetDetails(s);
         isLive = details.isLive;
         const patch: any = {};
         if (details.hlsUrl && details.hlsUrl !== hlsUrl) { hlsUrl = details.hlsUrl; patch.hlsUrl = details.hlsUrl; }

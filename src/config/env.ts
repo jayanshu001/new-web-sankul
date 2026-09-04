@@ -64,6 +64,26 @@ const warnMissingProdFeatures = (
       warnings.push(`${key} not set — ${feature} may fail at runtime.`);
     }
   }
+  // StreamOS: only the SELECTED provider's credentials matter. Warning about
+  // v1 keys on a legacy deployment (or vice versa) would be pure noise, so this
+  // is checked here rather than listed in PROD_FEATURE_VARS.
+  // Read directly off `env` — this module deliberately stays dependency-free.
+  if (profile !== "worker") {
+    const usingV1 = env.STREAMOS_PROVIDER?.trim().toLowerCase() === "v1";
+    if (usingV1) {
+      if (!env.STREAMOS_API_KEY?.trim()) {
+        warnings.push("STREAMOS_API_KEY not set — StreamOS v1 live streaming will fail at runtime.");
+      }
+      if (!env.STREAMOS_WEBHOOK_SIGNING_SECRET?.trim()) {
+        warnings.push(
+          "STREAMOS_WEBHOOK_SIGNING_SECRET not set — StreamOS v1 recording webhooks cannot be verified and will be rejected."
+        );
+      }
+    } else if (!env.STREAMOS_ACCESS_KEY?.trim() || !env.STREAMOS_ACCESS_SECRET?.trim()) {
+      warnings.push("STREAMOS_ACCESS_KEY/SECRET not set — legacy StreamOS live streaming may fail at runtime.");
+    }
+  }
+
   const dbUrl = env.DATABASE_URL?.trim() ?? "";
   if (dbUrl && !/connection_limit=/i.test(dbUrl)) {
     warnings.push(

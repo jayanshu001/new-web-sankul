@@ -15,6 +15,544 @@
 
 ---
 
+## 2026-09-03 — Admin dashboard: stale raw `price` on ws_test_series_subscription
+
+> **Code-only fix, no DDL, no contract change.** Plus: the 2026-09-01 StreamOS v1
+> live-session DDL was applied to local staging (`websankul_staging_1`).
+
+### Symptom
+
+`GET /admin/dashboard` 500'd on every uncached request with MySQL 1054
+`Unknown column 'price' in 'field list'` from `$queryRawUnsafe`.
+
+### Cause
+
+The 2026-08-31 package-shape DDL renamed `ws_test_series_subscription.price` →
+`amount`. The Prisma model and the typed `aggregate()` in
+`admin-dashboard.service.ts` were updated, but the time-series bucket query passes
+the column name to `seriesFor()` as a **raw string**, which Prisma never validates
+against the schema — so the rename only surfaced at runtime, once the DDL landed on
+the DB. `yarn typecheck` cannot catch this class of drift.
+
+### Change
+
+- `seriesFor("ws_test_series_subscription", "price", …)` → `"amount"` (the only
+  stale raw reference to either renamed test-series table in the repo).
+
+### Also on this date (environment, not code)
+
+`GET /admin/live-sessions` 500'd with *"column ws_live_session.stream_provider does
+not exist"* — the reverse direction: the working-tree `schema.prisma` already
+declares the StreamOS v1 columns, but
+`2026-09-01_streamos_v1_live_session.sql` had not been applied locally. Applied via
+`npx prisma db execute --file …`; verified the four columns +
+`ws_streamos_webhook_delivery` now exist and `liveSession.findMany` succeeds.
+**Prod ordering reminder:** that ALTER goes out BEFORE its code (additive, nullable);
+the test-series rename goes out WITH its code.
+
+---
+
+## 2026-09-03 (a) — First REAL StreamOS payload: correlation solved, DRM is a blocker
+
+> **No DDL.** Webhook guard + regression baseline.
+
+### What arrived
+
+StreamOS added a stream reference to the recording payload and sent us a genuine
+`VIDEO_TRANSCODING_COMPLETED`. First real delivery we have seen — everything before this
+was documentation-derived.
+
+```jsonc
+"stream": { "id": "Hzia0D5XEE2", "stream_key": "EXSO_17884189103817" }
+```
+
+### ✅ Correlation is SOLVED
+
+Both keys are present, and `resolveSession` already handles each: `stream.stream_key`
+first, `stream.id` third. **No code change needed.** The four-way resolver was the right
+call — it works on the real shape without modification.
+
+The payload also settles two doc discrepancies in our favour:
+
+| Docs said | Reality | Effect |
+|---|---|---|
+| quality is `"P480"` | `"480p"` | None — `normalizeQualityLabel` accepts both |
+| — | `renditions` is a SIBLING of `video` under `data` | Matches what we parse |
+
+### 🔴 THE FINDING: the recording is DRM, and unplayable
+
+```
+video.drm            = true
+video.url            = null          ← no HLS manifest
+drm_content_id       = c033b5c61d98
+renditions           = 3 × .mpd      ← DASH, not HLS
+download_url         = null
+```
+
+StreamOS's own playback doc: *"Playback needs a licence server, which is not available yet
+— DRM assets currently cannot be played."*
+
+So this recording **cannot be played by anyone** — not our app, not their dashboard.
+
+Had this reached students unguarded, we would have marked the session `READY`, auto-promoted
+a `.mpd` into the course folder, and shown a player that silently fails. A broken recording
+that looks fine is worse than a missing one.
+
+### Guard added — `applyEvent`, `VIDEO_TRANSCODING_COMPLETED`
+
+When `video.drm === true`, or `drm_content_id` is set, or every rendition is `.mpd` with no
+HLS manifest:
+
+- **Store** `recordedAssetId` — nothing is lost; it becomes playable if a licence server
+  ships or the stream is re-encoded
+- **Do NOT** set `READY`, and **do NOT** auto-promote
+- Log at **error** with a hint naming the cause
+
+A missing recording is recoverable and visible; a broken one is neither.
+
+### Why our own streams should be fine
+
+`provisionStream` passes no `drm`, and both `createLiveStream` and `scheduleLiveStream`
+default it to `false`. The test above was StreamOS's own stream, presumably created with
+DRM on. **But this is unverified for our path** — the guard exists precisely because that
+assumption has not been tested end to end.
+
+⚠ **Confirm on the first real test class** that the recording comes back with
+`drm: false` and a non-null `video.url`. If it does not, DRM is defaulting on somewhere
+and must be raised with StreamOS before any class relies on recordings.
+
+### Verification
+
+`yarn typecheck` green. `yarn verify:streamos` now **88 assertions** (was 78). The 10 new
+ones pin this exact payload as a regression baseline: correlation keys, untagged-delivery
+handling, label normalisation, rendition nesting, and all four DRM markers.
+
+---
+
+## 2026-09-02 (c) — StreamOS v1: doc re-audit found 2 parsing BUGS + 3 gaps
+
+> **No DDL, no contract change.** Client-parsing fixes + capability additions.
+
+### Why
+
+Systematic re-read of every page at <https://streamos.in/docs>, field by field,
+against our client. The first pass had missed detail in the shared payload tables.
+**Two of the findings were real bugs that `yarn typecheck` could never catch** — both
+would have produced empty arrays at runtime rather than an error.
+
+### 🔴 Bug 1 — `renditions` read from the wrong nesting level
+
+We parsed `asset.video.renditions`. The docs place `renditions` at the **asset ROOT**;
+`video` holds only `hls_manifest_url` and `drm_content_id`.
+
+**Impact had this shipped:** every v1 recording resolves with an empty quality ladder.
+The master playlist would still play, but the per-quality list — and therefore the app's
+download-size picker — would be empty for every v1 recording.
+
+Fixed to read the root, with the `video` nesting kept as a defensive fallback.
+
+### 🔴 Bug 2 — quality labels are `"P480"`, not `"480p"`
+
+v1 emits `"quality": "P480"`. Every consumer in this codebase expects `<height>p`:
+
+| Consumer | Behaviour on `"P480"` |
+|---|---|
+| `pickRecordingSql` QUALITY_PREFERENCE | No match → falls through to `recordings[0]` |
+| `qualitiesFromSessionRecordings` regex `/(\d{3,4})\s*p/i` | No match → **`qualities: []`** |
+
+**Impact had this shipped:** the app's quality/download picker would be empty on every
+v1 recording, and recording promotion would pick an arbitrary rendition instead of the
+preferred one.
+
+Fixed with `normalizeQualityLabel` at the API boundary (`"P480"` → `"480p"`), so no
+downstream consumer needs a v1 special case.
+
+### 🟡 Gap 3 — `hls_urls` DOES exist on a v1 livestream
+
+Previously recorded (and told both frontend teams) that v1 has no per-quality live map,
+so `hlsUrls` was hardcoded `null`. The livestream object in fact carries `hls_urls`
+(playback URLs by label). Now parsed and passed through, so the app's live quality picker
+keeps a source. **Both frontend docs need correcting** — flagged below.
+
+### 🟡 Gap 4 — webhook list/delete endpoints exist
+
+`GET /webhooks/` and `DELETE /webhooks/{endpoint_id}/` are documented; previously logged
+as "unknown". Added `listWebhooks()` / `deleteWebhook()`.
+
+**`getRecordingHealth` now genuinely verifies registration** instead of reporting
+"not verifiable": it confirms a webhook points at `/client/webhook/recording` AND that it
+subscribes to all four required events. A webhook registered for the wrong events looks
+healthy but never delivers — that is now a `warn` naming the missing events.
+
+### 🟡 Gap 5 — unparsed livestream fields
+
+Added `rtmp_server_url`, `rtmp_server_key`, `push_domain` (encoders like OBS want server
+and key in separate boxes), plus `playback_url`, `latency`, `drm_for_recording`.
+
+### Confirmed, not changed
+
+- **Signature scheme.** The docs state the signed payload is `"{timestamp}.{raw_body}"` —
+  the Stripe-style construction. Our verifier already accepts it. Kept the body-only
+  branch as well: docs have already proven abbreviated once, and neither form is forgeable
+  without the secret.
+- **Retry backoff is ~1m, 5m, 25m, 2h, 10h.** A delivery can therefore arrive up to ~10h
+  late; the 30-day delivery-ledger retention comfortably covers it.
+- **Abandoned streams auto-close after 24h** on StreamOS's side.
+
+### Verification
+
+`yarn typecheck` green. `yarn verify:streamos` now **78 assertions** (was 64) — the 14 new
+ones cover exactly the two bugs above: label normalisation in every form, renditions at
+root, renditions nested (fallback), URL-less renditions dropped, and `size_bytes` string→
+number coercion.
+
+### ⚠ Follow-up needed
+
+`docs/client/STREAMOS_V1_CLIENT_FRONTEND.md` and `docs/admin/STREAMOS_V1_ADMIN_FRONTEND.md`
+both state `hlsUrls` is null on v1. That is now wrong (Gap 3) and must be corrected before
+either team builds against it.
+
+---
+
+## 2026-09-02 (b) — StreamOS v1: log which correlation key matched
+
+> **No DDL, no contract change.** Logging + a persistent verification script.
+
+### Why
+
+`resolveSession` tries four correlation keys in order but logged nothing about which
+one won. Since StreamOS's event tables are abbreviated, **we do not actually know
+whether `data.stream.stream_key` is present on a real delivery** — that is the open
+question in `STREAMOS_V1_QUESTIONS.md`.
+
+Logging the winner turns the first live recording into the experiment that settles it.
+Once known, the losing branches can be deleted rather than carried indefinitely.
+
+### Change
+
+- **`StreamOS v1 webhook correlated`** (info) — `{ via, event, sessionId }` where `via`
+  is one of `stream_key` · `customTags.wsSessionId` · `stream.public_id` ·
+  `recorded_asset_id`.
+- **`StreamOS v1 webhook correlation failed`** (warn) — logs which fields WERE present
+  (`sawStreamKey`, `sawSessionTag`, `sawPublicId`, `sawAssetId`, `dataKeys`) so the gap
+  is diagnosable from one line instead of needing the delivery replayed.
+
+### Also — `scripts/verify-streamos-v1.ts` (`yarn verify:streamos`)
+
+The behavioural checks previously lived in a scratch directory and were rewritten each
+session. They are now a permanent script following the `db:verify` convention: pure
+in-process, no DB or network, ~1s, non-zero exit on failure so it can gate a deploy.
+
+**64 assertions** across signature forgery/replay, DTO contract (legacy `toPublicView`
+byte-identical), provider resolution, push expiry, payload parsing against StreamOS's
+documented samples, environment isolation, and the recording picker.
+
+Note: the script calls `process.exit(0)` explicitly — importing the service layer opens
+Prisma/Redis handles that otherwise keep the event loop alive after results print.
+
+### Deployment status check (2026-09-02)
+
+`POST /api/v1/client/webhook/recording` on production returns byte-identical output to a
+deliberately nonexistent path (`401 "Authentication token is required."`), while a known
+public route answers correctly (`422`). **The webhook route is not deployed.** Several
+client sub-routers mount at `router.use("/", ...)` with a global `authenticate`, so an
+unmatched path under `/api/v1/client/*` reports 401 rather than 404 — misleading, but the
+three-way comparison is conclusive.
+
+Until that deploy lands, StreamOS can register the URL but every delivery will fail.
+
+---
+
+## 2026-09-02 (a) — StreamOS v1: environment isolation on a SHARED organisation
+
+> **No DDL.** Code + one new env var (`STREAMOS_ENV_TAG`).
+
+### Why
+
+StreamOS answered our question about per-environment API keys with: *"you can use same
+key in prod and staging as well."*
+
+That resolves authentication, but not isolation. Per **their own docs** the constraints
+are per-ORGANISATION, not per-key:
+
+> `POST /livestreams/` — per organization — `10 / minute` — *"Stream slots are a finite shared pool."*
+> `POST /videos/` — *"capped for the org across every key and the dashboard together."*
+
+So staging and production now share one StreamOS account. Two consequences:
+
+1. **Both environments' streams live in the same StreamOS org**, and a webhook registered
+   by one environment can receive the OTHER's recordings.
+2. **Staging can consume production's live-stream slots** — a developer's test can make a
+   real class fail with `503 NO_SLOTS_AVAILABLE`.
+
+(1) is a correctness risk and is fixed here. (2) is operational and cannot be fixed in
+code from our side — see below.
+
+### Change — `wsEnv` tag + a foreign-delivery gate
+
+Every v1 stream we create is now stamped `customTags: { wsEnv, wsSessionId }`.
+`streamosEnvTag()` reads `STREAMOS_ENV_TAG`, falling back to `NODE_ENV`.
+
+`isForeignEnvironment(body)` reads `wsEnv` back off any tag bag on the delivery. The
+webhook handler calls it **before correlation** and acks-and-ignores anything stamped
+with a different environment.
+
+Ordering matters: dropping a foreign delivery *before* `resolveSession` is the point. A
+staging recording searched for among production's sessions could, on an id collision,
+attach a test recording to a real class.
+
+**An UNTAGGED delivery is treated as OURS.** Legacy streams, streams created before this
+tag existed, and anything created from the StreamOS dashboard carry no tag — silently
+dropping those would lose real recordings. The gate only rejects an explicit mismatch.
+
+### What this does NOT fix
+
+Shared stream slots. Nothing in our code can stop a staging test occupying a slot a real
+class needs — that is a property of the shared organisation. **Operational rule: do not
+run v1 tests during class hours until StreamOS grants a separate staging org.**
+
+Also unresolved: whether one organisation can register TWO webhook URLs. If not, only one
+environment can receive deliveries at all — the `wsEnv` gate keeps the receiving side
+*correct*, but the other environment gets nothing. Question is with StreamOS.
+
+### Verification
+
+`yarn typecheck` green. **11/11** assertions on the isolation logic: own-environment
+accepted across all four tag bags, foreign environments rejected, and every untagged
+shape (no tags, empty data, no data, tags without `wsEnv`, blank `wsEnv`) treated as ours.
+
+---
+
+## 2026-09-01 (f) — StreamOS v1 webhook correlation moves to `stream_key` (corrects (e))
+
+> **No DDL.** Uses `ws_live_session.stream_key`, already added by the pending
+> `2026-09-01_streamos_v1_live_session.sql`. Code-only.
+
+### What was wrong in (e)
+
+Entry (e) recorded that the v1 recording webhook "carries no stream id", and the
+resolver was built to guess across four candidate keys as a result.
+
+**That was a misreading.** The v1 **Video payload** documents a `stream` object:
+
+> *"Set when the asset is a live stream recording, so you can tie it back to the broadcast."*
+
+It holds **`stream_key`**. The `VIDEO_UPLOADED` sample shows `"stream": null`, consistent
+with an upload having no broadcast. The wrong conclusion came from reading the
+abbreviated `LIVESTREAM_RECORDING_READY` table in isolation without cross-referencing the
+shared Video payload table where `stream` is defined.
+
+### The subtlety that matters
+
+`data.stream` carries the **`stream_key`**, NOT the `public_id` we persist as
+`streamId`. They are different identifiers on the v1 API. Matching the webhook's
+`stream_key` against `streamId` would never hit — which is why `stream_key` is its own
+column rather than being folded into `stream_id`.
+
+### Change
+
+| | |
+|---|---|
+| **New** | `findSessionByStreamKey(streamKey)` in `admin-live.service.ts` |
+| **Reordered** | `resolveSession` in `streamos.v1.webhook.ts` now tries `data.stream.stream_key` **first** |
+| **Retained** | `customTags.wsSessionId`, stream `public_id`, and `recordedAssetId` as fallbacks |
+
+The fallbacks stay deliberately. The documented field is now the primary path, but the
+event tables are abbreviated, so a trimmed or differently-shaped delivery still resolves
+rather than being dropped. `customTags` in particular is independent of their schema.
+
+### Known remaining gap (not a blocker)
+
+`LIVESTREAM_RECORDING_READY` appears to expose only `recording.asset_id` — its own docs
+call that *"the only place it is announced"* — with no `stream` object. So the **first**
+event of the pair may be uncorrelatable.
+
+That is tolerable by design: it only stores a pointer. `VIDEO_TRANSCODING_COMPLETED` —
+the event that actually publishes the recording and triggers auto-promotion — does carry
+`data.stream`, so a recording still reaches students even if the earlier notification is
+dropped.
+
+### Also corrected
+
+- `docs/migration/STREAMOS_V1_QUESTIONS.md` — Q1 banner: the original question is wrong
+  as written and must not be sent. Q3 (API keys) confirmed and strengthened; verbatim
+  from `/docs/errors`: `409 API_KEY_EXISTS` — *"One key is live per organization."* Limits
+  are org-wide (`POST /videos/` is *"capped for the org across every key and the dashboard
+  together"*), so a second key would not give staging its own quota — a separate staging
+  org is the actual ask.
+- `docs/migration/STREAMOS_V1_CHANGE_MATRIX.md` — correlation rows corrected.
+
+### Verification
+
+`yarn typecheck` green. No response contract touched — correlation is resolver-internal
+and surfaces in no DTO. Re-ran the behavioural suite after this change: **43/43** across
+signature verification, DTO contract (legacy `toPublicView` still byte-identical),
+provider resolution + push expiry, payload parsing against StreamOS's documented samples,
+and the recording picker.
+
+Not covered by automated checks: `resolveSession` itself hits the database, so the
+`stream_key` lookup order is verified by inspection only. It will be exercised for real by
+the first live delivery.
+
+---
+
+## 2026-09-01 (e) — StreamOS v1: provider columns on ws_live_session + webhook replay guard
+
+> **DDL PENDING on staging + prod:** `schema-changes/2026-09-01_streamos_v1_live_session.sql`.
+> **Apply the DDL BEFORE (or with) the code.** `schema.prisma` now declares the four new
+> `LiveSession` scalars, and Prisma selects every declared scalar — code ahead of DB means
+> MySQL 1054 on *every* live-session read. This is exactly the 2026-08-26 live-course
+> payment-drop incident in reverse; do not repeat it.
+
+### Why
+
+StreamOS shipped a **new API on a new host** (`api.streamos.in/api/public/v1`) that shares
+nothing with the platform our integration was built against (`streamapi.streamos.co/streamos`)
+— different auth, paths, payload shapes and webhook contract. It is not a version bump.
+Full old→new comparison: `docs/migration/STREAMOS_V1_CHANGE_MATRIX.md`.
+Open blockers with StreamOS: `docs/migration/STREAMOS_V1_QUESTIONS.md`.
+
+Both clients now ship side by side, selected by `STREAMOS_PROVIDER` (default `legacy`),
+because existing rows hold legacy stream ids and legacy CDN URLs that must keep resolving.
+
+### Schema — additive only, nothing dropped or renamed
+
+`ws_live_session`:
+
+| Column | Why |
+|---|---|
+| `stream_provider` VARCHAR(16) | Which API `stream_id` belongs to. Without it the id is ambiguous and resolving it against the wrong API 404s. **NULL reads as `legacy`, so no backfill is needed.** |
+| `stream_key` VARCHAR(255) | v1 returns the channel key separately; legacy baked the push token into `stream_id`. |
+| `push_expires_at` DATETIME | v1 ingest credentials expire ~24h after minting. Legacy URLs were effectively permanent, so there was nothing to store. |
+| `recorded_asset_id` VARCHAR(64) | v1 recordings become library assets, not a list of URLs in the webhook body. Pointer for `GET /assets/{id}/` and the missed-webhook recovery path. |
+
+`+ idx_live_session_recorded_asset` on `recorded_asset_id` (recovery lookups go asset → session).
+
+**New table `ws_streamos_webhook_delivery`** (`delivery_id` UNIQUE, `event`, `received_at`).
+v1 retries a failed delivery up to 6× with the same `X-Streamos-Delivery` id, and recording
+handling auto-promotes into a course folder (creates `ws_video` rows) — without this guard a
+replay duplicates content. The legacy webhook never retried, so no such guard existed.
+Nothing prunes the table yet; it grows one row per delivery.
+
+### Query-level impact
+
+Reads/writes that changed shape (all behaviour-preserving on legacy rows):
+
+| Site | Change |
+|---|---|
+| `updateSession` | accepts `streamProvider`, `streamKey`, `pushExpiresAt`, `recordedAssetId` |
+| `updateByStreamId` | accepts `recordedAssetId` |
+| `findSessionByStreamId` | now selects `pushExpiresAt` (camera-ingest expiry guard) |
+| `findSessionByRecordedAssetId` | **new** — v1 webhook correlation |
+| `claimWebhookDelivery` | **new** — INSERT on the unique `delivery_id`; P2002 means replay |
+| `listLiveCourseRecordings` session select | now selects `streamProvider` + `recordedAssetId` |
+| `resolveVodMeta` | takes a session row, not a bare streamId; Redis key namespaced `vodmeta:v1:<assetId>` vs `vodmeta:<streamId>` (the two platforms have independent id spaces) |
+
+**API response contract:** `toPublicView` gains four additive keys
+(`streamProvider`, `streamKey`, `pushExpiresAt`, `recordedAssetId`). No key removed,
+no key retyped. Verified by running the real builder and diffing key sets — legacy
+output is byte-identical (22/22 assertions).
+
+`recordings` (the PRIMARY array) now falls back to the HLS ladder **only when
+`mp4Recordings` is empty**. Legacy rows always carry MP4, so they are unaffected;
+this exists because StreamOS v1 produces no MP4 ladder at all (one `download_url`
+at one quality) and the array would otherwise publish as `[]`.
+
+### Code
+
+**New**
+- `src/config/streamos.ts` — `STREAMOS_PROVIDER` flag + v1 base/key/secret.
+- `src/admin/live/streamos.v1.service.ts` — v1 client (livestreams, assets,
+  webhooks, video upload). Re-exports `StreamosError` from the legacy service so
+  every controller's `err instanceof StreamosError` branch keeps mapping upstream
+  failures to the right status instead of degrading to 500.
+- `src/admin/live/streamos.provider.ts` — **the facade every consumer imports.**
+  Dispatch is PER SESSION (`row.streamProvider`), not per deploy, so flipping
+  `STREAMOS_PROVIDER` never strands existing rows.
+- `src/admin/live/streamos.v1.webhook.ts` — two-phase recording events,
+  correlation resolver, event application.
+- `src/utils/streamosSignature.ts` — HMAC verification + 300s replay window.
+
+- `src/admin/live/streamos.delivery.scheduler.ts` — prunes the delivery ledger
+  (30d retention, 24h sweep). **Batched** select-ids-then-delete, capped at 10k
+  rows/tick — an unbounded `deleteMany` on a growing table is the shape that took
+  production down on the `is_login` sweep.
+- `docs/admin/STREAMOS_V1_ADMIN_FRONTEND.md` + `docs/client/STREAMOS_V1_CLIENT_FRONTEND.md`
+  — per-surface frontend integration docs. They cover different payloads: the client
+  live-session endpoint returns a slim DTO and does **not** use `toPublicView`, so the
+  four new fields (including `streamKey`) never reach the student app.
+
+**Rewired to the facade** — `provisionLiveSession`, `startScheduledLiveSession`,
+`endLiveSession`, `getLiveSessionStatus`, `getRecordingHealth`,
+`updateRecordingWebhook`, `getUploadedVideoDetails` (admin);
+`getLiveSessionForClient` (client); `client-media.service` playback resolve;
+`resolveVodMeta`; `camera-ingest` push guard;
+`scripts/backfill-live-recordings-from-streamos.ts` (now recovers a MIXED table in one
+pass, stamps `recordedAssetId` even when a recording is still transcoding, and paces
+v1 at 600ms/session to stay under the 120 req/min key cap).
+
+### Behavioural changes (v1 only — legacy paths untouched)
+
+1. **Provisioning no longer mints RTMP.** v1 ingest credentials expire ~24h after
+   minting, so `/provision` now only RESERVES the stream (`rtmp_url` null) and
+   `/start` mints them at go-live. **Ops impact: admins can no longer configure OBS
+   days in advance on v1.** `/provision` reports when an existing stream's window
+   has lapsed; camera-ingest refuses a stale URL with an actionable message rather
+   than handing ffmpeg a dead endpoint.
+2. **`isLive` is derived, not reported.** v1 has no LIVE status — a stream in
+   progress still reads `READY_TO_STREAM`. Approximated as
+   `session.status === "CREATED" && providerStatus !== "ENDED"`. Deliberately
+   optimistic; can show live for an encoder that never connected (Q5).
+3. **Recordings complete in two events.** `LIVESTREAM_RECORDING_READY` stores the
+   asset pointer only; `VIDEO_TRANSCODING_COMPLETED` sets `READY`, writes
+   recordings and auto-promotes. Marking READY on the first would publish an
+   unplayable recording.
+4. **Webhook auth is now HMAC**, with no "accept unauthenticated and warn"
+   fallback — v1 signs every delivery, so an unverifiable one is a
+   misconfiguration or a forgery. Same public URL as legacy; the two are told
+   apart by v1's headers, so no route change is needed on either side.
+5. **DRM is forced off** (`drm: false`) — StreamOS has no licence server yet, so
+   DRM assets produce DASH with a null HLS manifest and cannot be played.
+6. **`pickRecordingSql` now prefers the adaptive master.** A v1 recording list is
+   `[{quality:"auto", …master.m3u8}, {quality:"480p"…}, …]`, and the existing
+   highest-wins order would have promoted the **480p rendition** into the course
+   folder — pinning every viewer to 480p forever. "auto" now wins. Legacy emits no
+   "auto" entry, so this is a no-op there (verified: legacy picks are unchanged).
+
+### Verification
+
+`yarn typecheck` green. Behaviour verified by running the real code, not just
+compiling it — **57/57 assertions**:
+
+| Suite | Covers |
+|---|---|
+| 22 | DTO contract — legacy `toPublicView` byte-identical, provider resolution, push expiry |
+| 12 | HMAC signature — tampering, wrong secret, replay window, 299s boundary, re-serialised body |
+| 13 | Payload parsing against StreamOS's **verbatim documented** event samples |
+| 10 | Recording picker — legacy order unchanged, v1 master beats every rendition |
+
+`req.rawBody` availability confirmed: `RAW_BODY_PATHS` in `app.ts` already covers
+`/api/v1/client/webhook`, and the bulk JSON parser is scoped to a different path.
+
+### Still open
+
+- **Q1 (correlation) is unresolved.** The documented v1 recording payloads carry no
+  stream id. `resolveSession` therefore tries four keys in turn — `customTags.wsSessionId`
+  (we stamp it on every v1 stream), stream `public_id` wherever an event carries it,
+  and `recorded_asset_id` stamped by the earlier event of the pair. If none match, the
+  delivery is acked (retrying will not help) and logged at **error**. Once StreamOS
+  confirms which key is real, delete the others.
+- **Signature payload construction unconfirmed.** Docs say "HMAC of the raw body" but
+  the `t=…,v1=…` format is Stripe-shaped, which signs `<t>.<body>`. Both are accepted
+  and the matched scheme is logged; pin it after the first real delivery.
+- **Deploy-order risk (highest):** apply the DDL BEFORE or WITH the code — see the
+  banner at the top of this entry.
+- No end-to-end run against the live v1 API has happened. Everything here is built
+  from documentation; a real stream + recording still has to be pushed through it.
+
+
+---
+
 ## 2026-09-01 (d) — Material category rename left the slug pinned to the OLD name
 
 > **No DDL.** `admin-material.service.ts` only. Existing rows keep their current

@@ -2089,6 +2089,17 @@ model LiveSession {
   endAt                   DateTime? @map("end_at")
   status                  String    @default("SCHEDULED")
   streamId                String?   @map("stream_id")
+  // Which StreamOS API `streamId` belongs to: "legacy" | "v1".
+  // NULL is read as "legacy" — existing rows predate the v1 platform.
+  streamProvider          String?   @map("stream_provider")
+  // v1 only: the channel key, returned separately from rtmpUrl.
+  streamKey               String?   @map("stream_key")
+  // v1 only: ingest credentials expire ~24h after minting. Past this, rtmpUrl
+  // is dead and the stream must be re-started to mint fresh credentials.
+  pushExpiresAt           DateTime? @map("push_expires_at")
+  // v1 only: library asset holding this session's recording. Fetched via
+  // GET /assets/{id}/ — also the recovery path when a webhook is missed.
+  recordedAssetId         String?   @map("recorded_asset_id")
   notifiedStreamId        String?   @map("notified_stream_id")
   rtmpUrl                 String?   @map("rtmp_url")
   hlsUrl                  String?   @map("hls_url")
@@ -2100,6 +2111,18 @@ model LiveSession {
   updatedAt               DateTime? @map("updated_at")
 
   @@map("ws_live_session")
+}
+
+/// Replay guard for StreamOS v1 webhooks. v1 retries a failed delivery up to 6
+/// times with the SAME X-Streamos-Delivery id; recording handling creates Video
+/// rows, so a replay would duplicate content.
+model StreamosWebhookDelivery {
+  id         BigInt   @id @default(autoincrement())
+  deliveryId String   @unique(map: "uq_streamos_delivery") @map("delivery_id")
+  event      String?
+  receivedAt DateTime @map("received_at")
+
+  @@map("ws_streamos_webhook_delivery")
 }
 
 model LiveSessionCourse {

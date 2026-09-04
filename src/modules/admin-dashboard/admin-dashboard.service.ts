@@ -36,7 +36,8 @@ const bookRevenue = async (w: Win) => {
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
 // Test-series subscription rows are created ONLY on verify (pending state lives on
-// ws_test_series_order), so every row is a paid purchase — no status filter, sum price.
+// ws_test_series_order), so every row is a paid purchase — no status filter, sum
+// `amount` (was `price` until the 2026-08-31 package-shape rename).
 const testSeriesRevenue = async (w: Win) => {
   const agg = await prisma.testSeriesSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end } }, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
@@ -148,7 +149,9 @@ export const fetchDashboardData = async (opts: {
     seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NOT NULL"),
     seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
-    seriesFor("ws_test_series_subscription", "price", tot, unit),
+    // Raw column name: `price` → `amount` (2026-08-31). Prisma does not validate
+    // strings passed to $queryRawUnsafe, so a rename here only fails at runtime.
+    seriesFor("ws_test_series_subscription", "amount", tot, unit),
     // Order table + its "complete" vocabulary (was ws_live_course_subscription /
     // payment_status='verified' before the 2026-08-25 split).
     // RAW SQL — the column name is a string, so `yarn typecheck` cannot catch a rename.

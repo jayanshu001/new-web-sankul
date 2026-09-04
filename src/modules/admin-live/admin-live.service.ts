@@ -69,6 +69,14 @@ export interface PublicSessionView {
   status: string;
   scheduledAt: Date | null;
   streamId: string | null;
+  /** Which StreamOS API `streamId` belongs to. Legacy rows report "legacy". */
+  streamProvider: string;
+  /** v1 only: channel key, returned separately from rtmpUrl. Null on legacy. */
+  streamKey: string | null;
+  /** v1 only: instant `rtmpUrl` stops accepting a push. Null on legacy. */
+  pushExpiresAt: Date | null;
+  /** v1 only: library asset holding this session's recording. */
+  recordedAssetId: string | null;
   rtmpUrl: string | null;
   hlsUrl: string | null;
   hlsUrls: any;
@@ -98,6 +106,19 @@ const pickBestMp4 = (recs: any[]): string | null => {
 export const hlsRecordingsOf = (row: SqlLiveSession): any[] => jArr(row.recordings);
 
 /**
+ * The array published as `recordings` in the public view.
+ *
+ * MP4 stays primary wherever it exists, so every legacy row is unchanged. Only
+ * when there is no MP4 at all — which is every StreamOS v1 session — does this
+ * fall through to the HLS ladder, so a v1 recording still surfaces instead of
+ * publishing an empty array.
+ */
+export const primaryRecordingsOf = (row: SqlLiveSession): any[] => {
+  const mp4 = jArr(row.mp4Recordings);
+  return mp4.length > 0 ? mp4 : jArr(row.recordings);
+};
+
+/**
  * Build the Mongo-shaped publicView from a SQL row + its linked course ids.
  * `liveCourses` mirrors Mongo's populated-doc array (id/name/image/thumbnail);
  * pass undefined to omit it (list/non-populated callers).
@@ -125,11 +146,21 @@ export const toPublicView = (
     status: row.status,
     scheduledAt: row.scheduledAt ?? null,
     streamId: row.streamId ?? null,
+    streamProvider: row.streamProvider ?? "legacy",
+    streamKey: row.streamKey ?? null,
+    pushExpiresAt: row.pushExpiresAt ?? null,
+    recordedAssetId: row.recordedAssetId ?? null,
     rtmpUrl: row.rtmpUrl ?? null,
     hlsUrl: row.hlsUrl ?? null,
     hlsUrls: row.hlsUrls ?? null,
     // PRIMARY array = MP4; the DRM-HLS ladder moves to `hlsRecordings`.
-    recordings: jArr(row.mp4Recordings),
+    //
+    // StreamOS v1 produces NO MP4 ladder (one download_url at one quality), so
+    // mp4Recordings is empty for v1 sessions. Falling back to the HLS ladder
+    // keeps the contract clients actually depend on — "recordings is non-empty
+    // once a recording exists" — instead of silently returning []. Legacy rows
+    // always have MP4, so their output is byte-identical to before.
+    recordings: primaryRecordingsOf(row),
     hlsRecordings: jArr(row.recordings),
     mp4Recordings: jArr(row.mp4Recordings),
     mp4Url: pickBestMp4(jArr(row.mp4Recordings)),
@@ -299,10 +330,17 @@ export const findById = (id: number): Promise<SqlLiveSession | null> =>
  */
 export const findSessionByStreamId = (
   streamId: string
-): Promise<{ streamId: string | null; rtmpUrl: string | null; status: string } | null> =>
+): Promise<{
+  streamId: string | null;
+  rtmpUrl: string | null;
+  status: string;
+  // Needed by the camera-ingest guard: v1 ingest credentials expire ~24h after
+  // minting, so a stale rtmpUrl must be rejected before ffmpeg is handed it.
+  pushExpiresAt: Date | null;
+} | null> =>
   prisma.liveSession.findFirst({
     where: { streamId },
-    select: { streamId: true, rtmpUrl: true, status: true },
+    select: { streamId: true, rtmpUrl: true, status: true, pushExpiresAt: true },
   });
 
 // ── session writes ───────────────────────────────────────────────────────────
@@ -359,6 +397,12 @@ export const updateSession = async (
     hlsUrls?: any;
     recordings?: any;
     mp4Recordings?: any;
+    // StreamOS v1 provisioning columns. `streamProvider` pins which API this
+    // row's streamId belongs to; the rest are v1-only and stay null on legacy.
+    streamProvider?: string | null;
+    streamKey?: string | null;
+    pushExpiresAt?: Date | null;
+    recordedAssetId?: string | null;
   }
 ): Promise<SqlLiveSession> =>
   prisma.liveSession.update({
@@ -369,7 +413,12 @@ export const updateSession = async (
 /** Update a session selected by streamId; null when none matched. */
 export const updateByStreamId = async (
   streamId: string,
-  data: { status?: string; recordings?: any; mp4Recordings?: any }
+  data: {
+    status?: string;
+    recordings?: any;
+    mp4Recordings?: any;
+    recordedAssetId?: string | null;
+  }
 ): Promise<SqlLiveSession | null> => {
   const found = await prisma.liveSession.findFirst({ where: { streamId }, select: { id: true } });
   if (!found) return null;
@@ -377,6 +426,54 @@ export const updateByStreamId = async (
     where: { id: found.id },
     data: { ...data, updatedAt: new Date() },
   });
+};
+
+// ── StreamOS v1 webhook support ──────────────────────────────────────────────
+
+/**
+ * Find a session by its v1 channel key.
+ *
+ * This is the DOCUMENTED correlation path: the v1 Video payload carries a
+ * `stream` object described as "Set when the asset is a live stream recording,
+ * so you can tie it back to the broadcast", and its field is `stream_key` —
+ * NOT the `public_id` we store as `streamId`. Hence the separate lookup.
+ */
+export const findSessionByStreamKey = (
+  streamKey: string
+): Promise<SqlLiveSession | null> =>
+  prisma.liveSession.findFirst({ where: { streamKey } });
+
+/** Find a session by the library asset holding its recording (v1 correlation). */
+export const findSessionByRecordedAssetId = (
+  assetId: string
+): Promise<SqlLiveSession | null> =>
+  prisma.liveSession.findFirst({ where: { recordedAssetId: assetId } });
+
+/**
+ * Claim a webhook delivery exactly once.
+ *
+ * StreamOS v1 retries a failed delivery up to 6 times with the SAME
+ * X-Streamos-Delivery id, and recording handling creates Video rows — so a
+ * replay would duplicate course content. Returns true only for the FIRST caller;
+ * every retry gets false and should ack 200 without re-processing.
+ *
+ * The unique index on delivery_id is what makes this atomic: two concurrent
+ * deliveries race on the INSERT and exactly one wins.
+ */
+export const claimWebhookDelivery = async (
+  deliveryId: string,
+  event: string | null
+): Promise<boolean> => {
+  try {
+    await prisma.streamosWebhookDelivery.create({
+      data: { deliveryId, event, receivedAt: new Date() },
+    });
+    return true;
+  } catch (err: any) {
+    // P2002 = unique constraint violation → already processed.
+    if (err?.code === "P2002") return false;
+    throw err;
+  }
 };
 
 // ── "session went live" buyer push (POST /:id/start side effect) ─────────────
@@ -730,6 +827,14 @@ const stripTrailingQuote = (s: string): string => s.replace(/(?:"|%22|%2522)+$/i
 /** Best recording from the JSON array (preference order → first available). */
 export const pickRecordingSql = (recordings: any[]): any | null => {
   if (!recordings || recordings.length === 0) return null;
+
+  // "auto" is the ADAPTIVE MASTER playlist, which StreamOS v1 emits alongside the
+  // per-quality renditions. It must win over any fixed rendition: promoting the
+  // 480p entry would pin every viewer to 480p forever, when the master lets the
+  // player pick. Legacy never produces an "auto" entry, so this is a no-op there.
+  const master = recordings.find((r) => String(r?.quality ?? "").toLowerCase() === "auto");
+  if (master?.path) return master;
+
   for (const q of QUALITY_PREFERENCE) {
     const hit = recordings.find((r) => String(r?.quality ?? "").toLowerCase() === q);
     if (hit) return hit;
