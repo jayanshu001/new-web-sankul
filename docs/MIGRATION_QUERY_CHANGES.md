@@ -15,6 +15,209 @@
 
 ---
 
+## 2026-09-11 (iv) — permission catalog: `promoters.dashboard.view` split out of `promoters.view`
+
+> **NO DDL.** Seeder inserts 1 `ws_permissions` row (`web`, category 17) on next
+> boot. Catalog `CATALOG_VERSION = "2026.09.11-2"`. Admin FE: 1 line.
+
+### Problem
+
+`GET /admin/promoters/dashboard` and `/promoters/:id/dashboard` (aggregated
+revenue) were gated by `promoters.view` (`rbacRouteMap.ts`, collapsed from the
+old `promoters.view-dashboard` on 2026-07-20). Any role that could list promoters
+saw revenue; no way to grant one without the other.
+
+### Change
+
+- `permissions.catalog.ts`: `mod("promoters.dashboard", "Promoter Dashboard",
+  "Promoters / Promocodes", { standard: ["view"] })` → key `promoters.dashboard.view`
+  (same view-only pattern as `subscriptions.reports`).
+- `rbacRouteMap.ts`: both dashboard routes → `promoters.dashboard.view`. List,
+  detail, `/promoters/:id/promocodes`, `/promoters/:id/subscriptions` stay on
+  `promoters.view`.
+- Admin FE `src/features/auth/rbac/modulePermissions.ts`: added
+  `'/admin/promoters/dashboard': 'promoters.dashboard.view'` (longest-prefix
+  match; sidebar item + route guard follow it).
+
+### Grants
+
+Nothing grants roles automatically — the seeder only upserts permission rows,
+never `ws_role_has_permissions`. `super_admin` bypasses. Every other role that
+holds `promoters.view` LOSES the dashboard until `promoters.dashboard.view` is
+ticked on it. Do that in Roles before flipping `RBAC_ENFORCE` (shadow mode only
+logs the would-block until then).
+
+---
+
+## 2026-09-11 (iii) — permission catalog: `customers` module gains 5 subscription-ADD keys
+
+> **NO DDL.** Seeder inserts 5 `ws_permissions` rows (`web`, category 13) on next
+> boot. Catalog `CATALOG_VERSION = "2026.09.11-3"` (was -1; -3 dropped the generic key, see below). Admin FE unchanged — its
+> existing `src/features/subscriptions/permissions.ts` keys are now backed.
+
+### Decision
+
+Customers permission set mirrors the legacy Laravel gates: `customer.read/create/
+edit/delete/status` + `customer.addsubscription` + one **add** key per
+subscription type. Legacy names are NOT reused — `customers.view` is already
+seeded in prod (row 340), the FE and route map gate on it, and the catalog
+forbids renames. Mapping:
+
+| Legacy (Laravel) | Catalog key |
+|---|---|
+| customer.read / create / edit / delete / status | `customers.view` / `.create` / `.edit` / `.delete` / `.toggle-status` (unchanged) |
+| customer.addsubscription | — dropped same day: FE `ANY_SUBSCRIPTION_CREATE_PERMISSION` is the 5 per-type keys, a generic key unlocked nothing |
+| customer.coursesubscription | `customers.course-subscriptions.create` (NEW) |
+| customer.packagesubscription | `customers.package-subscriptions.create` (NEW) |
+| customer.livecoursesubscription | `customers.live-course-subscriptions.create` (NEW) |
+| customer.testseriessubscription | `customers.test-series-subscriptions.create` (NEW) |
+| customer.ebooksubscription | `customers.ebook-subscriptions.create` (NEW) |
+
+Every READ under a customer (profile, addresses, each subscription tab, book
+orders) stays on `customers.view`.
+
+### Code
+
+- `admin/permission/permissions.catalog.ts`: `mod("customers", …, { extras: [5] })`
+  — first `web` module with extras since the 2026-07-20 cap; header note updated.
+- `middlewares/rbacRouteMap.ts`:
+  - `GET /customers/:id/{package,live-course,test-series}-subscriptions` and
+    `/book-orders` → `customers.view` (were UNMAPPED before).
+  - `POST /subscriptions` (course/package, kind in body) → `subscriptions.create`
+    OR `customers.course-subscriptions.create` OR `customers.package-subscriptions.create` (explicit rule ahead of
+    `crud("/subscriptions")`).
+  - `POST /ebooks/subscriptions` → `ebooks.create` OR `customers.ebook-subscriptions.create`.
+  - No admin create endpoint exists for live-course / test-series subscriptions;
+    those two keys gate the FE "Add Subscription" flow only until one does.
+
+### Local data (`websankul_staging_1` only)
+
+27 dead `customers.*` rows deleted (`addresses.*`, `course-subscriptions.{delete,
+edit,extend,list,revoke,toggle-status,view}`, `ebook-subscriptions.{same}`, `list`,
+`view-details`, plus 3 `*.view` rows briefly created by a mis-read of this
+request); 2 role links on role 41 to `ebook-subscriptions.create/list` removed
+first (the `.create` one is re-seeded as id 2458 — re-tick it on the role if
+wanted). `customers.subscriptions.create` (2450) created then deleted the same day (1 role
+link on role 42 dropped with it). `web` 553 → 531. Prod has none of the dead
+rows; only the 5 inserts apply there.
+
+---
+
+## 2026-09-11 (ii) — admin RBAC routers: legacy `requireRole("super_admin")` floor removed
+
+> **NO DDL. No query change.** Middleware-only. Response shapes unchanged.
+
+### Problem
+
+An admin holding `administrators.view` (via `ws_model_has_roles` →
+`ws_role_has_permissions`) still got `403 Access denied. Insufficient permissions.`
+on `GET /admin/administrators` and `/administrators/pre-requisites`. Five RBAC
+sub-routers kept a pre-catalog `router.use(authenticate, requireRole("super_admin"))`
+floor that ran before `enforceRbac`, so the permission was never consulted. The
+admin panel sidebar gates on the permission, the API gated on the JWT role — the
+two disagreed and the role gate won. `admin.routes.ts:78` already claimed these
+per-router gates were removed.
+
+### Fix
+
+Removed the floor line (and the now-unused `authenticate`/`requireRole` imports) in:
+
+- `src/admin/administrator/administrator.routes.ts`
+- `src/admin/role/role.routes.ts`
+- `src/admin/permission/permission.routes.ts` (also dropped the redundant
+  per-route `authenticate` on `GET /catalog`)
+- `src/admin/permissionCategory/permissionCategory.routes.ts`
+- `src/admin/guards/guards.routes.ts`
+
+`admin.routes.ts` already applies, once, for every admin route: `authenticate` →
+admin-surface `requireRole("admin","super_admin","editor")` → `enforceRbac`.
+`rbacRouteMap.ts:59-70` already maps these paths to `administrators.*`, `roles.*`,
+`permissions.*`, `permission-categories.*`, `guards.view`. Super admins bypass.
+
+Untouched by design: `cache.routes.ts` (`admin|super_admin`, no catalog key) and
+`admin.auth.routes.ts` bootstrap-register (`super_admin`).
+
+### Follow-up (same day): RBAC-management routers hard-enforce, env-independent
+
+Decision: "don't be dependent on ENV" for the role/permission surface. The five
+routers above now mount `enforceRbacStrict` (new, `middlewares/rbacEnforce.ts`):
+same route-map lookup as `enforceRbac`, but delegates to the new
+`requirePermissionStrict` (`middlewares/requirePermission.ts`), which 403s
+`Forbidden` whenever the key is absent — `RBAC_ENFORCE` is not consulted. Super
+admins still bypass; unmapped routes still allowed+logged.
+
+- `rbacEnforce.relativePath` now uses `req.baseUrl + req.path` so the same
+  resolver works on the admin router (`baseUrl=/api/v1/admin`) and inside a
+  sub-router (`baseUrl=/api/v1/admin/roles`, `path=/:id`). Master-level
+  behaviour unchanged (verified: every strict path resolves to its key).
+- `rbacRouteMap`: `GET /permissions/catalog` now accepts `permissions.view` OR
+  `roles.view` — the catalog feeds the Roles page tree, so a role manager must
+  be able to read it.
+- Rest of the admin panel stays on the `RBAC_ENFORCE` shadow flag. Flipping it
+  globally today would lock every non-super-admin out of prod: the catalog
+  rows were only seeded there 2026-09-11 and no role holds catalog grants yet.
+
+Net effect: an admin needs `administrators.view` / `roles.view` /
+`permissions.view` / `permission-categories.view` / `guards.view` (or the
+create/edit/delete/toggle-status variant) for those screens, in every
+environment, no env var. `yarn typecheck` green.
+
+---
+
+## 2026-09-11 — ws_permissions: local `api`-guard rows re-guarded to `web` (data fix, local sandbox only)
+
+> **NO DDL. No code change.** One-off DML on `websankul_staging_1` (local 3307).
+> Production/reference `ws_permissions` never had `api`-guard rows, so nothing to
+> apply there.
+
+### Background
+
+The first catalog seeder (`c5cb86d`, 2026-05-20) seeded every catalog key under a
+single non-assignable guard `api` (`DEFAULT_GUARD = "api"`). No role has ever had
+that guard, so the rows were unreachable. The seeder was fixed on 2026-07-07
+(`270c982`, per-guard `SEED_GUARDS`), and the catalog was trimmed to 5 standard
+actions per module on 2026-07-20 — but the 533 old `api` rows were left behind.
+
+### Change (decision: keep, do not delete)
+
+```sql
+UPDATE ws_permissions a
+LEFT JOIN ws_permissions w ON w.name = a.name AND w.guard_name = 'web'
+SET a.guard_name = 'web'
+WHERE a.guard_name = 'api' AND w.id IS NULL;
+```
+
+- 252 rows converted `api` → `web` (keys no longer in the catalog: `*.list`,
+  `*.view-details`, `customers.addresses.*`, `customers.course-subscriptions.*`,
+  `customers.ebook-subscriptions.*`, `*.extend`, `*.revoke`, `video-categories.*`,
+  `customer-masters.*`, …). They keep their `category_id`, so they render under
+  their category in the role modal; the boot seeder reports them as deprecated.
+  No route in `rbacRouteMap.ts` gates on them.
+- 281 rows could not be converted: same `name` already existed under `web`, and
+  `permissions_name_guard_name_unique (name, guard_name)` forbids the duplicate.
+  With consent (same day), those 281 `api` duplicates were deleted — the `web`
+  twin is the row roles link to; the `api` copy had 0 links:
+
+  ```sql
+  DELETE a FROM ws_permissions a
+  JOIN ws_permissions w ON w.name = a.name AND w.guard_name = 'web'
+  WHERE a.guard_name = 'api';
+  ```
+- `ws_role_has_permissions` had 0 links to any `api` row throughout.
+
+Counts: before `api:533 web:301` → after `api:0 web:553 promoter:7 educator:1`.
+Guard `api` no longer exists in the table.
+
+Later same day: the converted rows surfaced as duplicate-looking entries in the
+role modal (`administrators.list` next to `administrators.view`). Of the 252
+ex-catalog keys, the 3 under `administrators` were deleted on request
+(`administrators.list`, `administrators.assign-role`,
+`administrators.reset-password`; 0 role links) so that module shows only its 5
+catalog keys. The other 249 dead keys (87 `*.list`, `customers.addresses.*`,
+`customers.course-subscriptions.*`, …) remain by decision. `web` now 550.
+
+---
+
 ## 2026-09-10 (iv) — client promocode list: 0% link falls back to the row column (matches checkout)
 
 > **NO DDL.** Query-logic only; response shape unchanged. Check script:

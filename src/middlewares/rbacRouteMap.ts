@@ -66,7 +66,9 @@ R("PUT", "/roles/:id/permissions", "roles.edit"); // was roles.assign-permission
 crud("/roles", "roles");
 
 // ── /permissions → permissions (read-only catalog) ─────────────────────────
-R("GET", "/permissions/catalog", ...view("permissions"));
+// The catalog also feeds the Roles page permission tree, so a role manager
+// (roles.view) may read it without permissions.view. OR semantics.
+R("GET", "/permissions/catalog", ...view("permissions"), ...view("roles"));
 R("GET", "/permissions/:id/roles", ...view("permissions"));
 crud("/permissions", "permissions"); // create/edit/delete are 410'd upstream
 
@@ -164,7 +166,8 @@ R("POST", "/ebooks/:id/pdf", "ebooks.edit");
 R("PATCH", "/ebooks/:id/trending", "ebooks.edit");
 R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
 // ebooks.subscriptions is a view-only report; its write routes gate on parent `ebooks`.
-R("POST", "/ebooks/subscriptions", "ebooks.create");
+// "Add ebook subscription" from the Customers side also unlocks this (2026-09-11).
+R("POST", "/ebooks/subscriptions", "ebooks.create", "customers.ebook-subscriptions.create");
 R("GET", "/ebooks/subscriptions/:id", ...view("ebooks.subscriptions"));
 R("PUT", "/ebooks/subscriptions/:id", "ebooks.edit");
 R("DELETE", "/ebooks/subscriptions/:id", "ebooks.delete");
@@ -182,11 +185,17 @@ crud("/ebooks", "ebooks");
 R("GET", "/customers/pre-requisites", ...view("customers"));
 R("GET", "/customers/states/:id/districts", ...view("customers"));
 R("GET", "/customers/:id/details", ...view("customers")); // was customers.view-details
-// customers sub-resources (addresses, course/ebook subscriptions) collapsed
-// 2026-07-20 into the parent `customers` key.
+// Every read under a customer (addresses, each subscription tab, book orders)
+// is `customers.view`. Adding a subscription is gated by the per-type
+// `customers.<type>-subscriptions.create` keys on the create endpoints below
+// (2026-09-11, mirrors the legacy customer.*subscription gates).
 R("GET", "/customers/:id/addresses", ...view("customers"));
+R("GET", "/customers/:id/book-orders", ...view("customers"));
 R("GET", "/customers/:id/course-subscriptions", ...view("customers"));
-R("PUT", "/customers/:id/course-subscriptions/:sid", "customers.edit");
+R("PUT", "/customers/:id/course-subscriptions/:sid", "customers.edit"); // adjust dates
+R("GET", "/customers/:id/package-subscriptions", ...view("customers"));
+R("GET", "/customers/:id/live-course-subscriptions", ...view("customers"));
+R("GET", "/customers/:id/test-series-subscriptions", ...view("customers"));
 R("GET", "/customers/:id/ebook-subscriptions", ...view("customers"));
 crud("/customers", "customers");
 
@@ -351,6 +360,16 @@ R("GET", "/subscriptions/customer-addresses/:id", ...view("customers"));
 R("POST", "/subscriptions/customer-addresses", "customers.create");
 R("PUT", "/subscriptions/customer-addresses/:id", "customers.edit");
 R("DELETE", "/subscriptions/customer-addresses/:id", "customers.delete");
+// Manual course/package subscription (one endpoint, kind chosen in the body) —
+// "Add subscription" from the Customers side also unlocks this (2026-09-11).
+// Must precede crud() to win first-match.
+R(
+  "POST",
+  "/subscriptions",
+  "subscriptions.create",
+  "customers.course-subscriptions.create",
+  "customers.package-subscriptions.create"
+);
 crud("/subscriptions", "subscriptions");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
@@ -403,8 +422,11 @@ R("GET", "/offline/batch-enquiries", ...view("offline.enquiries"));
 R("DELETE", "/offline/batch-enquiries/:id", "offline.enquiries.delete");
 
 // ── /promoters → promoters (+ subscriptions, dashboard) ────────────────────
-R("GET", "/promoters/dashboard", ...view("promoters")); // was promoters.view-dashboard
-R("GET", "/promoters/:id/dashboard", ...view("promoters")); // was promoters.view-dashboard
+// Dashboard split out of `promoters.view` 2026-09-11 (was promoters.view-dashboard
+// → collapsed 2026-07-20 → own key again): listing promoters must not imply
+// seeing aggregated revenue.
+R("GET", "/promoters/dashboard", ...view("promoters.dashboard"));
+R("GET", "/promoters/:id/dashboard", ...view("promoters.dashboard"));
 R("GET", "/promoters/:id/promocodes", ...view("promoters"));
 R("GET", "/promoters/:id/subscriptions", ...view("promoters")); // collapsed from promoters.subscriptions 2026-07-20
 crud("/promoters", "promoters");

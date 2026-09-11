@@ -1,5 +1,5 @@
 import { Router } from "express";
-import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
 import { uploadS3 } from "../../middlewares/upload";
 import {
   getAdministrators,
@@ -13,7 +13,12 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("super_admin"));
+// Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC
+// (`administrators.*` in rbacRouteMap) is HARD-enforced here regardless of
+// RBAC_ENFORCE — this router is the security boundary itself. Replaced the old
+// requireRole("super_admin") floor 2026-09-11, which 403'd admins holding the
+// permission before RBAC ran.
+router.use(enforceRbacStrict);
 
 router.get("/pre-requisites", getAdministratorPreRequisites);
 

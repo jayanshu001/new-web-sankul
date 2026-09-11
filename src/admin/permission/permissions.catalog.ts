@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.07.20-2";
+export const CATALOG_VERSION = "2026.09.11-3";
 
 export interface CatalogPermission {
   key: string;
@@ -104,9 +104,9 @@ const rawMod = (
   description?: string
 ): CatalogModule => ({ key, label, group, guard, description, permissions });
 
-// NOTE: the `web` catalog is capped at the 5 STANDARD_5 actions per module — no
-// per-module `extras` (2026-07-20). The `extra()` helper was removed with them; if
-// a future non-web guard needs bespoke keys, use `rawMod()` instead.
+// NOTE: the `web` catalog is the 5 STANDARD_5 actions per module by default
+// (2026-07-20). Per-module `extras` are the exception, added only on an explicit
+// product decision (first: `customers`, 2026-09-11). Non-web guards use `rawMod()`.
 
 export const PERMISSION_CATALOG: CatalogModule[] = [
   // ── Master Data ──────────────────────────────────────────────────────────
@@ -183,9 +183,19 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("videos.categories", "Video Categories", "Videos"),
 
   // ── Customers ────────────────────────────────────────────────────────────
-  mod("customers", "Customers", "Customers"),
-  // customers.{addresses,course-subscriptions,ebook-subscriptions} removed
-  // 2026-07-20 — collapsed into the parent `customers` key in rbacRouteMap.
+  // 2026-09-11: mirrors the legacy Laravel set (customer.read/create/edit/
+  // delete/status + one ADD key per subscription type; the legacy generic
+  // customer.addsubscription has no FE counterpart, so no generic key).
+  // Reads (profile, addresses, every subscription tab) stay on `customers.view`.
+  mod("customers", "Customers", "Customers", {
+    extras: [
+      { key: "customers.course-subscriptions.create", label: "Add course subscription", action: "create", subResource: "course-subscriptions" },
+      { key: "customers.package-subscriptions.create", label: "Add package subscription", action: "create", subResource: "package-subscriptions" },
+      { key: "customers.live-course-subscriptions.create", label: "Add live course subscription", action: "create", subResource: "live-course-subscriptions" },
+      { key: "customers.test-series-subscriptions.create", label: "Add test series subscription", action: "create", subResource: "test-series-subscriptions" },
+      { key: "customers.ebook-subscriptions.create", label: "Add ebook subscription", action: "create", subResource: "ebook-subscriptions" },
+    ],
+  }),
 
   // ── Subscriptions (admin-wide) ───────────────────────────────────────────
   mod("subscriptions", "Subscriptions", "Subscriptions"),
@@ -209,6 +219,9 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // ── Promoters / Promocodes ───────────────────────────────────────────────
   mod("promoters", "Promoters", "Promoters / Promocodes"),
   // promoters.subscriptions removed 2026-07-20 — collapsed into `promoters`.
+  // Aggregated revenue dashboard is grantable separately from the promoter list
+  // (2026-09-11; same view-only pattern as subscriptions.reports).
+  mod("promoters.dashboard", "Promoter Dashboard", "Promoters / Promocodes", { standard: ["view"] }),
   mod("promocodes", "Promocodes", "Promoters / Promocodes"),
 
   // ── CMS ──────────────────────────────────────────────────────────────────

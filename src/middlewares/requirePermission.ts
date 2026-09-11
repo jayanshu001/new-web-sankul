@@ -37,7 +37,18 @@ const isSuperAdmin = (req: Request): boolean =>
  * Must run AFTER `authenticate` (needs `req.user`). Intended for admin routes;
  * super-admins bypass. See the shadow/enforce behavior in the file header.
  */
-export const requirePermission = (...requiredKeys: string[]) => {
+export const requirePermission = (...requiredKeys: string[]) =>
+  buildRequirePermission(requiredKeys, false);
+
+/**
+ * Same check, but ALWAYS hard-denies (403) — ignores RBAC_ENFORCE. For routes
+ * that are themselves the security boundary (role/permission/administrator
+ * management): a shadow-mode "would-block" there is a real privilege hole.
+ */
+export const requirePermissionStrict = (...requiredKeys: string[]) =>
+  buildRequirePermission(requiredKeys, true);
+
+const buildRequirePermission = (requiredKeys: string[], strict: boolean) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // CORS preflight carries no auth; authenticate already skips OPTIONS.
     if (req.method === "OPTIONS") return next();
@@ -72,7 +83,7 @@ export const requirePermission = (...requiredKeys: string[]) => {
     const hasKey = requiredKeys.some((k) => effectiveKeys.includes(k));
     if (hasKey) return next();
 
-    if (isRbacEnforced()) {
+    if (strict || isRbacEnforced()) {
       logger.warn("requirePermission DENIED (enforced)", {
         adminId: req.user.id,
         role: req.user.role,

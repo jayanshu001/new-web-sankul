@@ -12,37 +12,51 @@
 import { Request, Response, NextFunction } from "express";
 import logger from "../utils/logger";
 import { resolveRequiredKeys } from "./rbacRouteMap";
-import { requirePermission } from "./requirePermission";
+import { requirePermission, requirePermissionStrict } from "./requirePermission";
 
 const ADMIN_MOUNT = "/api/v1/admin";
 
-/** Admin-router-relative path, e.g. "/books/123" (mount prefix stripped). */
+/**
+ * Admin-router-relative path, e.g. "/books/123" (mount prefix stripped).
+ * `baseUrl + path` is the full mounted path whether this runs on the admin
+ * router itself (baseUrl = "/api/v1/admin") or inside a sub-router
+ * (baseUrl = "/api/v1/admin/roles", path = "/:id") — so one resolver serves
+ * both `enforceRbac` and the per-router `enforceRbacStrict`.
+ */
 const relativePath = (req: Request): string => {
-  // Inside the admin router `req.path` is usually already relative, but strip
-  // the mount defensively in case Express reports the absolute path.
-  let p = req.path;
+  let p = `${req.baseUrl}${req.path}`;
   if (p.startsWith(ADMIN_MOUNT)) p = p.slice(ADMIN_MOUNT.length) || "/";
   return p;
 };
 
-export const enforceRbac = (req: Request, res: Response, next: NextFunction) => {
-  if (req.method === "OPTIONS") return next();
+const buildEnforceRbac =
+  (strict: boolean) => (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === "OPTIONS") return next();
 
-  const keys = resolveRequiredKeys(req.method, relativePath(req));
+    const keys = resolveRequiredKeys(req.method, relativePath(req));
 
-  if (!keys || keys.length === 0) {
-    // No rule for this route yet. Log once per request so we can complete the
-    // map before flipping RBAC_ENFORCE on; never block on an unmapped route.
-    logger.warn("rbac unmapped route (allowed)", {
-      adminId: req.user?.id,
-      method: req.method,
-      path: req.originalUrl,
-      rbac: "unmapped",
-    });
-    return next();
-  }
+    if (!keys || keys.length === 0) {
+      // No rule for this route yet. Log once per request so we can complete the
+      // map before flipping RBAC_ENFORCE on; never block on an unmapped route.
+      logger.warn("rbac unmapped route (allowed)", {
+        adminId: req.user?.id,
+        method: req.method,
+        path: req.originalUrl,
+        rbac: "unmapped",
+      });
+      return next();
+    }
 
-  return requirePermission(...keys)(req, res, next);
-};
+    return (strict ? requirePermissionStrict : requirePermission)(...keys)(req, res, next);
+  };
+
+export const enforceRbac = buildEnforceRbac(false);
+
+/**
+ * Same route-map lookup, but hard-denies regardless of RBAC_ENFORCE. Mount on
+ * the RBAC-management sub-routers (administrators/roles/permissions/…): those
+ * are the boundary itself, so they never run in shadow mode.
+ */
+export const enforceRbacStrict = buildEnforceRbac(true);
 
 export default enforceRbac;

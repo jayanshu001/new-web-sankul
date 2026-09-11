@@ -1,5 +1,5 @@
 import { Router } from "express";
-import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
 import {
   listPermissions,
   getPermission,
@@ -12,14 +12,14 @@ import { getPermissionCatalog } from "./catalog.controller";
 
 const router = Router();
 
-// Catalog is readable by both admin and super_admin (frontend caches it
-// across the session for the Roles page tree).
-// Catalog read is gated by the admin-router staff gate + catalog RBAC
-// (permissions.view via enforceRbac); the super_admin floor below covers the
-// permission-management routes.
-router.get("/catalog", authenticate, getPermissionCatalog);
+// Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC
+// (`permissions.*` in rbacRouteMap) is HARD-enforced here regardless of
+// RBAC_ENFORCE — this router is the security boundary itself. Replaced the old
+// requireRole("super_admin") floor 2026-09-11, which 403'd admins holding the
+// permission before RBAC ran.
+router.use(enforceRbacStrict);
 
-router.use(authenticate, requireRole("super_admin"));
+router.get("/catalog", getPermissionCatalog);
 
 router.get("/tree", getPermissionsTree);
 
