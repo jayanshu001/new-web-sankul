@@ -42,6 +42,25 @@ export function buildPrismaSearch(
   };
 }
 
+// Prefix-only variant: `LIKE 'token%'` instead of `LIKE '%token%'`. Unlike `contains`,
+// a trailing-only wildcard lets MySQL use a B-tree index range scan on the column instead
+// of a full table scan — critical for large tables where `buildPrismaSearch` would time
+// out (see ws_customer: 1M+ rows, no index helps a leading-wildcard search). Matches the
+// legacy PHP admin's `LIKE 'term%'` search behavior. Same tokenize/AND/OR shape as
+// `buildPrismaSearch`, so callers swap one for the other without changing anything else.
+export function buildPrismaPrefixSearch(
+  term: string | undefined | null,
+  fields: string[]
+): { AND: Array<{ OR: Array<Record<string, { startsWith: string }>> }> } | undefined {
+  const tokens = searchTokens(term);
+  if (tokens.length === 0 || fields.length === 0) return undefined;
+  return {
+    AND: tokens.map((token) => ({
+      OR: fields.map((field) => ({ [field]: { startsWith: token } })),
+    })),
+  };
+}
+
 // Raw-SQL variant for the few repositories that build LIKE clauses by hand (JSON-column
 // / cross-table searches Prisma can't express). Emits one AND-joined group per token;
 // within a group each column is OR-ed. Values are returned separately so callers keep

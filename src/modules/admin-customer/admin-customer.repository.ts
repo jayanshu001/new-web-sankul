@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 const lookupInclude = {
   state: { select: { id: true, name: true } },
@@ -18,7 +18,7 @@ const buildWhere = (opts: {
   toDate?: Date;
 }): Prisma.CustomerWhereInput => {
   const where: Prisma.CustomerWhereInput = { isAccountDeleted: false };
-  const search = buildPrismaSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   if (opts.stateId !== undefined) where.stateId = opts.stateId;
