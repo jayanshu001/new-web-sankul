@@ -57,10 +57,10 @@ export const listCustomers = async (opts: {
     toDate: opts.toDate ? new Date(opts.toDate) : undefined,
   };
   const skip = (opts.page - 1) * opts.limit;
-  const [rows, total] = await Promise.all([
-    repo.list({ ...where, skip, take: opts.limit }),
-    repo.count(where),
-  ]);
+  const rows = await repo.list({ ...where, skip, take: opts.limit });
+  // A short first page IS the total — skip the COUNT, which is a full index scan
+  // for every search term (see 2026-09-14_customer_search_covering_index.sql).
+  const total = opts.page === 1 && rows.length < opts.limit ? rows.length : await repo.count(where);
   return { items: rows.map(toCustomerDto), total };
 };
 

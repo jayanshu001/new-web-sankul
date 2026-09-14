@@ -15,6 +15,56 @@
 
 ---
 
+## 2026-09-14 — `GET /admin/customers?search=` slow / timeouts at ~600k rows
+
+> **DDL:** `docs/migration/schema-changes/2026-09-14_customer_search_covering_index.sql`
+> — APPLIED on local dev DB 2026-09-14; PENDING on staging + prod. ADD `idx_customer_search` + DROP
+> `idx_customer_deleted_created` (strict prefix, redundant; the drop is REQUIRED —
+> with both present the optimizer keeps choosing the narrow one). Code change is
+> independent of the DDL and safe to deploy first.
+
+### Problem
+
+Search is `full_name LIKE '%x%' OR phone LIKE '%x%' OR email_address LIKE '%x%'`
+(leading wildcard by design — last-4 phone digits, name fragments). Both the list
+and the pagination COUNT walk every live row via `idx_customer_deleted_created`
+and then fetch the **full row** (~720 B, TEXT + JSON columns) to evaluate the
+LIKEs: ~400 MB of clustered-index reads per search on prod's ~600k rows. COUNT
+always; the list whenever the term is rare (the `ORDER BY created_at DESC LIMIT`
+walk only stops early on common terms). That working set does not stay in the
+buffer pool under normal traffic, so it hits disk, and concurrent searches queue
+on the Prisma pool → `pool_timeout` / LB timeout.
+
+### Change
+
+1. **Covering index** `idx_customer_search (is_account_deleted, created_at,
+   status, full_name, phone, email_address)` — the status filter and the LIKEs
+   are evaluated from the secondary index alone (`Using index`), ~40 MB
+   sequential instead of ~400 MB random. `status` is included so the admin's
+   active/inactive filter + search COUNT stays covering (without it: full table
+   scan, 514 ms vs 220 ms measured).
+   Measured on a 600k-row / 720 B-row copy (MySQL 8.0, 128 MB pool): count
+   300–4100 ms → ~200 ms; rare-term list 4100 ms → 240 ms; common-term list
+   unchanged (1 ms). The 2026-08-21 dashboard queries stay index-served (same
+   leading columns).
+2. `admin-customer.service.ts listCustomers`: when page 1 comes back shorter than
+   `limit`, `total = rows.length` and the COUNT is skipped (exact phone / name
+   searches — the common admin case — now cost one short index walk). Otherwise
+   list then count, sequential; no latency loss since the list is ~1 ms whenever
+   the count is the expensive one.
+
+### Not done, and why
+
+- **ngram FULLTEXT** (`WITH PARSER ngram`) measured: rare terms ~4 ms, but common
+  terms slower than LIKE (`user12@` 1185 ms vs 800 ms), and with the default
+  InnoDB stopword list any bigram containing `a`/`i` is dropped — `ram` returned
+  0 rows. Needs `innodb_ft_enable_stopword=OFF` at server level. Upgrade path if
+  ws_customer grows past a few million rows; not worth it at 600k.
+- No response-shape change; `sortBy`/`sortOrder` query params remain accepted and
+  ignored as before (order is fixed `created_at DESC`).
+
+---
+
 ## 2026-09-11 (iv) — permission catalog: `promoters.dashboard.view` split out of `promoters.view`
 
 > **NO DDL.** Seeder inserts 1 `ws_permissions` row (`web`, category 17) on next
