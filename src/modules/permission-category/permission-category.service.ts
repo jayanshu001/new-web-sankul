@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { nextOrder } from "../../utils/listOrdering";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 
 
@@ -73,7 +73,7 @@ export const listCategories = async (
 
   const where: any = {};
   if (typeof status === "boolean") where.status = status;
-  const titleSearch = buildPrismaSearch(search, ["title"]);
+  const titleSearch = buildPrismaPrefixSearch(search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
 
   // RECENCY IS THE CONTRACT on admin lists (utils/listOrdering): an "order" sort

@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the offline · batch/center READ branch (flag OFF).
@@ -15,7 +15,7 @@ const centerListWhere = (opts?: { cityId?: number; search?: string }) => ({
 const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) => ({
   deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
-  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
+  ...(buildPrismaPrefixSearch(opts?.search, ["name"]) ?? {}),
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
 });
 

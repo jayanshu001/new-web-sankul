@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-material MySQL branch.
@@ -252,7 +252,7 @@ function buildCatWhere(opts: { parent?: number | "root"; search?: string; status
   const where: Prisma.MaterialCategoryWhereInput = {};
   if (opts.parent === "root") where.parent = ROOT;
   else if (typeof opts.parent === "number") where.parent = opts.parent;
-  const search = buildPrismaSearch(opts.search, ["name"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;
@@ -315,7 +315,7 @@ function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.M
 
 function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean }): Prisma.MaterialWhereInput {
   const where: Prisma.MaterialWhereInput = {};
-  const search = buildPrismaSearch(opts.search, ["name"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.materialCategoryId !== undefined) where.materialCategoryId = opts.materialCategoryId;
   if (opts.status !== undefined) where.status = opts.status;

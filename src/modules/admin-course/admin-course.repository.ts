@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 
 // Tokenized name-search over a single related category/book (Prisma nested relation
 // filter — the flat helper can't express relations). AND each token; empty → {}.
@@ -327,7 +327,7 @@ function courseSortCol(sortBy: string): string {
 
 function buildCourseWhere(opts: { search?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean }): Prisma.CourseWhereInput {
   const where: Prisma.CourseWhereInput = {};
-  const search = buildPrismaSearch(opts.search, ["name", "description"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name", "description"]);
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   // purchase enum('0','1'): Mongo isPaid defaults TRUE → only explicit '0' is unpaid.

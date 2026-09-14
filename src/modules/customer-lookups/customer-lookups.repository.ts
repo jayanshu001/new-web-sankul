@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type {
   StateInput,
   DistrictInput,
@@ -12,7 +12,7 @@ import type {
 const adminDistrictWhere = (opts?: { status?: boolean; stateId?: number; search?: string }) => ({
   ...(opts?.status === undefined ? {} : { active: opts.status }),
   ...(opts?.stateId ? { stateId: opts.stateId } : {}),
-  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
+  ...(buildPrismaPrefixSearch(opts?.search, ["name"]) ?? {}),
 });
 
 export const customerLookupsRepository = {

@@ -8,7 +8,7 @@
  * "_id firstName lastName phoneNumber email").
  */
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 
 export const parseInquiryId = (id: string): number | null => {
@@ -66,7 +66,7 @@ export const listInquiries = async (opts: {
   const where: any = {};
   if (opts.course && COURSES.has(opts.course)) where.course = opts.course;
   if (opts.mode && MODES.has(opts.mode)) where.mode = opts.mode;
-  const search = buildPrismaSearch(opts.search, ["description", "name", "mobile", "email"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["description", "name", "mobile", "email"]);
   if (search) where.AND = search.AND;
   if (opts.from || opts.to) {
     where.createdAt = {};

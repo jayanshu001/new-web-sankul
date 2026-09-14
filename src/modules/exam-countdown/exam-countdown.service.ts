@@ -13,7 +13,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { nextOrder } from "../../utils/listOrdering";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 
 export const parseEcId = (id: string): number | null => {
@@ -130,7 +130,7 @@ export const populateExamCountdowns = async (row: {
 // (preserves the legacy "all categories" behaviour for non-paginating callers).
 export const listCategoriesAdmin = async (opts?: { search?: string | null; status?: boolean; skip?: number; take?: number }) => {
   const where: any = {};
-  const search = buildPrismaSearch(opts?.search, ["name"]);
+  const search = buildPrismaPrefixSearch(opts?.search, ["name"]);
   if (search) where.AND = search.AND;
   if (opts?.status !== undefined) where.status = opts.status;
   const [rows, total] = await Promise.all([
@@ -187,7 +187,7 @@ export const listCountdownsAdmin = async (opts: {
   if (opts.categoryIds && opts.categoryIds.length) {
     where.categoryId = opts.categoryIds.length === 1 ? opts.categoryIds[0] : { in: opts.categoryIds };
   }
-  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  const titleSearch = buildPrismaPrefixSearch(opts.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };
 

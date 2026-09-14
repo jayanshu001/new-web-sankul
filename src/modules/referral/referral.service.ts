@@ -1,6 +1,6 @@
 import { referralRepository as repo } from "./referral.repository";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { Prisma, RefferalProgram, RefferalTransaction } from "@prisma/client";
 
 export const REFERRAL_MODULE = "referral";
@@ -327,7 +327,7 @@ export const adminListPrograms = async (
   opts: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number } = {}
 ): Promise<{ data: any[]; total: number }> => {
   const where: Prisma.RefferalProgramWhereInput = {};
-  const search = buildPrismaSearch(opts.search, ["name", "title"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name", "title"]);
   if (search) where.AND = search.AND;
   const dir: "asc" | "desc" = opts.sortDir === "desc" ? "desc" : "asc";
   const orderBy: Prisma.RefferalProgramOrderByWithRelationInput[] =

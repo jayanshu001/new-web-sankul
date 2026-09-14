@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma, PaymentMethod } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 // Filters shared by list + count so `pagination.total` matches the page slice.
 export type SubFilter = {
@@ -225,13 +225,13 @@ export const adminEbookRepository = {
   // ── search helpers (cross-table, for subscription search) ───────────────────────
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
+      where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
       select: { id: true },
     });
     return rows.map((r) => r.id);
   },
   findEbookIdsBySearch: async (q: string): Promise<number[]> => {
-    const rows = await prisma.eBook.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } });
+    const rows = await prisma.eBook.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } });
     return rows.map((r) => r.id);
   },
 };
@@ -239,11 +239,11 @@ export const adminEbookRepository = {
 function buildEbookWhere(opts: { search?: string; author?: string; publisher?: string; language?: string; status?: boolean }): Prisma.EBookWhereInput {
   const where: Prisma.EBookWhereInput = {};
   const and: Prisma.EBookWhereInput[] = [];
-  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name", "author"]);
   if (search) and.push(search);
-  const author = buildPrismaSearch(opts.author, ["author"]);
+  const author = buildPrismaPrefixSearch(opts.author, ["author"]);
   if (author) and.push(author);
-  const publisher = buildPrismaSearch(opts.publisher, ["publisher"]);
+  const publisher = buildPrismaPrefixSearch(opts.publisher, ["publisher"]);
   if (publisher) and.push(publisher);
   if (opts.language) where.language = opts.language as any;
   if (opts.status !== undefined) where.active = opts.status;

@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-rbac MySQL branch (spatie tables).
@@ -19,7 +19,7 @@ export const adminRbacRepository = {
   listRoles: (opts: { guard?: string; search?: string; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
     const where: Prisma.AdminRoleRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
-    const search = buildPrismaSearch(opts.search, ["name"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     const col = opts.sortBy === "name" ? "name" : opts.sortBy === "updated_at" ? "updatedAt" : opts.sortBy === "created_at" ? "createdAt" : "id";
     return prisma.adminRoleRow.findMany({ where, orderBy: { [col]: opts.sortDir }, skip: opts.skip, take: opts.take });
@@ -27,7 +27,7 @@ export const adminRbacRepository = {
   countRoles: (opts: { guard?: string; search?: string }) => {
     const where: Prisma.AdminRoleRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
-    const search = buildPrismaSearch(opts.search, ["name"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     return prisma.adminRoleRow.count({ where });
   },
@@ -55,7 +55,7 @@ export const adminRbacRepository = {
     const where: Prisma.AdminPermissionRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
     if (opts.categoryId !== undefined) where.categoryId = opts.categoryId;
-    const search = buildPrismaSearch(opts.search, ["name"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     return prisma.adminPermissionRow.findMany({
       where, orderBy: { name: "asc" },
@@ -66,7 +66,7 @@ export const adminRbacRepository = {
     const where: Prisma.AdminPermissionRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
     if (opts.categoryId !== undefined) where.categoryId = opts.categoryId;
-    const search = buildPrismaSearch(opts.search, ["name"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     return prisma.adminPermissionRow.count({ where });
   },

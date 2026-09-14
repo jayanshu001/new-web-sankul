@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 // Populate the parent state (Mongo `stateId` populated shape) for city DTOs.
 const stateInclude = { State: { select: { id: true, name: true, state_code: true } } } as const;
@@ -8,7 +8,7 @@ const stateInclude = { State: { select: { id: true, name: true, state_code: true
 const adminCityWhere = (opts?: { status?: boolean; stateId?: number; search?: string }) => ({
   ...(opts?.status === undefined ? {} : { status: opts.status }),
   ...(opts?.stateId ? { state: opts.stateId } : {}),
-  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
+  ...(buildPrismaPrefixSearch(opts?.search, ["name"]) ?? {}),
 });
 
 /** Prisma persistence for the offline-city MySQL branch (ws_offline_city). */

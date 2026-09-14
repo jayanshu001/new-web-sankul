@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-plan MySQL branch (ws_package_course_ebook_price).
@@ -94,7 +94,7 @@ function buildWhere(opts: { entityType?: string; courseId?: number; packageId?: 
   if (opts.status !== undefined) where.status = opts.status;
   if (opts.isDefault !== undefined) where.isDefault = opts.isDefault;
   if (opts.withMaterial !== undefined) where.withMaterial = opts.withMaterial;
-  const search = buildPrismaSearch(opts.search, ["name"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   return where;
 }

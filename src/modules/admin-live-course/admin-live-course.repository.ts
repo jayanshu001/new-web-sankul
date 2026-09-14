@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
  * "This subscription was paid for."
@@ -169,7 +169,7 @@ export const adminLiveCourseRepository = {
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
   // Customer search resolver (name / phone / EMAIL) → id set for the OR fragment.
   customerIdsByText: async (q: string) =>
-    (await prisma.customer.findMany({ where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
+    (await prisma.customer.findMany({ where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
   findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
 
   /**
@@ -256,7 +256,7 @@ export const adminLiveCourseRepository = {
     const where: Prisma.LiveSessionWhereInput = { id: { in: ids } };
     if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
     else if (opts.status) where.status = opts.status;
-    const search = buildPrismaSearch(opts.search, ["title"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title"]);
     if (search) Object.assign(where, search);
     const [rows, total] = await Promise.all([
       prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
@@ -509,7 +509,7 @@ export const adminLiveCourseRepository = {
 
 function buildWhere(opts: { search?: string; status?: boolean }): Prisma.LiveCourseWhereInput {
   const where: Prisma.LiveCourseWhereInput = {};
-  const search = buildPrismaSearch(opts.search, ["name"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;

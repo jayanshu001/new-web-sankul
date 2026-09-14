@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { PopupCreateInput, PopupUpdateInput } from "./popup.types";
 import { toPrismaPopupCreate, toPrismaPopupUpdate } from "./popup.transformer";
 
@@ -19,7 +19,7 @@ const POPUP_SORT_COLUMNS: Record<string, string> = {
 };
 
 const buildPopupWhere = (opts: PopupListOpts): Record<string, unknown> =>
-  buildPrismaSearch(opts.search, ["title", "description", "discount", "promocode"]) ?? {};
+  buildPrismaPrefixSearch(opts.search, ["title", "description", "discount", "promocode"]) ?? {};
 
 export const popupRepository = {
   /** Admin list — newest first (matches Mongo default createdAt desc). */

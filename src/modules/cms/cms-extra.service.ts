@@ -9,7 +9,7 @@
  * here, the FE only needs the id for these admin lists).
  */
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
 
 
@@ -190,7 +190,7 @@ const CA_SORT_COLUMNS: Record<string, string> = { createdAt: "createdAt", title:
 export const listCurrentAffairsPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
-  const where = buildPrismaSearch(q.search, ["title", "youtubeLink", "image"]) ?? {};
+  const where = buildPrismaPrefixSearch(q.search, ["title", "youtubeLink", "image"]) ?? {};
   const [rows, total] = await Promise.all([
     prisma.currentAffair.findMany({
       where,
@@ -285,7 +285,7 @@ const LB_SORT_COLUMNS: Record<string, string> = { orderBy: "orderBy", createdAt:
 export const listLiveBannersPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
-  const where = buildPrismaSearch(q.search, ["image"]) ?? {};
+  const where = buildPrismaPrefixSearch(q.search, ["image"]) ?? {};
   const [rows, total] = await Promise.all([
     prisma.liveBannerSlider.findMany({
       where,

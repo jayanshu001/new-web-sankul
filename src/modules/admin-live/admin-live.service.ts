@@ -31,7 +31,7 @@ import { adminLiveCourseRepository } from "../admin-live-course/admin-live-cours
 import { dispatchAudience } from "../admin-notification/admin-notification.service";
 import { buildNotificationRouting } from "../../utils/notificationTarget";
 import logger from "../../utils/logger";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { LiveSession as SqlLiveSession } from "@prisma/client";
 
 
@@ -605,7 +605,7 @@ export const listSessions = async (
   // MySQL utf8mb4_*_ci; Prisma's `mode:"insensitive"` is Postgres-only). Matches
   // the visible list columns: session title + streamId. AND-combines with every
   // filter above (its own OR-group, so it composes with the upcoming=false OR).
-  const search = buildPrismaSearch(input.search, ["title", "streamId"]);
+  const search = buildPrismaPrefixSearch(input.search, ["title", "streamId"]);
   if (search) and.push(search);
   if (and.length > 0) where.AND = and;
   const [rows, total] = await Promise.all([

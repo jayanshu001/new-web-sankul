@@ -12,7 +12,7 @@
  */
 import { prisma } from "../../config/prisma";
 import * as liveSql from "../admin-live-course/admin-live-course.service";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
 import { getActivePackageSubMap } from "../commerce-subscription/commerce-subscription.service";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -210,7 +210,7 @@ export const listPackagesAndLiveByCategory = async (
 // Optional search (title) + sort + pagination. skip/take omitted → full list.
 export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
   const where: any = {};
-  const titleSearch = buildPrismaSearch(q?.search, ["title"]);
+  const titleSearch = buildPrismaPrefixSearch(q?.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
   // RECENCY IS THE CONTRACT on admin lists (utils/listOrdering): the "order" sort
   // and the no-sort default both mean newest-first, and sortDir is ignored for

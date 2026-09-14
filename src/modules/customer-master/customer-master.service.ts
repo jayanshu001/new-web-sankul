@@ -14,7 +14,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { parseLabels } from "../../utils/goalSelection";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 
 /** Parse a string id to a positive int, else null. */
@@ -36,7 +36,7 @@ export const listStates = async (opts?: {
 }): Promise<{ data: any[]; total: number }> => {
   const where: any = {};
   if (opts?.active !== undefined) where.active = opts.active;
-  const search = buildPrismaSearch(opts?.search, ["name", "state_code"]);
+  const search = buildPrismaPrefixSearch(opts?.search, ["name", "state_code"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.customerState.findMany({

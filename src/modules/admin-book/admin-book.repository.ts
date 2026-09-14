@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch, buildLikeTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, buildLikeTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
@@ -116,7 +116,7 @@ export const adminBookRepository = {
   /** Customer ids whose name/phone matches the search (for order search). */
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
+      where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
       select: { id: true },
     });
     return rows.map((r) => r.id);
@@ -131,7 +131,7 @@ export const adminBookRepository = {
    */
   findOrderKeysByBookSearch: async (q: string): Promise<string[]> => {
     const keys = new Set<string>();
-    const books = await prisma.book.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } });
+    const books = await prisma.book.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } });
     if (books.length) {
       const items = await prisma.bookOrderItem.findMany({
         where: { bookId: { in: books.map((b) => b.id) } },
@@ -175,7 +175,7 @@ export const adminBookRepository = {
 
 function buildWhere(opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean }): Prisma.BookWhereInput {
   const where: Prisma.BookWhereInput = {};
-  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name", "author"]);
   if (search) Object.assign(where, search);
   if (opts.language) where.language = opts.language;
   if (opts.isMagazine !== undefined) where.is_magazine = opts.isMagazine;
@@ -208,7 +208,7 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; state?: n
   // Search OR: receiptId match | order belongs to a matched customer | order_id
   // appears in the item-matched key set. Each clause optional; AND with filters.
   const or: Prisma.BookOrderWhereInput[] = [];
-  const receiptSearch = buildPrismaSearch(opts.receiptSearch, ["receiptId"]);
+  const receiptSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["receiptId"]);
   if (receiptSearch) or.push(receiptSearch);
   if (opts.customerIdsIn?.length) or.push({ userId: { in: opts.customerIdsIn } });
   if (opts.orderIdsIn?.length) or.push({ receiptId: { in: opts.orderIdsIn } });

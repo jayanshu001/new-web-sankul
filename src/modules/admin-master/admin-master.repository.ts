@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
-import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
@@ -138,7 +138,7 @@ export const adminMasterRepository = {
   // ── full videoCategory controller support (admin/videoCategory) ─────────────
   vcListFiltered: (opts: { search?: string; status?: boolean; educatorId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
     const where: any = {};
-    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
@@ -154,7 +154,7 @@ export const adminMasterRepository = {
   },
   vcCountFiltered: (opts: { search?: string; status?: boolean; educatorId?: number }) => {
     const where: any = {};
-    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
@@ -247,7 +247,7 @@ export const adminMasterRepository = {
     const childIds = await childIdsOf(categoryId);
     if (!childIds.length) return [];
     const where: any = { id: { in: childIds } };
-    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.videoCategory.findMany({
@@ -262,7 +262,7 @@ export const adminMasterRepository = {
     const childIds = await childIdsOf(categoryId);
     if (!childIds.length) return 0;
     const where: any = { id: { in: childIds } };
-    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.videoCategory.count({ where });
@@ -301,7 +301,7 @@ export const adminMasterRepository = {
 
   videosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string; skip: number; take: number }) => {
     const where: any = { videoCategoryId: categoryId };
-    const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug", "topic"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.platform) where.platform = opts.platform;
@@ -309,7 +309,7 @@ export const adminMasterRepository = {
   },
   countVideosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string }) => {
     const where: any = { videoCategoryId: categoryId };
-    const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
+    const search = buildPrismaPrefixSearch(opts.search, ["title", "slug", "topic"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.platform) where.platform = opts.platform;
@@ -458,14 +458,14 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
 
 function pcmWhere(opts?: { search?: string }) {
   const where: any = {};
-  const search = buildPrismaSearch(opts?.search, ["title"]);
+  const search = buildPrismaPrefixSearch(opts?.search, ["title"]);
   if (search) Object.assign(where, search);
   return where;
 }
 
 function subjWhere(opts?: { search?: string; status?: boolean }) {
   const where: any = {};
-  const search = buildPrismaSearch(opts?.search, ["title"]);
+  const search = buildPrismaPrefixSearch(opts?.search, ["title"]);
   if (search) Object.assign(where, search);
   if (opts?.status !== undefined) where.status = opts.status;
   return where;

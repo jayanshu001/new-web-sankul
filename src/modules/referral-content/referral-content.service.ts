@@ -1,6 +1,6 @@
 import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
 
 
@@ -116,7 +116,7 @@ const rcOrderBy = (opts: RcListOpts): any[] => {
 
 export const listTerms = async (opts: RcListOpts = {}): Promise<{ data: TermDto[]; total: number }> => {
   const where: any = {};
-  const search = buildPrismaSearch(opts.search, ["text"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["text"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.refferalTerm.findMany({
@@ -184,7 +184,7 @@ export const deleteTerm = async (id: number): Promise<boolean> => {
 
 export const listFaqs = async (opts: RcListOpts = {}): Promise<{ data: FaqDto[]; total: number }> => {
   const where: any = {};
-  const search = buildPrismaSearch(opts.search, ["question", "answer"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["question", "answer"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.refferalFaq.findMany({

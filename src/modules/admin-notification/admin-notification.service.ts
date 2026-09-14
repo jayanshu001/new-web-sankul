@@ -20,7 +20,7 @@
  * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
  */
 import { prisma } from "../../config/prisma";
-import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 import { sendPush } from "../../utils/fcm";
 import logger from "../../utils/logger";
 
@@ -463,7 +463,7 @@ export async function listAdminLog(opts: {
   take: number;
 }): Promise<{ data: any[]; total: number }> {
   const where: any = { customerId: null };
-  const search = buildPrismaSearch(opts.q, ["title", "body"]);
+  const search = buildPrismaPrefixSearch(opts.q, ["title", "body"]);
   if (search) Object.assign(where, search);
   if (opts.status && ["sent", "scheduled", "failed", "cancelled"].includes(opts.status)) {
     where.status = opts.status;

@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 const ADMIN_SORT_COLUMN: Record<string, keyof Prisma.CourseEducatorOrderByWithRelationInput> = {
   createdAt: "createdAt",
@@ -18,7 +18,7 @@ const buildAdminWhere = (opts: {
   // so course/live-course/package/session `educator_id` references still resolve
   // the educator name; `deleted=1` just hides it from the admin list.
   const where: Prisma.CourseEducatorWhereInput = { deleted: false };
-  const search = buildPrismaSearch(opts.search, ["name", "email"]);
+  const search = buildPrismaPrefixSearch(opts.search, ["name", "email"]);
   if (search) where.AND = search.AND;
   if (opts.status !== undefined) where.status = opts.status;
   return where;

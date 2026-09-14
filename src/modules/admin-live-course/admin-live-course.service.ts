@@ -29,7 +29,7 @@ import { providerOf, getRecordingByAssetId } from "../../admin/live/streamos.pro
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
 import { nextOrder } from "../../utils/listOrdering";
-import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch, matchesAllTokens } from "../../utils/searchFilter";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
 
@@ -2864,7 +2864,7 @@ export const lcListFolders = async (
   search?: string
 ): Promise<{ folders: any[]; relations: any[] }> => {
   const where: any = { liveCourseId };
-  const titleSearch = buildPrismaSearch(search, ["title"]);
+  const titleSearch = buildPrismaPrefixSearch(search, ["title"]);
   if (titleSearch) Object.assign(where, titleSearch);
   const folders = await prisma.videoCategory.findMany({
     where,
