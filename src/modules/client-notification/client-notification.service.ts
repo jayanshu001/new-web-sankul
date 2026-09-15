@@ -59,13 +59,19 @@ const contextFor = async (customerId: number) => {
  * "sent" at `scheduledAt`. Without this, a scheduled/not-yet-fired broadcast
  * already matched the OR below and appeared in every customer's feed the
  * moment an admin scheduled it, well before its send time.
+ *
+ * The signup cutoff is bounded by `sentAt`, not `createdAt`: `createdAt` on a
+ * scheduled row is when the admin composed it, which can predate signup even
+ * though the row only actually goes out (and only becomes visible, per the
+ * `status: "sent"` filter above) later. Every row this filter can match has
+ * `status: "sent"`, so `sentAt` is always populated.
  */
 const visWhere = (customerId: number, signupAt: Date | null) => ({
   status: "sent",
   OR: [
     { customerId },
     signupAt
-      ? { broadcast: true, createdAt: { gte: signupAt } }
+      ? { broadcast: true, sentAt: { gte: signupAt } }
       : { broadcast: true },
   ],
 });
@@ -86,18 +92,23 @@ const readIdsFor = async (customerId: number): Promise<Set<number>> => {
   return new Set(rows.map((r) => r.notificationId));
 };
 
-/** Read = an explicit mark, or created at/before the customer's mark-all watermark. */
+/**
+ * Read = an explicit mark, or sent at/before the customer's mark-all watermark.
+ * Keyed off `sentAt` (not `createdAt`) for the same reason as the signup cutoff
+ * above: a scheduled row's `createdAt` is composition time, not the time it
+ * actually reached the feed.
+ */
 const isReadFor = (
-  n: { id: number; createdAt: Date | null },
+  n: { id: number; sentAt: Date | null },
   readIds: Set<number>,
   readBefore: Date | null
 ): boolean =>
-  readIds.has(n.id) || (!!readBefore && !!n.createdAt && n.createdAt <= readBefore);
+  readIds.has(n.id) || (!!readBefore && !!n.sentAt && n.sentAt <= readBefore);
 
 /** Prisma `where` for the unread half of the feed — the watermark + explicit marks. */
 const unreadWhere = (readIds: Set<number>, readBefore: Date | null) => {
   const clauses: any[] = [];
-  if (readBefore) clauses.push({ OR: [{ createdAt: null }, { createdAt: { gt: readBefore } }] });
+  if (readBefore) clauses.push({ OR: [{ sentAt: null }, { sentAt: { gt: readBefore } }] });
   if (readIds.size) clauses.push({ id: { notIn: [...readIds] } });
   return clauses;
 };
@@ -124,12 +135,20 @@ const dismissedIdsFor = async (customerId: number): Promise<number[]> => {
 // `isRead`/`readAt` are supplied by the CALLER (per-customer), never read off the row —
 // n.isRead / n.readAt on a broadcast are the shared, cross-user values this change
 // exists to stop trusting. Same key + type on the wire either way.
+//
+// `createdAt` on the wire is `sentAt` (falling back to `createdAt` only for legacy
+// rows with no `sentAt`) — same key, same type, response shape untouched. Every
+// row reaching this DTO has `status: "sent"` (visWhere), but for a notification
+// that was scheduled, the row's `created_at` column is when the admin composed
+// it, which can be hours before it actually went out. Sending that would put a
+// 6:15pm-scheduled notification in the feed timestamped as if it arrived at
+// (say) 10am. `sentAt` is the moment it actually reached the customer.
 const dto = (n: any, read: { isRead: boolean; readAt: Date | null } = { isRead: false, readAt: null }) => ({
   _id: String(n.id), customerId: n.customerId != null ? String(n.customerId) : null,
   title: n.title, titleHtml: n.titleHtml ?? null, body: n.body, bodyHtml: n.bodyHtml ?? null,
   image: n.image ?? null, type: n.type, deepLink: n.deepLink ?? null,
   data: n.data ?? {}, isRead: read.isRead, readAt: read.readAt, broadcast: n.broadcast,
-  status: n.status, createdAt: n.createdAt ?? null, updatedAt: n.updatedAt ?? null,
+  status: n.status, createdAt: n.sentAt ?? n.createdAt ?? null, updatedAt: n.updatedAt ?? null,
   ...extractNotificationRouting({ deepLink: n.deepLink, data: n.data }),
 });
 
@@ -155,7 +174,15 @@ export const listNotifications = async (
     ? { AND: [...base.AND, ...searchFilter.AND] }
     : base;
   const [rows, total, unread] = await Promise.all([
-    prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
+    // Ordered by sentAt (when it actually reached the feed), not createdAt
+    // (when it was composed) — see the dto() comment above. createdAt is a
+    // tiebreak for legacy rows with no sentAt.
+    prisma.notification.findMany({
+      where,
+      orderBy: [{ sentAt: "desc" }, { createdAt: "desc" }],
+      skip,
+      take,
+    }),
     prisma.notification.count({ where }),
     prisma.notification.count({
       where: { AND: [...base.AND, ...unreadWhere(readIds, ctx.readBefore)] },

@@ -31,6 +31,17 @@ before their actual send time. Added an ANDed `{ status: "sent" }` to `visWhere`
 Targeted (non-broadcast) per-customer rows are unaffected — `dispatchAudience`
 only ever fans those out with `status: "sent"` already, after the send succeeds.
 
+Same root cause also affected the *timestamp* shown for a scheduled notification:
+the feed's signup cutoff, read-watermark comparisons, `dto().createdAt`, and
+`orderBy` all keyed off `created_at` (composition time), not when the
+notification actually went out — a broadcast scheduled at 10am for 6:15pm
+displayed/sorted as a 10am item instead of 6:15pm. Switched all four to
+`sentAt` (guaranteed non-null on every row `visWhere` can match, since it now
+requires `status: "sent"`), with `createdAt` kept only as an orderBy tiebreak
+for legacy rows with no `sentAt`. Response contract unchanged — the wire field
+is still named `createdAt`; only the value backing it changed (now `sentAt`,
+falling back to `createdAt`), so no app-side change is needed.
+
 ---
 
 ## 2026-09-15 — Notification target picker (`GET /admin/notifications/target-options`) now excludes inactive content
