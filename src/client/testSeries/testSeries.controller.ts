@@ -13,6 +13,8 @@ import {
 } from "../../modules/client-testseries/client-testseries.service";
 import { findPlanForOrder } from "../../modules/test-series-order/test-series-order.service";
 import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -98,6 +100,9 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
     const out = await getTestSeriesDetailMysql({ id: tsId, customerId: cidNum, now: new Date(), base: resolveBase(req), buildShareUrl });
     if (!out) { logger.warn("getTestSeriesDetail not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
     logger.info("getTestSeriesDetail success (sql)", { traceId, customerId, id, isPurchased: out.isPurchased });
+    if (customerId) {
+      queueCRMLead({ params: { userId: customerId, testSeriesId: tsId }, leadType: CRM_LEAD_TYPE.VIEW_TEST_SERIES }, { traceId, customerId, testSeriesId: tsId });
+    }
     return success(res, out, "Fetched.");
   } catch (e: any) {
     logger.error("getTestSeriesDetail failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });

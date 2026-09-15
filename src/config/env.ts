@@ -46,6 +46,11 @@ const PROD_FEATURE_VARS: { key: string; feature: string; profiles: ("api" | "wor
   // when the payout route is deleted from app.ts.
   { key: "RAZORPAY_PAYOUT_WEBHOOK_SECRET", feature: "referral payouts (drain-only)", profiles: ["api"] },
   { key: "METRICS_TOKEN", feature: "/metrics scrape auth", profiles: ["api"] },
+  // TeleCRM lead push (docs/old-telecrm-integration.md) — fires only from
+  // client-surface controllers (login/signup/catalog-view/payment), never
+  // from the worker, and GenerateCRMLead itself no-ops without these set.
+  { key: "TELE_CRM_BASE_URL", feature: "TeleCRM lead push", profiles: ["api"] },
+  { key: "TELE_CRM_ACCESS_TOKEN", feature: "TeleCRM lead push", profiles: ["api"] },
 ];
 
 const deployProfile = (): "api" | "worker" | "all" => {

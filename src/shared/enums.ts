@@ -194,7 +194,20 @@ export const AdminRole = {
 } as const;
 export type AdminRole = (typeof AdminRole)[keyof typeof AdminRole];
 
+// TeleCRM lead moments. Mirrors the old Mongo backend's CRM_LEAD_TYPE
+// (docs/old-telecrm-integration.md) plus two net-new moments (VIEW_LIVE_COURSE,
+// VIEW_TEST_SERIES) for products that didn't exist when that backend was
+// written. Adding a new lead-worthy moment = add a member here + a case in
+// utils/crm.ts's note builder + a fire-and-forget call at the trigger site.
 export const CRM_LEAD_TYPE = {
+  LOGIN: "LOGIN",
+  SIGNUP: "SIGNUP",
+  VIEW_PACKAGE: "VIEW_PACKAGE",
   VIEW_COURSE: "VIEW_COURSE",
+  VIEW_LIVE_COURSE: "VIEW_LIVE_COURSE",
+  VIEW_TEST_SERIES: "VIEW_TEST_SERIES",
+  PAYMENT_MODE: "PAYMENT_MODE",
+  PAYMENT_SUCCESS: "PAYMENT_SUCCESS",
+  PAYMENT_FAILED: "PAYMENT_FAILED",
 } as const;
 export type CRM_LEAD_TYPE = (typeof CRM_LEAD_TYPE)[keyof typeof CRM_LEAD_TYPE];

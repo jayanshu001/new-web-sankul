@@ -12,6 +12,8 @@ import {
 } from "./customer.service";
 import logger from "../../utils/logger";
 import { omit } from "../../utils/pick";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 // Fields the RN app never reads on GET /profile — dropped at the controller edge
 // to slim the mobile payload (see docs/api-optimization/GET_client_profile.md).
@@ -67,6 +69,14 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
     }
 
     logger.info("updateProfileHandler success", { traceId, userId });
+
+    // TeleCRM SIGNUP lead only once both name and email are on file — matches
+    // the old backend's rule.
+    const profileData = result?.data as { firstName?: string; emailAddress?: string } | undefined;
+    if (profileData?.firstName && profileData?.emailAddress) {
+      queueCRMLead({ params: { userId }, leadType: CRM_LEAD_TYPE.SIGNUP }, { traceId, userId });
+    }
+
     return success(res, result?.data, result.message, 200);
   } catch (err) {
     logger.error("updateProfileHandler failed", {

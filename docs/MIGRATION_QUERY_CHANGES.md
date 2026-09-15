@@ -15,6 +15,46 @@
 
 ---
 
+## 2026-09-15 — TeleCRM lead push ported to MySQL + wired into live-course/test-series
+
+> **DDL:** none. Read-only Prisma lookups against existing tables only.
+
+Fleshed out `src/utils/crm.ts` (`GenerateCRMLead`), previously a no-op logging stub
+with a single call site. Full port of the old Mongo backend's TeleCRM integration
+(see `docs/old-telecrm-integration.md`), extended with two product types that did
+not exist in that backend: live courses and test series. Config in
+`src/config/telecrm.ts`, lead types in `src/shared/enums.ts` (`CRM_LEAD_TYPE`).
+
+Every call site is fire-and-forget (`setImmediate(() => void GenerateCRMLead(...).catch(...))`)
+and `GenerateCRMLead` itself never throws — a TeleCRM outage cannot affect the
+triggering request. Production-only (`NODE_ENV=production`) and no-ops entirely
+when `TELE_CRM_BASE_URL`/`TELE_CRM_ACCESS_TOKEN` are unset (see `env.ts`
+`PROD_FEATURE_VARS`), so this adds **zero** extra queries outside prod.
+
+New read queries added per invocation (prod only): one `Customer` lookup, one
+active-subscription lookup (`PackageCourseSubscription` / `LiveCourseSubscription`
+/ `TestSeriesSubscription` depending on product), and one product-name + optional
+plan-name lookup. All are indexed PK/FK lookups (`findUnique`/`findFirst` on
+`id`/`customerId`+product id), so per-call cost is negligible; the notable change
+is that these now fire from hot paths (OTP login, profile update, package/course/
+live-course/test-series detail views, order creation, payment verify) that
+previously did not touch these tables.
+
+Trigger sites wired (see the doc's checklist): `auth.service.ts` (LOGIN),
+`customer.controller.ts` (SIGNUP), `package.controller.ts` (VIEW_PACKAGE),
+`course.controller.ts` (VIEW_COURSE — already wired), `live-course.controller.ts`
+(new `VIEW_LIVE_COURSE`), `testSeries.controller.ts` (new `VIEW_TEST_SERIES`), all
+four `*-payment.controller.ts` order-creation handlers (PAYMENT_MODE), and
+`verify.controller.ts`'s course/package/live-course/test-series branches
+(PAYMENT_SUCCESS) plus its signature-mismatch branch (PAYMENT_FAILED — previously
+unimplemented in the old backend too).
+
+Known quirk fixed vs. the old backend (documented, not silently changed): quirk #2
+in `docs/old-telecrm-integration.md` — `PAYMENT_SUCCESS` no longer throws when no
+`planId` is passed; the plan name is optional in the note text.
+
+---
+
 ## 2026-09-14 — `GET /admin/customers?search=` slow / timeouts at ~600k rows
 
 > **DDL:** `docs/migration/schema-changes/2026-09-14_customer_search_covering_index.sql`

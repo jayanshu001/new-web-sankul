@@ -6,6 +6,8 @@ import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { pickList, omit, omitList } from "../../utils/pick";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -143,6 +145,9 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
     const r = await liveSql.getLiveCourseDetailForClient(lid, Number.isInteger(cid) ? cid : null, resolveBase(req));
     if (r === "not_found") { logger.warn("getLiveCourseForClient not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
     logger.info("getLiveCourseForClient success (mysql)", { traceId, userId, id });
+    if (userId) {
+      queueCRMLead({ params: { userId, liveCourseId: lid }, leadType: CRM_LEAD_TYPE.VIEW_LIVE_COURSE }, { traceId, userId, liveCourseId: lid });
+    }
     // Drop unused top-level `scope` + unused plan meta (liveCourseId/status/materialPrice).
     const slimPlanMeta = ["liveCourseId", "status", "materialPrice"];
     const plans = r.plans

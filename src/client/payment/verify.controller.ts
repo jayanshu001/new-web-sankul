@@ -23,6 +23,8 @@ import {
 } from "../../modules/live-course-order/live-course-order.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -67,6 +69,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     if (!verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
       logger.warn("verifyPayment signature mismatch", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });
+      queueCRMLead({ params: { userId }, leadType: CRM_LEAD_TYPE.PAYMENT_FAILED }, { traceId, userId });
       return res.status(400).json({
         success: false,
         message: "Signature verification failed.",
@@ -102,6 +105,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
           razorpay_payment_id,
           endAt: subscription.endAt?.toISOString?.(),
         });
+        queueCRMLead(
+          { params: { userId: subscription.customerId, courseId: subscription.courseId ?? undefined, planId: subscription.packageId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
+          { traceId, customerId: subscription.customerId }
+        );
         // Entitlement changed → clear THIS buyer's cached catalog reads so the
         // next fetch shows isPurchased=true immediately (long TTL stays correct).
         await flushUserRouteCache(customerIdInt);
@@ -124,6 +131,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await verifyPackageOrderMysql(mysqlPackageOrder, razorpay_payment_id);
         logger.info("verifyPayment: package subscription activated (mysql)", { orderId: mysqlPackageOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        queueCRMLead(
+          { params: { userId: subscription.customerId, packageId: subscription.targetPackageId ?? undefined, planId: subscription.packageId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
+          { traceId, customerId: subscription.customerId }
+        );
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
@@ -201,6 +212,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await verifyLiveCourseOrderMysql(mysqlLiveOrder, razorpay_payment_id);
         logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        queueCRMLead(
+          { params: { userId: subscription.customerId, liveCourseId: subscription.liveCourseId, planId: subscription.planId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
+          { traceId, customerId: subscription.customerId }
+        );
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
@@ -220,6 +235,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await tsOrderSql.verifyOrderMysql(mysqlTsOrder, razorpay_payment_id);
         logger.info("verifyPayment: test-series subscription activated (mysql)", { orderId: mysqlTsOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        queueCRMLead(
+          { params: { userId: subscription.customerId, testSeriesId: subscription.testSeriesId, planId: subscription.planId ?? undefined, amount: subscription.price ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
+          { traceId, customerId: subscription.customerId }
+        );
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }

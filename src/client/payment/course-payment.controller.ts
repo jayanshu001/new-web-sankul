@@ -14,6 +14,8 @@ import {
   findCoursePlanForOrder,
 } from "../../modules/commerce-order/commerce-order.service";
 import { findCourseById } from "../../modules/catalog-course/catalog-course.service";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 /** Non-null Razorpay client (the controller has already null-checked it). */
 type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
@@ -213,6 +215,10 @@ const createCourseOrderMysqlPath = async (
   });
 
   logger.info("createCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+  queueCRMLead(
+    { params: { userId: customerId, courseId: plan.courseId, planId: packageId, amount: chargeAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
+    { traceId, customerId, orderId }
+  );
   return res.status(201).json({
     success: true,
     data: omit({

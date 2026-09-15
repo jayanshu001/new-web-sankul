@@ -12,6 +12,8 @@ import { ZodError } from "zod";
 import * as tsSql from "../../modules/test-series-order/test-series-order.service";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { getClientIp } from "../../utils/clientIp";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 // SQL planId is numeric (migrated id-space).
 const applyPromoSqlSchema = z.object({
@@ -273,6 +275,10 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
         refferalcodeSnapshot: codeSnapshot.refferalcode,
       });
       logger.info("createTestSeriesOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
+      queueCRMLead(
+        { params: { userId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, amount: bd.totalAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
+        { traceId, customerId, orderId }
+      );
       return res.status(201).json({ success: true, data: omit({
         testSeriesOrderId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: bd.totalAmount, breakdown: bd,
         testSeries: { _id: String(series.id), title: series.title },

@@ -10,6 +10,8 @@ import { getClientIp } from "../../utils/clientIp";
 import logger from "../../utils/logger";
 import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 import {
   findLiveCoursePlanForOrder,
   findLiveCourse,
@@ -341,6 +343,10 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });
       logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+      queueCRMLead(
+        { params: { userId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId, amount: chargeAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
+        { traceId, customerId, orderId }
+      );
       return res.status(201).json({
         success: true,
         data: omit({

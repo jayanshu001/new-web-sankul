@@ -24,6 +24,8 @@ import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscr
 import { prisma as prismaPkg } from "../../config/prisma";
 import { listChatMessagesMysql } from "../../modules/package-chat/package-chat.service";
 import { hasActivePackageSubscription } from "../../modules/commerce-subscription/commerce-subscription.service";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -51,6 +53,9 @@ export const getPackageDetail = async (req: Request, res: Response) => {
       package: omit(pkg, ["packageType", "goal", "isPopular", "subtitle", "examCountdownCategoryIds", "examCountdownIds"]),
     };
     logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
+    if (req.user?.id) {
+      queueCRMLead({ params: { userId: req.user.id, packageId: pid }, leadType: CRM_LEAD_TYPE.VIEW_PACKAGE }, { traceId, userId: req.user.id, packageId: pid });
+    }
     return res.status(200).json({ success: true, data: slimDetail });
   } catch (error: any) {
     logger.error("getPackageDetail failed", { traceId, packageId: id, error: getErrorMessage(error), stack: error.stack });

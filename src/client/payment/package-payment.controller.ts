@@ -13,6 +13,8 @@ import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.serv
 import { resolveShippingIdForAddress } from "../../modules/customer-shipping/customer-shipping.service";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 // SQL planId is numeric (migrated id-space).
 const createPackageOrderSqlSchema = z.object({
@@ -145,6 +147,10 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       //   price (list) − code_discount (promo/referral) − ws_coin = discount_price (paid)
       const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: codeSnapshot.promocode, referralCode: codeSnapshot.refferalcode, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: shippingIdSql, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+      queueCRMLead(
+        { params: { userId: customerIdInt, packageId: planSql.packageId, planId: body.packageId, amount: chargeAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
+        { traceId, customerId, orderId }
+      );
       return res.status(201).json({
         success: true,
         data: omit({

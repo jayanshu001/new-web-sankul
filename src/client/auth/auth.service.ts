@@ -9,6 +9,8 @@ import {
   toCustomerProfileDto,
   isProfileCompleteMysql,
 } from "../../modules/customer-auth/customer-auth.transformer";
+import { queueCRMLead } from "../../utils/crm";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;
@@ -301,6 +303,13 @@ export async function validateOtp(
   );
 
   const profile = toCustomerProfileDto(row, { isNewUser, isProfileCompleted: profileCompleted });
+
+  // TeleCRM LOGIN lead only for customers who already have a name/email on
+  // file — matches the old backend's rule (docs/old-telecrm-integration.md).
+  if (row.fullName || row.emailAddress) {
+    queueCRMLead({ params: { userId: row.id }, leadType: CRM_LEAD_TYPE.LOGIN }, { traceId, customerId: row.id });
+  }
+
   return {
     ok: true,
     message: "Login successful.",

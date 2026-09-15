@@ -3,7 +3,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
-import { GenerateCRMLead } from "../../utils/crm";
+import { queueCRMLead } from "../../utils/crm";
 import { buildCourseReceiptHtml, buildCourseReceiptHtmlBySub, buildLiveCourseReceiptHtml, buildTestSeriesReceiptHtml, buildTestSeriesReceiptHtmlBySub, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
 import {
@@ -150,11 +150,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
     if (!sqlResponse) return failure(res, "Please select valid package", 400);
     const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
     (sqlResponse as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
-    setImmediate(() => {
-      void GenerateCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }).catch((err) => {
-        logger.warn("GenerateCRMLead (fire-and-forget) failed", { traceId, userId, courseId, error: getErrorMessage(err) });
-      });
-    });
+    queueCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }, { traceId, userId, courseId });
     logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
     // Drop the nested catalog trees + empty promo list — RN loads tab content via
     // GET /client/catalog/:type/:id/{videos|materials|tests}. Keeps course/scope/
