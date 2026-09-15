@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-09-15 — Client notification feed no longer leaks scheduled (not-yet-sent) rows
+
+> **DDL:** none. Query-filter change only.
+
+`visWhere` (`src/modules/client-notification/client-notification.service.ts`, used by
+`listNotifications`/`unreadCount`/`markRead`/`markAllRead`/`deleteMany`/`deleteAll`)
+matched on `customerId`/`broadcast` only, with no `status` check. A scheduled
+broadcast's parent `ws_notification` row is written at schedule-create time
+(`status = "scheduled"`, so the BullMQ job can be rehydrated on boot) and only
+flips to `status = "sent"` when the scheduler worker fires at `scheduledAt`. With
+no status filter, the row was already visible/broadcast-matched the instant it
+was scheduled, so customers saw (and got an unread badge for) notifications well
+before their actual send time. Added an ANDed `{ status: "sent" }` to `visWhere`.
+Targeted (non-broadcast) per-customer rows are unaffected — `dispatchAudience`
+only ever fans those out with `status: "sent"` already, after the send succeeds.
+
+---
+
 ## 2026-09-15 — Notification target picker (`GET /admin/notifications/target-options`) now excludes inactive content
 
 > **DDL:** none. Query-filter change only.

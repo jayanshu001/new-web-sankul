@@ -52,7 +52,16 @@ const contextFor = async (customerId: number) => {
  * `signupAt` null (legacy rows with no created_at) → no bound, i.e. the old behaviour.
  * Losing a customer's whole feed is a worse failure than showing a little extra.
  */
+/**
+ * Only "sent" rows are visible to customers — "scheduled" rows are written to
+ * ws_notification at schedule-create time (so the BullMQ job can be rehydrated
+ * on boot) and only actually go out once the scheduler worker flips them to
+ * "sent" at `scheduledAt`. Without this, a scheduled/not-yet-fired broadcast
+ * already matched the OR below and appeared in every customer's feed the
+ * moment an admin scheduled it, well before its send time.
+ */
 const visWhere = (customerId: number, signupAt: Date | null) => ({
+  status: "sent",
   OR: [
     { customerId },
     signupAt
