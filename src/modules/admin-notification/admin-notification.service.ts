@@ -542,13 +542,22 @@ export async function searchTargetOptions(opts: {
 
   // Each branch keeps its Prisma delegate + label field explicit (delegates are
   // not structurally compatible, so a generic helper can't type-check cleanly).
+  //
+  // `statusField` is always ANDed in as `true` — an admin must never be able to
+  // pick an inactive/unpublished item as a notification target: the resulting
+  // deeplink would point at content the app can't render (404 / hidden), which
+  // is how a broadcast notification "breaks" on tap.
   const run = async <T extends { id: number }>(
     findMany: (args: any) => Promise<T[]>,
     count: (args: any) => Promise<number>,
-    labelField: string
+    labelField: string,
+    statusField: string
   ) => {
     const toks = searchTokens(q);
-    const where = toks.length ? { AND: toks.map((t) => ({ [labelField]: { contains: t } })) } : {};
+    const where = {
+      [statusField]: true,
+      ...(toks.length ? { AND: toks.map((t) => ({ [labelField]: { contains: t } })) } : {}),
+    };
     const [rows, total] = await Promise.all([
       findMany({ where, orderBy: { [labelField]: "asc" }, skip: opts.skip, take: opts.take }),
       count({ where }),
@@ -559,17 +568,17 @@ export async function searchTargetOptions(opts: {
 
   switch (opts.entity) {
     case "course":
-      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name");
+      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name", "status");
     case "package":
-      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name");
+      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name", "active");
     case "live-course":
-      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name");
+      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name", "status");
     case "book":
-      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name");
+      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name", "active");
     case "ebook":
-      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name");
+      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name", "active");
     case "test-series":
-      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title");
+      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title", "status");
   }
 }
 

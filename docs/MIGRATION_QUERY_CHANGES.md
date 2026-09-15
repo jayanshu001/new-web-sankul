@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-09-15 — Notification target picker (`GET /admin/notifications/target-options`) now excludes inactive content
+
+> **DDL:** none. Query-filter change only.
+
+`searchTargetOptions` (`src/modules/admin-notification/admin-notification.service.ts`)
+listed course/package/live-course/book/ebook/test-series rows with no status
+filter, so an admin composing a broadcast notification could pick an
+inactive/unpublished item as the target. The resulting deeplink then points at
+content the client app can't render — the notification "breaks" on tap. Added
+an ANDed `{ status: true }` / `{ active: true }` (field name matches each
+model — `Course.status`, `Package.active`, `LiveCourse.status`, `Book.active`,
+`EBook.active`, `TestSeries.status`) to every branch's `where`, alongside the
+existing search tokens.
+
+---
+
 ## 2026-09-15 — TeleCRM lead push ported to MySQL + wired into live-course/test-series
 
 > **DDL:** none. Read-only Prisma lookups against existing tables only.
