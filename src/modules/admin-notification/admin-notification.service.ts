@@ -22,6 +22,7 @@
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 import { sendPush } from "../../utils/fcm";
+import { parseContentDeepLink } from "../../utils/notificationTarget";
 import logger from "../../utils/logger";
 
 
@@ -199,14 +200,28 @@ export async function dispatchAudience(
   const isBroadcast = resolved.isAll;
   const tokens = await collectTokens(resolved);
 
+  // Content can be deactivated between an admin picking it (searchTargetOptions
+  // already excludes inactive rows) and this send actually firing — most
+  // relevant for scheduled notifications. Recheck here so a stale target
+  // degrades to "notification with no destination" instead of the app
+  // rendering "not found" on tap.
+  let deepLink = payload.deepLink;
+  let data = payload.data;
+  const target = parseContentDeepLink(deepLink);
+  if (target && !(await isTargetContentActive(target.entity, target.id))) {
+    logger.warn("dispatchAudience: target content no longer active, dropping deepLink", target);
+    deepLink = null;
+    data = undefined;
+  }
+
   const sendResult = await sendPush(tokens, {
     title: payload.title,
     body: payload.body,
     titleHtml: payload.titleHtml,
     bodyHtml: payload.bodyHtml,
     image: payload.image,
-    deepLink: payload.deepLink,
-    data: payload.data,
+    deepLink,
+    data,
   });
 
   const status: "sent" | "failed" =
@@ -240,8 +255,8 @@ export async function dispatchAudience(
             bodyHtml: payload.bodyHtml ?? null,
             image: payload.image ?? null,
             type: payload.type ?? "general",
-            deepLink: payload.deepLink ?? null,
-            data: (payload.data ?? {}) as any,
+            deepLink: deepLink ?? null,
+            data: (data ?? {}) as any,
             status: "sent",
             sentAt: now,
             recipientCount: 1,
@@ -532,6 +547,18 @@ export const TARGET_ENTITIES: TargetEntity[] = [
   "test-series",
 ];
 
+// Single source of truth for "which boolean column marks this entity active",
+// shared by the picker (searchTargetOptions) and the send-time recheck
+// (isTargetContentActive) so the two can never drift apart.
+const TARGET_ENTITY_STATUS_FIELD: Record<TargetEntity, string> = {
+  course: "status",
+  package: "active",
+  "live-course": "status",
+  book: "active",
+  ebook: "active",
+  "test-series": "status",
+};
+
 export async function searchTargetOptions(opts: {
   entity: TargetEntity;
   q?: string;
@@ -566,19 +593,45 @@ export async function searchTargetOptions(opts: {
     return { data, total };
   };
 
+  const statusField = TARGET_ENTITY_STATUS_FIELD[opts.entity];
   switch (opts.entity) {
     case "course":
-      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name", "status");
+      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name", statusField);
     case "package":
-      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name", "active");
+      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name", statusField);
     case "live-course":
-      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name", "status");
+      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name", statusField);
     case "book":
-      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name", "active");
+      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name", statusField);
     case "ebook":
-      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name", "active");
+      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name", statusField);
     case "test-series":
-      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title", "status");
+      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title", statusField);
+  }
+}
+
+/**
+ * Re-check, right before a notification actually goes out, that a "content"
+ * target's deeplink still points at an active row. Content can be deactivated
+ * between an admin picking it and a scheduled job firing, so this is defense
+ * in depth on top of `searchTargetOptions` already excluding inactive rows.
+ */
+export async function isTargetContentActive(entity: TargetEntity, id: number): Promise<boolean> {
+  const statusField = TARGET_ENTITY_STATUS_FIELD[entity];
+  const where = { id, [statusField]: true };
+  switch (entity) {
+    case "course":
+      return (await prisma.course.count({ where })) > 0;
+    case "package":
+      return (await prisma.package.count({ where })) > 0;
+    case "live-course":
+      return (await prisma.liveCourse.count({ where })) > 0;
+    case "book":
+      return (await prisma.book.count({ where })) > 0;
+    case "ebook":
+      return (await prisma.eBook.count({ where })) > 0;
+    case "test-series":
+      return (await prisma.testSeries.count({ where })) > 0;
   }
 }
 

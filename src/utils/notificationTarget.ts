@@ -104,6 +104,25 @@ export interface BuiltRouting {
   data: Record<string, string>;
 }
 
+const CONTENT_DEEPLINK_RE = new RegExp(
+  `^${APP_SCHEME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}://(${Object.values(CONTENT_ENTITY_PATHS).join("|")})/(\\d+)$`
+);
+
+/**
+ * Inverse of the "content" branch of `buildNotificationRouting`: recover
+ * `{ entity, id }` from a previously-built deepLink string. Used to re-check
+ * that the target is still active right before a notification actually goes
+ * out (see `admin-notification.service.ts` `assertDeepLinkStillActive`) —
+ * content can be deactivated between when an admin picks it and when a
+ * scheduled notification fires.
+ */
+export function parseContentDeepLink(deepLink: string | null | undefined): { entity: ContentEntity; id: number } | null {
+  if (!deepLink) return null;
+  const match = CONTENT_DEEPLINK_RE.exec(deepLink);
+  if (!match) return null;
+  return { entity: match[1] as ContentEntity, id: Number(match[2]) };
+}
+
 /**
  * Resolve a semantic target into the FCM routing fields. The caller merges the
  * result into the outgoing `deepLink` + `data` before dispatch, so every
