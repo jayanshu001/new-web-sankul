@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-09-16 — Admin test-series search fixed: prefix match → substring match on title
+
+> **DDL:** none. Query-filter change only.
+
+`listTestSeries` and `testSeriesIdsByText` (`src/modules/admin-testseries/admin-testseries.service.ts:230,753`)
+searched `title` with `buildPrismaPrefixSearch` (per-token `startsWith`, all tokens ANDed).
+For a multi-word query (e.g. searching "Mix Test" against a row titled
+"Mix Test - 594"), the token "Test" does not match `startsWith` since the title
+doesn't *begin* with "Test" — only its first word does — so the AND of tokens
+returned zero rows despite an obvious substring match. Switched both call sites
+to `buildPrismaSearch` (per-token `contains`, same tokenize/AND/OR shape) so any
+word of the title matches regardless of position. `test_series` is a small table,
+so the B-tree prefix-scan performance rationale documented in `searchFilter.ts`
+(large tables like `ws_customer`) doesn't apply here; the customer-name/phone/email
+search at line 747 is left on `buildPrismaPrefixSearch` since it targets that
+large table.
+
 ## 2026-09-15 — Client notification feed no longer leaks scheduled (not-yet-sent) rows
 
 > **DDL:** none. Query-filter change only.
