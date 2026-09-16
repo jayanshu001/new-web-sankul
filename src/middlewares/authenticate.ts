@@ -39,7 +39,7 @@ const getCustomerGate = async (id: string): Promise<CustomerGate | null> => {
     // request, so the two queries must not serialize.
     const [row, liveToken] = await Promise.all([
       customerAuthRepository.getAuthStateById(numId),
-      customerAuthRepository.findLiveTokenId(numId, new Date()),
+      customerAuthRepository.findLiveTokenId(numId),
     ]);
     gate = row
       ? { deleted: !!row.isAccountDeleted, disabled: !row.status, hasLiveToken: !!liveToken }

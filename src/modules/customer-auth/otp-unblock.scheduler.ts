@@ -71,13 +71,12 @@ async function withReconnect<T>(fn: () => Promise<T>): Promise<T> {
  * number of rows actually cleared.
  */
 async function reconcileLoggedOut(): Promise<number> {
-  const now = new Date();
   let afterId = 0;
   let cleared = 0;
 
   for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
     const rows = await withReconnect(() =>
-      customerAuthRepository.findStaleLoggedInIds(now, afterId, RECONCILE_PAGE)
+      customerAuthRepository.findStaleLoggedInIds(afterId, RECONCILE_PAGE)
     );
     if (rows.length === 0) break;
 

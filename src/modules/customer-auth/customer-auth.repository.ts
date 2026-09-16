@@ -45,13 +45,17 @@ export const customerAuthRepository = {
    * request path entirely.
    *
    * `findFirst` + `select: { id }`, not `count`: we only need existence, and
-   * this way MySQL stops at the first match. Fully covered by
+   * this way MySQL stops at the first match. Covered by the prefix of
    * idx_cust_access_token_live (customer_id, active, deleted, expires_at) —
    * without that index this would full-scan on EVERY authenticated request.
+   *
+   * `expires_at` is deliberately NOT checked (2026-09-16): customer sessions
+   * have no time ceiling — only logout / account disable / account delete
+   * (which flag or remove the rows) end them.
    */
-  findLiveTokenId: (customerId: number, now: Date) =>
+  findLiveTokenId: (customerId: number) =>
     prisma.customerAccessToken.findFirst({
-      where: { customerId, active: true, deleted: false, expires_at: { gt: now } },
+      where: { customerId, active: true, deleted: false },
       select: { id: true },
     }),
 
@@ -166,14 +170,15 @@ export const customerAuthRepository = {
    * UPDATE holding row locks and inflating one binlog event. See the batched
    * loop in otp-unblock.scheduler.ts.
    */
-  findStaleLoggedInIds: (now: Date, afterId: number, take: number) =>
+  findStaleLoggedInIds: (afterId: number, take: number) =>
     prisma.customer.findMany({
       where: {
         isLoggedIn: true,
         id: { gt: afterId },
+        // Same "live row" predicate as findLiveTokenId — no expires_at.
         NOT: {
           customerAccessToken: {
-            some: { active: true, deleted: false, expires_at: { gt: now } },
+            some: { active: true, deleted: false },
           },
         },
       },

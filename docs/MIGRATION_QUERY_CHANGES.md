@@ -15,6 +15,42 @@
 
 ---
 
+## 2026-09-16 — Customer sessions have no time ceiling (access 7d + refresh 60d + `expires_at` gate removed)
+
+> **DDL:** none. Query-filter change: `expires_at` dropped from the two
+> `ws_customer_access_token` "live row" predicates. Index
+> `idx_cust_access_token_live (customer_id, active, deleted, expires_at)` still
+> covers both via its 3-column prefix — no index change.
+
+Requested behaviour: a customer stays logged in until they log out (or the account
+is disabled / deleted). Three things enforced a time ceiling; all three removed:
+
+1. **Access JWT `exp`** (was 7d) — `src/client/auth/auth.service.ts` login
+   (`verifyOtp`) + `refreshCustomerToken` sign without `expiresIn`.
+2. **Refresh JWT `exp`** (was 60d) — same two call sites, same change.
+3. **`ws_customer_access_token.expires_at` read on the request path** —
+   `customer-auth.repository.ts`:
+   - `findLiveTokenId(customerId)` — `expires_at: { gt: now }` dropped; predicate
+     is now `active && !deleted`. `now` param removed (caller
+     `middlewares/authenticate.ts:42`).
+   - `findStaleLoggedInIds(afterId, take)` — same predicate change so the
+     `is_login` reconcile sweep (`otp-unblock.scheduler.ts`) agrees with the gate;
+     otherwise `is_login` would flip to 0 at day 60 while the session still worked.
+
+`iat` is still in both JWTs — the Redis revocation cutoff (`libs/tokenRevocation.ts`,
+logout-all / disable) keys on it and is unchanged. `JWT_ACCESS_TTL_DAYS` deleted;
+`JWT_REFRESH_TTL_DAYS` (60) kept only because `expires_at` is NOT NULL and must be
+written (informational, nothing reads it) and as the EX of the write-only
+`customer_session:*` Redis key.
+
+What ends a customer session now: `DELETE /client/auth/logout`, logout-all,
+account disable, account delete — each flags/removes the token rows →
+`401 SESSION_REVOKED` on the next request. Nothing else.
+
+Admin / educator / promoter untouched (1d access / 30d refresh). Tokens issued
+before deploy keep the `exp` they were signed with. Doc:
+`docs/client/REFRESH_TOKEN_GUIDE.md` "Token lifetimes" updated.
+
 ## 2026-09-16 — Admin test-series search fixed: prefix match → substring match on title
 
 > **DDL:** none. Query-filter change only.

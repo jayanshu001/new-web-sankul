@@ -42,7 +42,13 @@ if (DUMMY_OTP_ENABLED) {
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET as string;
-const JWT_ACCESS_TTL_DAYS = 7;
+// Customer sessions have NO time ceiling (2026-09-16 by request): neither the
+// access nor the refresh JWT carries `exp`, and `authenticate` no longer checks
+// ws_customer_access_token.expires_at. Only logout / account disable / account
+// delete end a session (they flag or remove the row).
+//
+// `expires_at` is NOT NULL, so it is still written — informational only, nothing
+// reads it. Also used as the EX of the write-only `customer_session:*` Redis key.
 const JWT_REFRESH_TTL_DAYS = 60;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -279,13 +285,11 @@ export async function validateOtp(
   const idStr = String(row.id);
   const token = jwt.sign(
     { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
-    JWT_SECRET,
-    { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
+    JWT_SECRET
   );
   const refreshToken = jwt.sign(
     { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
-    JWT_REFRESH_SECRET,
-    { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
+    JWT_REFRESH_SECRET
   );
 
   await customerAuthRepository.createToken({
@@ -299,7 +303,7 @@ export async function validateOtp(
     `customer_session:${idStr}`,
     token,
     "EX",
-    JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
+    JWT_REFRESH_TTL_DAYS * 24 * 60 * 60
   );
 
   const profile = toCustomerProfileDto(row, { isNewUser, isProfileCompleted: profileCompleted });
@@ -387,13 +391,11 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
     const idStr = String(row.id);
     const newToken = jwt.sign(
       { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
-      JWT_SECRET,
-      { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
+      JWT_SECRET
     );
     const newRefreshToken = jwt.sign(
       { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
-      JWT_REFRESH_SECRET,
-      { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
+      JWT_REFRESH_SECRET
     );
 
     // ORDER MATTERS — insert the new row BEFORE retiring the old one.
@@ -423,7 +425,7 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
       `customer_session:${idStr}`,
       newToken,
       "EX",
-      JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
+      JWT_REFRESH_TTL_DAYS * 24 * 60 * 60
     );
 
     const profile = toCustomerProfileDto(row, {
