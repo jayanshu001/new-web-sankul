@@ -19,6 +19,7 @@ import type { RequestHandler } from "express";
 import { redisClient } from "../config/redis";
 import { prisma } from "../config/prisma";
 import { isShuttingDown } from "../utils/gracefulShutdown";
+import { sanitizeClientMessage } from "../utils/errorSanitizer";
 import {
   getPdfUploadQueueOrNull,
   getPdfUploadWorkerOrNull,
@@ -82,7 +83,11 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
     await withTimeout(prisma.$queryRaw`SELECT 1`, PING_TIMEOUT_MS, "mysql");
     checks.mysql = { ok: true, latencyMs: Date.now() - mysqlStart };
   } catch (err) {
-    checks.mysql = { ok: false, latencyMs: Date.now() - mysqlStart, error: (err as Error).message };
+    checks.mysql = {
+      ok: false,
+      latencyMs: Date.now() - mysqlStart,
+      error: sanitizeClientMessage((err as Error).message, 500),
+    };
   }
 
   // Redis: PING is the canonical check. ioredis short-circuits with a queued
@@ -96,7 +101,7 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
     checks.redis = {
       ok: false,
       latencyMs: Date.now() - redisStart,
-      error: (err as Error).message,
+      error: sanitizeClientMessage((err as Error).message, 500),
     };
   }
 
