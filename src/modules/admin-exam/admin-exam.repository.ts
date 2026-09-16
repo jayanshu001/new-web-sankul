@@ -1,7 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { examInCategoryWhere } from "../catalog-exam/exam-category-pivot.where";
-import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /** Shape used by question create/bulk inserts (option image/order dropped — no columns). */
 export interface QuestionWrite {
@@ -68,7 +68,7 @@ export const adminExamRepository = {
     isPaid?: boolean;
   }): Prisma.ExamWhereInput => {
     const parts: Prisma.ExamWhereInput[] = [];
-    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+    const search = buildPrismaSearch(opts.search, ["name"]);
     if (search) parts.push(search);
     if (opts.categoryId !== undefined) parts.push(examInCategoryWhere(opts.categoryId));
     if (opts.type) parts.push({ type: opts.type });
@@ -121,7 +121,7 @@ export const adminExamRepository = {
   listQuestions: (opts: { examId?: number; search?: string; status?: boolean; skip: number; take: number }) => {
     const where: Prisma.ExamQuestionWhereInput = {};
     if (opts.examId !== undefined) where.exam = opts.examId;
-    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+    const search = buildPrismaSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.examQuestion.findMany({ where, orderBy: [{ order_by: "asc" }, { createdAt: "asc" }, { id: "asc" }], skip: opts.skip, take: opts.take });
@@ -129,7 +129,7 @@ export const adminExamRepository = {
   countQuestions: (opts: { examId?: number; search?: string; status?: boolean }) => {
     const where: Prisma.ExamQuestionWhereInput = {};
     if (opts.examId !== undefined) where.exam = opts.examId;
-    const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+    const search = buildPrismaSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.examQuestion.count({ where });
