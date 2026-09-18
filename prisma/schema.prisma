@@ -3435,3 +3435,93 @@ model JobSearchDocument {
   @@index([contentType, publishedAt], map: "wsj_search_type_published_idx")
   @@map("wsj_search_documents")
 }
+
+// *****************************CAREERS (ws_career_*) ******************************
+// Pre-existing tables (NOT created by websankul-backend — already live in this
+// same production DB, 11 openings / 1231+ applications at introspection time,
+// 2026-09-18). No DDL here; these models are hand-mapped onto the real columns
+// via `DESCRIBE`/`SHOW INDEX`, the same way the rest of prisma/schema.prisma
+// wraps introspected legacy tables. This is the exposure of that existing data
+// through websankul-backend, replacing the legacy `api.websankul.com/v2/careers/*`
+// endpoints (`websankul-jobs` + `websankul-books` frontends both called it
+// directly, unauthenticated) — see docs/MIGRATION_QUERY_CHANGES.md (2026-09-18).
+//
+// `CareerOpening` = an admin-managed job posting on the WebSankul careers page.
+// `CareerApplication` = a public, unauthenticated submission against one. Both
+// public client endpoints (list openings, submit application) are a documented
+// auth exception alongside app-version — see careers.routes.ts.
+
+enum CareerOpeningJobType {
+  full_time
+  part_time
+  contract
+  internship
+}
+
+// Openings use a 3-value enum (incl. "any"); applications store this as a
+// free-text column instead (see CareerApplication.experienceLevel below) —
+// confirmed via DESCRIBE, not a typo.
+enum CareerOpeningExperienceLevel {
+  fresher
+  experienced
+  any
+}
+
+enum CareerApplicationStatus {
+  new
+  reviewing
+  shortlisted
+  rejected
+}
+
+model CareerOpening {
+  id              BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
+  title           String                       @db.VarChar(255)
+  department      String?                      @db.VarChar(255)
+  location        String?                      @db.VarChar(255)
+  jobType         CareerOpeningJobType         @default(full_time) @map("job_type")
+  experienceLevel CareerOpeningExperienceLevel @default(any) @map("experience_level")
+  description     String?                      @db.Text
+  requirements    String?                      @db.Text
+  minSalary       Decimal?                     @map("min_salary") @db.Decimal(10, 2)
+  maxSalary       Decimal?                     @map("max_salary") @db.Decimal(10, 2)
+  vacancies       Int                          @default(1)
+  lastDate        DateTime?                    @map("last_date") @db.Date
+  /// Active/inactive on the public listing — legacy contract's `status` (0/1).
+  status          Boolean                      @default(true)
+  createdAt       DateTime?                    @default(now()) @map("created_at")
+  updatedAt       DateTime?                    @default(now()) @updatedAt @map("updated_at")
+  applications    CareerApplication[]
+
+  @@map("ws_career_openings")
+}
+
+model CareerApplication {
+  id              BigInt                  @id @default(autoincrement()) @db.UnsignedBigInt
+  opening         CareerOpening?          @relation(fields: [openingId], references: [id], onDelete: SetNull, map: "ws_career_applications_opening_id_foreign")
+  openingId       BigInt?                 @map("opening_id") @db.UnsignedBigInt
+  /// Snapshotted at apply time — survives the opening being edited/deleted later.
+  jobTitle        String?                 @map("job_title") @db.VarChar(255)
+  fullName        String                  @map("full_name") @db.VarChar(255)
+  email           String?                 @db.VarChar(255)
+  contactNumber   String                  @map("contact_number") @db.VarChar(15)
+  /// VARCHAR on this table (not Int) — matches the legacy form's digit-string
+  /// contract, confirmed via DESCRIBE. Same for gender/experienceLevel/
+  /// currentSalary/expectedSalary below.
+  age             String                  @db.VarChar(10)
+  gender          String                  @db.VarChar(20)
+  address         String                  @db.Text
+  experienceLevel String                  @map("experience_level") @db.VarChar(30)
+  lastCompany     String?                 @map("last_company") @db.VarChar(255)
+  currentSalary   String?                 @map("current_salary") @db.VarChar(255)
+  expectedSalary  String                  @map("expected_salary") @db.VarChar(255)
+  reason          String?                 @db.Text
+  resume          String?                 @db.VarChar(255)
+  /// Admin review workflow — not part of the legacy public contract.
+  status          CareerApplicationStatus @default(new)
+  createdAt       DateTime?               @map("created_at")
+  updatedAt       DateTime?               @default(now()) @updatedAt @map("updated_at")
+
+  @@index([openingId], map: "ws_career_applications_opening_id_foreign")
+  @@map("ws_career_applications")
+}

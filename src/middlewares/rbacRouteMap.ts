@@ -562,6 +562,15 @@ crud("/jobs/papers", "jobs.previous-papers");
 // ── /jobs/suggested-products → jobs.suggested-products ──────────────────
 crud("/jobs/suggested-products", "jobs.suggested-products");
 
+// ── /careers/openings → careers.openings ─────────────────────────────────
+crud("/careers/openings", "careers.openings");
+
+// ── /careers/applications → careers.applications (view + status-edit only,
+//    no create/delete — applications arrive from the public apply endpoint) ─
+R("PUT", "/careers/applications/:id/status", "careers.applications.edit");
+R("GET", "/careers/applications", ...view("careers.applications"));
+R("GET", "/careers/applications/:id", ...view("careers.applications"));
+
 // ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────
 
 /**

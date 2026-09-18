@@ -45,6 +45,7 @@ import clientRecentlyAddedRoutes from "./recently-added/recently-added.routes";
 import clientAppVersionRoutes from "./app-version/app-version.routes";
 import clientDownloadsRoutes from "./downloads/downloads.routes";
 import clientSubscriptionsRoutes from "./subscriptions/subscriptions.routes";
+import clientCareersRoutes from "./careers/careers.routes";
 
 const router = Router();
 
@@ -105,5 +106,6 @@ router.use("/catalog", clientCatalogRoutes);        // -> /api/v1/client/catalog
 router.use("/app-version", clientAppVersionRoutes); // -> /api/v1/client/app-version/check (PUBLIC: store vs. installed + force-update gate, pre-login)
 router.use("/downloads", clientDownloadsRoutes);    // -> /api/v1/client/downloads/encryption-key (GET/PUT per-user offline AES key)
 router.use("/subscriptions", clientSubscriptionsRoutes); // -> /api/v1/client/subscriptions/access (offline entitlement snapshot: kind+id+endAt)
+router.use("/careers", clientCareersRoutes); // -> /api/v1/client/careers/* (PUBLIC: current-openings, apply — pre-login, see careers.routes.ts)
 
 export default router;

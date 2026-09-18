@@ -248,6 +248,12 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("jobs.previous-papers", "Previous Papers", "Jobs"),
   mod("jobs.suggested-products", "Jobs Suggested Products", "Jobs"),
 
+  // ── Careers ──────────────────────────────────────────────────────────────
+  mod("careers.openings", "Career Openings", "Careers"),
+  // Applications are submitted publicly, never created/deleted by an admin —
+  // only viewed and moved through the review-status workflow.
+  mod("careers.applications", "Career Applications", "Careers", { standard: ["view", "edit"] }),
+
   // ── Offline ──────────────────────────────────────────────────────────────
   mod("offline.banners", "Offline Banners", "Offline"),
   mod("offline.cities", "Offline Cities", "Offline"),
