@@ -2865,15 +2865,17 @@ model JobOrganization {
 
   contents       JobContent[]
   previousPapers JobPreviousPaper[]
+  categories     JobCategory[]
 
   @@map("wsj_organizations")
 }
 
 model JobCategory {
-  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  slug       String    @unique(map: "wsj_categories_slug_unique") @db.VarChar(100)
-  label      String    @db.VarChar(255)
-  sortOrder  Int       @default(0) @map("sort_order")
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  slug           String    @unique(map: "wsj_categories_slug_unique") @db.VarChar(100)
+  label          String    @db.VarChar(255)
+  organizationId BigInt?   @map("organization_id") @db.UnsignedBigInt
+  sortOrder      Int       @default(0) @map("sort_order")
   imageUrl   String?   @map("image_url") @db.VarChar(1000)
   imageAlt   String?   @map("image_alt") @db.VarChar(255)
   showOnHome Boolean   @default(false) @map("show_on_home")
@@ -2881,8 +2883,10 @@ model JobCategory {
   createdAt  DateTime? @map("created_at") @db.Timestamp(0)
   updatedAt  DateTime? @map("updated_at") @db.Timestamp(0)
 
-  contents JobContent[]
+  organization JobOrganization? @relation(fields: [organizationId], references: [id], map: "fk_wsj_categories_organization")
+  contents     JobContent[]
 
+  @@index([organizationId], map: "idx_wsj_categories_organization_id")
   @@map("wsj_categories")
 }
 

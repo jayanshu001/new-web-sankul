@@ -2,6 +2,8 @@ export interface CategoryDto {
   _id: string;
   slug: string;
   label: string;
+  organizationId?: string;
+  organization?: { _id: string; name: string };
   sortOrder: number;
   imageUrl?: string;
   imageAlt?: string;
@@ -14,6 +16,7 @@ export interface CategoryDto {
 export interface CategoryCreateInput {
   slug?: string;
   label: string;
+  organizationId?: bigint | null;
   sortOrder?: number;
   imageUrl?: string | null;
   imageAlt?: string | null;
@@ -24,6 +27,7 @@ export interface CategoryCreateInput {
 export interface CategoryUpdateInput {
   slug?: string;
   label?: string;
+  organizationId?: bigint | null;
   sortOrder?: number;
   imageUrl?: string | null;
   imageAlt?: string | null;
@@ -33,6 +37,7 @@ export interface CategoryUpdateInput {
 
 export interface CategoryListQuery {
   search?: string;
+  organizationId?: bigint;
   skip: number;
   take: number;
 }

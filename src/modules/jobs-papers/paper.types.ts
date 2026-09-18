@@ -37,8 +37,6 @@ export interface PaperDto {
   description?: string;
   status: JobPaperStatus;
   publishedAt?: Date;
-  // Single-file: `wsj_previous_paper_files` no longer exists, so only the
-  // first uploaded file (`pdfUrl`) is kept — 0 or 1 items, never more.
   files: PaperFileDto[];
   jobIds: string[];
   tags: string[];

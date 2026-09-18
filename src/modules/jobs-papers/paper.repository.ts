@@ -19,15 +19,21 @@ const buildWhere = (q: Partial<PaperListQuery>) => {
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-// `wsj_previous_paper_files`/`_job_links`/`_products` (as a distinct table)
-// no longer exist. `jobIds`/`products` now live in the `Json?` columns
-// already on `wsj_previous_papers`; a multi-file upload collapses to the
-// first file's URL in `pdfUrl` (the only storage left for it).
+// Storage shape is the legacy Laravel admin's (GovtJobRecruitmentService::savePaper):
+//  - pdf_url   : JSON-encoded [{label,url}] (a plain URL is legacy single-file)
+//  - job_ids   : JSON array of ints; content_id mirrors the first one
+//  - products  : JSON [{product_type, product_id:"123", is_featured:"1"?}]
 const writeTags = async (tx: Tx, paperId: bigint, input: PaperWriteInput) => {
   await tx.jobPreviousPaperTag.deleteMany({ where: { paperId } });
   for (const tag of input.tags ?? []) {
     await tx.jobPreviousPaperTag.create({ data: { paperId, tag } });
   }
+};
+
+const pdfUrlOf = (files: PaperWriteInput["files"]) => {
+  if (files === undefined) return undefined;
+  const list = files.map((f) => ({ label: f.label?.trim() || null, url: f.url }));
+  return list.length ? JSON.stringify(list) : null;
 };
 
 const baseData = (input: PaperWriteInput) => ({
@@ -43,11 +49,17 @@ const baseData = (input: PaperWriteInput) => ({
   isSolved: input.isSolved ?? false,
   description: input.description,
   status: input.status,
-  papersCount: input.files?.length ?? 0,
-  pdfUrl: input.files?.[0]?.url,
-  jobIds: input.jobIds ? input.jobIds.map(String) : undefined,
+  ...(input.files !== undefined ? { papersCount: input.files.length } : {}),
+  pdfUrl: pdfUrlOf(input.files),
+  ...(input.jobIds !== undefined
+    ? { jobIds: input.jobIds.map(Number), contentId: input.jobIds.length ? input.jobIds[0] : null }
+    : {}),
   products: input.products
-    ? input.products.map((p) => ({ ...p, productId: String(p.productId) }))
+    ? input.products.map((p) => ({
+        product_type: p.productType,
+        product_id: String(p.productId),
+        ...(p.isFeatured ? { is_featured: "1" } : {}),
+      }))
     : undefined,
 });
 
@@ -73,7 +85,7 @@ export const paperRepository = {
           organizationId: input.organizationId ?? undefined,
           categoryId: input.categoryId ?? undefined,
           previewUrl: input.previewUrl ?? undefined,
-          publishedAt: input.publishedAt ?? undefined,
+          publishedAt: input.publishedAt ?? (input.status === "published" ? new Date() : undefined),
           createdAt: new Date(),
           updatedAt: new Date(),
         },
@@ -84,6 +96,7 @@ export const paperRepository = {
 
   update: (id: bigint, input: PaperWriteInput) =>
     prisma.$transaction(async (tx) => {
+      const existing = await tx.jobPreviousPaper.findUniqueOrThrow({ where: { id }, select: { publishedAt: true } });
       await tx.jobPreviousPaper.update({
         where: { id },
         data: {
@@ -91,7 +104,7 @@ export const paperRepository = {
           organizationId: input.organizationId ?? null,
           categoryId: input.categoryId ?? null,
           ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
-          publishedAt: input.publishedAt ?? null,
+          publishedAt: input.publishedAt ?? existing.publishedAt ?? (input.status === "published" ? new Date() : null),
           updatedAt: new Date(),
         },
       });

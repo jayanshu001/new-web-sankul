@@ -4,6 +4,7 @@ import { success } from "../../utils/httpResponse";
 import { HttpError } from "../../middlewares/errorHandler";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { categoryCreateSchema, categoryUpdateSchema, categoryReorderSchema } from "../../modules/jobs-taxonomy/category.validation";
+import { parseOptionalBigInt } from "../../utils/parseId";
 import * as categoryService from "../../modules/jobs-taxonomy/category.service";
 
 const applyImageUpload = (req: Request) => {
@@ -17,7 +18,8 @@ const applyImageUpload = (req: Request) => {
 
 export const getCategoryList = asyncHandler(async (req: Request, res: Response) => {
   const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
-  const { items, total } = await categoryService.listCategoriesPaged({ search, skip, take: limit });
+  const organizationId = parseOptionalBigInt(req.query.organizationId);
+  const { items, total } = await categoryService.listCategoriesPaged({ search, organizationId, skip, take: limit });
   return res.status(200).json({ success: true, data: items, pagination: buildPagination(total, page, limit) });
 });
 
