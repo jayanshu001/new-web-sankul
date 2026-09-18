@@ -2,6 +2,49 @@ import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
+ * `ws_package_course_order.customer_id` and `ws_ebook_order.customer_id` are
+ * `VARCHAR(255)` in the real DB — every sibling order/subscription table uses
+ * `INT` (confirmed via `information_schema.COLUMNS`), so this is legacy drift on
+ * just these two, not yet migrated. `schema.prisma` declares both as `Int?`
+ * (matching every other table, and what the column *should* be), so
+ * `prisma.<model>.findMany({ where: { userId: customerId } })` binds the value
+ * as an INT parameter. MySQL then has to numeric-cast every stored VARCHAR row to
+ * compare, which defeats ref/range access on ANY index with customer_id as a
+ * leading column — including `idx_pco_user_status_id`, built for exactly this
+ * query. Measured on production (customer 471985, `EXPLAIN ANALYZE`):
+ *
+ *   int bind (`customer_id = 471985`):    2973ms, 424,801 rows examined (full index scan)
+ *   string bind (`customer_id = '471985'`): 0.03ms,       6 rows examined (index seek)
+ *
+ * Same pathology on `ws_ebook_order` (193ms → 0.4ms). The two functions below
+ * use `$queryRawUnsafe` instead of `.findMany`/`.count` SOLELY to control the
+ * bind type — `String(customerId)` restores the index. This is a workaround, not
+ * a fix: the real fix is `ALTER TABLE ... MODIFY customer_id INT` on both tables
+ * to match every other order table, which needs its own DDL pass (see
+ * docs/MIGRATION_QUERY_CHANGES.md, 2026-09-18). Selects only the columns
+ * `client-purchase-history.service.ts` actually reads off these rows.
+ */
+type PurchaseOrderRow = {
+  id: number;
+  planId: number | null;
+  createdAt: Date | null;
+  gatewayOrderId: string | null;
+  gatewayPaymentId: string | null;
+  amount: number | null;
+};
+type EbookOrderRow = {
+  id: number;
+  planId: number | null;
+  orderPrice: number;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  status: string;
+  gatewayOrderId: string | null;
+  gatewayPaymentId: string | null;
+  bankTransactionId: string | null;
+};
+
+/**
  * Prisma persistence for the client purchase-history MySQL branch (Wave 7).
  * Pure read-aggregation over ALREADY-MIGRATED tables — no new tables:
  *  - subscriptions tab → ws_package_course_subscription (+ package/course/type)
@@ -70,13 +113,21 @@ export const clientPurchaseHistoryRepository = {
   // completed order = a transaction). Live-course already lists per-purchase (its
   // retired extend rows stay payment_status="verified"), so it keeps its sub source.
   listPurchaseOrders: (customerId: number, skip: number, take: number) =>
-    prisma.packageCourseOrder.findMany({
-      where: { userId: customerId, status: "complete" },
-      orderBy: { id: "desc" },
-      skip, take,
-    }),
+    prisma.$queryRawUnsafe<PurchaseOrderRow[]>(
+      `SELECT id, plan_id AS planId, created_at AS createdAt, razorpay_order_id AS gatewayOrderId,
+              razorpay_payment_id AS gatewayPaymentId, discount_price AS amount
+       FROM ws_package_course_order
+       WHERE customer_id = ? AND status = 'complete'
+       ORDER BY id DESC LIMIT ? OFFSET ?`,
+      String(customerId), take, skip
+    ),
   countPurchaseOrders: (customerId: number) =>
-    prisma.packageCourseOrder.count({ where: { userId: customerId, status: "complete" } }),
+    prisma
+      .$queryRawUnsafe<{ n: bigint | number }[]>(
+        `SELECT COUNT(*) AS n FROM ws_package_course_order WHERE customer_id = ? AND status = 'complete'`,
+        String(customerId)
+      )
+      .then((r) => Number(r[0]?.n ?? 0)),
   /** plan rows for order display: course/package target + material flag + duration. */
   pcPlansByIds: (ids: number[]) =>
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, courseId: true, packageId: true, withMaterial: true, duration: true } }) : Promise.resolve([]),
@@ -178,14 +229,27 @@ export const clientPurchaseHistoryRepository = {
   // ── ebooks tab ───────────────────────────────────────────────────────────────
   // ws_ebook_order has no ebook_id and no title column, so name search is resolved
   // upstream (ebook name → price ids) and passed in as `planIds` to constrain here.
-  listEbookOrders: (customerId: number, status: string, skip: number, take: number, planIds?: number[]) =>
-    prisma.eBookOrder.findMany({
-      where: { userId: customerId, status: status as any, ...(planIds ? { planId: { in: planIds } } : {}) },
-      orderBy: { id: "desc" },
-      skip, take,
-    }),
-  countEbookOrders: (customerId: number, status: string, planIds?: number[]) =>
-    prisma.eBookOrder.count({ where: { userId: customerId, status: status as any, ...(planIds ? { planId: { in: planIds } } : {}) } }),
+  listEbookOrders: (customerId: number, status: string, skip: number, take: number, planIds?: number[]) => {
+    const planFilter = planIds?.length ? ` AND plan_id IN (${planIds.map(() => "?").join(",")})` : "";
+    return prisma.$queryRawUnsafe<EbookOrderRow[]>(
+      `SELECT id, plan_id AS planId, order_price AS orderPrice, created_at AS createdAt, updated_at AS updatedAt,
+              status, razorpay_order_id AS gatewayOrderId, razorpay_payment_id AS gatewayPaymentId,
+              transaction_id AS bankTransactionId
+       FROM ws_ebook_order
+       WHERE customer_id = ? AND status = ?${planFilter}
+       ORDER BY id DESC LIMIT ? OFFSET ?`,
+      String(customerId), status, ...(planIds ?? []), take, skip
+    );
+  },
+  countEbookOrders: (customerId: number, status: string, planIds?: number[]) => {
+    const planFilter = planIds?.length ? ` AND plan_id IN (${planIds.map(() => "?").join(",")})` : "";
+    return prisma
+      .$queryRawUnsafe<{ n: bigint | number }[]>(
+        `SELECT COUNT(*) AS n FROM ws_ebook_order WHERE customer_id = ? AND status = ?${planFilter}`,
+        String(customerId), status, ...(planIds ?? [])
+      )
+      .then((r) => Number(r[0]?.n ?? 0));
+  },
   /** ebook ids whose name matches the search text (name-search entry point). */
   ebookIdsByName: (search: string) =>
     prisma.eBook.findMany({ where: buildPrismaSearch(search, ["name"]) ?? {}, select: { id: true } }),

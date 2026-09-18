@@ -15,6 +15,84 @@
 
 ---
 
+## 2026-09-18 — purchase-history: fixed the real cause of the multi-second load (VARCHAR/INT bind mismatch, not missing indexes)
+
+> **Code-only. No DDL, no schema change — schema stays exactly as-is.** Response
+> shape unchanged (verified byte-identical across repeated calls on production data).
+> `GET /client/purchase-history/subscriptions`, `GET /client/purchase-history/ebooks`.
+
+### Root cause
+
+The 2026-08-26 (b) / 2026-08-27 (h) passes added the right indexes and the right
+query shape, but production was still reported slow. Investigated directly against
+production (not staging) with `EXPLAIN ANALYZE` for a real heavy customer (471985):
+
+```
+WHERE customer_id = 471985                -- Prisma's int bind (schema says Int?)
+-> Index range scan on idx_ws_package_course_order_status (status='complete', reverse)
+   actual time=0.158..2973ms  rows=424,801 examined  (customer_id filtered AFTER, in a scan)
+
+WHERE customer_id = '471985'              -- same query, string bind
+-> Covering index lookup on idx_pco_user_status_id (customer_id='471985', status='complete')
+   actual time=0.027..0.033ms  rows=6 examined
+```
+
+**`ws_package_course_order.customer_id` and `ws_ebook_order.customer_id` are
+`VARCHAR(255)` in the real database** — every sibling order/subscription table
+(`ws_book_order`, `ws_package_course_subscription`, `ws_live_course_order`,
+`ws_live_course_subscription`, `ws_test_series_order`,
+`ws_test_series_subscription`) already has `customer_id INT`. `schema.prisma`
+declares `userId Int?` on both models (correctly, matching every other table), so
+Prisma's client binds the filter value as an INT parameter. MySQL then has to
+numeric-cast every stored VARCHAR row to compare against an int, which defeats
+ref/range access on **any** index with `customer_id` as a leading column —
+`idx_pco_user_status_id`, built in 2026-08-26 for exactly this query, was never
+actually usable in production. A **~100,000x** difference (2973ms -> 0.03ms) on
+`ws_package_course_order`; **~480x** (193ms -> 0.4ms) on the smaller
+`ws_ebook_order`. This is why staging (where the synthetic test table presumably
+had `customer_id INT`) measured 8–82ms after the index pass, while production —
+same code, same indexes — stayed at multi-second.
+
+Also confirmed while investigating (so it isn't re-derived next time): `schema.prisma`
+is stale versus the real DB — it under-declares indexes that already exist on
+`ws_book_order`, `ws_ebook_order`, `ws_live_course_order/subscription`, and
+`ws_test_series_order/subscription` (checked via `information_schema.STATISTICS`
+directly). None of those tables were doing a full scan; only the two VARCHAR-typed
+columns above were. `ws_live_course_*`/`ws_test_series_*` also hold only single-digit
+row counts in production today, so their branches of the subscriptions-tab union cost
+nothing regardless of query shape.
+
+### The fix (applied)
+
+`client-purchase-history.repository.ts`: `listPurchaseOrders`/`countPurchaseOrders`
+(on `PackageCourseOrder`) and `listEbookOrders`/`countEbookOrders` (on `EBookOrder`)
+now use `prisma.$queryRawUnsafe` instead of `.findMany`/`.count`, binding the
+customer id as `String(customerId)` — the only way to control the wire bind type,
+since Prisma's typed client always sends `userId: number` as an INT for an
+`Int?`-declared field. Each raw query `SELECT`s only the columns
+`client-purchase-history.service.ts` actually reads off these rows (verified by
+reading every `.field` access on the returned objects) — same discipline the rest
+of this repository already uses via Prisma `select`. No other function in this
+repository changed; every other table's `customer_id` is genuinely `INT`, so
+`.findMany`/`.count` already bind correctly there.
+
+**Verified against production** (customer 471985 — 275 package/course orders, 124
+book orders, 7 ebook orders): `listSubscriptions()` page 1 output is byte-identical
+across two consecutive calls, and every field (`amount`, `purchasedAt`, `tracking`,
+`meta.razorpayOrderId`, etc.) matches the pre-fix shape — this is a raw-SQL rewrite
+of the data-access path, not a contract change.
+
+### Known remaining
+
+`customer_id` staying `VARCHAR(255)` on these two tables is the reason
+`listPurchaseOrders`/`countPurchaseOrders`/`listEbookOrders`/`countEbookOrders` use
+raw SQL instead of `.findMany`/`.count` — that is a deliberate, permanent choice for
+this session, **no schema/DDL change is planned or proposed**. If a column-type
+migration is ever wanted, that is a separate decision for whoever owns the database,
+not something to derive from this entry.
+
+---
+
 ## 2026-09-17 — Jobs Management: categories scoped to an organization (`wsj_categories.organization_id`)
 
 > **DDL:** `docs/migration/schema-changes/2026-09-17_jobs_category_organization_link.sql`
