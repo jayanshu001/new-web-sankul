@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-09-18 — websankul-jobs-api: public job list/detail also serve `expired` jobs
+
+> **Code-only (jobs-api + websankul-jobs). No DDL, no data writes.**
+
+- **Why:** the backend's hourly `expire-sweep` (`admin/jobs/jobs.scheduler.ts`) flips a job to
+  `status='expired'` once `card.application_end` is past. jobs-api only listed `published`, so the
+  public Latest Jobs page showed "0 Jobs Available" (5 jobs expired at 2026-09-18 20:30 IST).
+- **Change:** for `type='job'` only, list + detail now match `status IN ('published','expired')`
+  (`libs/contentSerializers.ts` `publicStatusFilter`); the job list sorts `status ASC` first
+  (enum order draft < published < expired) so live postings come before expired ones. Drafts stay
+  hidden. Expired jobs return `badge: "expired"`; the site renders an "EXPIRED" chip.
+  Home feed / stats / notifications / every other content type still use `published` only.
+- The sweep itself is unchanged.
+
+---
+
 ## 2026-09-18 — jobs-management: category↔organization link restored; previous papers read/write the stored (legacy Laravel) formats
 
 > **Code-only. No DDL run or added.** `wsj_categories.organization_id` (and all old `wsj_`
