@@ -4,7 +4,10 @@ import { listActiveContactDepartments } from "../../modules/department/departmen
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { omit } from "../../utils/pick";
-import { submitInquiry as sqlSubmitInquiry } from "../../modules/inquiry/inquiry.service";
+import { submitInquiry as sqlSubmitInquiry, submitPublicEnquiry } from "../../modules/inquiry/inquiry.service";
+import { asyncHandler } from "../../middlewares/asyncHandler";
+import { success } from "../../utils/httpResponse";
+import type { PublicEnquiryInput } from "../../modules/inquiry/inquiry.validation";
 
 const submitSchema = z.object({
   description: z.string().min(1).max(2000),
@@ -73,3 +76,10 @@ export const getContactUs = async (_req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
+
+// POST /api/v1/client/enquiry — PUBLIC lead-capture form (websankul-jobs / books sites).
+// Body already parsed + coerced by validate({ body: publicEnquirySchema }).
+export const submitEnquiry = asyncHandler(async (req: Request, res: Response) => {
+  const enquiry = await submitPublicEnquiry(req.body as PublicEnquiryInput);
+  return success(res, { enquiry }, "Thanks! Our team will contact you shortly.", 201);
+});

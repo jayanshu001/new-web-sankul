@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-09-18 — public enquiry endpoint + route-order fix for public client routes
+
+> **Code-only. No DDL** — writes to the existing `ws_website_inquiry` columns
+> (`name/mobile/email/city/mode/course/source`).
+
+- New PUBLIC `POST /api/v1/client/enquiry` (`src/client/inquiry/enquiry.routes.ts`,
+  `publicEnquirySchema`, `submitPublicEnquiry`): lead-capture form for
+  `websankul-jobs`, replacing its last call to the legacy `api.websankul.com/v1/inquiry`
+  (`WEBSANKUL_LEGACY_API_BASE_URL` removed from `websankul-jobs`). Course labels
+  "TET TAT"/"FHW MPHW" normalized to the `Courses` enum; rows saved with `source='web'`,
+  `customer_id` NULL.
+- **Bug fix:** `client.routes.ts` mounted `/careers` AFTER `router.use("/", clientCmsRoutes)`
+  / `clientInquiryRoutes`, whose routers call `router.use(authenticate)` — so the
+  "public" careers endpoints would 401 before reaching their router. `/careers` and
+  `/enquiry` are now mounted right after `/auth`. Note: `/app-version` (line ~106) has the
+  same latent ordering problem and was left untouched (out of scope).
+
+---
+
 ## 2026-09-18 — jobs-management: adapted to the user's unilateral drop of 24 wsj_ detail tables + 4 columns (prod DDL, not run by me)
 
 > **Reactive fix, not a planned migration.** The user directly dropped 24 tables

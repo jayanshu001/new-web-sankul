@@ -123,3 +123,24 @@ export const submitInquiry = async (customerId: number, description: string): Pr
   const [h] = await hydrateCustomers([row]);
   return dto(h);
 };
+
+/** Public (pre-login) lead-capture form on the marketing site — no customer row. */
+export const submitPublicEnquiry = async (input: {
+  name: string; mobile: string; email?: string; city: string; mode: "online" | "offline"; course: string;
+}): Promise<any> => {
+  const now = new Date();
+  const row = await prisma.inquiry.create({
+    data: {
+      name: input.name,
+      mobile: input.mobile,
+      email: input.email || null,
+      city: input.city,
+      mode: input.mode,
+      course: input.course as any,
+      source: "web",
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  return dto({ ...row, customer: null });
+};
