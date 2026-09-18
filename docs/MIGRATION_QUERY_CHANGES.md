@@ -15,6 +15,82 @@
 
 ---
 
+## 2026-09-18 — jobs-management: adapted to the user's unilateral drop of 24 wsj_ detail tables + 4 columns (prod DDL, not run by me)
+
+> **Reactive fix, not a planned migration.** The user directly dropped 24 tables
+> (`wsj_job_details`, `wsj_admit_card_details`, `wsj_content_sections` + children,
+> `wsj_syllabus_*`, `wsj_content_products`, `wsj_content_categories`,
+> `wsj_media`, etc.) and 4 columns (`wsj_contents.featured_image_id`,
+> `wsj_previous_papers.preview_media_id`, `wsj_organizations.logo_media_id`,
+> `wsj_categories.image_media_id` + `.organization_id`) directly against
+> production, outside this codebase, before telling me. No DDL in this entry was
+> authored or executed by me — this is the application-layer catch-up for DDL that
+> already happened. Surviving `wsj_` tables: `wsj_contents`, `wsj_organizations`,
+> `wsj_categories`, `wsj_previous_papers` (+ `wsj_previous_paper_tags`),
+> `wsj_suggested_products`, `wsj_search_documents`.
+
+### What was discovered
+
+The user's own reset script had already migrated the dropped tables' data into
+`wsj_contents.card` / `.detail` (JSON columns that existed unused since the
+original Jobs Management build) using the **legacy Laravel admin's exact
+snake_case field shape** (`App\Models\GovtJob\Content::field()`: reads `card`
+first, falls back to `detail`, then base columns). Verified by reading real rows
+directly per content `type` (job/result/admit_card/answer_key/syllabus/other/
+exam_calendar) — confirmed live data, not empty JSON, in a completely different
+shape than initially assumed.
+
+### The fix
+
+- **`prisma/schema.prisma`** (this repo and `websankul-jobs-api`'s own copy):
+  removed the 25 now-nonexistent models/enums and the 4 dropped scalar columns.
+  Hand-edited (not `db pull` — a full introspection on this schema strips
+  hand-maintained relations on ~15 unrelated modules that lack real DB FK
+  constraints; confirmed and reverted once, see git history if relevant).
+- **`content.repository.ts` / `content.transformer.ts`**: rewritten to build/read
+  `card`+`detail` as flat snake_case JSON (card wins on overlapping keys, matching
+  Laravel precedence) instead of the 21-table relational join this module
+  previously used. `findStaleJobIds` switched to
+  `JSON_UNQUOTE(JSON_EXTRACT(card, '$.application_end'))` raw SQL.
+- **`content.types.ts` / `.validation.ts` / `.service.ts`**: `categoryIds[]` →
+  single `categoryId` (join table gone); `featuredImageId`/`ogImageId` (Media FK)
+  → `featuredImageUrl`/`ogImageUrl` (plain string, `jobs-media` module deleted
+  entirely — no DB-backed media library left for this feature).
+- **`jobs-taxonomy` (organizations/categories)**: `logoMediaId`/`imageMediaId` →
+  `logoUrl`/`imageUrl` strings; categories lost `organizationId` scoping entirely
+  (column dropped, no replacement — this is a genuine capability loss, not a bug).
+- **`jobs-papers`**: `previewMediaId` → `previewUrl` string; `wsj_content_products`
+  / `wsj_previous_paper_files` / `wsj_previous_paper_job_links` join tables gone,
+  `paper.repository.ts` now writes `pdfUrl` (single string), `jobIds`/`products` as
+  JSON columns directly on `wsj_previous_papers`. Added `parsePdfFiles()` (in
+  `websankul-jobs-api`'s serializer) to handle legacy rows where `pdf_url` holds a
+  JSON-stringified array from the old file table's migrated data.
+- **`websankul-jobs-api`** (separate repo/Prisma client, same tables): same schema
+  trim; `contentSerializers.ts`/`contentHelpers.ts` rewritten to read the merged
+  `card`+`detail` snake_case shape; `buildHomeStats`/`buildHomeExamCategories`
+  raw-SQL and groupBy queries updated off the dropped relations.
+- **`websankul-admin`**: `jobsOrganizations`/`jobsCategories`/`jobsContent`/
+  `jobsPreviousPapers` features updated to the new field names; category↔org
+  linking UI removed (dead capability); content category picker changed from
+  multi-select to single-select.
+
+**Response contract:** `JobContentDto` output shape is unchanged where the
+underlying capability still exists (still `_id`, camelCase, same field names for
+everything except the ones listed above that had no choice but to change because
+the data they pointed at no longer exists). `category` is now singular
+(`category?: RefDto`) instead of `categories: RefDto[]` — a deliberate,
+unavoidable break given the join table is gone; there is no partial-frozen path
+that hides this from clients.
+
+**Verified:** `yarn typecheck` clean (this repo), `npm run typecheck` clean
+(`websankul-jobs-api`), `npx eslint .` + `npx vite build` clean (`websankul-admin`).
+Live-verified against a running `websankul-jobs-api` dev server: `/v1/home/feed`,
+`/v1/home/stats`, `/v1/content-jobs`, `/v1/content-jobs/:slug`,
+`/v1/previous-papers/:id` all return 200 with correct real data (dates, locations,
+apply links, org logos, previous-paper PDF URLs all populated). This repo's own
+runtime was not verified locally (blocked on Redis/Docker not running locally —
+pre-existing environment gap, unrelated to this change).
+
 ## 2026-09-18 — purchase-history: fixed the real cause of the multi-second load (VARCHAR/INT bind mismatch, not missing indexes)
 
 > **Code-only. No DDL, no schema change — schema stays exactly as-is.** Response
