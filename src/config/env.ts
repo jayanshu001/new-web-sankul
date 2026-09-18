@@ -51,6 +51,11 @@ const PROD_FEATURE_VARS: { key: string; feature: string; profiles: ("api" | "wor
   // from the worker, and GenerateCRMLead itself no-ops without these set.
   { key: "TELE_CRM_BASE_URL", feature: "TeleCRM lead push", profiles: ["api"] },
   { key: "TELE_CRM_ACCESS_TOKEN", feature: "TeleCRM lead push", profiles: ["api"] },
+  // Best-effort cache-revalidation ping to the public websankul-jobs-api
+  // after jobs-content/taxonomy/papers/suggested-products writes — no-ops
+  // without these set, never blocks the admin response.
+  { key: "JOBS_API_BASE_URL", feature: "public jobs-api cache revalidation", profiles: ["api"] },
+  { key: "JOBS_API_CACHE_AUTH_KEY", feature: "public jobs-api cache revalidation", profiles: ["api"] },
 ];
 
 const deployProfile = (): "api" | "worker" | "all" => {

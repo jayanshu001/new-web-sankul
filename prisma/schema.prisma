@@ -2796,3 +2796,642 @@ model LectureAudioNote {
   @@index([customerId, videoId], name: "idx_lecture_audio_note_customer_video")
   @@map("ws_lecture_audio_note")
 }
+
+// *****************************JOBS MANAGEMENT (wsj_*) ENUMS******************************
+// DDL: docs/migration/schema-changes/2026-09-17_jobs_normalize_content.sql
+// Field mapping: docs/migration/JOBS_NORMALIZATION.md
+
+enum JobContentType {
+  job
+  result
+  admit_card
+  answer_key
+  syllabus
+  other
+  exam_calendar
+}
+
+enum JobContentStatus {
+  draft
+  published
+  expired
+  scheduled
+  archived
+}
+
+enum JobReleaseStatus {
+  released
+  coming_soon
+}
+
+enum JobKeyStatus {
+  final
+  provisional
+}
+
+enum JobContentBlockType {
+  important_dates
+  table
+  list
+  steps
+  faq
+  rich_text
+  custom
+  related_posts
+  related_products
+}
+
+enum JobContentSectionPosition {
+  main
+  sidebar
+}
+
+enum JobContentStepGroup {
+  selection_process
+  download_steps
+  how_to_check_steps
+  objection_steps
+}
+
+enum JobProductType {
+  course
+  package
+  book
+  ebook
+}
+
+enum JobSuggestedPlacement {
+  home
+  jobs
+  call_letters    @map("call-letters")
+  results
+  answer_keys     @map("answer-keys")
+  syllabus
+  previous_papers @map("previous-papers")
+  others
+  exam_calendar   @map("exam-calendar")
+}
+
+enum JobPaperTier {
+  tier_1
+  tier_2
+  pre
+  mains
+  all
+}
+
+enum JobPaperStatus {
+  draft
+  published
+  expired
+}
+
+// *****************************JOBS MANAGEMENT (wsj_*) MODELS******************************
+
+model Media {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  url        String   @db.VarChar(1000)
+  altText    String?  @map("alt_text") @db.VarChar(255)
+  width      Int?     @db.UnsignedInt
+  height     Int?     @db.UnsignedInt
+  mimeType   String?  @map("mime_type") @db.VarChar(100)
+  sizeBytes  Int?     @map("size_bytes") @db.UnsignedInt
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamp(0)
+
+  categories     JobCategory[]
+  organizations  JobOrganization[]
+  contents       JobContent[]
+  contentSeos    JobContentSeo[]
+  previousPapers JobPreviousPaper[]
+
+  @@map("wsj_media")
+}
+
+model JobOrganization {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String    @db.VarChar(255)
+  slug        String    @unique(map: "wsj_organizations_slug_unique") @db.VarChar(255)
+  logoUrl     String?   @map("logo_url") @db.VarChar(1000)
+  logoAlt     String?   @map("logo_alt") @db.VarChar(255)
+  logoMediaId BigInt?   @map("logo_media_id") @db.UnsignedBigInt
+  createdAt   DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt   DateTime? @map("updated_at") @db.Timestamp(0)
+
+  logo           Media?             @relation(fields: [logoMediaId], references: [id], map: "fk_wsj_organizations_logo_media")
+  contents       JobContent[]
+  previousPapers JobPreviousPaper[]
+  categories     JobCategory[]
+
+  @@index([logoMediaId], map: "fk_wsj_organizations_logo_media")
+  @@map("wsj_organizations")
+}
+
+model JobCategory {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  slug           String    @unique(map: "wsj_categories_slug_unique") @db.VarChar(100)
+  label          String    @db.VarChar(255)
+  organizationId BigInt?   @map("organization_id") @db.UnsignedBigInt
+  sortOrder      Int       @default(0) @map("sort_order")
+  imageUrl       String?   @map("image_url") @db.VarChar(1000)
+  imageAlt       String?   @map("image_alt") @db.VarChar(255)
+  imageMediaId   BigInt?   @map("image_media_id") @db.UnsignedBigInt
+  showOnHome     Boolean   @default(false) @map("show_on_home")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt      DateTime? @map("updated_at") @db.Timestamp(0)
+
+  image        Media?                 @relation(fields: [imageMediaId], references: [id], map: "fk_wsj_categories_image_media")
+  organization JobOrganization?       @relation(fields: [organizationId], references: [id], map: "fk_wsj_categories_organization")
+  contentLinks JobContentCategory[]
+
+  @@index([imageMediaId], map: "fk_wsj_categories_image_media")
+  @@index([organizationId], map: "idx_wsj_categories_organization_id")
+  @@map("wsj_categories")
+}
+
+model JobContentCategory {
+  id         BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId  BigInt @map("content_id") @db.UnsignedBigInt
+  categoryId BigInt @map("category_id") @db.UnsignedBigInt
+  sortOrder  Int    @default(0) @map("sort_order")
+
+  content  JobContent  @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_categories_content")
+  category JobCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade, map: "fk_wsj_content_categories_category")
+
+  @@unique([contentId, categoryId], map: "uq_wsj_content_categories")
+  @@index([categoryId], map: "idx_wsj_content_categories_category")
+  @@map("wsj_content_categories")
+}
+
+model JobContent {
+  id               BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  type             JobContentType
+  slug             String            @db.VarChar(300)
+  title            String            @db.VarChar(255)
+  subtitle         String?           @db.VarChar(255)
+  organizationId   BigInt?           @map("organization_id") @db.UnsignedBigInt
+  categoryId       BigInt?           @map("category_id") @db.UnsignedBigInt
+  relatedJobId     BigInt?           @map("related_job_id") @db.UnsignedBigInt
+  status           JobContentStatus  @default(draft)
+  publishedAt      DateTime?         @map("published_at") @db.DateTime(0)
+  featured         Boolean           @default(false)
+  badge            String?           @db.VarChar(50)
+  sortOrder        Int               @default(0) @map("sort_order")
+  bodyHtml         String?           @map("body_html") @db.LongText
+  featuredImageId  BigInt?           @map("featured_image_id") @db.UnsignedBigInt
+  card             Json?
+  detail           Json?
+  createdAt        DateTime?         @map("created_at") @db.Timestamp(0)
+  updatedAt        DateTime?         @map("updated_at") @db.Timestamp(0)
+
+  organization  JobOrganization? @relation(fields: [organizationId], references: [id])
+  featuredImage Media?           @relation(fields: [featuredImageId], references: [id], map: "fk_wsj_contents_featured_image")
+
+  relatedJob   JobContent?  @relation("JobContentRelatedJob", fields: [relatedJobId], references: [id])
+  relatedFrom  JobContent[] @relation("JobContentRelatedJob")
+
+  categories        JobContentCategory[]
+  facts             JobContentFact[]
+  products          JobContentProduct[]
+  sections          JobContentSection[]
+  seo               JobContentSeo?
+  steps             JobContentStep[]
+  dateItems         JobContentDateItem[]
+  feeItems          JobContentFeeItem[]
+  paymentModes      JobContentPaymentMode[]
+  notes             JobContentNote[]
+  relatedPostsFrom  JobContentRelatedPost[] @relation("JobContentRelatedPostsFrom")
+  relatedPostsTo    JobContentRelatedPost[] @relation("JobContentRelatedPostsTo")
+  paperJobLinks     JobPreviousPaperJobLink[]
+  linkedPapers      JobPreviousPaper[]
+
+  jobDetail          JobDetailJob?
+  admitCardDetail    JobDetailAdmitCard?
+  resultDetail       JobDetailResult?
+  answerKeyDetail    JobDetailAnswerKey?
+  otherDetail        JobDetailOther?
+  examCalendarDetail JobDetailExamCalendar?
+  syllabusDetail     JobDetailSyllabus?
+  syllabusStages     JobSyllabusStage[]
+
+  @@unique([type, slug], map: "wsj_contents_type_slug_unique")
+  @@index([featuredImageId], map: "fk_wsj_contents_featured_image")
+  @@index([categoryId], map: "wsj_contents_category_id_index")
+  @@index([organizationId], map: "wsj_contents_organization_id_index")
+  @@index([relatedJobId], map: "wsj_contents_related_job_id_index")
+  @@index([status, type, publishedAt], map: "wsj_contents_status_type_published_idx")
+  @@index([status, type, updatedAt], map: "wsj_contents_status_type_updated_idx")
+  @@map("wsj_contents")
+}
+
+model JobContentSeo {
+  contentId       BigInt  @id @map("content_id") @db.UnsignedBigInt
+  seoTitle        String? @map("seo_title") @db.VarChar(255)
+  metaDescription String? @map("meta_description") @db.VarChar(500)
+  metaKeywords    String? @map("meta_keywords") @db.VarChar(500)
+  canonicalUrl    String? @map("canonical_url") @db.VarChar(500)
+  ogTitle         String? @map("og_title") @db.VarChar(255)
+  ogDescription   String? @map("og_description") @db.VarChar(500)
+  ogImageId       BigInt? @map("og_image_id") @db.UnsignedBigInt
+  schemaType      String? @map("schema_type") @db.VarChar(50)
+  robotsIndex     Boolean @default(true) @map("robots_index")
+  robotsFollow    Boolean @default(true) @map("robots_follow")
+  focusKeyword    String? @map("focus_keyword") @db.VarChar(255)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_seo_content")
+  ogImage Media?     @relation(fields: [ogImageId], references: [id], map: "fk_wsj_content_seo_og_image")
+
+  @@index([ogImageId], map: "idx_wsj_content_seo_og_image")
+  @@map("wsj_content_seo")
+}
+
+model JobDetailJob {
+  contentId               BigInt    @id @map("content_id") @db.UnsignedBigInt
+  applicationStart        DateTime? @map("application_start") @db.Date
+  applicationEnd          DateTime? @map("application_end") @db.Date
+  location                String?   @db.VarChar(255)
+  qualification           String?   @db.VarChar(255)
+  excerpt                 String?   @db.VarChar(500)
+  totalPosts              String?   @map("total_posts") @db.VarChar(100)
+  applyUrl                String?   @map("apply_url") @db.VarChar(1000)
+  officialNotificationUrl String?   @map("official_notification_url") @db.VarChar(1000)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_job_details_content")
+
+  @@map("wsj_job_details")
+}
+
+model JobDetailAdmitCard {
+  contentId     BigInt            @id @map("content_id") @db.UnsignedBigInt
+  tierLabel     String?           @map("tier_label") @db.VarChar(100)
+  releasedAt    DateTime?         @map("released_at") @db.Date
+  examDateLabel String?           @map("exam_date_label") @db.VarChar(255)
+  releaseStatus JobReleaseStatus  @default(coming_soon) @map("release_status")
+  downloadUrl   String?           @map("download_url") @db.VarChar(1000)
+  notifyUrl     String?           @map("notify_url") @db.VarChar(1000)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_admit_card_details_content")
+
+  @@map("wsj_admit_card_details")
+}
+
+model JobDetailResult {
+  contentId   BigInt    @id @map("content_id") @db.UnsignedBigInt
+  declaredAt  DateTime? @map("declared_at") @db.Date
+  officialUrl String?   @map("official_url") @db.VarChar(1000)
+  downloadUrl String?   @map("download_url") @db.VarChar(1000)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_result_details_content")
+
+  @@map("wsj_result_details")
+}
+
+model JobDetailAnswerKey {
+  contentId   BigInt       @id @map("content_id") @db.UnsignedBigInt
+  keyStatus   JobKeyStatus @default(provisional) @map("key_status")
+  releasedAt  DateTime?    @map("released_at") @db.Date
+  downloadUrl String?      @map("download_url") @db.VarChar(1000)
+  tags        Json?
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_answer_key_details_content")
+
+  @@map("wsj_answer_key_details")
+}
+
+model JobDetailOther {
+  contentId BigInt  @id @map("content_id") @db.UnsignedBigInt
+  summary   String? @db.Text
+  tags      Json?
+  cardMeta  Json?   @map("card_meta")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_other_details_content")
+
+  @@map("wsj_other_details")
+}
+
+model JobDetailExamCalendar {
+  contentId       BigInt    @id @map("content_id") @db.UnsignedBigInt
+  examDate        DateTime? @map("exam_date") @db.Date
+  applyStartDate  DateTime? @map("apply_start_date") @db.Date
+  applyEndDate    DateTime? @map("apply_end_date") @db.Date
+  admitCardDate   DateTime? @map("admit_card_date") @db.Date
+  admitCardNote   String?   @map("admit_card_note") @db.VarChar(500)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_exam_calendar_details_content")
+
+  @@map("wsj_exam_calendar_details")
+}
+
+model JobDetailSyllabus {
+  contentId     BigInt  @id @map("content_id") @db.UnsignedBigInt
+  subtitle      String? @db.VarChar(255)
+  languages     String? @db.VarChar(255)
+  sectionsCount Int?    @map("sections_count") @db.UnsignedInt
+  downloadUrl   String? @map("download_url") @db.VarChar(1000)
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_syllabus_details_content")
+
+  @@map("wsj_syllabus_details")
+}
+
+model JobSyllabusStage {
+  id          BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId   BigInt  @map("content_id") @db.UnsignedBigInt
+  stage       String  @db.VarChar(255)
+  description String? @db.Text
+  mode        String? @db.VarChar(100)
+  medium      String? @db.VarChar(100)
+  totalMarks  String? @map("total_marks") @db.VarChar(50)
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  content  JobContent            @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_syllabus_stages_content")
+  subjects JobSyllabusSubject[]
+
+  @@index([contentId], map: "idx_wsj_syllabus_stages_content")
+  @@map("wsj_syllabus_stages")
+}
+
+model JobSyllabusSubject {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  stageId   BigInt @map("stage_id") @db.UnsignedBigInt
+  subject   String @db.VarChar(255)
+  sortOrder Int    @default(0) @map("sort_order")
+
+  stage  JobSyllabusStage    @relation(fields: [stageId], references: [id], onDelete: Cascade, map: "fk_wsj_syllabus_subjects_stage")
+  topics JobSyllabusTopic[]
+
+  @@index([stageId], map: "idx_wsj_syllabus_subjects_stage")
+  @@map("wsj_syllabus_subjects")
+}
+
+model JobSyllabusTopic {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  subjectId BigInt @map("subject_id") @db.UnsignedBigInt
+  topic     String @db.VarChar(500)
+  sortOrder Int    @default(0) @map("sort_order")
+
+  subject JobSyllabusSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade, map: "fk_wsj_syllabus_topics_subject")
+
+  @@index([subjectId], map: "idx_wsj_syllabus_topics_subject")
+  @@map("wsj_syllabus_topics")
+}
+
+model JobContentSection {
+  id         BigInt                     @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId  BigInt                     @map("content_id") @db.UnsignedBigInt
+  title      String?                    @db.VarChar(255)
+  blockType  JobContentBlockType        @map("block_type")
+  position   JobContentSectionPosition  @default(main)
+  icon       String?                    @db.VarChar(50)
+  isVisible  Boolean                    @default(true) @map("is_visible")
+  sortOrder  Int                        @default(0) @map("sort_order")
+
+  content JobContent               @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_sections_content")
+  items   JobContentSectionItem[]
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_sections_content")
+  @@map("wsj_content_sections")
+}
+
+model JobContentSectionItem {
+  id        BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  sectionId BigInt  @map("section_id") @db.UnsignedBigInt
+  icon      String? @db.VarChar(50)
+  title     String? @db.VarChar(255)
+  value     String? @db.VarChar(1000)
+  extra     String? @db.Text
+  sortOrder Int     @default(0) @map("sort_order")
+
+  section JobContentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade, map: "fk_wsj_content_section_items_section")
+
+  @@index([sectionId, sortOrder], map: "idx_wsj_content_section_items_section")
+  @@map("wsj_content_section_items")
+}
+
+model JobContentFact {
+  id        BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId BigInt  @map("content_id") @db.UnsignedBigInt
+  icon      String? @db.VarChar(50)
+  metaKey   String? @map("meta_key") @db.VarChar(100)
+  metaValue String? @map("meta_value") @db.VarChar(255)
+  sortOrder Int     @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_facts_content")
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_facts_content")
+  @@map("wsj_content_facts")
+}
+
+model JobContentProduct {
+  id          BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId   BigInt?         @map("content_id") @db.UnsignedBigInt
+  paperId     BigInt?         @map("paper_id") @db.UnsignedBigInt
+  productType JobProductType  @map("product_type")
+  productId   BigInt          @map("product_id") @db.UnsignedBigInt
+  isFeatured  Boolean         @default(false) @map("is_featured")
+  sortOrder   Int             @default(0) @map("sort_order")
+
+  content JobContent?       @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_products_content")
+  paper   JobPreviousPaper? @relation(fields: [paperId], references: [id], onDelete: Cascade, map: "fk_wsj_content_products_paper")
+
+  @@index([contentId], map: "idx_wsj_content_products_content")
+  @@index([paperId], map: "idx_wsj_content_products_paper")
+  @@map("wsj_content_products")
+}
+
+model JobContentRelatedPost {
+  id                BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId         BigInt @map("content_id") @db.UnsignedBigInt
+  relatedContentId  BigInt @map("related_content_id") @db.UnsignedBigInt
+  sortOrder         Int    @default(0) @map("sort_order")
+
+  content        JobContent @relation("JobContentRelatedPostsFrom", fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_related_posts_content")
+  relatedContent JobContent @relation("JobContentRelatedPostsTo", fields: [relatedContentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_related_posts_related")
+
+  @@unique([contentId, relatedContentId], map: "uq_wsj_content_related_posts")
+  @@index([relatedContentId], map: "idx_wsj_content_related_posts_related")
+  @@map("wsj_content_related_posts")
+}
+
+model JobContentStep {
+  id          BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId   BigInt                @map("content_id") @db.UnsignedBigInt
+  stepGroup   JobContentStepGroup   @map("step_group")
+  title       String?               @db.VarChar(255)
+  description String?               @db.Text
+  sortOrder   Int                   @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_steps_content")
+
+  @@index([contentId, stepGroup], map: "idx_wsj_content_steps_content")
+  @@map("wsj_content_steps")
+}
+
+model JobContentDateItem {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId BigInt    @map("content_id") @db.UnsignedBigInt
+  label     String    @db.VarChar(255)
+  dateValue DateTime? @map("date_value") @db.Date
+  note      String?   @db.VarChar(500)
+  sortOrder Int       @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_date_items_content")
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_date_items_content")
+  @@map("wsj_content_date_items")
+}
+
+model JobContentFeeItem {
+  id            BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId     BigInt @map("content_id") @db.UnsignedBigInt
+  categoryLabel String @map("category_label") @db.VarChar(255)
+  amountLabel   String @map("amount_label") @db.VarChar(100)
+  sortOrder     Int    @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_fee_items_content")
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_fee_items_content")
+  @@map("wsj_content_fee_items")
+}
+
+model JobContentPaymentMode {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId BigInt @map("content_id") @db.UnsignedBigInt
+  label     String @db.VarChar(100)
+  sortOrder Int    @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_payment_modes_content")
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_payment_modes_content")
+  @@map("wsj_content_payment_modes")
+}
+
+model JobContentNote {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  contentId BigInt @map("content_id") @db.UnsignedBigInt
+  text      String @db.VarChar(1000)
+  sortOrder Int    @default(0) @map("sort_order")
+
+  content JobContent @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_content_notes_content")
+
+  @@index([contentId, sortOrder], map: "idx_wsj_content_notes_content")
+  @@map("wsj_content_notes")
+}
+
+model JobPreviousPaper {
+  id              BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  slug            String?         @db.VarChar(255)
+  contentId       BigInt?         @map("content_id") @db.UnsignedBigInt
+  jobIds          Json?           @map("job_ids")
+  recruitmentId   BigInt?         @map("recruitment_id") @db.UnsignedBigInt
+  organizationId  BigInt?         @map("organization_id") @db.UnsignedBigInt
+  categoryId      BigInt?         @map("category_id") @db.UnsignedBigInt
+  year            Int?            @db.SmallInt
+  title           String?         @db.VarChar(255)
+  subtitle        String?         @db.VarChar(255)
+  subject         String?         @db.VarChar(255)
+  formatLabel     String?         @map("format_label") @db.VarChar(50)
+  yearsLabel      String?         @map("years_label") @db.VarChar(255)
+  papersCount     Int             @default(0) @map("papers_count") @db.UnsignedInt
+  downloadsCount  Int             @default(0) @map("downloads_count") @db.UnsignedInt
+  tier            JobPaperTier?
+  language        String?         @db.VarChar(255)
+  isSolved        Boolean?        @default(false) @map("is_solved")
+  pdfUrl          String?         @map("pdf_url") @db.VarChar(1000)
+  previewUrl      String?         @map("preview_url") @db.VarChar(1000)
+  previewMediaId  BigInt?         @map("preview_media_id") @db.UnsignedBigInt
+  description     String?         @db.LongText
+  products        Json?
+  status          JobPaperStatus  @default(draft)
+  publishedAt     DateTime?       @map("published_at") @db.DateTime(0)
+  createdAt       DateTime?       @map("created_at") @db.Timestamp(0)
+  updatedAt       DateTime?       @map("updated_at") @db.Timestamp(0)
+
+  organization  JobOrganization? @relation(fields: [organizationId], references: [id])
+  linkedContent JobContent?      @relation(fields: [contentId], references: [id])
+  previewMedia  Media?           @relation(fields: [previewMediaId], references: [id], map: "fk_wsj_previous_papers_preview_media")
+
+  contentProducts JobContentProduct[]
+  files           JobPreviousPaperFile[]
+  jobLinks        JobPreviousPaperJobLink[]
+  tags            JobPreviousPaperTag[]
+
+  @@index([previewMediaId], map: "fk_wsj_previous_papers_preview_media")
+  @@index([tier], map: "idx_tier")
+  @@index([year], map: "idx_year")
+  @@index([categoryId], map: "wsj_previous_papers_category_id_index")
+  @@index([contentId], map: "wsj_previous_papers_content_id_index")
+  @@index([organizationId], map: "wsj_previous_papers_organization_id_index")
+  @@index([recruitmentId], map: "wsj_previous_papers_recruitment_id_index")
+  @@map("wsj_previous_papers")
+}
+
+model JobPreviousPaperFile {
+  id        BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  paperId   BigInt  @map("paper_id") @db.UnsignedBigInt
+  label     String? @db.VarChar(255)
+  url       String  @db.VarChar(1000)
+  sortOrder Int     @default(0) @map("sort_order")
+
+  paper JobPreviousPaper @relation(fields: [paperId], references: [id], onDelete: Cascade, map: "fk_wsj_previous_paper_files_paper")
+
+  @@index([paperId], map: "idx_wsj_previous_paper_files_paper")
+  @@map("wsj_previous_paper_files")
+}
+
+model JobPreviousPaperJobLink {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  paperId   BigInt @map("paper_id") @db.UnsignedBigInt
+  contentId BigInt @map("content_id") @db.UnsignedBigInt
+
+  paper   JobPreviousPaper @relation(fields: [paperId], references: [id], onDelete: Cascade, map: "fk_wsj_previous_paper_job_links_paper")
+  content JobContent       @relation(fields: [contentId], references: [id], onDelete: Cascade, map: "fk_wsj_previous_paper_job_links_content")
+
+  @@unique([paperId, contentId], map: "uq_wsj_previous_paper_job_links")
+  @@index([contentId], map: "idx_wsj_previous_paper_job_links_content")
+  @@map("wsj_previous_paper_job_links")
+}
+
+model JobPreviousPaperTag {
+  id      BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  paperId BigInt  @map("paper_id") @db.UnsignedBigInt
+  tag     String? @db.VarChar(100)
+
+  paper JobPreviousPaper @relation(fields: [paperId], references: [id], onDelete: Cascade, map: "wsj_previous_paper_tags_paper_id_foreign")
+
+  @@index([paperId], map: "wsj_previous_paper_tags_paper_id_index")
+  @@map("wsj_previous_paper_tags")
+}
+
+model JobSuggestedProduct {
+  id            BigInt                 @id @default(autoincrement()) @db.UnsignedBigInt
+  placementType JobSuggestedPlacement  @default(home) @map("placement_type")
+  postId        BigInt?                @map("post_id") @db.UnsignedBigInt
+  productType   JobProductType         @map("product_type")
+  productId     BigInt                 @map("product_id") @db.UnsignedBigInt
+  sortOrder     Int                    @default(0) @map("sort_order")
+  isActive      Boolean                @default(true) @map("is_active")
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamp(0)
+
+  @@unique([placementType, productType, productId], map: "uq_wsj_suggested_placement_product")
+  @@index([placementType, postId], map: "idx_wsj_suggested_placement")
+  @@map("wsj_suggested_products")
+}
+
+model JobSearchDocument {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  contentType   String    @map("content_type") @db.VarChar(50)
+  contentId     BigInt    @map("content_id") @db.UnsignedBigInt
+  slug          String    @db.VarChar(255)
+  title         String    @db.VarChar(255)
+  subtitle      String?   @db.VarChar(255)
+  orgName       String?   @map("org_name") @db.VarChar(255)
+  categorySlugs String?   @map("category_slugs") @db.VarChar(500)
+  href          String    @db.VarChar(500)
+  publishedAt   DateTime? @map("published_at") @db.DateTime(0)
+  updatedAt     DateTime? @map("updated_at") @db.DateTime(0)
+
+  @@unique([contentType, contentId], map: "wsj_search_content_unique")
+  @@index([contentType, publishedAt], map: "wsj_search_type_published_idx")
+  @@map("wsj_search_documents")
+}

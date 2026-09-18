@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.09.11-3";
+export const CATALOG_VERSION = "2026.09.17-1";
 
 export interface CatalogPermission {
   key: string;
@@ -240,6 +240,13 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("cms.app-update", "App Update", "CMS", { standard: ["view", "edit"] }),
   mod("cms.social-links", "Social Links", "CMS"),
   mod("cms.social-link-types", "Social Link Types", "CMS"),
+
+  // ── Jobs ─────────────────────────────────────────────────────────────────
+  mod("jobs.content", "Job Content", "Jobs"),
+  mod("jobs.categories", "Job Categories", "Jobs"),
+  mod("jobs.organizations", "Job Organizations", "Jobs"),
+  mod("jobs.previous-papers", "Previous Papers", "Jobs"),
+  mod("jobs.suggested-products", "Jobs Suggested Products", "Jobs"),
 
   // ── Offline ──────────────────────────────────────────────────────────────
   mod("offline.banners", "Offline Banners", "Offline"),

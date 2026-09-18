@@ -541,6 +541,27 @@ R("POST", "/test-series/:id/prices", "test-series.create");
 R("POST", "/test-series/:id/grant", "test-series.create");
 crud("/test-series", "test-series");
 
+// ── /jobs/content → jobs.content ────────────────────────────────────────
+R("PATCH", "/jobs/content/:id/status", "jobs.content.toggle-status");
+R("POST", "/jobs/content/reorder", "jobs.content.edit");
+R("POST", "/jobs/content/inline-image", "jobs.content.create", "jobs.content.edit");
+R("POST", "/jobs/content/document", "jobs.content.create", "jobs.content.edit");
+crud("/jobs/content", "jobs.content");
+
+// ── /jobs/categories → jobs.categories ──────────────────────────────────
+R("POST", "/jobs/categories/reorder", "jobs.categories.edit");
+crud("/jobs/categories", "jobs.categories");
+
+// ── /jobs/organizations → jobs.organizations ────────────────────────────
+crud("/jobs/organizations", "jobs.organizations");
+
+// ── /jobs/papers → jobs.previous-papers ─────────────────────────────────
+R("POST", "/jobs/papers/files", "jobs.previous-papers.create", "jobs.previous-papers.edit");
+crud("/jobs/papers", "jobs.previous-papers");
+
+// ── /jobs/suggested-products → jobs.suggested-products ──────────────────
+crud("/jobs/suggested-products", "jobs.suggested-products");
+
 // ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────
 
 /**

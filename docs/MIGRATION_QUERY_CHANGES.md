@@ -15,6 +15,84 @@
 
 ---
 
+## 2026-09-17 — Jobs Management: categories scoped to an organization (`wsj_categories.organization_id`)
+
+> **DDL:** `docs/migration/schema-changes/2026-09-17_jobs_category_organization_link.sql`
+> (applied). One additive nullable FK column (`wsj_categories.organization_id` →
+> `wsj_organizations.id`, `ON DELETE SET NULL`) + index. Nothing dropped or renamed.
+
+Lets the content editor's category picker filter down to the categories that
+belong to the organization selected on that content item (one organization → many
+categories). A category with `organization_id = NULL` is treated as shared/global
+and still matches regardless of which organization is selected — all pre-existing
+categories fall into this bucket, so nothing needed backfilling.
+
+`categoryRepository.findPage`/`count` now take an optional `organizationId` and
+filter `WHERE (organization_id = :id OR organization_id IS NULL)` when provided
+(query-shape change, not just a new column — same `OR`-with-NULL pattern would
+need to be reproduced if this repository is ever rewritten).
+
+**`prisma/schema.prisma` regression repeated mid-session (see the entry below this
+one, which already warned about this exact failure mode): running `prisma db pull`
+after applying this DDL rewrote the entire file again and was reverted with `git
+checkout --`, which — since this whole Jobs Management block was still uncommitted
+— wiped all 32 hand-authored Job* models, not just reformatted them. Recovered in
+full from this session's own transcript log (the original bulk-insert Edit call
+plus its 4 follow-up fixups, replayed in order) and re-verified with a clean
+project-wide `tsc --noEmit` (0 errors) before re-adding `organizationId`. Diff
+against the pre-recovery file is purely additive — confirmed via `git diff`
+showing only `+model`/`+enum` lines, zero deletions, zero unrelated models
+touched. **`prisma db pull` must not be run again against this file — hand-edit
+new columns directly into the relevant model block, matching the surrounding
+`@map` style, the way this file's own header comment already instructs.**
+
+## 2026-09-17 — Jobs Management: `wsj_contents` card/detail JSON normalized into relational tables
+
+> **DDL:** `docs/migration/schema-changes/2026-09-17_jobs_normalize_content.sql`
+> (applied). 25 new tables + 4 additive nullable FK columns
+> (`wsj_contents.featured_image_id`, `wsj_organizations.logo_media_id`,
+> `wsj_categories.image_media_id`, `wsj_previous_papers.preview_media_id`), plus two
+> follow-up `ALTER TABLE`s applied in the same session (not in the checked-in SQL
+> file's history, folded directly into the `CREATE TABLE` blocks for documentation
+> accuracy): `wsj_job_details.excerpt` and `wsj_syllabus_stages.{description,mode,
+> medium,total_marks}` — both discovered missing only after inspecting live JSON
+> payloads. Nothing dropped or renamed; `card`/`detail`/`pdf_url`/`job_ids`/
+> `recruitment_id`/`logo_url`/`logo_alt`/`preview_url` are untouched and still
+> readable, a later migration removes them once this ships. Full old→new field
+> mapping: `docs/migration/JOBS_NORMALIZATION.md`.
+
+Greenfield on the Node/Prisma side — the 7 `wsj_*` tables existed in the live DB
+(verified via direct query against `DATABASE_URL`) but had zero presence in
+`prisma/schema.prisma` before this change. This is the schema foundation for a new
+Jobs Management admin (websankul-backend + websankul-admin), replacing the Laravel
+`govt-jobs` admin's card/detail-JSON-blob approach with typed columns.
+
+**`prisma/schema.prisma` was hand-authored for this block, not introspected.**
+Running `prisma db pull` after the DDL rewrote the *entire* file and silently
+degraded existing hand-maintained enums back to their raw `String`/`VARCHAR` DB
+type (`PaymentMethod`, `BookLanguage`) and dropped `EducatorAccessToken` entirely
+— that pull was discarded before `prisma generate` ever ran against it. The 32
+new models (`Media`, `JobOrganization`, `JobCategory`, `JobContentCategory`,
+`JobContent`, `JobContentSeo`, 7×`JobDetail*`, `JobSyllabusStage/Subject/Topic`,
+`JobContentSection/SectionItem/Fact/Product/RelatedPost/Step/DateItem/FeeItem/
+PaymentMode/Note`, `JobPreviousPaper/File/JobLink/Tag`, `JobSuggestedProduct`,
+`JobSearchDocument`) and 11 enums were appended by hand to the untouched original
+file (verified: diff against the pre-change file is purely additive, zero lines
+changed elsewhere). **If `db pull` is ever re-run on this file, re-check for the
+same regression before trusting its output.**
+
+Backfilled via `scripts/backfill-jobs-normalize.ts` (idempotent, delete-then-
+reinsert per parent row): all 50 `wsj_contents` rows' `card`/`detail` JSON → the
+new per-type detail tables + shared repeaters (verified row counts match source:
+8 job/5 admit_card/4 result/14 answer_key/3 other/5 exam_calendar/11 syllabus
+detail rows, 8 SEO rows — SEO only existed on `type=job` in the source data, 2
+facts, 263 attached products, 12 steps); the single legacy `category_id` →
+one `JobContentCategory` row each (47 of 50 rows had a category set). All 17
+`wsj_previous_papers` rows' `pdf_url` (plain-URL-or-JSON-array hack) → 18
+`JobPreviousPaperFile` rows; `job_ids`/`content_id` fallback → 2
+`JobPreviousPaperJobLink` rows; `products` → `JobContentProduct` rows keyed by
+`paperId`.
+
 ## 2026-09-16 — Customer sessions have no time ceiling (access 7d + refresh 60d + `expires_at` gate removed)
 
 > **DDL:** none. Query-filter change: `expires_at` dropped from the two

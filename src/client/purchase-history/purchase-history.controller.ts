@@ -35,9 +35,10 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
     const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
     // Slim to fields the RN PurchaseHistory screen reads (see
     // docs/api-optimization/GET_client_purchase_history_subscriptions.md). Keeps
-    // tracking.trackingId (AWB); drops tracking.courier + unused card meta.
+    // tracking.trackingId (AWB) + endAt (expiry, used by the website's purchase
+    // history); drops tracking.courier + unused card meta.
     const slim = (data as any[]).map((r) => ({
-      ...omit(r, ["thumbnail", "kind", "startAt", "endAt", "meta"]),
+      ...omit(r, ["thumbnail", "kind", "startAt", "meta"]),
       tracking: r.tracking ? omit(r.tracking, ["courier"]) : r.tracking,
     }));
     return res.status(200).json({ success: true, data: slim, pagination });

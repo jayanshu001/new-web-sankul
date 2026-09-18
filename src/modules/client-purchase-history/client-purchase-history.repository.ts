@@ -197,11 +197,11 @@ export const clientPurchaseHistoryRepository = {
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, ebookId: true } }) : Promise.resolve([]),
   ebooksByIds: (ids: number[]) =>
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, thumbnail: true, author: true } }) : Promise.resolve([]),
-  /** subscription start_at + ebook_id per order. start_at is the purchase-date proxy
+  /** subscription start_at/end_at + ebook_id per order. start_at is the purchase-date proxy
    *  for legacy orders whose created_at is NULL; ebook_id resolves the ebook for
    *  plan-less orders (manual grants) where the order.plan_id → ebook hop is NULL. */
   ebookSubStartByOrderIds: (orderIds: number[]) =>
-    orderIds.length ? prisma.eBookSubscription.findMany({ where: { orderId: { in: orderIds } }, select: { orderId: true, startAt: true, ebookId: true } }) : Promise.resolve([]),
+    orderIds.length ? prisma.eBookSubscription.findMany({ where: { orderId: { in: orderIds } }, select: { orderId: true, startAt: true, endAt: true, ebookId: true } }) : Promise.resolve([]),
 
   // ── ebook receipt (single order, ownership-scoped) ───────────────────────────
   ebookOrderForReceipt: (orderId: number, customerId: number) =>

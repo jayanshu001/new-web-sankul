@@ -60,6 +60,12 @@ const TSS_ID_PREFIX = "tss_";
 type PcWindow = { orderId: number | null; courseId: number | null; packageId: number | null; startAt: Date | null; endAt: Date | null };
 const pickWindowForTarget = (rows: readonly PcWindow[] | undefined, courseId: number | null, packageId: number | null): PcWindow | undefined => {
   if (!rows?.length) return undefined;
+  // A single row is already unambiguous — it's the one subscription this order_id
+  // created (2026-08-25: order_id is unique per subscription). Trust it even when its
+  // course/package id has drifted from what the order's plan states today (plans can be
+  // edited after purchase); target-matching below exists only to disambiguate the rare
+  // legacy bucket that holds more than one row for the same order_id.
+  if (rows.length === 1) return rows[0];
   const matches = rows.filter((s) => (courseId ? s.courseId === courseId : packageId ? s.packageId === packageId : true));
   if (!matches.length) return undefined;
   return matches.reduce((best, s) => ((s.endAt?.getTime() ?? 0) > (best.endAt?.getTime() ?? 0) ? s : best));
@@ -1004,14 +1010,20 @@ export const listEbooks = async (customerId: number, status: string, skip: numbe
 
   // Subscription per order: start_at is the purchase-date proxy for legacy orders
   // whose created_at is NULL; ebook_id resolves the ebook for plan-less orders
-  // (manual grants) whose order.plan_id → ebook hop yields nothing.
+  // (manual grants) whose order.plan_id → ebook hop yields nothing. end_at is the
+  // expiry shown on the purchase-history screen.
   const startByOrder = new Map<number, Date>();
+  const endByOrder = new Map<number, Date>();
   const ebookIdByOrder = new Map<number, number>();
   for (const s of await repo.ebookSubStartByOrderIds(orders.map((o) => o.id))) {
     if (s.orderId == null) continue;
     if (s.startAt) {
       const cur = startByOrder.get(s.orderId);
       if (!cur || s.startAt < cur) startByOrder.set(s.orderId, s.startAt); // earliest
+    }
+    if (s.endAt) {
+      const cur = endByOrder.get(s.orderId);
+      if (!cur || s.endAt > cur) endByOrder.set(s.orderId, s.endAt); // latest
     }
     if (s.ebookId != null && s.ebookId > 0 && !ebookIdByOrder.has(s.orderId)) ebookIdByOrder.set(s.orderId, s.ebookId);
   }
@@ -1036,6 +1048,7 @@ export const listEbooks = async (customerId: number, status: string, skip: numbe
       // created_at (true order time) first; for legacy NULL rows fall back to the
       // subscription's start_at (≈ purchase date), then updated_at.
       purchasedAt: o.createdAt ?? startByOrder.get(o.id) ?? o.updatedAt ?? null,
+      endAt: endByOrder.get(o.id) ?? null,
       status: o.status,
       receiptUrl: `${RECEIPT_BASE}/ebooks/${o.id}/receipt`,
       meta: {

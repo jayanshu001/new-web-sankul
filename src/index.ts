@@ -30,6 +30,7 @@ import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
 import { initExportScheduler } from "./admin/exports/export.scheduler";
+import { initJobsScheduler, shutdownJobsScheduler } from "./admin/jobs/jobs.scheduler";
 import {
   initPlanPopularityScheduler,
   stopPlanPopularityScheduler,
@@ -103,6 +104,13 @@ const buildPreClose =
           err: (err as Error).message,
         });
       }
+      try {
+        await shutdownJobsScheduler();
+      } catch (err) {
+        logger.warn("[shutdown] shutdownJobsScheduler failed", {
+          err: (err as Error).message,
+        });
+      }
     }
     if (sockets?.io) {
       try {
@@ -151,6 +159,10 @@ const startWorkers = async (): Promise<void> => {
   const t4 = Date.now();
   initOtpUnblockScheduler();
   bootMs("otp-unblock scheduler", t4);
+
+  const t5 = Date.now();
+  await initJobsScheduler();
+  bootMs("jobs-content-lifecycle scheduler", t5);
 };
 
 const startServer = async () => {

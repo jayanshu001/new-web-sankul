@@ -45,11 +45,13 @@ const MULTER_UTF8: Pick<multer.Options, "defParamCharset"> = {
   defParamCharset: "utf8",
 };
 
-const IMAGE_FIELDS = new Set(["image", "thumbnail", "profilePicture"]);
+const IMAGE_FIELDS = new Set(["image", "thumbnail", "profilePicture", "featuredImage", "ogImage", "logo", "previewImage"]);
 const PDF_FIELDS = new Set(["demoUrl", "bookUrl", "file", "solutionPdfUrl"]);
 const IMAGE_TYPES = /jpeg|jpg|png|webp/;
 const PDF_TYPES = /pdf/;
 const AUDIO_TYPES = /mp3|mpeg|m4a|aac|wav|webm|ogg|opus/;
+const DOCUMENT_EXT = /\.(pdf|csv|xlsx|xls|md|txt)$/i;
+const DOCUMENT_MIME = /^(application\/pdf|text\/csv|text\/markdown|text\/plain|application\/octet-stream|application\/vnd\.ms-excel|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet)$/i;
 
 export const uploadS3 = multer({
   ...MULTER_UTF8,
@@ -136,6 +138,38 @@ export const enforceMixedSizeLimits = async (
   const cap = IMAGE_FIELDS.has(first.fieldname) ? "3 MB" : "50 MB";
   next(new Error(`${first.fieldname} exceeds the ${cap} limit.`));
 };
+
+// Reference documents attached inline in an editor (e.g. job content
+// download links: admit card/result/answer-key/syllabus PDFs, result CSVs,
+// syllabus sheets). Single file under the `file` field, stored alongside the
+// same prefix convention as other admin uploads.
+const documentStorage = multerS3({
+  s3: s3Config,
+  bucket: process.env.DO_BUCKET || "websankul-staging",
+  acl: "public-read",
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: function (_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const filename = `admin/documents/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    cb(null, filename);
+  },
+});
+
+export const uploadS3Document = multer({
+  ...MULTER_UTF8,
+  storage: documentStorage,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25 MB ceiling
+  },
+  fileFilter: (_req, file, cb) => {
+    if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
+      return cb(new Error("File uploads are disabled: DigitalOcean Spaces credentials are not configured."));
+    }
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (DOCUMENT_EXT.test(ext) && DOCUMENT_MIME.test(file.mimetype)) return cb(null, true);
+    cb(new Error("Invalid file type. Only PDF, CSV, XLSX, XLS, MD, and TXT are allowed."));
+  },
+});
 
 // Customer-recorded audio notes attached to a lecture moment. Single file
 // per upload under the `audio` fieldname; stored under a customer-scoped

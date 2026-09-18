@@ -39,6 +39,12 @@ const KINDS = {
     mimePattern: /^application\/pdf$/i,
     maxBytes: PRESIGN_MAX_BYTES,
   },
+  jobPreviousPaperPdf: {
+    prefix: "admin/jobs/papers",
+    extPattern: /\.pdf$/i,
+    mimePattern: /^application\/pdf$/i,
+    maxBytes: PRESIGN_MAX_BYTES,
+  },
 } as const;
 
 export type PresignKind = keyof typeof KINDS;
