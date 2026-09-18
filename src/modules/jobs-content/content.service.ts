@@ -77,23 +77,27 @@ export const createContent = async (input: ContentWriteInput): Promise<JobConten
   return toContentDto(row as never);
 };
 
-// featuredImageId / seo.ogImageId only arrive in the write payload when the
+// featuredImageUrl / seo.ogImageUrl only arrive in the write payload when the
 // admin uploaded a NEW file this save (see content.controller.ts's
-// applyContentUploads — it's only set on an actual upload). Left as-is, a
-// plain edit that doesn't touch the image would fall through to `?? null` in
-// the repository and silently clear the existing featured/OG image on every
-// save. Carry the current id forward when the payload doesn't replace it.
+// applyContentUploads — it's only set on an actual upload). The `detail` JSON
+// is fully rebuilt on every save (see content.repository.ts), so a plain edit
+// that doesn't touch the image would otherwise drop the existing featured/OG
+// image. Carry the current value forward when the payload doesn't replace it.
 const preserveExistingImages = async (
   numId: bigint,
   input: ContentWriteInput
 ): Promise<ContentWriteInput> => {
-  if (input.featuredImageId !== undefined && (!input.seo || input.seo.ogImageId !== undefined)) return input;
+  if (input.featuredImageUrl !== undefined && (!input.seo || input.seo.ogImageUrl !== undefined)) return input;
   const existing = await contentRepository.findById(numId);
   if (!existing) return input;
+  const existingDto = toContentDto(existing);
   return {
     ...input,
-    featuredImageId: input.featuredImageId ?? existing.featuredImageId ?? undefined,
-    seo: input.seo ? { ...input.seo, ogImageId: input.seo.ogImageId ?? existing.seo?.ogImageId ?? undefined } : input.seo,
+    featuredImageUrl: input.featuredImageUrl ?? existingDto.featuredImageUrl,
+    featuredImageAlt: input.featuredImageAlt ?? existingDto.featuredImageAlt,
+    seo: input.seo
+      ? { ...input.seo, ogImageUrl: input.seo.ogImageUrl ?? existingDto.seo?.ogImageUrl }
+      : input.seo,
   };
 };
 

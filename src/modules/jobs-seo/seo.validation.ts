@@ -11,7 +11,7 @@ export const jobContentSeoSchema = z
     canonicalUrl: z.string().max(500).optional(),
     ogTitle: z.string().max(255).optional(),
     ogDescription: z.string().max(500).optional(),
-    ogImageId: z.coerce.bigint().optional(),
+    ogImageUrl: z.string().max(1000).optional(),
     schemaType: z.string().max(50).optional(),
     robotsIndex: zBool.optional().default(true),
     robotsFollow: zBool.optional().default(true),

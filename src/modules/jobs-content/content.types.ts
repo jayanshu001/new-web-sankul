@@ -46,6 +46,16 @@ export const JOB_PRODUCT_TYPES = ["course", "package", "book", "ebook"] as const
 export type JobProductType = (typeof JOB_PRODUCT_TYPES)[number];
 
 // ─── DTO ────────────────────────────────────────────────────────────────────
+//
+// `wsj_content_seo`/`_facts`/`_products`/`_sections`(+items)/`_steps`/
+// `_date_items`/`_fee_items`/`_payment_modes`/`_notes`/`_related_posts` and
+// every `wsj_*_details`/`wsj_syllabus_*` table were dropped from prod. All of
+// that now lives in one JSON blob (`wsj_contents.detail`) instead of 20+
+// child tables. Per-item `_id`s are generated at write time (the repository
+// already does a full replace on every save, so there was never any
+// expectation of id stability across edits). `wsj_content_categories` (the
+// many-to-many join) is also gone — a content row now has at most ONE
+// category via the plain `category_id` column, not many.
 
 export interface RefDto {
   _id: string;
@@ -60,7 +70,7 @@ export interface SeoDto {
   canonicalUrl?: string;
   ogTitle?: string;
   ogDescription?: string;
-  ogImage?: { _id: string; url: string; altText?: string };
+  ogImageUrl?: string;
   schemaType?: string;
   robotsIndex: boolean;
   robotsFollow: boolean;
@@ -146,14 +156,15 @@ export interface JobContentDto {
   title: string;
   subtitle?: string;
   organization?: RefDto;
-  categories: RefDto[];
+  category?: RefDto;
   status: JobContentStatus;
   publishedAt?: Date;
   featured: boolean;
   badge?: string;
   sortOrder: number;
   bodyHtml?: string;
-  featuredImage?: { _id: string; url: string; altText?: string };
+  featuredImageUrl?: string;
+  featuredImageAlt?: string;
   seo?: SeoDto;
   facts: FactDto[];
   products: ProductDto[];
@@ -216,14 +227,15 @@ export interface ContentWriteInput {
   slug?: string;
   subtitle?: string;
   organizationId?: bigint | null;
-  categoryIds?: bigint[];
+  categoryId?: bigint | null;
   status: JobContentStatus;
   publishedAt?: Date | null;
   featured?: boolean;
   badge?: string;
   sortOrder?: number;
   bodyHtml?: string;
-  featuredImageId?: bigint | null;
+  featuredImageUrl?: string | null;
+  featuredImageAlt?: string | null;
   seo?: {
     seoTitle?: string;
     metaDescription?: string;
@@ -231,7 +243,7 @@ export interface ContentWriteInput {
     canonicalUrl?: string;
     ogTitle?: string;
     ogDescription?: string;
-    ogImageId?: bigint;
+    ogImageUrl?: string;
     schemaType?: string;
     robotsIndex?: boolean;
     robotsFollow?: boolean;

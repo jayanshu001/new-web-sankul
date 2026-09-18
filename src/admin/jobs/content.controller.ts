@@ -5,7 +5,6 @@ import { HttpError } from "../../middlewares/errorHandler";
 import { parseListQuery } from "../../utils/listQuery";
 import { buildPagination } from "../../utils/listQuery";
 import { parseOptionalBigInt } from "../../utils/parseId";
-import { createMediaFromUpload, deleteMediaById, parseMediaId } from "../../modules/jobs-media/media.service";
 import {
   contentWriteSchema,
   contentUpdateSchema,
@@ -30,7 +29,6 @@ const syncScheduledPublish = async (data: JobContentDto) => {
 // Repeater/nested fields arrive as JSON-stringified multipart fields so the
 // admin editor can send arbitrary-depth objects/arrays in one form-data POST.
 const JSON_BODY_FIELDS = [
-  "categoryIds",
   "seo",
   "facts",
   "products",
@@ -58,18 +56,17 @@ const parseJsonBodyFields = (req: Request) => {
   }
 };
 
-const applyContentUploads = async (req: Request) => {
+const applyContentUploads = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   const featuredImage = files?.featuredImage?.[0];
   if (featuredImage?.location) {
-    const media = await createMediaFromUpload({ url: featuredImage.location, altText: req.body.title });
-    req.body.featuredImageId = media._id;
+    req.body.featuredImageUrl = featuredImage.location;
+    req.body.featuredImageAlt = req.body.title;
   }
   const ogImage = files?.ogImage?.[0];
   if (ogImage?.location) {
-    const media = await createMediaFromUpload({ url: ogImage.location });
     const body = req.body as { seo?: Record<string, unknown> };
-    body.seo = { ...(body.seo ?? {}), ogImageId: media._id };
+    body.seo = { ...(body.seo ?? {}), ogImageUrl: ogImage.location };
   }
 };
 
@@ -99,7 +96,7 @@ export const getContentDetail = asyncHandler(async (req: Request, res: Response)
 
 export const createContent = asyncHandler(async (req: Request, res: Response) => {
   parseJsonBodyFields(req);
-  await applyContentUploads(req);
+  applyContentUploads(req);
   const validated = contentWriteSchema.parse(req.body);
   const data = await contentService.createContent(validated);
   await syncScheduledPublish(data);
@@ -108,21 +105,11 @@ export const createContent = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateContent = asyncHandler(async (req: Request, res: Response) => {
   parseJsonBodyFields(req);
-  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
-  const replacingFeatured = Boolean(files?.featuredImage?.[0]);
-  const replacingOg = Boolean(files?.ogImage?.[0]);
-  const previous =
-    replacingFeatured || replacingOg ? await contentService.getContentById(req.params.id as string) : null;
-
-  await applyContentUploads(req);
+  applyContentUploads(req);
   const validated = contentUpdateSchema.parse(req.body);
   const data = await contentService.updateContent(req.params.id as string, validated);
   if (!data) throw new HttpError(404, "Job content not found.");
   await syncScheduledPublish(data);
-
-  // Best-effort: clean up the S3 file + Media row the new upload just replaced.
-  if (replacingFeatured && previous?.featuredImage) await deleteMediaById(parseMediaId(previous.featuredImage._id));
-  if (replacingOg && previous?.seo?.ogImage) await deleteMediaById(parseMediaId(previous.seo.ogImage._id));
 
   return success(res, data as unknown as object);
 });

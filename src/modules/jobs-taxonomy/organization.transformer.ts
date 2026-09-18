@@ -1,14 +1,12 @@
-import type { JobOrganization, Media } from "@prisma/client";
-import { toMediaDto } from "../jobs-media/media.transformer";
+import type { JobOrganization } from "@prisma/client";
 import type { OrganizationDto } from "./organization.types";
 
-type Row = JobOrganization & { logo?: Media | null };
-
-export const toOrganizationDto = (row: Row): OrganizationDto => ({
+export const toOrganizationDto = (row: JobOrganization): OrganizationDto => ({
   _id: String(row.id),
   name: row.name,
   slug: row.slug,
-  logo: row.logo ? toMediaDto(row.logo) : undefined,
+  logoUrl: row.logoUrl ?? undefined,
+  logoAlt: row.logoAlt ?? undefined,
   createdAt: row.createdAt ?? undefined,
   updatedAt: row.updatedAt ?? undefined,
 });

@@ -25,7 +25,7 @@ export const listCategoriesPaged = async (
 ): Promise<{ items: CategoryDto[]; total: number }> => {
   const [rows, total] = await Promise.all([
     categoryRepository.findPage(q),
-    categoryRepository.count(q.search, q.organizationId),
+    categoryRepository.count(q.search),
   ]);
   return { items: rows.map(toCategoryDto), total };
 };

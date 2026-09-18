@@ -1,8 +1,23 @@
 import type { Prisma } from "@prisma/client";
 import type { PAPER_INCLUDE } from "./paper.repository";
-import type { PaperDto } from "./paper.types";
+import type { PaperDto, PaperProductDto } from "./paper.types";
 
 type PaperRow = Prisma.JobPreviousPaperGetPayload<{ include: typeof PAPER_INCLUDE }>;
+
+const asStringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+
+const asProducts = (value: unknown): PaperProductDto[] => {
+  if (!Array.isArray(value)) return [];
+  return value.map((p, i) => {
+    const row = p as Record<string, unknown>;
+    return {
+      _id: String(i),
+      productType: row.productType as PaperProductDto["productType"],
+      productId: String(row.productId),
+      isFeatured: Boolean(row.isFeatured),
+    };
+  });
+};
 
 export const toPaperDto = (row: PaperRow): PaperDto => ({
   _id: String(row.id),
@@ -20,21 +35,14 @@ export const toPaperDto = (row: PaperRow): PaperDto => ({
   isSolved: row.isSolved ?? false,
   organizationId: row.organizationId ? String(row.organizationId) : undefined,
   categoryId: row.categoryId ? String(row.categoryId) : undefined,
-  previewMedia: row.previewMedia
-    ? { _id: String(row.previewMedia.id), url: row.previewMedia.url, altText: row.previewMedia.altText ?? undefined }
-    : undefined,
+  previewUrl: row.previewUrl ?? undefined,
   description: row.description ?? undefined,
   status: row.status,
   publishedAt: row.publishedAt ?? undefined,
-  files: row.files.map((f) => ({ _id: String(f.id), label: f.label ?? undefined, url: f.url })),
-  jobIds: row.jobLinks.map((l) => String(l.contentId)),
+  files: row.pdfUrl ? [{ _id: "1", url: row.pdfUrl }] : [],
+  jobIds: asStringArray(row.jobIds),
   tags: row.tags.map((t) => t.tag ?? "").filter(Boolean),
-  products: row.contentProducts.map((p) => ({
-    _id: String(p.id),
-    productType: p.productType,
-    productId: String(p.productId),
-    isFeatured: p.isFeatured,
-  })),
+  products: asProducts(row.products),
   createdAt: row.createdAt ?? undefined,
   updatedAt: row.updatedAt ?? undefined,
 });

@@ -53,17 +53,8 @@ export const updatePaper = async (id: string, input: PaperWriteInput): Promise<P
   if (numId === null) return null;
   const slug = input.slug ? await uniqueSlug(slugify(input.slug), (c) => paperSlugExists(c, numId)) : undefined;
 
-  // previewMediaId only arrives in the payload when the admin uploaded a NEW
-  // preview image this save. Left as-is, a plain edit falls through to
-  // `?? null` in the repository and silently clears the existing preview.
-  let mergedInput = input;
-  if (input.previewMediaId === undefined) {
-    const existing = await paperRepository.findById(numId);
-    if (existing) mergedInput = { ...input, previewMediaId: existing.previewMediaId ?? undefined };
-  }
-
   try {
-    const row = await paperRepository.update(numId, { ...mergedInput, slug });
+    const row = await paperRepository.update(numId, { ...input, slug });
     await safeRevalidatePreviousPapers(row.slug ?? String(row.id));
     return toPaperDto(row);
   } catch {

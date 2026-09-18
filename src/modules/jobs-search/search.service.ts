@@ -16,7 +16,7 @@ const HREF_PREFIX: Record<string, string> = {
 export const syncContentToSearchIndex = async (contentId: bigint): Promise<void> => {
   const content = await prisma.jobContent.findUnique({
     where: { id: contentId },
-    include: { organization: true, categories: { include: { category: true } } },
+    include: { organization: true, category: true },
   });
   if (!content) {
     await searchRepository.deleteByContent("__unknown__", contentId);
@@ -26,7 +26,6 @@ export const syncContentToSearchIndex = async (contentId: bigint): Promise<void>
     await searchRepository.deleteByContent(content.type, contentId);
     return;
   }
-  const categorySlugs = content.categories.map((link) => link.category.slug).join(",");
   await searchRepository.upsert({
     contentType: content.type,
     contentId,
@@ -34,7 +33,7 @@ export const syncContentToSearchIndex = async (contentId: bigint): Promise<void>
     title: content.title,
     subtitle: content.subtitle,
     orgName: content.organization?.name ?? null,
-    categorySlugs: categorySlugs || null,
+    categorySlugs: content.category?.slug || null,
     href: `${HREF_PREFIX[content.type] ?? ""}/${content.slug}`,
     publishedAt: content.publishedAt,
   });

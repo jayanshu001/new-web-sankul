@@ -3,11 +3,7 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { PaperListQuery, PaperWriteInput } from "./paper.types";
 
 export const PAPER_INCLUDE = {
-  previewMedia: true,
-  files: { orderBy: { sortOrder: "asc" as const } },
-  jobLinks: true,
   tags: true,
-  contentProducts: { orderBy: { sortOrder: "asc" as const } },
 } as const;
 
 const buildWhere = (q: Partial<PaperListQuery>) => {
@@ -23,29 +19,37 @@ const buildWhere = (q: Partial<PaperListQuery>) => {
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-const writeChildren = async (tx: Tx, paperId: bigint, input: PaperWriteInput) => {
-  for (const [i, file] of (input.files ?? []).entries()) {
-    await tx.jobPreviousPaperFile.create({ data: { paperId, sortOrder: i, label: file.label, url: file.url } });
-  }
-  for (const contentId of input.jobIds ?? []) {
-    await tx.jobPreviousPaperJobLink.create({ data: { paperId, contentId } });
-  }
+// `wsj_previous_paper_files`/`_job_links`/`_products` (as a distinct table)
+// no longer exist. `jobIds`/`products` now live in the `Json?` columns
+// already on `wsj_previous_papers`; a multi-file upload collapses to the
+// first file's URL in `pdfUrl` (the only storage left for it).
+const writeTags = async (tx: Tx, paperId: bigint, input: PaperWriteInput) => {
+  await tx.jobPreviousPaperTag.deleteMany({ where: { paperId } });
   for (const tag of input.tags ?? []) {
     await tx.jobPreviousPaperTag.create({ data: { paperId, tag } });
   }
-  for (const [i, product] of (input.products ?? []).entries()) {
-    await tx.jobContentProduct.create({
-      data: { paperId, sortOrder: i, productType: product.productType, productId: product.productId, isFeatured: product.isFeatured ?? false },
-    });
-  }
 };
 
-const clearChildren = async (tx: Tx, paperId: bigint) => {
-  await tx.jobPreviousPaperFile.deleteMany({ where: { paperId } });
-  await tx.jobPreviousPaperJobLink.deleteMany({ where: { paperId } });
-  await tx.jobPreviousPaperTag.deleteMany({ where: { paperId } });
-  await tx.jobContentProduct.deleteMany({ where: { paperId } });
-};
+const baseData = (input: PaperWriteInput) => ({
+  slug: input.slug,
+  title: input.title,
+  subtitle: input.subtitle,
+  subject: input.subject,
+  formatLabel: input.formatLabel,
+  yearsLabel: input.yearsLabel,
+  year: input.year,
+  tier: input.tier,
+  language: input.language,
+  isSolved: input.isSolved ?? false,
+  description: input.description,
+  status: input.status,
+  papersCount: input.files?.length ?? 0,
+  pdfUrl: input.files?.[0]?.url,
+  jobIds: input.jobIds ? input.jobIds.map(String) : undefined,
+  products: input.products
+    ? input.products.map((p) => ({ ...p, productId: String(p.productId) }))
+    : undefined,
+});
 
 export const paperRepository = {
   findPage: (q: PaperListQuery) =>
@@ -65,28 +69,16 @@ export const paperRepository = {
     prisma.$transaction(async (tx) => {
       const base = await tx.jobPreviousPaper.create({
         data: {
-          slug: input.slug,
-          title: input.title,
-          subtitle: input.subtitle,
-          subject: input.subject,
-          formatLabel: input.formatLabel,
-          yearsLabel: input.yearsLabel,
-          year: input.year,
-          tier: input.tier,
-          language: input.language,
-          isSolved: input.isSolved ?? false,
+          ...baseData(input),
           organizationId: input.organizationId ?? undefined,
           categoryId: input.categoryId ?? undefined,
-          previewMediaId: input.previewMediaId ?? undefined,
-          description: input.description,
-          status: input.status,
+          previewUrl: input.previewUrl ?? undefined,
           publishedAt: input.publishedAt ?? undefined,
-          papersCount: input.files?.length ?? 0,
           createdAt: new Date(),
           updatedAt: new Date(),
         },
       });
-      await writeChildren(tx, base.id, input);
+      await writeTags(tx, base.id, input);
       return tx.jobPreviousPaper.findUniqueOrThrow({ where: { id: base.id }, include: PAPER_INCLUDE });
     }),
 
@@ -95,28 +87,15 @@ export const paperRepository = {
       await tx.jobPreviousPaper.update({
         where: { id },
         data: {
-          slug: input.slug,
-          title: input.title,
-          subtitle: input.subtitle,
-          subject: input.subject,
-          formatLabel: input.formatLabel,
-          yearsLabel: input.yearsLabel,
-          year: input.year,
-          tier: input.tier,
-          language: input.language,
-          isSolved: input.isSolved ?? false,
+          ...baseData(input),
           organizationId: input.organizationId ?? null,
           categoryId: input.categoryId ?? null,
-          previewMediaId: input.previewMediaId ?? null,
-          description: input.description,
-          status: input.status,
+          ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
           publishedAt: input.publishedAt ?? null,
-          papersCount: input.files?.length ?? 0,
           updatedAt: new Date(),
         },
       });
-      await clearChildren(tx, id);
-      await writeChildren(tx, id, input);
+      await writeTags(tx, id, input);
       return tx.jobPreviousPaper.findUniqueOrThrow({ where: { id }, include: PAPER_INCLUDE });
     }),
 

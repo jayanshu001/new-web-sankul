@@ -8,7 +8,6 @@ export const organizationRepository = {
   findPage: (opts: { search?: string; skip: number; take: number }) =>
     prisma.jobOrganization.findMany({
       where: buildWhere(opts.search),
-      include: { logo: true },
       orderBy: { id: "desc" },
       skip: opts.skip,
       take: opts.take,
@@ -16,8 +15,7 @@ export const organizationRepository = {
 
   count: (search?: string) => prisma.jobOrganization.count({ where: buildWhere(search) }),
 
-  findById: (id: bigint) =>
-    prisma.jobOrganization.findUnique({ where: { id }, include: { logo: true } }),
+  findById: (id: bigint) => prisma.jobOrganization.findUnique({ where: { id } }),
 
   findBySlug: (slug: string) => prisma.jobOrganization.findUnique({ where: { slug } }),
 
@@ -26,11 +24,11 @@ export const organizationRepository = {
       data: {
         name: input.name,
         slug: input.slug,
-        logoMediaId: input.logoMediaId ?? undefined,
+        logoUrl: input.logoUrl ?? undefined,
+        logoAlt: input.logoAlt ?? undefined,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
-      include: { logo: true },
     }),
 
   update: (id: bigint, input: OrganizationUpdateInput) =>
@@ -39,10 +37,10 @@ export const organizationRepository = {
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.slug !== undefined ? { slug: input.slug } : {}),
-        ...(input.logoMediaId !== undefined ? { logoMediaId: input.logoMediaId } : {}),
+        ...(input.logoUrl !== undefined ? { logoUrl: input.logoUrl } : {}),
+        ...(input.logoAlt !== undefined ? { logoAlt: input.logoAlt } : {}),
         updatedAt: new Date(),
       },
-      include: { logo: true },
     }),
 
   delete: (id: bigint) => prisma.jobOrganization.delete({ where: { id } }),

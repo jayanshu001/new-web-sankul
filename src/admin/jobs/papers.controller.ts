@@ -4,7 +4,6 @@ import { success } from "../../utils/httpResponse";
 import { HttpError } from "../../middlewares/errorHandler";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { parseOptionalBigInt } from "../../utils/parseId";
-import { createMediaFromUpload, deleteMediaById, parseMediaId } from "../../modules/jobs-media/media.service";
 import { paperWriteSchema, paperUpdateSchema } from "../../modules/jobs-papers/paper.validation";
 import * as paperService from "../../modules/jobs-papers/paper.service";
 import type { JobPaperStatus, JobPaperTier } from "../../modules/jobs-papers/paper.types";
@@ -24,12 +23,11 @@ const parseJsonBodyFields = (req: Request) => {
   }
 };
 
-const applyPreviewUpload = async (req: Request) => {
+const applyPreviewUpload = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   const preview = files?.previewImage?.[0];
   if (preview?.location) {
-    const media = await createMediaFromUpload({ url: preview.location });
-    req.body.previewMediaId = media._id;
+    req.body.previewUrl = preview.location;
   }
 };
 
@@ -59,7 +57,7 @@ export const getPaperDetail = asyncHandler(async (req: Request, res: Response) =
 
 export const createPaper = asyncHandler(async (req: Request, res: Response) => {
   parseJsonBodyFields(req);
-  await applyPreviewUpload(req);
+  applyPreviewUpload(req);
   const validated = paperWriteSchema.parse(req.body);
   const data = await paperService.createPaper(validated);
   return res.status(201).json({ success: true, data });
@@ -67,16 +65,10 @@ export const createPaper = asyncHandler(async (req: Request, res: Response) => {
 
 export const updatePaper = asyncHandler(async (req: Request, res: Response) => {
   parseJsonBodyFields(req);
-  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
-  const replacingPreview = Boolean(files?.previewImage?.[0]);
-  const previous = replacingPreview ? await paperService.getPaperById(req.params.id as string) : null;
-
-  await applyPreviewUpload(req);
+  applyPreviewUpload(req);
   const validated = paperUpdateSchema.parse(req.body);
   const data = await paperService.updatePaper(req.params.id as string, validated);
   if (!data) throw new HttpError(404, "Previous paper not found.");
-
-  if (replacingPreview && previous?.previewMedia) await deleteMediaById(parseMediaId(previous.previewMedia._id));
 
   return success(res, data as unknown as object);
 });

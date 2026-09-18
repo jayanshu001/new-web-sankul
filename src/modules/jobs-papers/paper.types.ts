@@ -33,10 +33,12 @@ export interface PaperDto {
   isSolved: boolean;
   organizationId?: string;
   categoryId?: string;
-  previewMedia?: { _id: string; url: string; altText?: string };
+  previewUrl?: string;
   description?: string;
   status: JobPaperStatus;
   publishedAt?: Date;
+  // Single-file: `wsj_previous_paper_files` no longer exists, so only the
+  // first uploaded file (`pdfUrl`) is kept — 0 or 1 items, never more.
   files: PaperFileDto[];
   jobIds: string[];
   tags: string[];
@@ -58,7 +60,7 @@ export interface PaperWriteInput {
   isSolved?: boolean;
   organizationId?: bigint | null;
   categoryId?: bigint | null;
-  previewMediaId?: bigint | null;
+  previewUrl?: string | null;
   description?: string;
   status: JobPaperStatus;
   publishedAt?: Date | null;

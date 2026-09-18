@@ -1,10 +1,9 @@
-import type { MediaDto } from "../jobs-media/media.types";
-
 export interface OrganizationDto {
   _id: string;
   name: string;
   slug: string;
-  logo?: MediaDto;
+  logoUrl?: string;
+  logoAlt?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -12,13 +11,15 @@ export interface OrganizationDto {
 export interface OrganizationCreateInput {
   name: string;
   slug?: string;
-  logoMediaId?: bigint | null;
+  logoUrl?: string | null;
+  logoAlt?: string | null;
 }
 
 export interface OrganizationUpdateInput {
   name?: string;
   slug?: string;
-  logoMediaId?: bigint | null;
+  logoUrl?: string | null;
+  logoAlt?: string | null;
 }
 
 export interface OrganizationListQuery {
