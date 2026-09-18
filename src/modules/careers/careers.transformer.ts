@@ -3,6 +3,7 @@ import type { CareerApplicationDto, CareerOpeningDto } from "./careers.types";
 
 export const toCareerOpeningDto = (row: CareerOpening): CareerOpeningDto => ({
   _id: String(row.id),
+  id: Number(row.id),
   title: row.title,
   department: row.department,
   location: row.location,
@@ -21,6 +22,7 @@ export const toCareerOpeningDto = (row: CareerOpening): CareerOpeningDto => ({
 
 export const toCareerApplicationDto = (row: CareerApplication): CareerApplicationDto => ({
   _id: String(row.id),
+  id: Number(row.id),
   opening_id: row.openingId !== null ? String(row.openingId) : null,
   job_title: row.jobTitle,
   full_name: row.fullName,

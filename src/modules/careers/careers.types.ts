@@ -4,6 +4,10 @@ export type CareerApplicationStatus = "new" | "reviewing" | "shortlisted" | "rej
 
 export interface CareerOpeningDto {
   _id: string;
+  // Legacy `websankul-jobs`/`websankul-books` careers UI (pre-existing, not
+  // rewritten for this migration) reads `id` as a number — kept alongside
+  // `_id` (websankul-admin's convention) so neither frontend needs changes.
+  id: number;
   title: string;
   department: string | null;
   location: string | null;
@@ -39,6 +43,7 @@ export type CareerOpeningUpdateInput = Partial<CareerOpeningCreateInput>;
 
 export interface CareerApplicationDto {
   _id: string;
+  id: number;
   opening_id: string | null;
   job_title: string | null;
   full_name: string;
