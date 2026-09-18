@@ -15,6 +15,29 @@
 
 ---
 
+## 2026-09-18 — jobs-management: category↔organization link restored; previous papers read/write the stored (legacy Laravel) formats
+
+> **Code-only. No DDL run or added.** `wsj_categories.organization_id` (and all old `wsj_`
+> tables/columns) still exist in the DB; only Prisma models / repositories changed.
+
+- **Categories:** `JobCategory` gets `organizationId` + `organization` relation again
+  (`prisma/schema.prisma`, `category.{repository,service,transformer,types,validation}.ts`,
+  `admin/jobs/categories.controller.ts`).
+- **Previous papers** (`paper.repository.ts`, `paper.transformer.ts`, `paper.types.ts`)
+  follow the storage shape of Laravel `GovtJobRecruitmentService::savePaper`:
+  - `pdf_url` = JSON `[{label,url}]` (plain URL = legacy single file); `papers_count` = file count.
+  - `job_ids` = JSON int array; `content_id` mirrors the first id.
+  - `products` = JSON `[{product_type, product_id:"123", is_featured:"1"?}]`.
+  - `published_at` is no longer wiped on update.
+- **websankul-jobs-api (separate repo):** paper detail now returns `relatedProducts` (same
+  resolver as job/content detail); the paper's category is resolved from its own
+  `category_id` via a batched `wsj_categories` lookup (no FK/relation) instead of only the
+  linked job's category; job detail returns `relatedPapers` (published papers with
+  `content_id = job` OR `job_ids` containing the job id). Job-detail cache is not
+  invalidated when a paper is (un)linked — it refreshes on its normal TTL.
+
+---
+
 ## 2026-09-18 — public enquiry endpoint + route-order fix for public client routes
 
 > **Code-only. No DDL** — writes to the existing `ws_website_inquiry` columns
