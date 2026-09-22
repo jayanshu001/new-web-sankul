@@ -15,9 +15,9 @@
 
 ---
 
-## 2026-09-22 — `/admin/pc-materials` search un-anchored (prefix → contains)
+## 2026-09-22 — admin master-list search un-anchored (prefix → contains)
 
-> **Code-only (`src/modules/admin-master/admin-master.repository.ts`, `pcmWhere`). No DDL, no data writes, no response-shape change.**
+> **Code-only (`src/modules/admin-master/admin-master.repository.ts` — `pcmWhere` + `subjWhere`). No DDL, no data writes, no response-shape change.**
 
 - **Bug:** `pcmWhere` used `buildPrismaPrefixSearch`, which anchors the first token, so a
   substring term matched nothing:
@@ -34,20 +34,27 @@
   -- (after)
   WHERE title LIKE '%8%'
   ```
-- **Why this table and not a blanket revert of the prefix helper:** prefix anchoring exists to buy
-  a B-tree range scan on large indexed columns (`ws_customer`, 1M+ rows). `ws_package_course_material`
-  is a small single-field master with **no index on `title`** (see `prisma/schema.prisma`,
-  `model PackageCourseMaterial`), so MySQL full-scans either way — the anchor bought no plan
-  improvement and only cost matches. The other ~63 `buildPrismaPrefixSearch` call sites are
-  deliberately left alone.
-- **Affects:** `GET /api/v1/admin/pc-materials` (paginated list + its `total`; `pcmList` and
-  `pcmCount` share `pcmWhere`, so both move together and pagination stays consistent).
-- **Known sibling, NOT changed:** `subjWhere` (`ws_course_subject_category`, `GET /admin/master/course-subject-categories`)
-  has the same shape and also no index on `title`. Left as-is — not reported, and changing it
-  would widen this fix beyond the endpoint under test.
+- **Same change applied to `subjWhere`** (`ws_course_subject_category`) in the same commit — identical
+  shape, identical reasoning, reported separately.
+- **Why these two tables and not a blanket revert of the prefix helper:** prefix anchoring exists to
+  buy a B-tree range scan on large indexed columns (`ws_customer`, 1M+ rows). Both
+  `ws_package_course_material` and `ws_course_subject_category` are small masters with **no index on
+  `title`** (see `prisma/schema.prisma`, `model PackageCourseMaterial` / `model CourseSubjectCategory`),
+  so MySQL full-scans either way — the anchor bought no plan improvement and only cost matches. The
+  other ~62 `buildPrismaPrefixSearch` call sites are deliberately left alone.
+- **Affects:**
+  - `GET /api/v1/admin/pc-materials` — **not route-cached**, so the fix is live on deploy.
+  - `GET /api/v1/admin/master/subject-categories` — **route-cached**
+    (`cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory })`). Cache keys are
+    per-query-hash, so a term already searched before the deploy keeps serving its stale EMPTY result
+    for up to 24h. **Flush `course-subject-category` after deploying** (`POST /api/v1/admin/cache/flush`)
+    or the fix looks like it did nothing for exactly the terms that were reported.
+  - In both cases the `*List` and `*Count` halves share one `*Where`, so rows and `total` move
+    together and pagination stays consistent.
 - **QA:** `?search=8` returns titles containing 8 anywhere; `?search=<prefix>` still returns what
-  it did before (`contains` is a superset of `startsWith`); empty/whitespace `search` still returns
-  the unfiltered list.
+  it did before (`contains` is a superset of `startsWith`, so this can only ADD rows, never drop
+  them); empty/whitespace `search` still returns the unfiltered list; `subject-categories` re-checked
+  after a `course-subject-category` cache flush, not before.
 
 ---
 
