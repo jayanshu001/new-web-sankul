@@ -468,9 +468,12 @@ function pcmWhere(opts?: { search?: string }) {
   return where;
 }
 
+// Unanchored `contains`, same reasoning as pcmWhere above: ws_course_subject_category
+// has no index on `title`, so the prefix anchor bought no plan improvement and only
+// dropped substring matches (`?search=8` → `title LIKE '8%'`).
 function subjWhere(opts?: { search?: string; status?: boolean }) {
   const where: any = {};
-  const search = buildPrismaPrefixSearch(opts?.search, ["title"]);
+  const search = buildPrismaSearch(opts?.search, ["title"]);
   if (search) Object.assign(where, search);
   if (opts?.status !== undefined) where.status = opts.status;
   return where;
