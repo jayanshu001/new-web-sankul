@@ -15,6 +15,42 @@
 
 ---
 
+## 2026-09-22 — `/admin/pc-materials` search un-anchored (prefix → contains)
+
+> **Code-only (`src/modules/admin-master/admin-master.repository.ts`, `pcmWhere`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `pcmWhere` used `buildPrismaPrefixSearch`, which anchors the first token, so a
+  substring term matched nothing:
+
+  ```sql
+  -- GET /api/v1/admin/pc-materials?page=1&limit=10&search=8   (before)
+  WHERE title LIKE '8%'      -- misses every "Class 8 ...", "Std 8 ..." title
+  ```
+
+  Reported on `GET /api/v1/admin/pc-materials?page=1&limit=10&search=8`.
+- **Change:** `pcmWhere` now calls `buildPrismaSearch` (unanchored `contains`) instead.
+
+  ```sql
+  -- (after)
+  WHERE title LIKE '%8%'
+  ```
+- **Why this table and not a blanket revert of the prefix helper:** prefix anchoring exists to buy
+  a B-tree range scan on large indexed columns (`ws_customer`, 1M+ rows). `ws_package_course_material`
+  is a small single-field master with **no index on `title`** (see `prisma/schema.prisma`,
+  `model PackageCourseMaterial`), so MySQL full-scans either way — the anchor bought no plan
+  improvement and only cost matches. The other ~63 `buildPrismaPrefixSearch` call sites are
+  deliberately left alone.
+- **Affects:** `GET /api/v1/admin/pc-materials` (paginated list + its `total`; `pcmList` and
+  `pcmCount` share `pcmWhere`, so both move together and pagination stays consistent).
+- **Known sibling, NOT changed:** `subjWhere` (`ws_course_subject_category`, `GET /admin/master/course-subject-categories`)
+  has the same shape and also no index on `title`. Left as-is — not reported, and changing it
+  would widen this fix beyond the endpoint under test.
+- **QA:** `?search=8` returns titles containing 8 anywhere; `?search=<prefix>` still returns what
+  it did before (`contains` is a superset of `startsWith`); empty/whitespace `search` still returns
+  the unfiltered list.
+
+---
+
 ## 2026-09-22 — multi-word search fixed across every `buildPrismaPrefixSearch` endpoint
 
 > **Code-only (`src/utils/searchFilter.ts`). No DDL, no data writes, no response-shape change.**
