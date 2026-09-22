@@ -300,3 +300,15 @@ export const deleteFromS3FileUrl = async (fileUrl: string) => {
     console.error(`[deleteFromS3FileUrl] Failed to delete orphaned file ${fileUrl}:`, err);
   }
 };
+
+const RANK_PDF_MAX_BYTES = 25 * 1024 * 1024;
+
+export const uploadRankPdfToMemory = multer({
+  ...MULTER_UTF8,
+  storage: multer.memoryStorage(),
+  limits: { fileSize: RANK_PDF_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") return cb(null, true);
+    cb(new Error("Only PDF response sheets are accepted."));
+  },
+});

@@ -1,23 +1,15 @@
 import { Request, Response } from "express";
-import type { z } from "zod";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
-import type { applicationCreateSchema } from "../../modules/careers/careers.validation";
+import type { CareerApplicationBody } from "../../modules/careers/careers.validation";
 import * as careersService from "../../modules/careers/careers.service";
 
-type ApplicationCreateBody = z.infer<typeof applicationCreateSchema>;
+export const getCurrentOpenings = asyncHandler(async (_req: Request, res: Response) =>
+  success(res, { openings: await careersService.listActiveOpenings() })
+);
 
-// GET /api/v1/client/careers/current-openings — PUBLIC, active openings only.
-export const getCurrentOpenings = asyncHandler(async (_req: Request, res: Response) => {
-  const openings = await careersService.listActiveOpenings();
-  return success(res, { openings });
-});
-
-// POST /api/v1/client/careers/apply — PUBLIC, no account required.
-// `validate({ body: applicationCreateSchema })` on the route has already
-// parsed + coerced req.body by the time this runs.
 export const applyToOpening = asyncHandler(async (req: Request, res: Response) => {
-  const body = req.body as ApplicationCreateBody;
+  const body = req.body as CareerApplicationBody;
 
   const application = await careersService.submitApplication({
     openingId: body.opening_id ?? undefined,

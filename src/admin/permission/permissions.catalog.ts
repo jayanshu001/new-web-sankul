@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.09.17-1";
+export const CATALOG_VERSION = "2026.09.21-4";
 
 export interface CatalogPermission {
   key: string;
@@ -250,9 +250,16 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Careers ──────────────────────────────────────────────────────────────
   mod("careers.openings", "Career Openings", "Careers"),
-  // Applications are submitted publicly, never created/deleted by an admin —
-  // only viewed and moved through the review-status workflow.
   mod("careers.applications", "Career Applications", "Careers", { standard: ["view", "edit"] }),
+
+  // ── Rank Predictor ─────────────────────────────────────────────────────────
+  mod("rank-predictor.papers", "Rank Predictor Papers", "Rank Predictor"),
+  mod("rank-predictor.answer-keys", "Rank Predictor Answer Keys", "Rank Predictor", {
+    standard: ["view", "create", "toggle-status"],
+  }),
+  mod("rank-predictor.submissions", "Rank Predictor Submissions", "Rank Predictor", {
+    standard: ["view", "edit", "delete"],
+  }),
 
   // ── Offline ──────────────────────────────────────────────────────────────
   mod("offline.banners", "Offline Banners", "Offline"),

@@ -1,6 +1,8 @@
 import type { CareerApplication, CareerOpening } from "@prisma/client";
 import type { CareerApplicationDto, CareerOpeningDto } from "./careers.types";
 
+const toNumberOrNull = (value: unknown): number | null => (value === null ? null : Number(value));
+
 export const toCareerOpeningDto = (row: CareerOpening): CareerOpeningDto => ({
   _id: String(row.id),
   id: Number(row.id),
@@ -11,8 +13,8 @@ export const toCareerOpeningDto = (row: CareerOpening): CareerOpeningDto => ({
   experience_level: row.experienceLevel,
   description: row.description,
   requirements: row.requirements,
-  min_salary: row.minSalary !== null ? Number(row.minSalary) : null,
-  max_salary: row.maxSalary !== null ? Number(row.maxSalary) : null,
+  min_salary: toNumberOrNull(row.minSalary),
+  max_salary: toNumberOrNull(row.maxSalary),
   vacancies: row.vacancies,
   last_date: row.lastDate,
   status: row.status ? 1 : 0,
@@ -23,7 +25,7 @@ export const toCareerOpeningDto = (row: CareerOpening): CareerOpeningDto => ({
 export const toCareerApplicationDto = (row: CareerApplication): CareerApplicationDto => ({
   _id: String(row.id),
   id: Number(row.id),
-  opening_id: row.openingId !== null ? String(row.openingId) : null,
+  opening_id: row.openingId === null ? null : String(row.openingId),
   job_title: row.jobTitle,
   full_name: row.fullName,
   email: row.email,
