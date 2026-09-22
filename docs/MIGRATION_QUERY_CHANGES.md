@@ -15,6 +15,73 @@
 
 ---
 
+## 2026-09-22 — `shareableLink` carries an encrypted id token (no DDL, no query change)
+
+> **DDL:** none. **Queries:** none — no repository, service or Prisma call was
+> touched. Logged here only because every `shareableLink` value in the API
+> changes shape, and the id in a share URL is now derived, not stored.
+
+Requested: the public share URL must not expose the real row id.
+`https://websankul.com/share/ebooks/120` → `https://websankul.com/share/ebooks/UMAv6-8`.
+
+**Encoding** (`src/deeplinking/shareRedirect.ts`)
+- `encodeShareId(resource, id)`: AES-128-CTR over `[1 salt byte][uint32 BE id]`,
+  base64url → always 7 chars of `A-Za-z0-9-_`.
+- Key + IV = `sha256("<SHARE_ID_SECRET>:<resource>")` split 16/16, so the token is
+  **resource-scoped**: ebook 120 and course 120 encode differently.
+- `SHARE_ID_SECRET` is optional and falls back to `JWT_ACCESS_SECRET` — no new
+  required env var. Documented in `.env.example`.
+- Deterministic, so a link shared once keeps resolving. The salt byte is bumped
+  until the token contains a non-digit, which is what guarantees a token can
+  never be mistaken for a legacy all-numeric id.
+
+**Single chokepoint:** `buildShareUrl()` encodes. Every `shareableLink` producer
+already routes through it (catalog-ebook/book/course/package, client-free,
+client-testseries, client-educator, admin-live-course, package-category,
+commerce-ebook-sub, …) so no call site changed.
+
+**Decoding:** `src/deeplinking/deeplinking.routes.ts` `sendShare(resource, deepPath)`
+now takes the URL segment as well (it keys the cipher) and decodes before
+rendering. The in-app deep link still carries the **real** id
+(`com.gpscvideo.gpsc://ebook/120`), so the mobile app is unchanged.
+
+**Backwards compatible:** plain numeric ids are still accepted, so share links
+already in the wild keep working.
+
+**Untouched:** the admin-entered `shareable_link` / `shareableLink` columns
+(`ws_package`, `ws_course`, `ws_live_course`, exam countdown) are hand-typed
+marketing URLs, not generated links — still returned raw.
+
+**Verification:** `scripts/check-share-id.ts` (round-trip, 7-char shape,
+never-all-numeric, resource scoping, garbage rejection) + a route smoke test
+confirming token, legacy id and cross-resource paths. `yarn typecheck` green.
+
+**Resolve endpoint — the one supported way to turn a token back into an id:**
+`GET /share/resolve/:resource/:token` → `{ resource, id, deepPath, appLink,
+webLink }` (public, no Bearer, `shareLimiter`, `success()` / `failure()`
+envelope; plain numeric ids accepted so callers need no branch for pre-cipher
+links). No DB access in the handler. `buildShareTargets()` was extracted in
+`shareRedirect.ts` so the endpoint and the rendered redirect page can never
+disagree on `appLink` / `webLink`.
+
+The deep-link handler — web or mobile — calls it and navigates. Nothing decodes
+client-side; the cipher key never leaves the API. A `next.config.js`
+`redirects()` / `rewrites()` proxy was considered and dropped in favour of the
+single endpoint. (For context: `ORIGIN=https://websankul.com` is the Next.js
+site, not this API, and it 404s on `/share/*` today — old plain-id links
+included, so that surface was already broken before the cipher.)
+
+The existing `GET /share/:resource/:id` HTML redirect page still works and now
+accepts tokens as well, for links that point straight at the API host.
+
+Inline comments in the three touched files were trimmed to the non-obvious bits
+(why the salt loop exists, why `SURFACES` keys the cipher, why `/share/resolve`
+is public); the long-form explanation lives in the FE doc.
+
+FE/app doc: `docs/client/SHARE_LINK_CIPHER.md`.
+
+---
+
 ## 2026-09-18 — websankul-jobs-api: public job list/detail also serve `expired` jobs
 
 > **Code-only (jobs-api + websankul-jobs). No DDL, no data writes.**
