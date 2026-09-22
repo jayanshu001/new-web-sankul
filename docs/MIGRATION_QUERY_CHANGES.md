@@ -15,6 +15,46 @@
 
 ---
 
+## 2026-09-22 — multi-word search fixed across every `buildPrismaPrefixSearch` endpoint
+
+> **Code-only (`src/utils/searchFilter.ts`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `buildPrismaPrefixSearch` anchored EVERY token as `startsWith`, so a multi-word term
+  produced an unsatisfiable predicate on any single-field search — one value cannot start with
+  two different tokens:
+
+  ```sql
+  -- search=Week 01 over [title]  (before)
+  WHERE title LIKE 'Week%' AND title LIKE '01%'    -- always 0 rows
+  ```
+
+  Reported via `GET /api/v1/admin/videos/pre-requisites?search=Week+01&limit=50`, which returned
+  an empty `categories[]` while `ws_video_category` holds `Week 01 (Constable)`, `Week 01 (PSI)`,
+  `Week 01 (GPSC)`, … Single-word terms were unaffected, which is why it went unnoticed.
+- **Change:** only the FIRST token stays `startsWith`; every later token becomes `contains`.
+
+  ```sql
+  -- search=Week 01 over [title]  (after)
+  WHERE title LIKE 'Week%' AND title LIKE '%01%'   -- 11 rows
+  ```
+
+- **Scope:** ~60 call sites — admin list/picker endpoints for videos, video categories, customers,
+  administrators, courses, packages, ebooks, books, materials, master data, plans, promoters,
+  promocodes, notifications, live courses, RBAC, inquiries, referrals, offline city/batch,
+  exam-countdown, popups, CMS. Single-token searches emit byte-identical SQL; only multi-token
+  terms change (from 0 rows to matching rows).
+- **Performance:** unchanged. The first token keeps the trailing-only wildcard, so the index range
+  scan that motivated the prefix helper (ws_customer, 1M+ rows) still applies; the added
+  `%token%` predicates only filter rows that scan already returned.
+- **Deliberate limitation:** the term still matches from the START of a value — `Week 01` finds
+  `Week 01 (PSI)` but `01 Week` finds nothing. That anchor is what buys the index. Endpoints
+  needing unanchored matching use `buildPrismaSearch` (`%token%` on every token), which was
+  never affected by this bug.
+- `buildPrismaSearch`, `buildLikeTokens`, `matchesAllTokens` and the hand-rolled `searchTokens`
+  callers all use `contains` semantics already and are untouched.
+
+---
+
 ## 2026-09-18 — websankul-jobs-api: public job list/detail also serve `expired` jobs
 
 > **Code-only (jobs-api + websankul-jobs). No DDL, no data writes.**

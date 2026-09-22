@@ -42,21 +42,41 @@ export function buildPrismaSearch(
   };
 }
 
-// Prefix-only variant: `LIKE 'token%'` instead of `LIKE '%token%'`. Unlike `contains`,
-// a trailing-only wildcard lets MySQL use a B-tree index range scan on the column instead
-// of a full table scan — critical for large tables where `buildPrismaSearch` would time
-// out (see ws_customer: 1M+ rows, no index helps a leading-wildcard search). Matches the
-// legacy PHP admin's `LIKE 'term%'` search behavior. Same tokenize/AND/OR shape as
-// `buildPrismaSearch`, so callers swap one for the other without changing anything else.
+// Prefix-ANCHORED variant: the first token is matched as `LIKE 'token%'` instead of
+// `LIKE '%token%'`. Unlike `contains`, a trailing-only wildcard lets MySQL use a B-tree
+// index range scan on the column instead of a full table scan — critical for large tables
+// where `buildPrismaSearch` would time out (see ws_customer: 1M+ rows, no index helps a
+// leading-wildcard search). Matches the legacy PHP admin's `LIKE 'term%'` search behavior.
+//
+// ONLY the first token is anchored; every token after it falls back to `contains`. This
+// is not a detail — anchoring every token makes ANY multi-word search unsatisfiable on a
+// single-field search, because one value cannot start with two different tokens:
+//
+//   "Week 01" over [title]  =>  title LIKE 'Week%' AND title LIKE '01%'   -- always 0 rows
+//
+// which silently broke multi-word search on every list/picker endpoint using this helper
+// (the reported case: GET /admin/videos/pre-requisites?search=Week+01 returned nothing
+// while "Week 01 (Constable)" and friends existed). The first token keeps the index range
+// scan; the remaining tokens only narrow the rows that scan already returned, so the
+// query plan is no worse than a single-token search.
+//
+// Consequence, on purpose: the term must match from the START of a value — "Week 01"
+// finds "Week 01 (PSI)" but not "Physics Week 01". That is the trade-off that buys the
+// index; use `buildPrismaSearch` where unanchored matching matters more than speed.
+//
+// Same tokenize/AND/OR shape as `buildPrismaSearch`, so callers swap one for the other
+// without changing anything else.
 export function buildPrismaPrefixSearch(
   term: string | undefined | null,
   fields: string[]
-): { AND: Array<{ OR: Array<Record<string, { startsWith: string }>> }> } | undefined {
+): { AND: Array<{ OR: Array<Record<string, { startsWith: string } | { contains: string }>> }> } | undefined {
   const tokens = searchTokens(term);
   if (tokens.length === 0 || fields.length === 0) return undefined;
   return {
-    AND: tokens.map((token) => ({
-      OR: fields.map((field) => ({ [field]: { startsWith: token } })),
+    AND: tokens.map((token, i) => ({
+      OR: fields.map((field) => ({
+        [field]: i === 0 ? { startsWith: token } : { contains: token },
+      })),
     })),
   };
 }
