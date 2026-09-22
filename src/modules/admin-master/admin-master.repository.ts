@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
-import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
@@ -456,9 +456,14 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
   return candidate;
 }
 
+// Unanchored `contains`, NOT buildPrismaPrefixSearch. The prefix variant exists to
+// buy a B-tree range scan on large indexed columns, and ws_package_course_material
+// has no index on `title` (nor enough rows to need one) — so anchoring bought
+// nothing here and only cost matches: `?search=8` compiled to `title LIKE '8%'`
+// and missed every "... 8 ..." title, which is what the admin picker types.
 function pcmWhere(opts?: { search?: string }) {
   const where: any = {};
-  const search = buildPrismaPrefixSearch(opts?.search, ["title"]);
+  const search = buildPrismaSearch(opts?.search, ["title"]);
   if (search) Object.assign(where, search);
   return where;
 }
