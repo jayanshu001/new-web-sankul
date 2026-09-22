@@ -15,6 +15,315 @@
 
 ---
 
+## 2026-09-22 — `shareableLink` carries an encrypted id token (no DDL, no query change)
+
+> **DDL:** none. **Queries:** none — no repository, service or Prisma call was
+> touched. Logged here only because every `shareableLink` value in the API
+> changes shape, and the id in a share URL is now derived, not stored.
+
+Requested: the public share URL must not expose the real row id.
+`https://websankul.com/share/ebooks/120` → `https://websankul.com/share/ebooks/UMAv6-8`.
+
+**Encoding** (`src/deeplinking/shareRedirect.ts`)
+- `encodeShareId(resource, id)`: AES-128-CTR over `[1 salt byte][uint32 BE id]`,
+  base64url → always 7 chars of `A-Za-z0-9-_`.
+- Key + IV = `sha256("<SHARE_ID_SECRET>:<resource>")` split 16/16, so the token is
+  **resource-scoped**: ebook 120 and course 120 encode differently.
+- `SHARE_ID_SECRET` is optional and falls back to `JWT_ACCESS_SECRET` — no new
+  required env var. Documented in `.env.example`.
+- Deterministic, so a link shared once keeps resolving. The salt byte is bumped
+  until the token contains a non-digit, which is what guarantees a token can
+  never be mistaken for a legacy all-numeric id.
+
+**Single chokepoint:** `buildShareUrl()` encodes. Every `shareableLink` producer
+already routes through it (catalog-ebook/book/course/package, client-free,
+client-testseries, client-educator, admin-live-course, package-category,
+commerce-ebook-sub, …) so no call site changed.
+
+**Decoding:** `src/deeplinking/deeplinking.routes.ts` `sendShare(resource, deepPath)`
+now takes the URL segment as well (it keys the cipher) and decodes before
+rendering. The in-app deep link still carries the **real** id
+(`com.gpscvideo.gpsc://ebook/120`), so the mobile app is unchanged.
+
+**Backwards compatible:** plain numeric ids are still accepted, so share links
+already in the wild keep working.
+
+**Untouched:** the admin-entered `shareable_link` / `shareableLink` columns
+(`ws_package`, `ws_course`, `ws_live_course`, exam countdown) are hand-typed
+marketing URLs, not generated links — still returned raw.
+
+**Verification:** `scripts/check-share-id.ts` (round-trip, 7-char shape,
+never-all-numeric, resource scoping, garbage rejection) + a route smoke test
+confirming token, legacy id and cross-resource paths. `yarn typecheck` green.
+
+**Resolve endpoint — the one supported way to turn a token back into an id:**
+`GET /share/resolve/:resource/:token` → `{ resource, id, deepPath, appLink,
+webLink }` (public, no Bearer, `shareLimiter`, `success()` / `failure()`
+envelope; plain numeric ids accepted so callers need no branch for pre-cipher
+links). No DB access in the handler. `buildShareTargets()` was extracted in
+`shareRedirect.ts` so the endpoint and the rendered redirect page can never
+disagree on `appLink` / `webLink`.
+
+The deep-link handler — web or mobile — calls it and navigates. Nothing decodes
+client-side; the cipher key never leaves the API. A `next.config.js`
+`redirects()` / `rewrites()` proxy was considered and dropped in favour of the
+single endpoint. (For context: `ORIGIN=https://websankul.com` is the Next.js
+site, not this API, and it 404s on `/share/*` today — old plain-id links
+included, so that surface was already broken before the cipher.)
+
+The existing `GET /share/:resource/:id` HTML redirect page still works and now
+accepts tokens as well, for links that point straight at the API host.
+
+Inline comments in the three touched files were trimmed to the non-obvious bits
+(why the salt loop exists, why `SURFACES` keys the cipher, why `/share/resolve`
+is public); the long-form explanation lives in the FE doc.
+
+FE/app doc: `docs/client/SHARE_LINK_CIPHER.md`.
+
+---
+
+## 2026-09-22 — `ws_exam.exam_category_id` missing on the staging host → new guarded ADD file
+
+> **New DDL: `docs/migration/schema-changes/2026-09-22_exam_add_exam_category_id.sql`. Adds one nullable column. No backfill, no data writes, no query or response-shape change. Nothing under `src/` touched.**
+
+- **Symptom:** after the ANSI_QUOTES fix below unblocked the runner, it stopped on the
+  next file:
+
+  ```text
+  → 2026-08-20_exam_category_nullable.sql ...
+  Error: Unknown column 'exam_category_id' in 'ws_exam'
+  ```
+
+- **Cause:** not a syntax problem — that host's `ws_exam` has **no `exam_category_id`
+  column at all** (confirmed by inspection on the host). `2026-08-20_exam_category_nullable.sql`
+  only widens the column (`NOT NULL` → `NULL`); `MODIFY COLUMN` asserts it exists.
+
+- **Why the column has to come back.** `prisma/schema.prisma` models it —
+  `Exam.examCategoryId Int? @map("exam_category_id")` plus the
+  `ExamCategory?` relation on that field — so Prisma names the column in the SELECT list
+  of every full `Exam` read and in the join behind `include: { ExamCategory: true }`
+  (`src/modules/admin-exam/admin-exam.service.ts`, `src/modules/admin-course/admin-course.service.ts`).
+  `admin-exam.service.ts` also writes it (`examCategoryId: catId`).
+  `docs/migration/FIELD_COMPARISON.md` lists it as `int NOT NULL` in the reference
+  schema, so this is single-host drift, not a retired column.
+
+- **Fix, in two parts:**
+  1. `2026-08-20_exam_category_nullable.sql` is now guarded on `IS_NULLABLE` — `'NO'`
+     widens, `'YES'` and "column absent" both no-op. It no longer halts a run over a
+     column it cannot see, and it does **not** invent the column either.
+  2. `2026-09-22_exam_add_exam_category_id.sql` (new) adds
+     `` `exam_category_id` INT NULL `` when absent, guarded on
+     `INFORMATION_SCHEMA.COLUMNS` so it is a no-op on every host that already has it.
+     Nullable, no `DEFAULT`, no position clause, no FK (this repo's introspected schema
+     records no constraint name for that relation, so it cannot be reproduced
+     faithfully — add it separately if byte parity with the other hosts is wanted).
+     Filename order matters and works out: 08-20 no-ops first, then 09-22 adds the
+     column already in its widened shape.
+
+- **Existing rows get NULL, and that is not a read regression:** the category read paths
+  match EITHER the direct column OR the pivot
+  (`src/modules/catalog-exam/exam-category-pivot.where.ts` ORs `{ examCategoryId: id }`
+  with `examCategoryPivot: { some: { categoryId: id } }`), and `toExamDto` maps a null
+  category to `null`. Re-populating the column from `ws_exam_category_pivot` would be a
+  **separate** data backfill and needs a decision first — the pivot is seeded *from* this
+  column (`scripts/seed-exam-category-pivot.ts`), so "which pivot row was primary" is not
+  recoverable from the pivot alone.
+
+- **Verified** on MySQL 8.0 in a throwaway database with `ANSI_QUOTES` in `sql_mode`,
+  over a staging-shaped `ws_exam`: column-absent → added nullable with existing rows
+  untouched; re-run → both files no-op; column present as `NOT NULL` → 08-20 widens,
+  09-22 no-ops, values preserved.
+
+- **After applying:** run `yarn prisma:generate` (the DB and the client now agree) and, if
+  you `yarn db:pull` from this host, check the `Exam.ExamCategory` relation survived —
+  without a DB-level FK, introspection will not re-emit it.
+
+## 2026-09-22 — DDL guards: no-op branches and inline literals made ANSI_QUOTES-safe
+
+> **DDL-file fix only (`docs/migration/schema-changes/*.sql`, 11 files). No schema change, no data writes, no query or response-shape change. Nothing under `src/` touched.**
+
+- **Symptom:** `yarn db:migrate` on staging stopped dead on the first file whose change
+  was already present in the database:
+
+  ```text
+  → 2026-07-27_exam_end_date_nullable.sql ...
+  Error: Unknown column 'ws_exam.end_date already nullable' in 'field list'
+  ✗ FAILED on 2026-07-27_exam_end_date_nullable.sql — stopping. Nothing after this ran.
+  ```
+
+- **Cause:** the re-runnable guards build their statement as a string and dispatch it
+  through `PREPARE`/`EXECUTE`. Older files wrote the "nothing to do" branch as
+  `'SELECT "…already applied…" AS note'`. That message is a **double-quoted** token, and
+  on a server whose `sql_mode` includes `ANSI_QUOTES` a double-quoted token is an
+  *identifier*, not a string — so MySQL looked for a column literally named
+  `ws_exam.end_date already nullable`. `2026-08-27_live_course_subscription_tracking.sql`
+  had the same hazard in real SQL, not just a message: `NULLIF(s.tracking_status, "")`
+  and `"pending"` inside the backfill `INSERT`.
+
+- **Why it only surfaced now:** the guard picks the no-op branch *only* where the change
+  already exists. On a fresh database every file takes its `ALTER` branch and the
+  double-quoted message is never parsed. The failure mode is specifically "schema already
+  migrated, `_ddl_migrations` ledger row missing" — i.e. a box that was hand-migrated
+  before the runner existed.
+
+- **Fix:** every no-op branch is now `'DO 0'` — the style already used by ~30 of the newer
+  files (`2026-07-13_referral_reward_on_purchase.sql` onward). It parses under any
+  `sql_mode` and returns no result set. Inline literals in dynamic SQL now use
+  escaped single quotes (`''pending''`) instead of double quotes.
+
+  Files touched: `2026-06-30_customer_access_token_refresh.sql`,
+  `2026-06-30_customer_address_cols.sql`, `2026-06-30_offline_city_state.sql`,
+  `2026-06-30_offline_city_status_order.sql`,
+  `2026-07-24_drop_customer_address_city_id.sql`,
+  `2026-07-25_drop_book_setting_origin_cols.sql`,
+  `2026-07-25_drop_course_featured_order.sql`,
+  `2026-07-27_drop_live_course_level.sql`, `2026-07-27_exam_end_date_nullable.sql`,
+  `2026-08-06_is_login_reconcile_indexes.sql`,
+  `2026-08-27_live_course_subscription_tracking.sql`.
+
+- **Rule for new DDL:** inside a `PREPARE`d string use backticks for identifiers and
+  single quotes for literals, and make the no-op branch `'DO 0'`. Never a
+  `SELECT "message"`.
+
+- **Applying:** re-run `yarn db:migrate`. Nothing already recorded in `_ddl_migrations`
+  re-executes; the previously failing file now runs its `DO 0` branch (its `ALTER` was
+  already in place on that host), records itself, and the run continues with the files
+  that were blocked behind it.
+
+## 2026-09-22 — client paged exam list: drop the `end_date` filter on subject quizzes
+
+> **Code-only (`src/modules/client-exam/client-exam.repository.ts` — `examsByCategoryPaged` + `countExamsByCategoryPaged`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `GET /api/v1/client/exam-categories/1658/exams?page=1&limit=10` returned
+  `total: 0` while the category card advertised 33 quizzes. All 33 published `subject`
+  exams under category 1658 carry a stale legacy `end_date` of `2024-12-31 23:55:00`,
+  and both paged queries AND-ed in a non-expired window:
+
+  ```sql
+  -- (before)
+  WHERE status = 1 AND type = 'subject'
+    AND (start_date IS NULL OR start_date <= NOW())
+    AND (end_date   IS NULL OR end_date   >= NOW())   -- ← excluded all 33
+  ```
+
+- **Why this was the outlier, not the other paths.** Three sibling queries read the same
+  data and only this one gated `subject` on `end_date`:
+  - `examsByCategory` (non-paged, same repository, serves
+    `GET /client/exams/categories/:categoryId/exams`) uses
+    `{ OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] }` — subject is
+    **exempt** from the end window; only `daily` is gated. The same category listed 33 there
+    and 0 here.
+  - `catalog-exam.repository.countExams` and the `client-catalog` per-category exam count
+    (which produce the `count` on the category card) apply `status:true, type:"subject"` +
+    `subjectStartedWhere` and **no** end-date clause at all — hence 33 on the card.
+  - `subjectStartedWhere`'s own contract is START-only: "Subject-type exams are only visible
+    once their start date has arrived."
+- **Change:** removed `{ OR: [{ endAt: null }, { endAt: { gte: now } }] }` from both
+  `examsByCategoryPaged` and `countExamsByCategoryPaged`. `subjectStartedWhere(now)` stays —
+  scheduled-for-later quizzes are still hidden. Both queries already hard-filter
+  `type: "subject"`, so the removed clause could only ever hide subject exams.
+
+  ```sql
+  -- (after)
+  WHERE status = 1 AND type = 'subject'
+    AND (start_date IS NULL OR start_date <= NOW())
+  ```
+- **Blast radius (prod, 2026-09-22):** 5,929 of 9,533 published subject exams (62%) have a
+  past `end_date`; **1,440 exam categories** had every quiz hidden on this endpoint while
+  their card showed a non-zero count. Those categories now list their quizzes. Verified
+  category 1658 returns 33 under the new predicate.
+- **Not a cache issue.** The route is `cacheRoute({ ttl: DAY, entity: CatalogExam, scope: User })`;
+  admin exam writes flush it via `autoFlushGroup(CacheEntity.Exam)` → `CatalogExam`. Cached
+  `total: 0` entries written before the deploy will persist up to 24h — flush
+  `CacheEntity.CatalogExam` (`POST /admin/cache/flush`) after rollout.
+- **Response shape unchanged** — same `{ category, list }` + `pagination` envelope; only
+  membership of `list` and the value of `total` change.
+
+---
+
+## 2026-09-22 — admin master-list search un-anchored (prefix → contains)
+
+> **Code-only (`src/modules/admin-master/admin-master.repository.ts` — `pcmWhere` + `subjWhere`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `pcmWhere` used `buildPrismaPrefixSearch`, which anchors the first token, so a
+  substring term matched nothing:
+
+  ```sql
+  -- GET /api/v1/admin/pc-materials?page=1&limit=10&search=8   (before)
+  WHERE title LIKE '8%'      -- misses every "Class 8 ...", "Std 8 ..." title
+  ```
+
+  Reported on `GET /api/v1/admin/pc-materials?page=1&limit=10&search=8`.
+- **Change:** `pcmWhere` now calls `buildPrismaSearch` (unanchored `contains`) instead.
+
+  ```sql
+  -- (after)
+  WHERE title LIKE '%8%'
+  ```
+- **Same change applied to `subjWhere`** (`ws_course_subject_category`) in the same commit — identical
+  shape, identical reasoning, reported separately.
+- **Why these two tables and not a blanket revert of the prefix helper:** prefix anchoring exists to
+  buy a B-tree range scan on large indexed columns (`ws_customer`, 1M+ rows). Both
+  `ws_package_course_material` and `ws_course_subject_category` are small masters with **no index on
+  `title`** (see `prisma/schema.prisma`, `model PackageCourseMaterial` / `model CourseSubjectCategory`),
+  so MySQL full-scans either way — the anchor bought no plan improvement and only cost matches. The
+  other ~62 `buildPrismaPrefixSearch` call sites are deliberately left alone.
+- **Affects:**
+  - `GET /api/v1/admin/pc-materials` — **not route-cached**, so the fix is live on deploy.
+  - `GET /api/v1/admin/master/subject-categories` — **route-cached**
+    (`cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory })`). Cache keys are
+    per-query-hash, so a term already searched before the deploy keeps serving its stale EMPTY result
+    for up to 24h. **Flush `course-subject-category` after deploying** (`POST /api/v1/admin/cache/flush`)
+    or the fix looks like it did nothing for exactly the terms that were reported.
+  - In both cases the `*List` and `*Count` halves share one `*Where`, so rows and `total` move
+    together and pagination stays consistent.
+- **QA:** `?search=8` returns titles containing 8 anywhere; `?search=<prefix>` still returns what
+  it did before (`contains` is a superset of `startsWith`, so this can only ADD rows, never drop
+  them); empty/whitespace `search` still returns the unfiltered list; `subject-categories` re-checked
+  after a `course-subject-category` cache flush, not before.
+
+---
+
+## 2026-09-22 — multi-word search fixed across every `buildPrismaPrefixSearch` endpoint
+
+> **Code-only (`src/utils/searchFilter.ts`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `buildPrismaPrefixSearch` anchored EVERY token as `startsWith`, so a multi-word term
+  produced an unsatisfiable predicate on any single-field search — one value cannot start with
+  two different tokens:
+
+  ```sql
+  -- search=Week 01 over [title]  (before)
+  WHERE title LIKE 'Week%' AND title LIKE '01%'    -- always 0 rows
+  ```
+
+  Reported via `GET /api/v1/admin/videos/pre-requisites?search=Week+01&limit=50`, which returned
+  an empty `categories[]` while `ws_video_category` holds `Week 01 (Constable)`, `Week 01 (PSI)`,
+  `Week 01 (GPSC)`, … Single-word terms were unaffected, which is why it went unnoticed.
+- **Change:** only the FIRST token stays `startsWith`; every later token becomes `contains`.
+
+  ```sql
+  -- search=Week 01 over [title]  (after)
+  WHERE title LIKE 'Week%' AND title LIKE '%01%'   -- 11 rows
+  ```
+
+- **Scope:** ~60 call sites — admin list/picker endpoints for videos, video categories, customers,
+  administrators, courses, packages, ebooks, books, materials, master data, plans, promoters,
+  promocodes, notifications, live courses, RBAC, inquiries, referrals, offline city/batch,
+  exam-countdown, popups, CMS. Single-token searches emit byte-identical SQL; only multi-token
+  terms change (from 0 rows to matching rows).
+- **Performance:** unchanged. The first token keeps the trailing-only wildcard, so the index range
+  scan that motivated the prefix helper (ws_customer, 1M+ rows) still applies; the added
+  `%token%` predicates only filter rows that scan already returned.
+- **Deliberate limitation:** the term still matches from the START of a value — `Week 01` finds
+  `Week 01 (PSI)` but `01 Week` finds nothing. That anchor is what buys the index. Endpoints
+  needing unanchored matching use `buildPrismaSearch` (`%token%` on every token), which was
+  never affected by this bug.
+- `buildPrismaSearch`, `buildLikeTokens`, `matchesAllTokens` and the hand-rolled `searchTokens`
+  callers all use `contains` semantics already and are untouched.
+
+---
+
 ## 2026-09-22 — Rank predictor: raw leaderboard/rank queries moved to tagged `$queryRaw`
 
 - **No schema change. No response-shape change.** Cleanup pass over the rank-predictor

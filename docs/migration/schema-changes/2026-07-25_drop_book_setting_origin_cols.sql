@@ -33,7 +33,7 @@ SET @origin_city_exists := (
 SET @ddl := IF(
   @origin_city_exists > 0,
   'ALTER TABLE `ws_book_setting` DROP COLUMN `origin_city`',
-  'SELECT "ws_book_setting.origin_city already dropped" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;
@@ -51,7 +51,7 @@ SET @origin_hub_exists := (
 SET @ddl := IF(
   @origin_hub_exists > 0,
   'ALTER TABLE `ws_book_setting` DROP COLUMN `origin_hub`',
-  'SELECT "ws_book_setting.origin_hub already dropped" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;

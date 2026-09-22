@@ -28,7 +28,7 @@ SET @sql := IF(
     WHERE table_schema = DATABASE()
       AND table_name = 'ws_customer'
       AND index_name = 'idx_customer_is_login_id') > 0,
-  'SELECT "idx_customer_is_login_id already exists" AS msg',
+  'DO 0',
   'ALTER TABLE `ws_customer` ADD KEY `idx_customer_is_login_id` (`is_login`, `id`)'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -38,7 +38,7 @@ SET @sql := IF(
     WHERE table_schema = DATABASE()
       AND table_name = 'ws_customer_access_token'
       AND index_name = 'idx_cat_customer_live') > 0,
-  'SELECT "idx_cat_customer_live already exists" AS msg',
+  'DO 0',
   'ALTER TABLE `ws_customer_access_token` ADD KEY `idx_cat_customer_live` (`customer_id`, `active`, `deleted`, `expires_at`)'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

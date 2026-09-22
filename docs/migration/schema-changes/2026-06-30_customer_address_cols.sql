@@ -17,7 +17,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_customer_address` ADD COLUMN `label` VARCHAR(20) NULL DEFAULT NULL AFTER `pincode`',
-  'SELECT "ws_customer_address.label already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
@@ -32,7 +32,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_customer_address` ADD COLUMN `is_default` TINYINT(1) NULL DEFAULT 0 AFTER `label`',
-  'SELECT "ws_customer_address.is_default already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
@@ -47,7 +47,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_customer_address` ADD COLUMN `city_id` INT NULL DEFAULT NULL AFTER `is_default`',
-  'SELECT "ws_customer_address.city_id already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;

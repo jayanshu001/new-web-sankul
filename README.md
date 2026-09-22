@@ -117,7 +117,6 @@ MYSQL_ROOT_PASSWORD=your_root_password
 # JWT (both secrets required — boot fails if missing)
 JWT_ACCESS_SECRET=your_jwt_access_secret
 JWT_REFRESH_SECRET=your_jwt_refresh_secret
-JWT_ADMIN_TTL=1d
 
 # CORS (CSV of allowed origins — REQUIRED in production)
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173

@@ -54,9 +54,7 @@ export const clientExamRepository = {
           examInCategoriesWhere(categoryIds),
           { status: true, type: "subject" },
           ...searchTokens(search).map((t) => ({ name: { contains: t } })),
-          // subject exams: only once started (see subjectStartedWhere) and before the window ends.
           subjectStartedWhere(now),
-          { OR: [{ endAt: null }, { endAt: { gte: now } }] },
         ],
       },
       orderBy: [{ order_by: "asc" }, { createAt: "asc" }],
@@ -70,9 +68,7 @@ export const clientExamRepository = {
           examInCategoriesWhere(categoryIds),
           { status: true, type: "subject" },
           ...searchTokens(search).map((t) => ({ name: { contains: t } })),
-          // subject exams: only once started (see subjectStartedWhere) and before the window ends.
           subjectStartedWhere(now),
-          { OR: [{ endAt: null }, { endAt: { gte: now } }] },
         ],
       },
     }),

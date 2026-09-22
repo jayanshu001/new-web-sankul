@@ -33,7 +33,7 @@ SET @level_exists := (
 SET @ddl := IF(
   @level_exists > 0,
   'ALTER TABLE `ws_live_course` DROP COLUMN `level`',
-  'SELECT "ws_live_course.level already dropped" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;

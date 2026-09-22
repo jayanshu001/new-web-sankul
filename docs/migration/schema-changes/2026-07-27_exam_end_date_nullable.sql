@@ -35,10 +35,15 @@ SET @is_nullable := (
     AND COLUMN_NAME = 'end_date'
 );
 
+-- Re-runnable guard: ALTER only while the column is still NOT NULL. The no-op
+-- branch must be `DO 0` and never `SELECT "..."` — a double-quoted string is
+-- read as an *identifier* on servers whose sql_mode includes ANSI_QUOTES, so the
+-- prepared statement dies with "Unknown column '...' in 'field list'" on exactly
+-- the hosts where the change is already in place.
 SET @ddl := IF(
   @is_nullable = 'NO',
   'ALTER TABLE `ws_exam` MODIFY COLUMN `end_date` DATETIME NULL',
-  'SELECT "ws_exam.end_date already nullable" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;
