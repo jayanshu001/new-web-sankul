@@ -15,6 +15,62 @@
 
 ---
 
+## 2026-09-22 — `ws_exam.exam_category_id` missing on the staging host → new guarded ADD file
+
+> **New DDL: `docs/migration/schema-changes/2026-09-22_exam_add_exam_category_id.sql`. Adds one nullable column. No backfill, no data writes, no query or response-shape change. Nothing under `src/` touched.**
+
+- **Symptom:** after the ANSI_QUOTES fix below unblocked the runner, it stopped on the
+  next file:
+
+  ```text
+  → 2026-08-20_exam_category_nullable.sql ...
+  Error: Unknown column 'exam_category_id' in 'ws_exam'
+  ```
+
+- **Cause:** not a syntax problem — that host's `ws_exam` has **no `exam_category_id`
+  column at all** (confirmed by inspection on the host). `2026-08-20_exam_category_nullable.sql`
+  only widens the column (`NOT NULL` → `NULL`); `MODIFY COLUMN` asserts it exists.
+
+- **Why the column has to come back.** `prisma/schema.prisma` models it —
+  `Exam.examCategoryId Int? @map("exam_category_id")` plus the
+  `ExamCategory?` relation on that field — so Prisma names the column in the SELECT list
+  of every full `Exam` read and in the join behind `include: { ExamCategory: true }`
+  (`src/modules/admin-exam/admin-exam.service.ts`, `src/modules/admin-course/admin-course.service.ts`).
+  `admin-exam.service.ts` also writes it (`examCategoryId: catId`).
+  `docs/migration/FIELD_COMPARISON.md` lists it as `int NOT NULL` in the reference
+  schema, so this is single-host drift, not a retired column.
+
+- **Fix, in two parts:**
+  1. `2026-08-20_exam_category_nullable.sql` is now guarded on `IS_NULLABLE` — `'NO'`
+     widens, `'YES'` and "column absent" both no-op. It no longer halts a run over a
+     column it cannot see, and it does **not** invent the column either.
+  2. `2026-09-22_exam_add_exam_category_id.sql` (new) adds
+     `` `exam_category_id` INT NULL `` when absent, guarded on
+     `INFORMATION_SCHEMA.COLUMNS` so it is a no-op on every host that already has it.
+     Nullable, no `DEFAULT`, no position clause, no FK (this repo's introspected schema
+     records no constraint name for that relation, so it cannot be reproduced
+     faithfully — add it separately if byte parity with the other hosts is wanted).
+     Filename order matters and works out: 08-20 no-ops first, then 09-22 adds the
+     column already in its widened shape.
+
+- **Existing rows get NULL, and that is not a read regression:** the category read paths
+  match EITHER the direct column OR the pivot
+  (`src/modules/catalog-exam/exam-category-pivot.where.ts` ORs `{ examCategoryId: id }`
+  with `examCategoryPivot: { some: { categoryId: id } }`), and `toExamDto` maps a null
+  category to `null`. Re-populating the column from `ws_exam_category_pivot` would be a
+  **separate** data backfill and needs a decision first — the pivot is seeded *from* this
+  column (`scripts/seed-exam-category-pivot.ts`), so "which pivot row was primary" is not
+  recoverable from the pivot alone.
+
+- **Verified** on MySQL 8.0 in a throwaway database with `ANSI_QUOTES` in `sql_mode`,
+  over a staging-shaped `ws_exam`: column-absent → added nullable with existing rows
+  untouched; re-run → both files no-op; column present as `NOT NULL` → 08-20 widens,
+  09-22 no-ops, values preserved.
+
+- **After applying:** run `yarn prisma:generate` (the DB and the client now agree) and, if
+  you `yarn db:pull` from this host, check the `Exam.ExamCategory` relation survived —
+  without a DB-level FK, introspection will not re-emit it.
+
 ## 2026-09-22 — DDL guards: no-op branches and inline literals made ANSI_QUOTES-safe
 
 > **DDL-file fix only (`docs/migration/schema-changes/*.sql`, 11 files). No schema change, no data writes, no query or response-shape change. Nothing under `src/` touched.**
