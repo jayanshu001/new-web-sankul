@@ -41,7 +41,11 @@ export const config = {
     process.env.MIGRATION_TEST_CUSTOMER_PHONE?.trim() ||
     process.env.TESTING_PHONE_NUMBERS?.split(",")[0]?.trim() ||
     "",
-  customerOtp: process.env.MIGRATION_TEST_CUSTOMER_OTP ?? "5786",
+  /**
+   * Mirrors STATIC_OTP in src/client/auth/auth.service.ts: every number listed in
+   * TESTING_PHONE_NUMBERS gets this exact OTP, so there is nothing to configure.
+   */
+  customerOtp: "5786",
   /** Write tests (PUT/POST/DELETE) run by default; set MIGRATION_API_SKIP_WRITE=true to skip. */
   skipWrite: process.env.MIGRATION_API_SKIP_WRITE === "true",
   /**

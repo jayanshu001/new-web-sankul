@@ -8,7 +8,7 @@ import { runTests } from "../_lib/runner.js";
  *
  * Requires an existing ws_customer row whose phone is in TESTING_PHONE_NUMBERS
  * (so OTP = 5786 and SMS is skipped). Configured via MIGRATION_TEST_CUSTOMER_PHONE
- * (default falls back to TESTING_PHONE_NUMBERS[0]) + MIGRATION_TEST_CUSTOMER_OTP.
+ * (default falls back to TESTING_PHONE_NUMBERS[0]).
  */
 
 type Profile = { id?: string | number; phoneNumber?: string; isProfileCompleted?: boolean };

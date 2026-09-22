@@ -15,6 +15,57 @@
 
 ---
 
+## 2026-09-22 — client paged exam list: drop the `end_date` filter on subject quizzes
+
+> **Code-only (`src/modules/client-exam/client-exam.repository.ts` — `examsByCategoryPaged` + `countExamsByCategoryPaged`). No DDL, no data writes, no response-shape change.**
+
+- **Bug:** `GET /api/v1/client/exam-categories/1658/exams?page=1&limit=10` returned
+  `total: 0` while the category card advertised 33 quizzes. All 33 published `subject`
+  exams under category 1658 carry a stale legacy `end_date` of `2024-12-31 23:55:00`,
+  and both paged queries AND-ed in a non-expired window:
+
+  ```sql
+  -- (before)
+  WHERE status = 1 AND type = 'subject'
+    AND (start_date IS NULL OR start_date <= NOW())
+    AND (end_date   IS NULL OR end_date   >= NOW())   -- ← excluded all 33
+  ```
+
+- **Why this was the outlier, not the other paths.** Three sibling queries read the same
+  data and only this one gated `subject` on `end_date`:
+  - `examsByCategory` (non-paged, same repository, serves
+    `GET /client/exams/categories/:categoryId/exams`) uses
+    `{ OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] }` — subject is
+    **exempt** from the end window; only `daily` is gated. The same category listed 33 there
+    and 0 here.
+  - `catalog-exam.repository.countExams` and the `client-catalog` per-category exam count
+    (which produce the `count` on the category card) apply `status:true, type:"subject"` +
+    `subjectStartedWhere` and **no** end-date clause at all — hence 33 on the card.
+  - `subjectStartedWhere`'s own contract is START-only: "Subject-type exams are only visible
+    once their start date has arrived."
+- **Change:** removed `{ OR: [{ endAt: null }, { endAt: { gte: now } }] }` from both
+  `examsByCategoryPaged` and `countExamsByCategoryPaged`. `subjectStartedWhere(now)` stays —
+  scheduled-for-later quizzes are still hidden. Both queries already hard-filter
+  `type: "subject"`, so the removed clause could only ever hide subject exams.
+
+  ```sql
+  -- (after)
+  WHERE status = 1 AND type = 'subject'
+    AND (start_date IS NULL OR start_date <= NOW())
+  ```
+- **Blast radius (prod, 2026-09-22):** 5,929 of 9,533 published subject exams (62%) have a
+  past `end_date`; **1,440 exam categories** had every quiz hidden on this endpoint while
+  their card showed a non-zero count. Those categories now list their quizzes. Verified
+  category 1658 returns 33 under the new predicate.
+- **Not a cache issue.** The route is `cacheRoute({ ttl: DAY, entity: CatalogExam, scope: User })`;
+  admin exam writes flush it via `autoFlushGroup(CacheEntity.Exam)` → `CatalogExam`. Cached
+  `total: 0` entries written before the deploy will persist up to 24h — flush
+  `CacheEntity.CatalogExam` (`POST /admin/cache/flush`) after rollout.
+- **Response shape unchanged** — same `{ category, list }` + `pagination` envelope; only
+  membership of `list` and the value of `total` change.
+
+---
+
 ## 2026-09-22 — admin master-list search un-anchored (prefix → contains)
 
 > **Code-only (`src/modules/admin-master/admin-master.repository.ts` — `pcmWhere` + `subjWhere`). No DDL, no data writes, no response-shape change.**
