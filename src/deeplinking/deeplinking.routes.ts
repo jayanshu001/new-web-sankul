@@ -1,15 +1,14 @@
 import { Router, Request, Response } from "express";
 import { renderShareRedirect } from "./shareRedirect";
+import { decryptShareId } from "../utils/shareId";
 
 const router = Router();
 
-const OBJECT_ID = /^([a-f0-9]{24}|[1-9]\d*)$/i;
-
-function sendShare(deepPath: string) {
+function sendShare(resource: string, deepPath: string) {
   return (req: Request, res: Response) => {
-    const id = String(req.params.id || "");
-    if (!OBJECT_ID.test(id)) {
-      return res.status(400).type("text/plain").send("Invalid id");
+    const id = decryptShareId(String(req.params.cipher || ""), resource);
+    if (!id) {
+      return res.status(400).type("text/plain").send("Invalid link");
     }
     const { html, nonce } = renderShareRedirect(deepPath, id);
     res.setHeader(
@@ -20,14 +19,15 @@ function sendShare(deepPath: string) {
   };
 }
 
-// Add new deep-link surfaces here. The first arg to sendShare() is the
-// in-app route path the iOS/Android app registers for that resource.
-router.get("/courses/:id", sendShare("course"));
-router.get("/books/:id", sendShare("book"));
-router.get("/ebooks/:id", sendShare("ebook"));
-router.get("/live-courses/:id", sendShare("live-course"));
-router.get("/packages/:id", sendShare("package"));
-router.get("/test-series/:id", sendShare("test-series"));
-router.get("/educators/:id", sendShare("educator"));
+// Add new deep-link surfaces here. First arg is this route's own URL segment
+// (must match what the service passes to buildShareUrl); second is the in-app
+// route path the iOS/Android app registers for that resource.
+router.get("/courses/:cipher", sendShare("courses", "course"));
+router.get("/books/:cipher", sendShare("books", "book"));
+router.get("/ebooks/:cipher", sendShare("ebooks", "ebook"));
+router.get("/live-courses/:cipher", sendShare("live-courses", "live-course"));
+router.get("/packages/:cipher", sendShare("packages", "package"));
+router.get("/test-series/:cipher", sendShare("test-series", "test-series"));
+router.get("/educators/:cipher", sendShare("educators", "educator"));
 
 export default router;

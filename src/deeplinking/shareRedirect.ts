@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { encryptShareId } from "../utils/shareId";
 
 const TEMPLATE_PATH = path.join(
   process.cwd(),
@@ -35,7 +36,8 @@ const FALLBACK_URL = process.env.SHARE_FALLBACK_URL || "https://www.gpscvideo.co
 
 /**
  * Build the public share URL for a resource, e.g. buildShareUrl("courses", id, base)
- * → "<base>/share/courses/<id>".
+ * → "<base>/share/courses/<cipher>". The id is encrypted and bound to
+ * `resource` (utils/shareId.ts).
  *
  * `base` is the request-derived origin (the `ORIGIN` env var, or the request
  * host) resolved by each controller's `resolveBase(req)`.
@@ -47,7 +49,7 @@ export function buildShareUrl(
 ): string {
   const cleanResource = resource.replace(/^\/+|\/+$/g, "");
   const cleanBase = (base || "").replace(/\/+$/, "");
-  return `${cleanBase}/share/${cleanResource}/${id}`;
+  return `${cleanBase}/share/${cleanResource}/${encryptShareId(cleanResource, id)}`;
 }
 
 export interface RenderedShare {
