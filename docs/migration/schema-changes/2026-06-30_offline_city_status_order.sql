@@ -17,7 +17,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_offline_city` ADD COLUMN `status` TINYINT(1) NOT NULL DEFAULT 1',
-  'SELECT "ws_offline_city.status already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
@@ -33,7 +33,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_offline_city` ADD COLUMN `order` INT NOT NULL DEFAULT 0',
-  'SELECT "ws_offline_city.order already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;

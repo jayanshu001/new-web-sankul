@@ -15,6 +15,58 @@
 
 ---
 
+## 2026-09-22 — DDL guards: no-op branches and inline literals made ANSI_QUOTES-safe
+
+> **DDL-file fix only (`docs/migration/schema-changes/*.sql`, 11 files). No schema change, no data writes, no query or response-shape change. Nothing under `src/` touched.**
+
+- **Symptom:** `yarn db:migrate` on staging stopped dead on the first file whose change
+  was already present in the database:
+
+  ```text
+  → 2026-07-27_exam_end_date_nullable.sql ...
+  Error: Unknown column 'ws_exam.end_date already nullable' in 'field list'
+  ✗ FAILED on 2026-07-27_exam_end_date_nullable.sql — stopping. Nothing after this ran.
+  ```
+
+- **Cause:** the re-runnable guards build their statement as a string and dispatch it
+  through `PREPARE`/`EXECUTE`. Older files wrote the "nothing to do" branch as
+  `'SELECT "…already applied…" AS note'`. That message is a **double-quoted** token, and
+  on a server whose `sql_mode` includes `ANSI_QUOTES` a double-quoted token is an
+  *identifier*, not a string — so MySQL looked for a column literally named
+  `ws_exam.end_date already nullable`. `2026-08-27_live_course_subscription_tracking.sql`
+  had the same hazard in real SQL, not just a message: `NULLIF(s.tracking_status, "")`
+  and `"pending"` inside the backfill `INSERT`.
+
+- **Why it only surfaced now:** the guard picks the no-op branch *only* where the change
+  already exists. On a fresh database every file takes its `ALTER` branch and the
+  double-quoted message is never parsed. The failure mode is specifically "schema already
+  migrated, `_ddl_migrations` ledger row missing" — i.e. a box that was hand-migrated
+  before the runner existed.
+
+- **Fix:** every no-op branch is now `'DO 0'` — the style already used by ~30 of the newer
+  files (`2026-07-13_referral_reward_on_purchase.sql` onward). It parses under any
+  `sql_mode` and returns no result set. Inline literals in dynamic SQL now use
+  escaped single quotes (`''pending''`) instead of double quotes.
+
+  Files touched: `2026-06-30_customer_access_token_refresh.sql`,
+  `2026-06-30_customer_address_cols.sql`, `2026-06-30_offline_city_state.sql`,
+  `2026-06-30_offline_city_status_order.sql`,
+  `2026-07-24_drop_customer_address_city_id.sql`,
+  `2026-07-25_drop_book_setting_origin_cols.sql`,
+  `2026-07-25_drop_course_featured_order.sql`,
+  `2026-07-27_drop_live_course_level.sql`, `2026-07-27_exam_end_date_nullable.sql`,
+  `2026-08-06_is_login_reconcile_indexes.sql`,
+  `2026-08-27_live_course_subscription_tracking.sql`.
+
+- **Rule for new DDL:** inside a `PREPARE`d string use backticks for identifiers and
+  single quotes for literals, and make the no-op branch `'DO 0'`. Never a
+  `SELECT "message"`.
+
+- **Applying:** re-run `yarn db:migrate`. Nothing already recorded in `_ddl_migrations`
+  re-executes; the previously failing file now runs its `DO 0` branch (its `ALTER` was
+  already in place on that host), records itself, and the run continues with the files
+  that were blocked behind it.
+
 ## 2026-09-22 — client paged exam list: drop the `end_date` filter on subject quizzes
 
 > **Code-only (`src/modules/client-exam/client-exam.repository.ts` — `examsByCategoryPaged` + `countExamsByCategoryPaged`). No DDL, no data writes, no response-shape change.**

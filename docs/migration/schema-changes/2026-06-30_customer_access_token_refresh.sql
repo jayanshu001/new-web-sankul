@@ -15,7 +15,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_customer_access_token` ADD COLUMN `refresh_token` TEXT NULL AFTER `token`',
-  'SELECT "ws_customer_access_token.refresh_token already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;

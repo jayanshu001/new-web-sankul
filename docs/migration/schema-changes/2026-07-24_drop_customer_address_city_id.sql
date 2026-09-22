@@ -22,7 +22,7 @@ SET @col_exists := (
 SET @ddl := IF(
   @col_exists > 0,
   'ALTER TABLE `ws_customer_address` DROP COLUMN `city_id`',
-  'SELECT "ws_customer_address.city_id already dropped" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;

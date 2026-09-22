@@ -17,7 +17,7 @@ SET @col := (
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `ws_offline_city` ADD COLUMN `state` INT NULL',
-  'SELECT "ws_offline_city.state already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
@@ -33,7 +33,7 @@ SET @fk := (
 );
 SET @sql := IF(@fk = 0,
   'ALTER TABLE `ws_offline_city` ADD CONSTRAINT `fk_ws_offline_city_state` FOREIGN KEY (`state`) REFERENCES `ws_customer_state`(`id`) ON DELETE SET NULL ON UPDATE CASCADE',
-  'SELECT "fk_ws_offline_city_state already exists — skipping"');
+  'DO 0');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;

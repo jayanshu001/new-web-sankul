@@ -75,7 +75,7 @@ SET @ddl := IF(@col=1,
   'INSERT IGNORE INTO ws_live_course_subscription_tracking (id, `order`, status, created_at, updated_at)
      SELECT s.tracking,
             s.order_id,
-            COALESCE(NULLIF(s.tracking_status, ""), "pending"),
+            COALESCE(NULLIF(s.tracking_status, ''''), ''pending''),
             s.created_at,
             s.updated_at
        FROM ws_live_course_subscription s

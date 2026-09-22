@@ -30,7 +30,7 @@ SET @col_exists := (
 SET @ddl := IF(
   @col_exists > 0,
   'ALTER TABLE `ws_course` DROP COLUMN `featured_order`',
-  'SELECT "ws_course.featured_order already dropped" AS note'
+  'DO 0'
 );
 
 PREPARE stmt FROM @ddl;
