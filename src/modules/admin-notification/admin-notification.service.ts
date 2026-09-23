@@ -1,0 +1,698 @@
+/**
+ * Admin notification WRITE subsystem — MySQL (Prisma) branch.
+ *
+ * SQL mirror of the Mongo `src/admin/notification/{audience,dispatcher}.ts` write
+ * path, enabling the `client-notification` flag. The legacy files branch on
+ * `isAdminNotificationMysql()` and delegate here when on.
+ *
+ * Coupling resolved vs Mongo:
+ *  - tokens: read from the single ws_customer.device (firebaseToken) column —
+ *    one token per customer (last device wins), NOT Customer.firebaseTokens[].
+ *  - audience: SQL customer ids (int). Course-targeting uses
+ *    ws_package_course_subscription — which has NO payment_status column, so the
+ *    entitlement signal is status=true (+ endAt null/future), per the migration's
+ *    documented drift.
+ *  - claim-lock / fanout / persistence: prisma.notification (ws_notification).
+ *  - id type: SQL ints; the BullMQ jobId is `notif-${id}` (numeric-only ids are
+ *    rejected by BullMQ), namespaced in the scheduler — see jobIdFor().
+ *
+ * Runtime ids ARE SQL ints (customer-auth + catalog-* make req ids SQL), so the
+ * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
+ */
+import { prisma } from "../../config/prisma";
+import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
+import { sendPush } from "../../utils/fcm";
+import { parseContentDeepLink } from "../../utils/notificationTarget";
+import logger from "../../utils/logger";
+
+
+/** Parse a numeric string id to a positive int, else null. */
+export const parseIntId = (v: string): number | null => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const intIds = (vals?: string[]): number[] =>
+  (vals ?? []).map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0);
+
+export interface AudienceFilter {
+  platforms?: ("ios" | "android")[];
+  courseIds?: string[];
+  userIds?: string[];
+}
+
+export interface ResolvedAudience {
+  isAll: boolean;
+  customerIds: number[];
+}
+
+export interface DispatchResult {
+  status: "sent" | "failed";
+  recipientCount: number;
+  failureCount: number;
+  invalidTokensPruned: number;
+  failureReason: string | null;
+  isBroadcast: boolean;
+  targetCustomerIds: number[];
+}
+
+/**
+ * Resolve a targeted audience to SQL customer ids. Empty filter → isAll.
+ * Only customers that (a) match platform/user/course filters AND (b) have a
+ * device token in ws_customer.device are returned (token-owning gate mirrors
+ * Mongo's `firebaseTokens.0 $exists`).
+ */
+export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedAudience> {
+  const platforms = filter.platforms ?? [];
+  const userIds = intIds(filter.userIds);
+  const courseIds = intIds(filter.courseIds);
+  const hasPlatforms = platforms.length > 0;
+  const hasUsers = userIds.length > 0;
+  const hasCourses = courseIds.length > 0;
+
+  if (!hasPlatforms && !hasUsers && !hasCourses) {
+    return { isAll: true, customerIds: [] };
+  }
+
+  // Course-targeting → active subscribers. ws_package_course_subscription has no
+  // payment_status; status=true (+ endAt null/future) is the entitlement signal.
+  let courseCustomerIds: number[] | null = null;
+  if (hasCourses) {
+    const now = new Date();
+    const subs = await prisma.packageCourseSubscription.findMany({
+      where: {
+        courseId: { in: courseIds },
+        status: true,
+        OR: [{ endAt: null }, { endAt: { gt: now } }],
+        customerId: { not: null },
+      },
+      select: { customerId: true },
+      distinct: ["customerId"],
+    });
+    courseCustomerIds = subs.map((s) => s.customerId!).filter((id) => id != null);
+    if (courseCustomerIds.length === 0) return { isAll: false, customerIds: [] };
+  }
+
+  // Intersect user + course id sets when both present.
+  let idIn: number[] | undefined;
+  if (hasUsers && courseCustomerIds) {
+    const set = new Set(courseCustomerIds);
+    idIn = userIds.filter((id) => set.has(id));
+    if (idIn.length === 0) return { isAll: false, customerIds: [] };
+  } else if (hasUsers) {
+    idIn = userIds;
+  } else if (courseCustomerIds) {
+    idIn = courseCustomerIds;
+  }
+
+  // Token-owning gate + platform + live-account filters against ws_customer.
+  // A device token lives in the single `device` column (firebaseToken); only
+  // customers with a non-null token can receive a push (mirrors Mongo's
+  // `firebaseTokens.0 $exists`).
+  const customers = await prisma.customer.findMany({
+    where: {
+      ...(idIn ? { id: { in: idIn } } : {}),
+      isAccountDeleted: false,
+      status: true,
+      firebaseToken: { not: null },
+      ...(hasPlatforms ? { os_type: { in: platforms } } : {}),
+    },
+    select: { id: true },
+  });
+
+  return { isAll: false, customerIds: customers.map((c) => c.id) };
+}
+
+// How many ws_customer rows to pull per page when collecting device tokens, and
+// how many customer ids to bind into one `IN (...)` for targeted sends. Both
+// bound a query that would otherwise scale with the entire customer base.
+const TOKEN_PAGE_SIZE = 5_000;
+const TOKEN_ID_CHUNK = 1_000;
+
+/**
+ * All device tokens for the given customers (broadcast → all live accounts).
+ *
+ * Read in PK-ordered pages rather than one findMany. A broadcast on a ~600k-row
+ * ws_customer previously materialised every row object in a single result set
+ * (and, for large targeted audiences, bound every id into one `IN (...)` big
+ * enough to threaten max_allowed_packet). Paging keeps peak memory to one page
+ * of rows plus the deduped token strings.
+ *
+ * Dedup is global across pages — identical to the previous single-query
+ * behaviour, so the same device is never pushed twice when two accounts share a
+ * token. Result order is PK order, as before.
+ */
+async function collectTokens(audience: ResolvedAudience): Promise<string[]> {
+  const seen = new Set<string>();
+
+  const drain = async (where: any): Promise<void> => {
+    let cursorId: number | undefined;
+    for (;;) {
+      const rows = await prisma.customer.findMany({
+        where,
+        select: { id: true, firebaseToken: true },
+        orderBy: { id: "asc" },
+        take: TOKEN_PAGE_SIZE,
+        ...(cursorId != null ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      });
+      if (!rows.length) return;
+      for (const r of rows) {
+        if (r.firebaseToken) seen.add(r.firebaseToken);
+      }
+      if (rows.length < TOKEN_PAGE_SIZE) return;
+      cursorId = rows[rows.length - 1].id;
+    }
+  };
+
+  if (audience.isAll) {
+    // Broadcast: every token whose owner is a live, non-deleted customer.
+    await drain({ isAccountDeleted: false, status: true, firebaseToken: { not: null } });
+    return [...seen];
+  }
+
+  if (audience.customerIds.length === 0) return [];
+  // Targeted: chunk the id list so no single statement carries the whole audience.
+  for (let i = 0; i < audience.customerIds.length; i += TOKEN_ID_CHUNK) {
+    const chunk = audience.customerIds.slice(i, i + TOKEN_ID_CHUNK);
+    await drain({ id: { in: chunk } });
+  }
+  return [...seen];
+}
+
+/**
+ * Resolve audience, push via FCM, and (for targeted sends) fan out per-recipient
+ * feed rows into ws_notification. Mirrors the Mongo dispatchAudience contract.
+ */
+export async function dispatchAudience(
+  payload: {
+    title: string;
+    body: string;
+    titleHtml?: string | null;
+    bodyHtml?: string | null;
+    image?: string | null;
+    type?: string;
+    deepLink?: string | null;
+    data?: Record<string, unknown>;
+  },
+  audienceFilter: AudienceFilter
+): Promise<DispatchResult> {
+  const resolved = await resolveAudience(audienceFilter);
+  const isBroadcast = resolved.isAll;
+  const tokens = await collectTokens(resolved);
+
+  // Content can be deactivated between an admin picking it (searchTargetOptions
+  // already excludes inactive rows) and this send actually firing — most
+  // relevant for scheduled notifications. Recheck here so a stale target
+  // degrades to "notification with no destination" instead of the app
+  // rendering "not found" on tap.
+  let deepLink = payload.deepLink;
+  let data = payload.data;
+  const target = parseContentDeepLink(deepLink);
+  if (target && !(await isTargetContentActive(target.entity, target.id))) {
+    logger.warn("dispatchAudience: target content no longer active, dropping deepLink", target);
+    deepLink = null;
+    data = undefined;
+  }
+
+  const sendResult = await sendPush(tokens, {
+    title: payload.title,
+    body: payload.body,
+    titleHtml: payload.titleHtml,
+    bodyHtml: payload.bodyHtml,
+    image: payload.image,
+    deepLink,
+    data,
+  });
+
+  const status: "sent" | "failed" =
+    sendResult.skipped || sendResult.successCount > 0 ? "sent" : "failed";
+  const failureReason =
+    status === "failed"
+      ? sendResult.skipped
+        ? "FCM not configured."
+        : sendResult.attempted === 0
+          ? "No registered devices for the selected audience."
+          : "All sends failed."
+      : null;
+
+  if (!isBroadcast && resolved.customerIds.length && status === "sent") {
+    try {
+      const now = new Date();
+      // Chunk the per-recipient feed insert to bound memory/packet size for
+      // large targeted audiences. Each row is independent, so the set of rows
+      // inserted is identical regardless of batch boundaries (order-independent).
+      const FEED_INSERT_BATCH_SIZE = 500;
+      const ids = resolved.customerIds;
+      for (let i = 0; i < ids.length; i += FEED_INSERT_BATCH_SIZE) {
+        const batch = ids.slice(i, i + FEED_INSERT_BATCH_SIZE);
+        await prisma.notification.createMany({
+          data: batch.map((id) => ({
+            customerId: id,
+            broadcast: false,
+            title: payload.title,
+            titleHtml: payload.titleHtml ?? null,
+            body: payload.body,
+            bodyHtml: payload.bodyHtml ?? null,
+            image: payload.image ?? null,
+            type: payload.type ?? "general",
+            deepLink: deepLink ?? null,
+            data: (data ?? {}) as any,
+            status: "sent",
+            sentAt: now,
+            recipientCount: 1,
+            audience: { all: false, userIds: [id] } as any,
+            createdAt: now,
+            updatedAt: now,
+          })),
+        });
+      }
+    } catch (err) {
+      logger.error("SQL: failed to fan out per-recipient notification rows", {
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  return {
+    status,
+    recipientCount: sendResult.successCount,
+    failureCount: sendResult.failureCount,
+    invalidTokensPruned: sendResult.invalidTokens.length,
+    failureReason,
+    isBroadcast,
+    targetCustomerIds: resolved.customerIds,
+  };
+}
+
+/** Audience filter from a stored ws_notification.audience JSON snapshot. */
+function audienceFromSnapshot(audience: any): AudienceFilter {
+  return {
+    platforms: audience?.platforms,
+    courseIds: audience?.courseIds?.map((id: unknown) => String(id)),
+    userIds: audience?.userIds?.map((id: unknown) => String(id)),
+  };
+}
+
+/**
+ * Dispatch a single scheduled SQL notification by int id (BullMQ worker path).
+ * Atomic claim "scheduled" → "sent" via conditional updateMany count, so retries
+ * / multi-instance can't double-send. Returns null if already claimed/cancelled
+ * OR if the id is not a SQL row (lets the worker fall back to the Mongo path).
+ */
+export async function dispatchScheduledById(
+  notificationId: string,
+  now: Date = new Date()
+): Promise<DispatchResult | null> {
+  const id = parseIntId(notificationId);
+  if (id == null) return null; // not a SQL id → caller falls back to Mongo
+
+  // Atomic claim. count===0 → already sent/cancelled by another worker (no-op);
+  // the worker only calls this after existsSql() confirmed a SQL row.
+  const claim = await prisma.notification.updateMany({
+    where: { id, status: "scheduled" },
+    data: { status: "sent", sentAt: now, updatedAt: now },
+  });
+  if (claim.count === 0) return null;
+
+  const claimed = await prisma.notification.findFirst({ where: { id } });
+  if (!claimed) return null;
+
+  try {
+    const result = await dispatchAudience(
+      {
+        title: claimed.title,
+        body: claimed.body,
+        titleHtml: claimed.titleHtml,
+        bodyHtml: claimed.bodyHtml,
+        image: claimed.image,
+        type: claimed.type,
+        deepLink: claimed.deepLink,
+        data: (claimed.data ?? {}) as Record<string, unknown>,
+      },
+      audienceFromSnapshot(claimed.audience)
+    );
+    await prisma.notification.update({
+      where: { id },
+      data: {
+        status: result.status,
+        failureReason: result.failureReason,
+        recipientCount: result.recipientCount,
+        sentAt: now,
+        updatedAt: now,
+      },
+    });
+    return result;
+  } catch (err) {
+    await prisma.notification.update({
+      where: { id },
+      data: { status: "scheduled", sentAt: null, updatedAt: new Date() },
+    });
+    throw err;
+  }
+}
+
+/** Does a SQL ws_notification row exist for this id? (worker dual-read routing) */
+export async function existsSql(notificationId: string): Promise<boolean> {
+  const id = parseIntId(notificationId);
+  if (id == null) return false;
+  const row = await prisma.notification.findFirst({ where: { id }, select: { id: true } });
+  return !!row;
+}
+
+/** Mark a SQL notification failed permanently (worker final-failure listener). */
+export async function markFailed(notificationId: string, reason: string): Promise<void> {
+  const id = parseIntId(notificationId);
+  if (id == null) return;
+  await prisma.notification.updateMany({
+    where: { id, status: "scheduled" },
+    data: { status: "failed", failureReason: reason, updatedAt: new Date() },
+  });
+}
+
+/** Boot rehydrate source: ids of all still-"scheduled" SQL notifications. */
+export async function listScheduledForRehydrate(): Promise<{ id: string; scheduledAt: Date }[]> {
+  const rows = await prisma.notification.findMany({
+    where: { status: "scheduled", scheduledAt: { not: null } },
+    select: { id: true, scheduledAt: true },
+  });
+  return rows.map((r) => ({ id: String(r.id), scheduledAt: r.scheduledAt as Date }));
+}
+
+// ─── Admin controller persistence (ws_notification parent rows) ──────────────────
+
+/** Create a scheduled parent row; returns its int id (BullMQ jobId = `notif-${id}`). */
+export async function createScheduled(input: {
+  broadcast: boolean;
+  title: string;
+  body: string;
+  titleHtml?: string | null;
+  bodyHtml?: string | null;
+  image?: string | null;
+  type: string;
+  deepLink?: string | null;
+  data?: Record<string, unknown>;
+  scheduledAt: Date;
+  audience: unknown;
+}): Promise<{ id: number }> {
+  const now = new Date();
+  const row = await prisma.notification.create({
+    data: {
+      customerId: null,
+      broadcast: input.broadcast,
+      title: input.title,
+      titleHtml: input.titleHtml ?? null,
+      body: input.body,
+      bodyHtml: input.bodyHtml ?? null,
+      image: input.image ?? null,
+      type: input.type,
+      deepLink: input.deepLink ?? null,
+      data: (input.data ?? {}) as any,
+      status: "scheduled",
+      scheduledAt: input.scheduledAt,
+      audience: input.audience as any,
+      createdAt: now,
+      updatedAt: now,
+    },
+    select: { id: true },
+  });
+  return { id: row.id };
+}
+
+/** Create the admin-log parent row for an immediate send. */
+export async function createImmediateLog(input: {
+  broadcast: boolean;
+  title: string;
+  body: string;
+  titleHtml?: string | null;
+  bodyHtml?: string | null;
+  image?: string | null;
+  type: string;
+  deepLink?: string | null;
+  data?: Record<string, unknown>;
+  status: "sent" | "failed";
+  failureReason: string | null;
+  recipientCount: number;
+  audience: unknown;
+}): Promise<void> {
+  const now = new Date();
+  await prisma.notification.create({
+    data: {
+      customerId: null,
+      broadcast: input.broadcast,
+      title: input.title,
+      titleHtml: input.titleHtml ?? null,
+      body: input.body,
+      bodyHtml: input.bodyHtml ?? null,
+      image: input.image ?? null,
+      type: input.type,
+      deepLink: input.deepLink ?? null,
+      data: (input.data ?? {}) as any,
+      status: input.status,
+      sentAt: now,
+      failureReason: input.failureReason,
+      recipientCount: input.recipientCount,
+      audience: input.audience as any,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+}
+
+/** Cancel a scheduled row; returns the updated row or null (404 / not scheduled). */
+export async function cancelScheduled(id: number): Promise<any | null> {
+  const claim = await prisma.notification.updateMany({
+    where: { id, status: "scheduled" },
+    data: { status: "cancelled", updatedAt: new Date() },
+  });
+  if (claim.count === 0) return null;
+  return prisma.notification.findFirst({ where: { id } });
+}
+
+/** Admin log listing (parent rows only: customerId null). */
+export async function listAdminLog(opts: {
+  q?: string;
+  status?: string;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  skip: number;
+  take: number;
+}): Promise<{ data: any[]; total: number }> {
+  const where: any = { customerId: null };
+  const search = buildPrismaPrefixSearch(opts.q, ["title", "body"]);
+  if (search) Object.assign(where, search);
+  if (opts.status && ["sent", "scheduled", "failed", "cancelled"].includes(opts.status)) {
+    where.status = opts.status;
+  }
+  const allowed = new Set(["createdAt", "scheduledAt", "sentAt", "status", "title"]);
+  const field = allowed.has(opts.sortBy) ? opts.sortBy : "createdAt";
+  const [data, total] = await Promise.all([
+    prisma.notification.findMany({
+      where,
+      orderBy: [{ [field]: opts.sortOrder }, { id: "desc" }],
+      skip: opts.skip,
+      take: opts.take,
+    }),
+    prisma.notification.count({ where }),
+  ]);
+  return { data, total };
+}
+
+/**
+ * Bulk delete by int ids. Returns the deleted count + the ids that were still
+ * "scheduled" (so the caller can cancel their BullMQ jobs).
+ */
+export async function bulkDelete(
+  ids: number[]
+): Promise<{ deletedCount: number; scheduledIds: string[] }> {
+  const scheduled = await prisma.notification.findMany({
+    where: { id: { in: ids }, status: "scheduled" },
+    select: { id: true },
+  });
+  const res = await prisma.notification.deleteMany({ where: { id: { in: ids } } });
+  return { deletedCount: res.count, scheduledIds: scheduled.map((r) => String(r.id)) };
+}
+
+/**
+ * Delete a single row by int id. Returns whether it existed + whether it was
+ * "scheduled" (caller cancels the BullMQ job in that case).
+ */
+export async function deleteOne(
+  id: number
+): Promise<{ existed: boolean; wasScheduled: boolean }> {
+  const row = await prisma.notification.findFirst({ where: { id }, select: { status: true } });
+  if (!row) return { existed: false, wasScheduled: false };
+  await prisma.notification.delete({ where: { id } });
+  return { existed: true, wasScheduled: row.status === "scheduled" };
+}
+
+// ─── Deep-link target options (searchable picker source) ─────────────────────
+// Powers the admin panel's server-side searchable dropdown: given a content
+// entity + query, return {id,label} rows so the admin picks an item instead of
+// typing a numeric id. Label field per model: TestSeries uses `title`, the rest
+// use `name` (Course.name is nullable → coalesced to "" for display).
+export type TargetEntity =
+  | "course"
+  | "package"
+  | "live-course"
+  | "book"
+  | "ebook"
+  | "test-series";
+
+export const TARGET_ENTITIES: TargetEntity[] = [
+  "course",
+  "package",
+  "live-course",
+  "book",
+  "ebook",
+  "test-series",
+];
+
+// Single source of truth for "which boolean column marks this entity active",
+// shared by the picker (searchTargetOptions) and the send-time recheck
+// (isTargetContentActive) so the two can never drift apart.
+const TARGET_ENTITY_STATUS_FIELD: Record<TargetEntity, string> = {
+  course: "status",
+  package: "active",
+  "live-course": "status",
+  book: "active",
+  ebook: "active",
+  "test-series": "status",
+};
+
+export async function searchTargetOptions(opts: {
+  entity: TargetEntity;
+  q?: string;
+  skip: number;
+  take: number;
+}): Promise<{ data: { id: number; label: string }[]; total: number }> {
+  const q = opts.q?.trim();
+
+  // Each branch keeps its Prisma delegate + label field explicit (delegates are
+  // not structurally compatible, so a generic helper can't type-check cleanly).
+  //
+  // `statusField` is always ANDed in as `true` — an admin must never be able to
+  // pick an inactive/unpublished item as a notification target: the resulting
+  // deeplink would point at content the app can't render (404 / hidden), which
+  // is how a broadcast notification "breaks" on tap.
+  const run = async <T extends { id: number }>(
+    findMany: (args: any) => Promise<T[]>,
+    count: (args: any) => Promise<number>,
+    labelField: string,
+    statusField: string
+  ) => {
+    const toks = searchTokens(q);
+    const where = {
+      [statusField]: true,
+      ...(toks.length ? { AND: toks.map((t) => ({ [labelField]: { contains: t } })) } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      findMany({ where, orderBy: { [labelField]: "asc" }, skip: opts.skip, take: opts.take }),
+      count({ where }),
+    ]);
+    const data = rows.map((r: any) => ({ id: r.id, label: String(r[labelField] ?? "") }));
+    return { data, total };
+  };
+
+  const statusField = TARGET_ENTITY_STATUS_FIELD[opts.entity];
+  switch (opts.entity) {
+    case "course":
+      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name", statusField);
+    case "package":
+      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name", statusField);
+    case "live-course":
+      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name", statusField);
+    case "book":
+      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name", statusField);
+    case "ebook":
+      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name", statusField);
+    case "test-series":
+      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title", statusField);
+  }
+}
+
+/**
+ * Re-check, right before a notification actually goes out, that a "content"
+ * target's deeplink still points at an active row. Content can be deactivated
+ * between an admin picking it and a scheduled job firing, so this is defense
+ * in depth on top of `searchTargetOptions` already excluding inactive rows.
+ */
+export async function isTargetContentActive(entity: TargetEntity, id: number): Promise<boolean> {
+  const statusField = TARGET_ENTITY_STATUS_FIELD[entity];
+  const where = { id, [statusField]: true };
+  switch (entity) {
+    case "course":
+      return (await prisma.course.count({ where })) > 0;
+    case "package":
+      return (await prisma.package.count({ where })) > 0;
+    case "live-course":
+      return (await prisma.liveCourse.count({ where })) > 0;
+    case "book":
+      return (await prisma.book.count({ where })) > 0;
+    case "ebook":
+      return (await prisma.eBook.count({ where })) > 0;
+    case "test-series":
+      return (await prisma.testSeries.count({ where })) > 0;
+  }
+}
+
+// ─── ImageNotification CRUD (in-app banner images; ws_image_notification) ────────
+// Same `client-notification` flag. DTO mirrors the Mongo shape (`_id`,
+// `redirectUrl`). The SQL table has no timestamps, so the Mongo `sort by
+// createdAt desc` becomes `id desc` (newest first — equivalent for autoincrement).
+const imageDto = (r: any) => ({
+  _id: String(r.id),
+  image: r.image,
+  redirectUrl: r.redirect_url ?? null,
+  active: r.active,
+});
+
+export async function listImageNotifications() {
+  const rows = await prisma.imageNotification.findMany({ orderBy: { id: "desc" } });
+  return rows.map(imageDto);
+}
+
+/**
+ * Client feed: active in-app banner images, newest first. Same DTO/flag.
+ * Paginated (skip/take) with a sibling count over the identical where. Banner
+ * rows have no natural text field, so there is no `search` support here.
+ */
+export async function listActiveImageNotifications(
+  opts: { skip?: number; take?: number } = {}
+): Promise<{ data: any[]; total: number }> {
+  const where = { active: true };
+  const [rows, total] = await Promise.all([
+    prisma.imageNotification.findMany({ where, orderBy: { id: "desc" }, skip: opts.skip, take: opts.take }),
+    prisma.imageNotification.count({ where }),
+  ]);
+  return { data: rows.map(imageDto), total };
+}
+
+export async function createImageNotification(input: {
+  image: string; redirectUrl?: string; active?: boolean;
+}) {
+  const row = await prisma.imageNotification.create({
+    data: { image: input.image, redirect_url: input.redirectUrl ?? null, active: input.active ?? true },
+  });
+  return imageDto(row);
+}
+
+export async function updateImageNotification(
+  id: number,
+  input: { image?: string; redirectUrl?: string; active?: boolean }
+): Promise<any | null> {
+  const exists = await prisma.imageNotification.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return null;
+  const data: any = {};
+  if (input.image !== undefined) data.image = input.image;
+  if (input.redirectUrl !== undefined) data.redirect_url = input.redirectUrl;
+  if (input.active !== undefined) data.active = input.active;
+  const row = await prisma.imageNotification.update({ where: { id }, data });
+  return imageDto(row);
+}
+
+export async function deleteImageNotification(id: number): Promise<boolean> {
+  const exists = await prisma.imageNotification.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return false;
+  await prisma.imageNotification.delete({ where: { id } });
+  return true;
+}

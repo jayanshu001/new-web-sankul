@@ -1,0 +1,21 @@
+import { z } from "zod";
+
+
+const objectIdSchema = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid id.");
+
+export const rateResultSchema = z.object({
+  ratting: z.string().min(1).max(20),
+});
+
+export const saveSingleAnswerSchema = z.object({
+  questionId: objectIdSchema,
+  answerId: objectIdSchema.nullable().optional(),
+});
+
+export const submitAttemptSchema = z.object({
+  timing: z
+    .string()
+    .regex(/^\d{1,3}:\d{2}(:\d{2})?$/, "Timing must be in MM:SS or HH:MM:SS format.")
+    .optional(),
+  ratting: z.string().max(20).optional(),
+});

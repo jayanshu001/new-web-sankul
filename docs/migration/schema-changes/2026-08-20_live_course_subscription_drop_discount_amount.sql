@@ -1,0 +1,53 @@
+-- 2026-08-20 — Drop ws_live_course_subscription.discount_amount.
+--
+-- Redundant: the column is fully derivable from three columns that stay.
+-- The write path (live-course-payment.controller → createLiveCourseOrderMysql) sets
+--
+--   paid_amount = original_amount - discount_amount - wallet_coin
+--
+-- so the promo discount is exactly
+--
+--   original_amount - paid_amount - COALESCE(wallet_coin, 0)
+--
+-- and `original_amount` is set ONLY when a promo was applied (NULL otherwise, which
+-- is the same condition under which discount_amount was NULL). No information is lost.
+--
+-- ⚠⚠ DESTRUCTIVE ⚠⚠ — NOT reversible by re-running a script. Restoring the column
+-- restores NULLs. Back it up first if prod has any non-NULL rows:
+--
+--   CREATE TABLE ws_lcs_discount_backup_20260820 AS
+--     SELECT id, original_amount, discount_amount, paid_amount, wallet_coin
+--       FROM ws_live_course_subscription
+--      WHERE discount_amount IS NOT NULL;
+--
+-- VERIFY BEFORE RUNNING — this must return 0. It is every row whose stored discount
+-- does NOT match the derivation, i.e. every row the API would start reporting
+-- differently once the column is gone:
+--
+--   SELECT COUNT(*) FROM ws_live_course_subscription
+--    WHERE discount_amount IS NOT NULL
+--      AND NOT (discount_amount <=>
+--               (original_amount - paid_amount - COALESCE(wallet_coin, 0)));
+--
+-- On staging (2026-08-20) this returned 0 — but the table held only ONE row with a
+-- non-NULL discount at the time (id=9: original 259, discount 130, paid 129, coin 0),
+-- so staging is weak evidence. RUN THE QUERY ON PROD before applying; a non-zero
+-- count means the derivation is wrong for those rows and this DDL must not be applied
+-- until that is understood.
+--
+-- CODE DEPENDENCY, ALREADY REWIRED — the column had one writer and two readers:
+--   writer  live-course-order.service.ts createLiveCourseOrderMysql  (field removed)
+--   reader  client-purchase-history.service.ts getLiveCourseReceiptMysql
+--             → receipt `discount` line, now derived
+--   reader  admin-customer-details.transformer.ts toLiveCourseDto
+--             → `discountAmount` DTO field, now derived
+-- Both API responses are UNCHANGED — the value is computed instead of stored.
+--
+-- ORDER: deploy the backend FIRST (it stops writing the column and starts deriving),
+-- THEN apply this file. The reverse order breaks inserts on the old build.
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-20_live_course_subscription_drop_discount_amount.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_live_course_subscription
+  DROP COLUMN discount_amount;

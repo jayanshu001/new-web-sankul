@@ -1,0 +1,38 @@
+-- 2026-08-20 — One row per module on ws_termsandcondition.
+--
+-- WHY: the client resolves a module with `findActiveByModule`, a **findFirst**
+-- (terms.repository.ts). A second active row for the same module therefore SILENTLY
+-- SHADOWS the first — the admin edits one row and the app keeps rendering the other,
+-- with no error on either side.
+--
+-- `module` is an enum of two live values (`book`, `referral code`; `pendrive` is
+-- retired) and BOTH already have a row, so "Add Terms" can now only ever produce that
+-- duplicate. The admin panel disables already-used modules in the create form, but
+-- that is a client-side courtesy — this index is what makes the rule real.
+--
+-- Paired with an app-level 409 (terms.service `moduleTaken`) so the admin sees
+-- "Terms for \"book\" already exist. Edit the existing entry instead." rather than a
+-- raw driver error. The index is the guarantee; the 409 is the readable message.
+--
+-- ⚠ TRADE-OFF: this forbids keeping an inactive/archived second row for a module.
+-- That is intended — `status` is a display toggle, not a versioning mechanism, and
+-- the read path cannot distinguish "archived" from "shadowing" anyway.
+--
+-- VERIFY BEFORE RUNNING — this must return no rows:
+--
+--   SELECT module, COUNT(*) n FROM ws_termsandcondition GROUP BY module HAVING n > 1;
+--
+-- Staging (2026-08-20) returned none: 2 rows, `book` (id 1) and `referral code`
+-- (id 3), one each. If a non-empty result comes back on prod, keep the row the admin
+-- actually edits (usually the lowest id, since findFirst has been serving it) and
+-- delete the shadow BEFORE applying — the ALTER fails otherwise, harmlessly.
+--
+-- ORDERING: apply AFTER the app-level guard is deployed, so a duplicate create fails
+-- as a 409 rather than as a 500 from the index. Either order is safe for data; only
+-- the error message differs.
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-20_terms_module_unique.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_termsandcondition
+  ADD UNIQUE KEY uq_terms_module (module);

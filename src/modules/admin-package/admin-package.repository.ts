@@ -1,0 +1,283 @@
+import { prisma } from "../../config/prisma";
+import type { Prisma } from "@prisma/client";
+import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+
+/**
+ * Prisma persistence for the admin-package MySQL branch.
+ *  - types          → ws_package_type (id/name only — NO order/active columns)
+ *  - packages       → ws_package
+ *  - specificSubjects[] → ws_package_specific_subject (subject_id → VideoCategory)
+ *  - materialCategories[] → ws_material_category_package (mcategory_id → MaterialCategory)
+ *  - examCategories[] → ws_exam_category_package (exam_category_id → ExamCategory)
+ *  - plans          → ws_package_course_ebook_price (package-owned; shared table)
+ *  - subscribers    → ws_package_course_subscription (package_id = the package)
+ *  - video relations→ ws_video_category_package_relation
+ *
+ * ⚠ Drift: ws_package has NO column for subtitle, notificationTopic, or the
+ * examCountdown* arrays. It DOES have is_paid
+ * and package_category_id (all wired through service write/read).
+ * SQL has exam_id (→ goal), educator_id, package_type_id, goal_id and
+ * goal_label_id (the latter stores the goal's JSON-label numeric id; the API
+ * boundary resolves it to/from the label NAME). with_material/without_material
+ * are descriptive VARCHAR text. package_type_id / exam_id are NOT NULL →
+ * sentinels on write.
+ */
+const pkgInclude = { packageType: { select: { id: true, name: true } } };
+
+const sortByCategoryId = <T extends { categoryId: number }>(orders: T[]): T[] =>
+  [...orders].sort((a, b) => a.categoryId - b.categoryId);
+
+export const adminPackageRepository = {
+  // ── package types ─────────────────────────────────────────────────────────
+  listTypes: () => prisma.packageType.findMany({ orderBy: [{ name: "asc" }] }),
+  findTypeBare: (id: number) => prisma.packageType.findUnique({ where: { id } }),
+  createType: (data: Prisma.PackageTypeUncheckedCreateInput) => prisma.packageType.create({ data }),
+  updateType: (id: number, data: Prisma.PackageTypeUncheckedUpdateInput) => prisma.packageType.update({ where: { id }, data }),
+  deleteType: (id: number) => prisma.packageType.delete({ where: { id } }),
+  typeInUse: (id: number) => prisma.package.findFirst({ where: { packageTypeId: id }, select: { id: true } }),
+
+  // ── packages: list / get ────────────────────────────────────────────────────
+  list: (opts: { search?: string; active?: boolean; packageTypeId?: number; skip: number; take: number }) =>
+    // Recency is the contract on admin lists (see utils/listOrdering). ws_package.order_by
+    // is still written and still drives the CLIENT catalog — it just isn't read here.
+    prisma.package.findMany({ where: buildWhere(opts), include: pkgInclude, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+  count: (opts: { search?: string; active?: boolean; packageTypeId?: number }) => prisma.package.count({ where: buildWhere(opts) }),
+  findById: (id: number) => prisma.package.findUnique({ where: { id }, include: pkgInclude }),
+  findBare: (id: number) => prisma.package.findUnique({ where: { id } }),
+  exists: (id: number) => prisma.package.findUnique({ where: { id }, select: { id: true } }),
+
+  // ── goal labels (JSON [{ id, name }] on ws_customer_target_goal) — name↔id ─────
+  goalById: (id: number) => prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true, labels: true } }),
+  goalsByIds: (ids: number[]) =>
+    ids.length ? prisma.customerTargetGoal.findMany({ where: { id: { in: ids } }, select: { id: true, labels: true } }) : Promise.resolve([]),
+
+  /** Active plans for a set of packages (list-row pricing buckets). */
+  plansForPackages: (packageIds: number[]) =>
+    packageIds.length
+      ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds }, status: true }, orderBy: { duration: "asc" } })
+      : Promise.resolve([]),
+
+  // ── embedded category pivots ──────────────────────────────────────────────────
+  specificSubjectsFor: (packageId: number) =>
+    prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: { order_by: "asc" } }),
+  materialCategoriesFor: (packageId: number) =>
+    prisma.materialCategoryPackage.findMany({ where: { packageId }, include: { MaterialCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" } }),
+  examCategoriesFor: (packageId: number) =>
+    prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" } }),
+
+  // Paginated variants of the three category pivots for the package-detail tabs
+  // (same include/orderBy as the embedded-array loaders above; add skip/take + count).
+  specificSubjectsForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: [{ order_by: "asc" }, { id: "asc" }], skip, take }),
+  countSpecificSubjectsFor: (packageId: number) =>
+    prisma.packageSpecificSubject.count({ where: { packageId } }),
+  materialCategoriesForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.materialCategoryPackage.findMany({ where: { packageId }, include: { MaterialCategory: { select: { id: true, name: true, image: true } } }, orderBy: [{ order: "asc" }, { id: "asc" }], skip, take }),
+  countMaterialCategoriesFor: (packageId: number) =>
+    prisma.materialCategoryPackage.count({ where: { packageId } }),
+  examCategoriesForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: [{ order: "asc" }, { id: "asc" }], skip, take }),
+  countExamCategoriesFor: (packageId: number) =>
+    prisma.examCategoryPackage.count({ where: { packageId } }),
+
+  // ── packages: write ───────────────────────────────────────────────────────────
+  createPackage: (input: {
+    data: Prisma.PackageUncheckedCreateInput;
+    specificSubjects: Array<{ id: number; order: number; status: boolean }>;
+    materialCategories: Array<{ id: number; order: number }>;
+    examCategories: Array<{ id: number; order: number }>;
+  }) =>
+    prisma.$transaction(async (tx) => {
+      const pkg = await tx.package.create({ data: input.data });
+      await replacePivots(tx, pkg.id, input);
+      return pkg;
+    }),
+
+  updatePackage: (
+    id: number,
+    data: Prisma.PackageUncheckedUpdateInput,
+    pivots: {
+      specificSubjects?: Array<{ id: number; order: number; status: boolean }>;
+      materialCategories?: Array<{ id: number; order: number }>;
+      examCategories?: Array<{ id: number; order: number }>;
+    }
+  ) =>
+    prisma.$transaction(async (tx) => {
+      const pkg = await tx.package.update({ where: { id }, data });
+      if (pivots.specificSubjects !== undefined) {
+        await tx.packageSpecificSubject.deleteMany({ where: { packageId: id } });
+        if (pivots.specificSubjects.length)
+          await tx.packageSpecificSubject.createMany({ data: pivots.specificSubjects.map((s) => ({ packageId: id, subjectId: s.id, order_by: s.order, status: s.status })) });
+      }
+      if (pivots.materialCategories !== undefined) {
+        await tx.materialCategoryPackage.deleteMany({ where: { packageId: id } });
+        if (pivots.materialCategories.length)
+          await tx.materialCategoryPackage.createMany({ data: pivots.materialCategories.map((m) => ({ packageId: id, materialCategoryId: m.id, order: m.order })) });
+      }
+      if (pivots.examCategories !== undefined) {
+        await tx.examCategoryPackage.deleteMany({ where: { packageId: id } });
+        if (pivots.examCategories.length)
+          await tx.examCategoryPackage.createMany({ data: pivots.examCategories.map((e) => ({ packageId: id, examCategoryId: e.id, order: e.order })) });
+      }
+      return pkg;
+    }),
+
+  deletePackage: (id: number) =>
+    prisma.$transaction(async (tx) => {
+      await tx.packageVideoCategoryRelation.deleteMany({ where: { packageId: id } });
+      await tx.packageChat.deleteMany({ where: { packageId: id } });
+      await tx.packageSpecificSubject.deleteMany({ where: { packageId: id } });
+      await tx.materialCategoryPackage.deleteMany({ where: { packageId: id } });
+      await tx.examCategoryPackage.deleteMany({ where: { packageId: id } });
+      // Detach plans (don't orphan a subscriber's plan row): null the package + status off.
+      await tx.packageCourseEbookPrice.updateMany({ where: { packageId: id }, data: { packageId: null, status: false } });
+      await tx.package.delete({ where: { id } });
+    }),
+
+  setActive: (id: number, active: boolean) => prisma.package.update({ where: { id }, data: { active, updated_at: new Date() } }),
+  setOrder: (id: number, order: number) => prisma.package.update({ where: { id }, data: { order_by: order, updated_at: new Date() } }),
+  subscriberCount: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),
+
+  // ── embedded reorder (in place) ─────────────────────────────────────────────
+  // One drag writes every visible row's position, so the whole batch runs as a single
+  // sequential transaction: firing the updates concurrently makes them contend for the
+  // same package_id rows and InnoDB kills the request with a write conflict/deadlock.
+  // Sorted by category id so concurrent requests take the row locks in the same order.
+  reorderSpecificSubjects: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.packageSpecificSubject.updateMany({ where: { packageId, subjectId: categoryId }, data: { order_by: order } })
+      )
+    ),
+  reorderMaterialCategories: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.materialCategoryPackage.updateMany({ where: { packageId, materialCategoryId: categoryId }, data: { order } })
+      )
+    ),
+  reorderExamCategories: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.examCategoryPackage.updateMany({ where: { packageId, examCategoryId: categoryId }, data: { order } })
+      )
+    ),
+
+  // ── plans ────────────────────────────────────────────────────────────────────
+  /**
+   * Every plan attached to the package — active AND inactive.
+   *
+   * `status: true` used to be baked in here and in countPlans, which made Packages
+   * the odd one out: none of the four sibling endpoints (course / ebook /
+   * live-course / test-series) filter. The consequence was that switching a package
+   * plan to Inactive made the row VANISH from the Pricing tab with no way to switch
+   * it back on from that screen.
+   *
+   * Ordered by duration only — NOT grouped by status. Active and inactive plans
+   * interleave in duration order so toggling a plan's status doesn't move its row.
+   * `id` is the tiebreaker so paging stays stable across equal durations.
+   */
+  listPlans: (packageId: number, skip?: number, take?: number, status?: boolean) =>
+    prisma.packageCourseEbookPrice.findMany({
+      where: { packageId, ...(status === undefined ? {} : { status }) },
+      orderBy: [{ duration: "asc" }, { id: "asc" }],
+      skip,
+      take,
+    }),
+  countPlans: (packageId: number, status?: boolean) =>
+    prisma.packageCourseEbookPrice.count({
+      where: { packageId, ...(status === undefined ? {} : { status }) },
+    }),
+  // Subscriptions per plan for one page of plans, batched so the list stays a single
+  // query rather than one count per row.
+  subscriptionCountsByPlan: (planIds: number[]) =>
+    prisma.packageCourseSubscription.groupBy({
+      by: ["planId"],
+      where: { planId: { in: planIds } },
+      _count: { _all: true },
+    }),
+  attachPlans: (packageId: number, planIds: number[]) =>
+    prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: planIds } }, data: { packageId, courseId: 0, ebookId: 0 } }),
+  /**
+   * REAL delete, scoped to the owning package so a stray planId cannot remove
+   * someone else's row.
+   *
+   * This used to `updateMany({ status: false })` — a silent deactivate that returned
+   * 200 and looked identical to a delete. It is why 251 "deleted" package plans are
+   * still in ws_package_course_ebook_price. Guarded by countPlanUsageOne in the
+   * service, matching the other four modules.
+   */
+  /**
+   * Promo-code plan links point at ws_package_course_ebook_price.id with NO foreign
+   * key, so deleting a plan without clearing them leaves rows in
+   * ws_promoted_package_course_ebook aimed at an id that no longer exists — the same
+   * orphan class the delete guards exist to prevent. admin-plan.deletePlan has always
+   * done this; the per-module deletes did not.
+   */
+  deletePromotedForPlan: (planId: number) =>
+    prisma.promotedPackageCourseEbook.deleteMany({ where: { planId } }),
+  deletePlanFromPackage: (packageId: number, planId: number) =>
+    prisma.packageCourseEbookPrice.deleteMany({ where: { id: planId, packageId } }),
+  findPlanInPackage: (packageId: number, planId: number) =>
+    prisma.packageCourseEbookPrice.findFirst({ where: { id: planId, packageId }, select: { id: true } }),
+
+  // ── subscribers ───────────────────────────────────────────────────────────────
+  listSubscribers: (packageId: number, skip: number, take: number) =>
+    prisma.packageCourseSubscription.findMany({
+      where: { packageId },
+      include: { customer: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }, package: { select: { id: true, name: true } } },
+      // created_at is nullable and not unique, so `id` is kept as the tiebreaker:
+      // without it, rows sharing a timestamp can repeat or vanish across pages.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip, take,
+    }),
+  countSubscribers: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),
+
+  // ── video category relations ────────────────────────────────────────────────
+  listVideoRelations: (packageId: number) =>
+    prisma.packageVideoCategoryRelation.findMany({ where: { packageId } }),
+  /** Set the package's active relation set: deactivate all, then upsert each id active. */
+  setVideoRelations: (packageId: number, relationIds: number[]) =>
+    prisma.$transaction(async (tx) => {
+      await tx.packageVideoCategoryRelation.updateMany({ where: { packageId }, data: { status: false } });
+      for (const rid of relationIds) {
+        const existing = await tx.packageVideoCategoryRelation.findFirst({ where: { packageId, videoCategoryRelationId: rid }, select: { id: true } });
+        if (existing) await tx.packageVideoCategoryRelation.update({ where: { id: existing.id }, data: { status: true } });
+        else await tx.packageVideoCategoryRelation.create({ data: { packageId, videoCategoryRelationId: rid, status: true, updated_at: new Date() } });
+      }
+      return relationIds.length;
+    }),
+
+  /** BFS roots = the package's specificSubjects subject ids. */
+  specificSubjectIds: async (packageId: number): Promise<number[]> => {
+    const rows = await prisma.packageSpecificSubject.findMany({ where: { packageId }, select: { subjectId: true } });
+    return rows.map((r) => r.subjectId).filter((s): s is number => s != null);
+  },
+  relationsByParents: (parents: number[]) =>
+    parents.length ? prisma.videoCategoryRelation.findMany({ where: { parent: { in: parents } }, select: { id: true, child: true } }) : Promise.resolve([]),
+};
+
+async function replacePivots(
+  tx: Prisma.TransactionClient,
+  packageId: number,
+  input: {
+    specificSubjects: Array<{ id: number; order: number; status: boolean }>;
+    materialCategories: Array<{ id: number; order: number }>;
+    examCategories: Array<{ id: number; order: number }>;
+  }
+) {
+  if (input.specificSubjects.length)
+    await tx.packageSpecificSubject.createMany({ data: input.specificSubjects.map((s) => ({ packageId, subjectId: s.id, order_by: s.order, status: s.status })) });
+  if (input.materialCategories.length)
+    await tx.materialCategoryPackage.createMany({ data: input.materialCategories.map((m) => ({ packageId, materialCategoryId: m.id, order: m.order })) });
+  if (input.examCategories.length)
+    await tx.examCategoryPackage.createMany({ data: input.examCategories.map((e) => ({ packageId, examCategoryId: e.id, order: e.order })) });
+}
+
+function buildWhere(opts: { search?: string; active?: boolean; packageTypeId?: number }): Prisma.PackageWhereInput {
+  const where: Prisma.PackageWhereInput = {};
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
+  if (opts.active !== undefined) where.active = opts.active;
+  if (opts.packageTypeId !== undefined) where.packageTypeId = opts.packageTypeId;
+  return where;
+}

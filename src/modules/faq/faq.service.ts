@@ -1,0 +1,188 @@
+import { faqRepository } from "./faq.repository";
+import { toFaqDto, toFaqTypeDto } from "./faq.transformer";
+import { matchesAllTokens } from "../../utils/searchFilter";
+import type {
+  FaqCategory,
+  FaqCreateInput,
+  FaqCreateMongoInput,
+  FaqDto,
+  FaqTypeDto,
+  FaqUpdateInput,
+  FaqUpdateMongoInput,
+} from "./faq.types";
+import { FAQ_TYPES } from "./faq.types";
+
+export const parseFaqId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+/**
+ * Normalise a caller-supplied FAQ type filter.
+ *
+ * Case- and space-insensitive: the admin UI shows the LABEL ("Referral") while the
+ * slug is lowercase ("referral"), so `?type=Referral` is a natural and very likely
+ * mistake. It resolves rather than silently failing.
+ *
+ * Returns `{ ok: false }` for a value that is not a real category. That case MUST
+ * NOT be treated as "no filter": dropping it returns general + referral mixed
+ * together, so a typo in the app reads as "the referral sheet has extra content"
+ * instead of an error. Callers turn it into a 422 — the same rule
+ * `/client/subscriptions/access` applies to a bad `kinds`.
+ *
+ * `ws_faq.type` is a MySQL `enum('general','referral')`, so FAQ_TYPES cannot drift
+ * from the database without a schema change.
+ */
+export const resolveFaqTypeFilter = (
+  typeId?: string
+): { ok: true; type?: FaqCategory } | { ok: false } => {
+  const raw = (typeId ?? "").trim();
+  if (!raw) return { ok: true, type: undefined }; // absent → all types, unchanged
+  const match = (FAQ_TYPES as readonly string[]).find(
+    (t) => t.toLowerCase() === raw.toLowerCase()
+  );
+  return match ? { ok: true, type: match as FaqCategory } : { ok: false };
+};
+
+/** Human-readable list for the 422 message. */
+export const FAQ_TYPE_FILTER_MESSAGE = `Invalid \`type\`. Allowed: ${FAQ_TYPES.join(", ")}.`;
+
+const resolveCategoryFilter = (typeId?: string): FaqCategory | undefined => {
+  const r = resolveFaqTypeFilter(typeId);
+  return r.ok ? r.type : undefined;
+};
+
+// ─── FAQ CRUD ────────────────────────────────────────────────────────────────
+
+export const listFaqs = async (opts?: {
+  typeId?: string;
+}): Promise<FaqDto[]> => {
+  const type = resolveCategoryFilter(opts?.typeId);
+  const rows = await faqRepository.findMany(type ? { type } : undefined);
+  return rows.map(toFaqDto);
+};
+
+/**
+ * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
+ * when provided (absent → full filtered list). Always returns the total count.
+ */
+export const listFaqsPaged = async (q: {
+  typeId?: string;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqDto[]; total: number }> => {
+  const type = resolveCategoryFilter(q.typeId);
+  const opts = { type, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+  const [rows, total] = await Promise.all([
+    faqRepository.findPage(opts),
+    faqRepository.count(opts),
+  ]);
+  return { items: rows.map(toFaqDto), total };
+};
+
+/**
+ * Client list: created_at asc ordering, optional type filter + `?search=`
+ * (question/answer) + pagination. Reuses the repository page/count helpers over
+ * the identical where.
+ */
+export const listFaqsClientPaged = async (q: {
+  typeId?: string;
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqDto[]; total: number }> => {
+  const type = resolveCategoryFilter(q.typeId);
+  const opts = {
+    type,
+    search: q.search,
+    sortBy: "createdAt",
+    sortDir: "asc" as const,
+    skip: q.skip,
+    take: q.take,
+  };
+  const [rows, total] = await Promise.all([
+    faqRepository.findPage(opts),
+    faqRepository.count(opts),
+  ]);
+  return { items: rows.map(toFaqDto), total };
+};
+
+export const getFaqById = async (id: string): Promise<FaqDto | null> => {
+  const numId = parseFaqId(id);
+  if (!numId) return null;
+  const row = await faqRepository.findById(numId);
+  return row ? toFaqDto(row) : null;
+};
+
+export const createFaq = async (
+  input: FaqCreateInput | FaqCreateMongoInput
+): Promise<FaqDto> => {
+  const row = await faqRepository.create(input as FaqCreateInput);
+  return toFaqDto(row);
+};
+
+export const updateFaq = async (
+  id: string,
+  input: FaqUpdateInput | FaqUpdateMongoInput
+): Promise<FaqDto | null> => {
+  const numId = parseFaqId(id);
+  if (!numId) return null;
+  try {
+    const row = await faqRepository.update(numId, input as FaqUpdateInput);
+    return toFaqDto(row);
+  } catch {
+    return null;
+  }
+};
+
+export const deleteFaq = async (id: string): Promise<boolean> => {
+  const numId = parseFaqId(id);
+  if (!numId) return false;
+  try {
+    await faqRepository.delete(numId);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const countFaqsByCategory = async (
+  type: FaqCategory
+): Promise<number> => {
+  return faqRepository.countByType(type);
+};
+
+// ─── FAQ types (synthetic list on MySQL) ─────────────────────────────────────
+
+export const listFaqTypes = async (): Promise<FaqTypeDto[]> => {
+  return FAQ_TYPES.map((t) => ({
+    ...toFaqTypeDto(t),
+    createdAt: undefined,
+    updatedAt: undefined,
+  }));
+};
+
+/**
+ * Client faq-types list with `?search=` (title) + pagination. The catalogue is
+ * a fixed synthetic list (no table), so search/paging apply in memory.
+ */
+export const listFaqTypesClientPaged = async (q: {
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqTypeDto[]; total: number }> => {
+  const all: FaqTypeDto[] = FAQ_TYPES.map((t) => ({
+    ...toFaqTypeDto(t),
+    createdAt: undefined,
+    updatedAt: undefined,
+  }));
+  const filtered = all.filter((t) => matchesAllTokens(q.search, [t.title]));
+  const total = filtered.length;
+  const start = q.skip ?? 0;
+  const items =
+    q.take != null ? filtered.slice(start, start + q.take) : filtered.slice(start);
+  return { items, total };
+};

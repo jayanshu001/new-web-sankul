@@ -1,0 +1,573 @@
+import { prisma } from "../../config/prisma";
+import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
+
+/**
+ * "This subscription was paid for."
+ *
+ * Payment moved from ws_live_course_subscription to ws_live_course_order on
+ * 2026-08-25, so the old `payment_status = "verified"` test became the linked
+ * order's `status = "complete"`. The legacy column has since been dropped and every
+ * historical row was linked to an order by the backfill, so the order is the only
+ * source — an unlinked row is not a purchase.
+ *
+ * NOTE this is a PURCHASE test, not an ACTIVE-ENTITLEMENT test. Callers that want a
+ * live entitlement filter on `status: true` (+ the endAt window) and do not need this
+ * at all: since 2026-08-25 a subscription row is only ever written for a paid order.
+ */
+const LIVE_SUB_PURCHASED = {
+  order: { status: "complete" },
+} satisfies Prisma.LiveCourseSubscriptionWhereInput;
+
+/**
+ * Prisma persistence for the admin-live-course MySQL branch (Wave 6).
+ *  - courses       → ws_live_course (schedule folders/entries live in JSON cols)
+ *  - plans         → ws_live_course_plan
+ *  - subscriptions → ws_live_course_subscription
+ *  - sessions      → ws_live_session (+ ws_live_session_course join, liveCourseIds[])
+ *
+ * ⚠ STAY Mongo (no SQL branch): the folder/video-in-folder controllers + the
+ * createLiveCourse Root-folder automation — ws_video_category has no
+ * live_course_id column (same blocker as the Wave 5 course Root folder).
+ * Schedule folders/entries are JSON on ws_live_course with synthetic string ids
+ * minted by the service (the Mongo API addresses them by subdoc _id).
+ * ⚠ plan.duration is treated as DAYS by the controllers (computeEndAt asDays).
+ */
+const courseInclude = undefined; // refs (educator/category) have no FK rows on staging; surfaced as ids
+
+export const adminLiveCourseRepository = {
+  // ── courses ───────────────────────────────────────────────────────────────
+  list: (opts: { search?: string; status?: boolean; skip: number; take: number }) =>
+    // Recency is the contract on admin lists — see utils/listOrdering.
+    prisma.liveCourse.findMany({ where: buildWhere(opts), orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+  count: (opts: { search?: string; status?: boolean }) => prisma.liveCourse.count({ where: buildWhere(opts) }),
+  findById: (id: number) => prisma.liveCourse.findUnique({ where: { id } }),
+  exists: (id: number) => prisma.liveCourse.findUnique({ where: { id }, select: { id: true } }),
+
+  // ── client detail / my-courses populates ───────────────────────────────────
+  findEducator: (id: number) =>
+    prisma.courseEducator.findUnique({ where: { id }, select: { id: true, name: true, image: true, about: true } }),
+  findPackageCategory: (id: number) =>
+    prisma.packageCategory.findUnique({ where: { id }, select: { id: true, title: true, slug: true, image: true } }),
+  coursesSlimByIds: (ids: number[]) =>
+    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, isPaid: true, status: true, educatorId: true } }),
+  myLiveCourseSubs: (customerId: number, filterStatus: string, now: Date) => {
+    // "Paid for" used to mean payment_status='verified' on this row. Payment moved to
+    // ws_live_course_order (2026-08-25), so it now means the linked order completed —
+    // with a fallback to the legacy column for rows the backfill has not reached.
+    const where: any = { customerId, ...LIVE_SUB_PURCHASED };
+    if (filterStatus === "active") { where.status = true; where.OR = [{ endAt: null }, { endAt: { gte: now } }]; }
+    else if (filterStatus === "expired") { where.OR = [{ status: false }, { endAt: { lt: now } }]; }
+    return prisma.liveCourseSubscription.findMany({ where, orderBy: { createdAt: "desc" } });
+  },
+  /** `ordered` of the PREVIOUS live course — input to the +1 calc (utils/listOrdering). */
+  prevOrdered: async (): Promise<number | null> =>
+    (await prisma.liveCourse.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { ordered: true } }))?.ordered ?? null,
+
+  /**
+   * Bulk reorder: set `ordered` per id in ONE transaction, so a 20-row drag is a
+   * single atomic write instead of 20 independent PUTs. Mirrors
+   * banner-slider.repository.reorder.
+   */
+  reorder: (ops: { id: number; ordered: number }[]) =>
+    prisma.$transaction(
+      ops.map((o) =>
+        prisma.liveCourse.update({
+          where: { id: o.id },
+          data: { ordered: o.ordered, updatedAt: new Date() },
+        })
+      )
+    ),
+
+  create: (data: Prisma.LiveCourseUncheckedCreateInput) => prisma.liveCourse.create({ data }),
+  update: (id: number, data: Prisma.LiveCourseUncheckedUpdateInput) => prisma.liveCourse.update({ where: { id }, data }),
+  delete: (id: number) =>
+    prisma.$transaction(async (tx) => {
+      await tx.liveCoursePlan.deleteMany({ where: { liveCourseId: id } });
+      await tx.materialCategoryLiveCourse.deleteMany({ where: { liveCourseId: id } });
+      await tx.liveCourse.delete({ where: { id } });
+    }),
+
+  /**
+   * Mirror the material_categories JSON onto ws_material_category_live_course —
+   * the pivot client-material entitlement joins (course/package have the same
+   * shape). Replace-in-place, one transaction, so a re-save can never leave a
+   * half-written attachment set.
+   *
+   * The JSON column stays the admin read/write contract; this is the read model
+   * for entitlement only (same split as ws_video_category_relation).
+   */
+  syncMaterialCategoryPivot: (liveCourseId: number, refs: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(async (tx) => {
+      await tx.materialCategoryLiveCourse.deleteMany({ where: { liveCourseId } });
+      if (!refs.length) return;
+      const now = new Date();
+      await tx.materialCategoryLiveCourse.createMany({
+        data: refs.map((r) => ({ liveCourseId, materialCategoryId: r.categoryId, order: r.order, created_at: now, updated_at: now })),
+        skipDuplicates: true,
+      });
+    }),
+  setSchedule: (id: number, field: "scheduleFolders", value: any) =>
+    prisma.liveCourse.update({ where: { id }, data: { [field]: value, updatedAt: new Date() } as any }),
+
+  // ── plans ────────────────────────────────────────────────────────────────────
+  listPlans: (liveCourseId: number, skip?: number, take?: number) =>
+    prisma.liveCoursePlan.findMany({ where: { liveCourseId }, orderBy: [{ isDefault: "desc" }, { price: "asc" }, { id: "asc" }], skip, take }),
+  countPlans: (liveCourseId: number) => prisma.liveCoursePlan.count({ where: { liveCourseId } }),
+  findPlanById: (id: number) => prisma.liveCoursePlan.findUnique({ where: { id } }),
+  createPlan: (data: Prisma.LiveCoursePlanUncheckedCreateInput) => prisma.liveCoursePlan.create({ data }),
+  updatePlan: (id: number, data: Prisma.LiveCoursePlanUncheckedUpdateInput) => prisma.liveCoursePlan.update({ where: { id }, data }),
+  deletePlan: (id: number) => prisma.liveCoursePlan.delete({ where: { id } }),
+  clearDefaultPlans: (liveCourseId: number, exceptId?: number) =>
+    prisma.liveCoursePlan.updateMany({ where: { liveCourseId, isDefault: true, ...(exceptId ? { id: { not: exceptId } } : {}) }, data: { isDefault: false } }),
+  // NOTE: `verifiedSubCountForPlan` (paymentStatus:"verified" only) was the delete
+  // guard here until 2026-08-21 — a pending or failed order did not block the delete.
+  // Superseded by utils/planUsage, which counts every referencing row.
+
+  // ── subscriptions (Reports contract — docs/REPORTS_SUBSCRIPTIONS_ADMIN.md) ────
+  // The caller composes the final `where` (base filters AND a normalized-status
+  // fragment) with reportFilters.andWhere, then passes it here. amount/revenue =
+  // paid_amount; paymentMethod derives from razorpay_order_id presence.
+  buildSubBaseWhere: (opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput => buildSubWhere(opts),
+  // `order` is included because the report/export rows read payment off it — it is
+  // the only place paid_amount / razorpay ids / the code snapshots live since
+  // 2026-08-25. One extra JOIN, no N+1.
+  listSubsByWhere: (where: Prisma.LiveCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
+    prisma.liveCourseSubscription.findMany({ where, orderBy: subOrderBy(sortBy, sortDir), skip, take, include: { order: true } }),
+  // Keyset page for the UNBOUNDED export: id DESC, rows strictly older than the last
+  // id seen — no deep OFFSET, so the caller can walk the full filtered set (lakhs) in
+  // O(take) pages with no row cap. See the service export iterator.
+  listSubsPageKeyset: (where: Prisma.LiveCourseSubscriptionWhereInput, beforeId: number | undefined, take: number) =>
+    prisma.liveCourseSubscription.findMany({
+      where: beforeId ? { AND: [where, { id: { lt: beforeId } }] } : where,
+      orderBy: { id: "desc" },
+      take,
+      include: { order: true },
+    }),
+  /**
+   * Report summary: row count + revenue for a filtered set of subscriptions.
+   *
+   * The count still comes from the subscriptions (that is what the report lists);
+   * revenue comes from the ORDERS linked to them, the only place the charged amount
+   * lives since 2026-08-25. The pre-backfill half that summed the subscription's own
+   * (now dropped) column is gone.
+   *
+   * The column is `discount_price` (Prisma `amount`) since the table took the
+   * ws_package_course_order shape on 2026-08-27; the returned key stays `paidAmount`
+   * so the caller's DTO is untouched.
+   */
+  aggSubs: async (where: Prisma.LiveCourseSubscriptionWhereInput) => {
+    const [counted, fromOrders] = await Promise.all([
+      prisma.liveCourseSubscription.aggregate({ where, _count: { _all: true } }),
+      prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: where } }, _sum: { amount: true } }),
+    ]);
+    return {
+      _count: counted._count,
+      _sum: { paidAmount: fromOrders._sum.amount ?? 0 },
+    };
+  },
+  countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
+  // Customer search resolver (name / phone / EMAIL) → id set for the OR fragment.
+  customerIdsByText: async (q: string) =>
+    (await prisma.customer.findMany({ where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
+  findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
+
+  /**
+   * The customer who owns this subscription. Read BEFORE an admin revoke so the
+   * caller can flush that customer's per-user route cache — on delete the row is
+   * gone afterwards, so this cannot be resolved after the fact.
+   */
+  findSubscriptionCustomerId: (id: number) =>
+    prisma.liveCourseSubscription.findUnique({ where: { id }, select: { customerId: true } }),
+  createSubscription: (data: Prisma.LiveCourseSubscriptionUncheckedCreateInput) => prisma.liveCourseSubscription.create({ data }),
+  /**
+   * The order row behind an admin grant. Admin grants are recorded as a completed
+   * purchase like any other (2026-08-25): payment lives here, entitlement on the
+   * subscription, and each grant/extension is its own order.
+   */
+  createOrder: (data: Prisma.LiveCourseOrderUncheckedCreateInput) => prisma.liveCourseOrder.create({ data }),
+  /** The material kit configured on a live course → the subscription's pc_material_id. */
+  liveCourseMaterialKit: (id: number) =>
+    prisma.liveCourse.findFirst({ where: { id }, select: { pcMaterialId: true } }),
+  /** Payment rows behind a page of subscriptions (admin DTO / report hydration). */
+  ordersByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourseOrder.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
+  updateOrder: (id: number, data: Prisma.LiveCourseOrderUncheckedUpdateInput) =>
+    prisma.liveCourseOrder.update({ where: { id }, data }),
+  updateSubscription: (id: number, data: Prisma.LiveCourseSubscriptionUncheckedUpdateInput) => prisma.liveCourseSubscription.update({ where: { id }, data }),
+  deleteSubscription: (id: number) => prisma.liveCourseSubscription.delete({ where: { id } }),
+  /**
+   * The customer's current entitlement for this live course (latest endAt), read to
+   * place a grant's start date. No `payment_status` filter: since 2026-08-25 a
+   * subscription row only exists for a paid order, and the backfill deactivated the
+   * legacy rows that were never verified — `status` is the entitlement gate now.
+   */
+  findActiveSubscription: (customerId: number, liveCourseId: number, now: Date) =>
+    prisma.liveCourseSubscription.findFirst({
+      where: { customerId, liveCourseId, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
+      orderBy: { endAt: "desc" },
+    }),
+
+  // ── customer hydration (subscription list/get) ───────────────────────────────
+  customersByIds: (ids: number[]) =>
+    ids.length ? prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }) : Promise.resolve([]),
+  customerExists: (id: number) => prisma.customer.findUnique({ where: { id }, select: { id: true } }),
+  // `educatorId` feeds the report's Educator Name column (→ educatorsByIds).
+  coursesByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, educatorId: true } }) : Promise.resolve([]),
+  plansByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
+
+  // ── report-column hydration (Live Course Report) ─────────────────────────────
+  // One batched lookup each, mirroring admin-subscription.repository so the two
+  // reports resolve the same columns from the same tables in the same way.
+  //  ws_live_course.educator_id → Educator Name
+  educatorsByIds: (ids: number[]) =>
+    ids.length ? prisma.courseEducator.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : Promise.resolve([]),
+  //  subscription.shipping → Address / City / Pincode.
+  //
+  //  ⚠ By column contract this is a ws_customer_shipping.id, and that is what the
+  //  package path snapshots (resolveShippingIdForAddress). The LIVE-COURSE checkout
+  //  never got that fix: live-course-payment.controller validates the incoming id
+  //  against the ADDRESS BOOK (customerAddressRepository.findActiveOwned) and stores
+  //  it raw, so live-course rows written to date hold a ws_customer_address.id. The
+  //  two tables are disjoint id spaces, so a shipping-only lookup silently misses and
+  //  the report's Address/City/Pincode came back blank on exactly the rows that HAVE
+  //  an address. Both tables carry identical columns, so the reader tries shipping
+  //  first and falls back to the address book — see resolveReportAddresses.
+  //
+  //  `userId` is selected so the caller can verify the row belongs to the
+  //  subscription's customer: the id spaces are disjoint today but nothing enforces
+  //  that, and a collision must never surface another customer's address.
+  shippingsByIds: (ids: number[]) =>
+    ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, userId: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
+  //  Fallback for the above — same columns, address-book table.
+  addressesByIds: (ids: number[]) =>
+    ids.length ? prisma.customerAddress.findMany({ where: { id: { in: ids } }, select: { id: true, userId: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
+  //  subscription.created_by → admin/staff name (Activated By); ws_users PK is BigInt.
+  adminUsersByIds: (ids: number[]) =>
+    ids.length ? prisma.adminUser.findMany({ where: { id: { in: ids.map((i) => BigInt(i)) } }, select: { id: true, firstName: true, lastName: true } }) : Promise.resolve([]),
+
+  // ── sessions for a course (many-to-many join) ────────────────────────────────
+  sessionsForCourse: async (liveCourseId: number, opts: { status?: string; upcoming?: boolean; search?: string; now: Date; skip: number; take: number }) => {
+    const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId }, select: { liveSessionId: true } });
+    const ids = links.map((l) => l.liveSessionId);
+    if (!ids.length) return { rows: [], total: 0 };
+    const where: Prisma.LiveSessionWhereInput = { id: { in: ids } };
+    if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
+    else if (opts.status) where.status = opts.status;
+    const search = buildPrismaPrefixSearch(opts.search, ["title"]);
+    if (search) Object.assign(where, search);
+    const [rows, total] = await Promise.all([
+      prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
+      prisma.liveSession.count({ where }),
+    ]);
+    return { rows, total };
+  },
+
+  // ── client course reads ──────────────────────────────────────────────────────
+  /** Active courses (status:true) with optional name search + optional startTime-future + optional category. */
+  listClientCourses: (opts: { search?: string; upcomingOnly?: boolean; packageCategoryId?: number; now: Date; sort: "ordered" | "startTime"; skip: number; take: number }) => {
+    const where = clientCourseWhere(opts);
+    return prisma.liveCourse.findMany({ where, orderBy: opts.sort === "startTime" ? [{ startTime: "asc" }, { ordered: "asc" }] : [{ ordered: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take });
+  },
+  countClientCourses: (opts: { search?: string; upcomingOnly?: boolean; packageCategoryId?: number; now: Date }) =>
+    prisma.liveCourse.count({ where: clientCourseWhere(opts) }),
+  coursesByIdsActive: (ids: number[]) =>
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids }, status: true }, orderBy: [{ ordered: "asc" }, { createdAt: "asc" }] }) : Promise.resolve([]),
+  activePlansForCourses: (ids: number[]) =>
+    ids.length ? prisma.liveCoursePlan.findMany({ where: { liveCourseId: { in: ids }, status: true }, orderBy: { price: "asc" } }) : Promise.resolve([]),
+  /** Per-category upcoming-batch counts (tab bar). */
+  upcomingCategoryCounts: async (now: Date): Promise<Map<number, number>> => {
+    const rows = await prisma.liveCourse.groupBy({ by: ["packageCategoryId"], where: { status: true, startTime: { gte: now }, packageCategoryId: { not: null } }, _count: { _all: true } });
+    return new Map(rows.filter((r) => r.packageCategoryId != null).map((r) => [r.packageCategoryId as number, r._count._all]));
+  },
+
+  /** PackageCategory details (title/slug/image) for the tab bar. */
+  packageCategoriesByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.packageCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, slug: true, image: true } })
+      : Promise.resolve([] as { id: number; title: string; slug: string; image: string | null }[]),
+
+  /** Cross-course session feeds. ids = the courses the customer can see. */
+  sessionsForCourses: async (courseIds: number[], opts: { upcoming?: boolean; liveNow?: boolean; search?: string; now: Date; skip: number; take: number }) => {
+    if (!courseIds.length) return { rows: [], total: 0, courseBySession: new Map<number, number[]>() };
+    const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: { in: courseIds } }, select: { liveSessionId: true, liveCourseId: true } });
+    const sessionIds = [...new Set(links.map((l) => l.liveSessionId))];
+    if (!sessionIds.length) return { rows: [], total: 0, courseBySession: new Map<number, number[]>() };
+    const courseBySession = new Map<number, number[]>();
+    for (const l of links) { const a = courseBySession.get(l.liveSessionId) ?? []; a.push(l.liveCourseId); courseBySession.set(l.liveSessionId, a); }
+    const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds } };
+    if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
+    else if (opts.liveNow) where.status = "CREATED"; // "live now" = CREATED (mirrors Mongo)
+    const search = buildPrismaSearch(opts.search, ["title"]);
+    if (search) Object.assign(where, search);
+    const [rows, total] = await Promise.all([
+      prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
+      prisma.liveSession.count({ where }),
+    ]);
+    return { rows, total, courseBySession };
+  },
+
+  // ── entitlement (client reads) — all on migrated subscription/plan/course tables ──
+  // These three are ACTIVE-ENTITLEMENT reads, so they filter on `status` + the endAt
+  // window and no longer test payment at all: since 2026-08-25 a subscription row is
+  // written only for a completed order, and the backfill deactivated legacy rows that
+  // never verified. See LIVE_SUB_PURCHASED for the purchase-history counterpart.
+  /** Active subscriptions for a customer over a set of courses. */
+  activeSubsForCourses: (customerId: number, liveCourseIds: number[], now: Date) =>
+    liveCourseIds.length
+      ? prisma.liveCourseSubscription.findMany({
+          where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
+          select: { liveCourseId: true, endAt: true },
+        })
+      : Promise.resolve([]),
+  /** All a customer's active course ids (for "my courses" / owned set). */
+  ownedCourseIds: async (customerId: number, now: Date): Promise<number[]> => {
+    const rows = await prisma.liveCourseSubscription.findMany({
+      where: { customerId, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
+      select: { liveCourseId: true },
+    });
+    return [...new Set(rows.map((r) => r.liveCourseId))];
+  },
+  /**
+   * Active subscribers across a set of live courses — the reverse of
+   * activeSubsForCourses (all buyers, not one customer). Powers the "session went
+   * live" push fan-out. Returns one row per (customer, course); the caller dedups.
+   */
+  activeSubscribersForCourses: (liveCourseIds: number[], now: Date): Promise<{ customerId: number; liveCourseId: number }[]> =>
+    liveCourseIds.length
+      ? prisma.liveCourseSubscription.findMany({
+          where: { liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },
+          select: { customerId: true, liveCourseId: true },
+        })
+      : Promise.resolve([]),
+  /**
+   * Completed-purchase count per course (popularity ranking).
+   *
+   * Counted off the ORDER table since 2026-08-25. This is a SALES measure, and the
+   * count is unchanged by the move: the old read counted verified subscription rows
+   * INCLUDING the retired rows a fold left behind, so renewals were already in the
+   * total — they are simply their own order now instead of a retired row.
+   */
+  purchaseCounts: async (liveCourseIds: number[]): Promise<Map<number, number>> => {
+    if (!liveCourseIds.length) return new Map();
+    const rows = await prisma.liveCourseOrder.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: liveCourseIds }, status: "complete" }, _count: { _all: true } });
+    return new Map(rows.map((r) => [r.liveCourseId, r._count._all]));
+  },
+
+  // ── reminders (ws_live_session_reminder) — READ only on SQL (writes provision Mongo notifications) ──
+  remindersForCustomer: (customerId: number) =>
+    prisma.liveSessionReminder.findMany({ where: { customerId }, orderBy: { id: "desc" } }),
+  reminderForSession: (customerId: number, liveSessionId: number) =>
+    prisma.liveSessionReminder.findFirst({ where: { customerId, liveSessionId } }),
+  sessionsByIds: (ids: number[]) =>
+    ids.length ? prisma.liveSession.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
+  // liveClassId on chat/ban rows is a LiveSession Streamos `streamId` string.
+  sessionsByStreamIds: (streamIds: string[]) =>
+    streamIds.length
+      ? prisma.liveSession.findMany({
+          where: { streamId: { in: streamIds } },
+          select: { id: true, streamId: true, title: true, subject: true, scheduledAt: true, status: true },
+        })
+      : Promise.resolve([]),
+
+  // ── chat (ws_live_chat_message / ws_live_chat_ban) ──────────────────────────
+  // `filter` narrows the listing to ONE chat mode, and for a private listing to
+  // one viewer's thread. Both are optional so the unfiltered call still returns
+  // every mode, which is what the admin history endpoint wants by default.
+  //   isPrivate  — the mode the message was sent under (is_private column).
+  //   viewerId   — restrict to rows this customer may see. Omit for the host,
+  //                who sees the whole private thread.
+  //
+  // A viewer's private listing is three things, not one:
+  //   1. their own messages
+  //   2. host replies ADDRESSED to them (target_customer_id = them)
+  //   3. host messages addressed to NOBODY (is_admin + target NULL) — the host
+  //      talking to the class. Private hides students from each other; it does
+  //      not hide the host from the class.
+  // A host reply addressed to someone else is excluded by all three, which is
+  // what stops one student reading another's thread.
+  chatHistory: (
+    liveClassId: string,
+    limit: number,
+    before?: Date,
+    filter?: { isPrivate?: boolean; viewerId?: number | null }
+  ) =>
+    prisma.liveChatMessage.findMany({
+      where: {
+        liveClassId,
+        deletedAt: null,
+        ...(filter?.isPrivate !== undefined ? { isPrivate: filter.isPrivate } : {}),
+        ...(filter?.viewerId != null
+          ? {
+              OR: [
+                { customerId: filter.viewerId },
+                { targetCustomerId: filter.viewerId },
+                { isAdmin: true, targetCustomerId: null },
+              ],
+            }
+          : {}),
+        ...(before ? { createdAt: { lt: before } } : {}),
+      },
+      orderBy: { createdAt: "desc" }, take: limit,
+    }),
+  chatBanForCustomer: (customerId: number) => prisma.liveChatBan.findFirst({ where: { customerId } }),
+  listChatBans: () => prisma.liveChatBan.findMany({ orderBy: { id: "desc" } }),
+  findChatMessage: (id: number) => prisma.liveChatMessage.findUnique({ where: { id } }),
+  createChatMessage: (data: Prisma.LiveChatMessageUncheckedCreateInput) => prisma.liveChatMessage.create({ data }),
+  softDeleteChatMessage: (id: number, deletedBy: number | null) =>
+    prisma.liveChatMessage.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date(), deletedBy, updatedAt: new Date() } }),
+  banCustomer: (liveClassId: string, customerId: number, bannedBy: number | null, reason: string | null) =>
+    prisma.liveChatBan.create({ data: { liveClassId, customerId, bannedBy, reason, createdAt: new Date(), updatedAt: new Date() } }),
+  unbanCustomer: (customerId: number) => prisma.liveChatBan.deleteMany({ where: { customerId } }),
+
+  // ── chat settings (ws_live_chat_setting) — per-liveClassId toggles ──────────
+  chatSettingFor: (liveClassId: string) => prisma.liveChatSetting.findUnique({ where: { liveClassId } }),
+  upsertChatSetting: (liveClassId: string, data: { chatEnabled?: boolean; privateChat?: boolean }) => {
+    const now = new Date();
+    return prisma.liveChatSetting.upsert({
+      where: { liveClassId },
+      create: {
+        liveClassId,
+        chatEnabled: data.chatEnabled ?? true,
+        privateChat: data.privateChat ?? false,
+        createdAt: now,
+        updatedAt: now,
+      },
+      update: {
+        ...(data.chatEnabled !== undefined ? { chatEnabled: data.chatEnabled } : {}),
+        ...(data.privateChat !== undefined ? { privateChat: data.privateChat } : {}),
+        updatedAt: now,
+      },
+    });
+  },
+
+  // ── polls (ws_live_poll / ws_live_poll_option / ws_live_poll_vote) ──────────
+  activePoll: (liveClassId: string) => prisma.livePoll.findFirst({ where: { liveClassId, isActive: true } }),
+  pollsByClass: (liveClassId: string) => prisma.livePoll.findMany({ where: { liveClassId }, orderBy: { id: "desc" } }),
+  findPoll: (id: number) => prisma.livePoll.findUnique({ where: { id } }),
+  pollOptions: (pollId: number) => prisma.livePollOption.findMany({ where: { pollId }, orderBy: { optionIndex: "asc" } }),
+  pollVoteFor: (pollId: number, customerId: number) => prisma.livePollVote.findFirst({ where: { pollId, customerId } }),
+  pollOptionAt: (pollId: number, optionIndex: number) => prisma.livePollOption.findFirst({ where: { pollId, optionIndex } }),
+  /**
+   * Re-votable poll: a customer may change their vote any number of times, but
+   * still counts once (the @@unique uq_lpv row is MOVED, not duplicated). First
+   * vote → insert + bump new option + bump totalVotes. Change to another option →
+   * old option −1, new option +1, totalVotes unchanged (still = distinct voters).
+   * Same option → no-op. All atomic in one transaction.
+   */
+  upsertPollVote: (pollId: number, customerId: number, optionIndex: number) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const existing = await tx.livePollVote.findFirst({ where: { pollId, customerId } });
+      if (!existing) {
+        await tx.livePollVote.create({ data: { pollId, customerId, optionIndex, createdAt: now, updatedAt: now } });
+        await tx.livePollOption.updateMany({ where: { pollId, optionIndex }, data: { votes: { increment: 1 } } });
+        await tx.livePoll.update({ where: { id: pollId }, data: { totalVotes: { increment: 1 }, updatedAt: now } });
+        return;
+      }
+      if (existing.optionIndex === optionIndex) return; // same choice — nothing to move
+      await tx.livePollVote.update({ where: { id: existing.id }, data: { optionIndex, updatedAt: now } });
+      await tx.livePollOption.updateMany({ where: { pollId, optionIndex: existing.optionIndex }, data: { votes: { decrement: 1 } } });
+      await tx.livePollOption.updateMany({ where: { pollId, optionIndex }, data: { votes: { increment: 1 } } });
+      await tx.livePoll.update({ where: { id: pollId }, data: { updatedAt: now } });
+    }),
+  createPollWithOptions: (poll: Prisma.LivePollUncheckedCreateInput, options: Array<{ text: string; votes: number }>) =>
+    prisma.$transaction(async (tx) => {
+      const created = await tx.livePoll.create({ data: poll });
+      if (options.length) await tx.livePollOption.createMany({ data: options.map((o, i) => ({ pollId: created.id, optionIndex: i, text: o.text, votes: o.votes })) });
+      return created;
+    }),
+  updatePoll: (id: number, data: Prisma.LivePollUncheckedUpdateInput) => prisma.livePoll.update({ where: { id }, data }),
+  /**
+   * Edit a poll's question and/or replace its options atomically. Options live in
+   * the separate ws_live_poll_option table (not embedded JSON), so "replace
+   * options" = deleteMany + createMany inside a transaction, re-indexing from 0.
+   * Only called after the service confirms the poll is active with 0 votes.
+   */
+  updatePollWithOptions: (id: number, patch: { question?: string; options?: Array<{ text: string; votes: number }> }) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const data: Prisma.LivePollUncheckedUpdateInput = { updatedAt: now };
+      if (patch.question !== undefined) data.question = patch.question;
+      const updated = await tx.livePoll.update({ where: { id }, data });
+      if (patch.options !== undefined) {
+        await tx.livePollOption.deleteMany({ where: { pollId: id } });
+        if (patch.options.length) await tx.livePollOption.createMany({ data: patch.options.map((o, i) => ({ pollId: id, optionIndex: i, text: o.text, votes: o.votes })) });
+      }
+      return updated;
+    }),
+  closePoll: (id: number) => prisma.livePoll.update({ where: { id }, data: { isActive: false, closedAt: new Date(), updatedAt: new Date() } }),
+  deletePoll: (id: number) =>
+    prisma.$transaction(async (tx) => {
+      await tx.livePollOption.deleteMany({ where: { pollId: id } });
+      await tx.livePollVote.deleteMany({ where: { pollId: id } });
+      await tx.livePoll.delete({ where: { id } });
+    }),
+};
+
+function buildWhere(opts: { search?: string; status?: boolean }): Prisma.LiveCourseWhereInput {
+  const where: Prisma.LiveCourseWhereInput = {};
+  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
+  if (opts.status !== undefined) where.status = opts.status;
+  return where;
+}
+
+function clientCourseWhere(opts: { search?: string; upcomingOnly?: boolean; packageCategoryId?: number; now: Date }): Prisma.LiveCourseWhereInput {
+  const where: Prisma.LiveCourseWhereInput = { status: true };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
+  if (opts.upcomingOnly) where.startTime = { gte: opts.now };
+  if (opts.packageCategoryId !== undefined) where.packageCategoryId = opts.packageCategoryId;
+  return where;
+}
+
+export interface SubReportFilter {
+  customerId?: number; liveCourseId?: number;
+  paymentMethod?: "online" | "backend";
+  fromDate?: Date; toDate?: Date;
+  // Report export bounds: startAt >= startFrom, endAt <= endTo (distinct from the
+  // createdAt fromDate/toDate range used by the list's default date filter).
+  startFrom?: Date; endTo?: Date;
+  customerIdsIn?: number[];
+}
+
+// `amount` sorts through the ORDER — paid_amount left the subscription on
+// 2026-08-25. Everything else is still a column on the subscription itself.
+function subOrderBy(sortBy: string, sortDir: "asc" | "desc"): Prisma.LiveCourseSubscriptionOrderByWithRelationInput {
+  if (sortBy === "startAt" || sortBy === "start_at") return { startAt: sortDir };
+  if (sortBy === "endAt" || sortBy === "end_at") return { endAt: sortDir };
+  if (sortBy === "amount") return { order: { amount: sortDir } };
+  return { createdAt: sortDir };
+}
+
+// Base where for the reports list: everything EXCEPT the normalized status
+// (status is applied by the service via reportFilters.statusWhere + andWhere,
+// because "active" carries its own OR that must not collide with the search OR).
+// paymentMethod: online = razorpay_order_id present; backend = admin grant (null).
+function buildSubWhere(opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput {
+  const where: Prisma.LiveCourseSubscriptionWhereInput = {};
+  if (opts.customerId !== undefined) where.customerId = opts.customerId;
+  if (opts.liveCourseId !== undefined) where.liveCourseId = opts.liveCourseId;
+  // razorpay_order_id lives on the ORDER since 2026-08-25. A relation filter on an
+  // optional to-one also requires the order to exist, which is the intent: an
+  // unlinked row has no payment method to report either way.
+  if (opts.paymentMethod === "online") where.order = { razorpayOrderId: { not: null } };
+  else if (opts.paymentMethod === "backend") where.order = { razorpayOrderId: null };
+  if (opts.fromDate || opts.toDate) {
+    where.createdAt = {};
+    if (opts.fromDate) where.createdAt.gte = opts.fromDate;
+    if (opts.toDate) where.createdAt.lte = opts.toDate;
+  }
+  if (opts.startFrom) where.startAt = { gte: opts.startFrom };
+  if (opts.endTo) where.endAt = { lte: opts.endTo };
+  // cross-table search OR (customer name/phone/email id membership).
+  const or: Prisma.LiveCourseSubscriptionWhereInput[] = [];
+  if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
+  if (or.length) where.OR = or;
+  return where;
+}
+
+void courseInclude;

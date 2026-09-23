@@ -1,0 +1,52 @@
+services:
+  ws-mysql:
+    image: mysql:8.0
+    container_name: ws-mysql
+    ports:
+      # Bind to localhost only — avoids clashes with other projects on shared dev hosts.
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-websankul_dev}
+      MYSQL_DATABASE: websankul_staging
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      - socket-network
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  ws-redis:
+    image: redis:alpine
+    container_name: ws-redis
+    ports:
+      # Localhost-only publish; pair with REDIS_PASSWORD in production-like dev.
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: always
+    networks:
+      - socket-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  socket-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:

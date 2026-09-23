@@ -1,0 +1,196 @@
+import { Request, Response } from "express";
+import { z } from "zod";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
+import { resolveWalletUsage } from "../../modules/referral/referral.service";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
+import logger from "../../utils/logger";
+import { formatZodError } from "../../utils/httpResponse";
+import { ZodError } from "zod";
+import {
+  createEbookOrderMysql,
+  findEbookPlanForOrder,
+} from "../../modules/ebook-order/ebook-order.service";
+import { findActiveEbookById } from "../../modules/catalog-ebook/catalog-ebook.service";
+
+/** Non-null Razorpay client (the controller has already null-checked it). */
+type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
+
+// MySQL ebook write path: the plan id is an INT (the migrated id-space). Accepts
+// the same optional promo code as the Mongo branch (ebooks are digital — no
+// delivery address).
+const createEbookOrderMysqlSchema = z.object({
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid eBook plan." })
+    .int("Please select a valid eBook plan.")
+    .positive("Please select a valid eBook plan."),
+  promocode: z
+    .string()
+    .trim()
+    .min(1, "Promo code cannot be empty. Remove it or enter a valid code.")
+    .optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
+});
+
+// POST /api/v1/client/payment/create-order/ebook
+// Creates an EbookOrder in PENDING status and a Razorpay order. /verify (or the
+// webhook) flips status to COMPLETE and provisions the EbookSubscription.
+export const createEbookOrderPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createEbookOrderPayment invoked", { traceId, path: req.originalUrl, customerId });
+
+  try {
+    if (!customerId) { logger.warn("createEbookOrderPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    const rp = getRazorpay();
+    if (!rp) {
+      logger.error("createEbookOrderPayment razorpay not configured", { traceId, customerId });
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay credentials not configured on the server.",
+      });
+    }
+
+    // C3 seam: coerce the string-typed token subject to the int customer id.
+    const customerIdInt = Number(customerId);
+    if (!Number.isInteger(customerIdInt)) {
+      logger.warn("createEbookOrderPayment[mysql] non-int customer id", { traceId, customerId });
+      return res.status(400).json({ success: false, message: "Invalid customer id." });
+    }
+    return createEbookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
+  } catch (e: any) {
+    if (e instanceof ZodError) {
+      logger.warn("createEbookOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
+    logger.error("createEbookOrderPayment failed", { traceId, customerId, error: e?.error?.description || e?.message, stack: e?.stack });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
+  }
+};
+
+// MySQL ebook create-order. Reads plan + ebook from MySQL, writes the pending
+// ws_ebook_order row, creates the Razorpay order, returns the SAME response shape
+// as the Mongo branch (ebookOrderId = the MySQL order id). /verify (ebook branch)
+// completes it. Contract-safe: the client only round-trips the razorpay order id.
+const createEbookOrderMysqlPath = async (
+  req: Request,
+  res: Response,
+  ctx: { traceId?: string; customerId: number; rp: RazorpayClient }
+) => {
+  const { traceId, customerId, rp } = ctx;
+  const { planId, promocode, coin } = createEbookOrderMysqlSchema.parse(req.body);
+
+  const plan = await findEbookPlanForOrder(planId);
+  if (!plan) {
+    logger.warn("createEbookOrderPayment[mysql] plan invalid/inactive", { traceId, customerId, planId });
+    return res.status(404).json({
+      success: false,
+      message: "This eBook plan is currently unavailable. Please choose another plan.",
+    });
+  }
+
+  const ebook = await findActiveEbookById(plan.ebookId);
+  if (!ebook) {
+    logger.warn("createEbookOrderPayment[mysql] ebook not found", { traceId, customerId, ebookId: plan.ebookId });
+    return res.status(404).json({ success: false, message: "Ebook not found or inactive." });
+  }
+
+  // Resolve the promo code (if any) against THIS ebook; charge the reduced
+  // amount. Re-validated here — the /promocodes/apply preview is never trusted.
+  let chargeAmount = plan.price;
+  let promocodeIdNum: number | null = null;
+  let originalAmount: number | null = null;
+  let discountAmount: number | null = null;
+  let referrerIdNum: number | null = null;
+  if (promocode) {
+    const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId, Number(customerId));
+    if (error || !result) {
+      logger.warn("createEbookOrderPayment[mysql] promo rejected", { traceId, customerId, promocode, error });
+      return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+    }
+    if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
+    chargeAmount = result.finalAmount;
+    const pid = Number(result.promo._id);
+    promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+    originalAmount = result.originalAmount;
+    discountAmount = result.discountAmount;
+    referrerIdNum = result.referrerId ?? null;
+  }
+
+  // Freeze the redeemed code into the order as the legacy snapshot OBJECT.
+  // ws_ebook_order has only a `promocode` column (no refferalcode), so whichever
+  // snapshot was built lands there and referrer_id tells the two kinds apart.
+  // promoter-data reads ebook commission off this column by JSON path.
+  const codeSnapshot = await buildOrderCodeSnapshots({
+    promocodeId: promocodeIdNum,
+    referrerId: referrerIdNum,
+    planId,
+  });
+  const codeJson = codeSnapshot.promocode ?? codeSnapshot.refferalcode;
+
+  // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
+  const walletUsage = await resolveWalletUsage(Number(customerId), coin, plan.price);
+  if (walletUsage.error) {
+    logger.warn("createEbookOrderPayment[mysql] wallet rejected", { traceId, customerId, coin, error: walletUsage.error });
+    return res.status(400).json({ success: false, message: walletUsage.error });
+  }
+  if (walletUsage.coin > 0) {
+    chargeAmount = chargeAmount - walletUsage.coin;
+    if (chargeAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
+  }
+
+  const receiptId = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const rzpOrder = await createRazorpayOrder(rp, {
+    amount: Math.round(chargeAmount * 100), // paise
+    currency: "INR",
+    receipt: receiptId,
+    notes: {
+      kind: "ebook",
+      ebookId: String(plan.ebookId),
+      planId: String(planId),
+      customerId: String(customerId),
+      ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}),
+    },
+  });
+
+  const { orderId } = await createEbookOrderMysql({
+    customerId,
+    planId,
+    orderPrice: chargeAmount,
+    razorpayOrderId: rzpOrder.id,
+    uniqueId: receiptId,
+    code: codeJson,
+    referrerId: referrerIdNum,
+    coin: walletUsage.coin,
+  });
+
+  logger.info("createEbookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+  return res.status(201).json({
+    success: true,
+    data: omit({
+      ebookOrderId: String(orderId),
+      receiptId,
+      razorpay: razorpayResponseFor(rzpOrder),
+      amountInRupees: chargeAmount,
+      ebook: {
+        _id: ebook._id,
+        name: ebook.name,
+      },
+      plan: {
+        _id: String(planId),
+        duration: plan.duration,
+        price: plan.price,
+      },
+      promo: promocodeIdNum
+        ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount }
+        : null,
+    }, PAYMENT_ORDER_ECHO_KEYS),
+  });
+};

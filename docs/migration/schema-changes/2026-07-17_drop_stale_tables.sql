@@ -1,0 +1,60 @@
+-- 2026-07-17 — Drop two stale tables: ws_user_inquiry + ws_live_course_category
+--
+-- Both established as unused by a full static audit of src/ (no Prisma accessor, no
+-- relation include, no raw-SQL mention) and both have ZERO inbound foreign keys.
+-- Local row counts at time of writing: both 0.
+--
+-- ws_live_course_category — architecturally SUPERSEDED, not merely unused. Live-course
+--   categories are stored as JSON on ws_live_course.material_categories / exam_categories
+--   and read via a local helper (client-catalog.service.ts:61 `liveCourseCategoryIds` —
+--   a function name, NOT the prisma.liveCourseCategory accessor). This table is the road
+--   not taken; nothing ever wrote to it. Its `LiveCourseCategory` model is removed from
+--   schema.prisma in the same change.
+--
+-- ws_user_inquiry — a contact/inquiry form table holding PERSONAL DATA (name, email,
+--   phone, city, dob, gender, education, inquiryFor). Never modelled in schema.prisma,
+--   no code path touches it. Latin1 charset + camelCase columns = pre-migration legacy.
+--
+--   ⚠ BEFORE RUNNING ON STAGING/PROD: check `SELECT COUNT(*) FROM ws_user_inquiry`.
+--   "No code reads it" is NOT "no data in it" — a lead-capture table like this is
+--   commonly read by hand (exports / phpMyAdmin) by sales. If prod has rows, EXPORT
+--   THEM FIRST and confirm with the business before dropping. Dropping this table on
+--   prod without that check could destroy real customer leads irrecoverably.
+--
+-- Rollback: the exact CREATE statements are recorded at the bottom of this file.
+-- They restore STRUCTURE ONLY — dropped rows are NOT recoverable from here. Take a
+-- backup/export before running this anywhere with data.
+
+DROP TABLE IF EXISTS `ws_user_inquiry`;
+DROP TABLE IF EXISTS `ws_live_course_category`;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ROLLBACK (structure only — captured from local before the drop, 2026-07-17)
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- CREATE TABLE `ws_user_inquiry` (
+--   `id` int NOT NULL AUTO_INCREMENT,
+--   `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+--   `email` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+--   `phone` bigint NOT NULL,
+--   `city` varchar(50) NOT NULL,
+--   `dob` varchar(11) NOT NULL,
+--   `gender` varchar(10) NOT NULL,
+--   `education` varchar(50) NOT NULL,
+--   `inquiryFor` varchar(250) NOT NULL,
+--   `createdAt` datetime NOT NULL,
+--   PRIMARY KEY (`id`)
+-- ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+--
+-- CREATE TABLE `ws_live_course_category` (
+--   `id` int NOT NULL AUTO_INCREMENT,
+--   `name` varchar(255) NOT NULL,
+--   `slug` varchar(255) DEFAULT NULL,
+--   `image` varchar(500) DEFAULT NULL,
+--   `parent` int NOT NULL DEFAULT '0',
+--   `order_by` int NOT NULL DEFAULT '0',
+--   `status` tinyint(1) NOT NULL DEFAULT '1',
+--   `created_at` timestamp NULL DEFAULT NULL,
+--   `updated_at` timestamp NULL DEFAULT NULL,
+--   PRIMARY KEY (`id`)
+-- ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -1,93 +1,830 @@
-# Websankul Backend
+# WebSankul API
 
+A comprehensive REST API for the WebSankul online education platform, providing services for course management, e-learning content delivery, live classes, examination systems, e-commerce functionality, and student management. Built on Node.js + TypeScript with Express 5, MySQL (Prisma), Socket.IO, Redis (BullMQ), and AWS S3.
 
+## ⚠️ Temporary — Tasks to be Turned ON Once Testing Ends
 
-## Getting started
+> **This section is temporary.** The items below are intentionally disabled/relaxed for the testing phase. Re-enable them before going to production, then delete this section.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+1. **Re-enable single-device enforcement** — turn it back on for **both** the Login flow and the Socket connection (currently relaxed to allow concurrent test sessions).
+2. **Turn ON the rate limiter** — restore global + admin + auth rate-limiting tiers (currently disabled/bypassed for testing).
+3. **Switch to real OTP** — remove the testing OTP bypass and the whitelisted test phone numbers; restore live 2Factor OTP delivery.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 📋 Table of Contents
 
-## Add your files
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Database Setup](#database-setup)
+- [Running the Application](#running-the-application)
+- [API Documentation](#api-documentation)
+- [Authentication](#authentication)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## ✨ Features
+
+- **🎓 Course Management**: Courses, subjects, lectures, videos, materials, and folders
+- **📡 Live Classes**: Live courses, live sessions, live chat, live polls, live reminders (Socket.IO + HLS)
+- **📚 Digital Content**: E-books, lecture notes, lecture audio notes, downloadable materials
+- **📖 Physical Products**: Book ordering, shipping, and tracking
+- **✅ Examination System**: Quizzes, test series, exam countdowns, and analytics
+- **📦 Package System**: Bundled course/ebook/test offerings with plans
+- **💳 Payment Integration**: Razorpay payments and payout webhooks
+- **👥 User Management**: Students, educators, promoters, administrators with role-based access
+- **🔔 Notifications**: Push notifications via Firebase Admin + image notifications
+- **🎯 Referral Program**: Student referral, rewards, and bank-account payouts
+- **🔗 Deep Linking**: iOS Universal Links / Android App Links + share URL generation
+- **🔍 Search**: Unified search across courses, ebooks, materials, and exams
+- **🔐 Security**: JWT auth, Helmet, CORS allowlist, rate limiting (global + admin + auth tiers)
+- **⚡ Caching & Queues**: Redis caching, BullMQ background workers, Socket.IO Redis adapter
+- **📊 Observability**: Winston logging (daily rotate), Prometheus `/metrics`, crash reporter with Redis-throttled emails
+- **🗂️ File Storage**: AWS S3 via multer-s3 (uploads), PDFKit for invoices, Puppeteer for rendering
+
+## 📦 Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **Node.js**: >= 18.x (recommended 20+)
+- **Yarn**: >= 1.22 (this project uses Yarn, not npm)
+- **Docker + Docker Compose**: to run the bundled MySQL (and optionally Redis) locally
+- **MySQL**: 8.x (provided via `docker compose ws-mysql` on host port **3307**, or your own instance)
+- **Redis**: >= 6.x (required for rate-limiting, BullMQ, Socket.IO adapter, crash throttle)
+- **Git**: For version control
+
+> **Note:** The platform is **MySQL-only via Prisma**. MongoDB has been fully removed — there is no `MONGODB_URI` any more.
+
+## 🚀 Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone git@gitlab.com:websankul1/websankul-backend.git
+cd new-web-sankul
+```
+
+### 2. Install Dependencies
+
+```bash
+yarn install
+```
+
+### 3. Create your `.env`
+
+Copy the example and fill in the values (see [Configuration](#configuration)):
+
+```bash
+cp .env.example .env
+```
+
+### 4. Start MySQL and generate the Prisma client
+
+```bash
+yarn db:up            # starts the ws-mysql container (host port 3307)
+yarn prisma:generate  # generates the Prisma client from schema.prisma
+```
+
+### 5. Build TypeScript (optional, for prod)
+
+```bash
+yarn build
+```
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+Create a `.env` file in the root directory. Use `.env.example` as a template:
+
+```bash
+cp .env.example .env
+```
+
+#### Required Environment Variables:
+
+```bash
+# Node Environment
+NODE_ENV=development
+PORT=2206
+
+# Database (MySQL via Prisma — required in every environment)
+# When using the bundled docker compose ws-mysql (host port 3307):
+DATABASE_URL=mysql://root:your_root_password@127.0.0.1:3307/websankul
+MYSQL_ROOT_PASSWORD=your_root_password
+
+# JWT (both secrets required — boot fails if missing)
+JWT_ACCESS_SECRET=your_jwt_access_secret
+JWT_REFRESH_SECRET=your_jwt_refresh_secret
+
+# CORS (CSV of allowed origins — REQUIRED in production)
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_USERNAME=
+REDIS_PASSWORD=
+
+# AWS S3 (file uploads)
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_S3_BUCKET=your_bucket_name
+
+# Razorpay
+RAZORPAY_KEY_ID=your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
+RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+
+# Firebase Admin (push notifications)
+FIREBASE_SERVICE_ACCOUNT_PATH=./secrets/firebase-service-account.json
+
+# Mail (SMTP)
+MAIL_HOST=smtp.example.com
+MAIL_PORT=587
+MAIL_USER=your_email@example.com
+MAIL_PASSWORD=your_email_password
+
+# 2Factor OTP
+TWO_FACTOR_API_KEY=your_2factor_api_key
+
+# Metrics (Prometheus scrape token)
+METRICS_TOKEN=long_random_string
+
+# Deep Linking
+APP_SCHEME=websankul
+APP_UNIVERSAL_DOMAIN=https://your-domain.com
+```
+
+## 🗄️ Database Setup
+
+### 1. Start MySQL
+
+The repo ships a `docker-compose.yml` with an `ws-mysql` service (host port **3307**) and Redis:
+
+```bash
+yarn db:up      # start MySQL
+# yarn db:down  # stop it
+```
+
+Point `DATABASE_URL` at it (see Configuration). To use your own MySQL instead, just set `DATABASE_URL` accordingly.
+
+### 2. Generate the Prisma Client
+
+The Prisma schema is introspected from the `ws_*` database. After the DB is up:
+
+```bash
+yarn prisma:generate
+yarn db:verify        # sanity-check the MySQL connection
+```
+
+> Do **not** run `yarn db:pull` for small changes — it rewrites the hand-curated `schema.prisma`. Apply DDL from `docs/migration/schema-changes/*.sql`, then `yarn prisma:generate`.
+
+### 3. (Optional) Run Migrations / Backfills
+
+One-off scripts live in `scripts/`. Example:
+
+```bash
+yarn tsx scripts/apply-ddl.ts
+```
+
+## 🎯 Running the Application
+
+### Development Mode
+
+```bash
+yarn dev
+```
+
+The server starts on `http://localhost:2206/api` (or your configured PORT). `tsx watch` provides auto-reload.
+
+### Type Check
+
+```bash
+yarn typecheck
+```
+
+`yarn typecheck` is the project's only verification gate — run it before considering any change done.
+
+### Production Mode (PM2)
+
+```bash
+yarn build
+yarn start
+```
+
+Uses `ecosystem.config.cjs` to launch via PM2 in cluster mode.
+
+### CPU / Auto-scale Monitors
+
+```bash
+yarn monitor:cpu
+yarn monitor:scale
+```
+
+## 🔧 Redis Setup
+
+Redis is required for rate-limiting, BullMQ workers, Socket.IO multi-pod adapter, and the crash-reporter throttle. A sample `redis.conf` ships at the repo root.
+
+Quick start (macOS):
+
+```bash
+brew install redis
+redis-server redis.conf
+```
+
+Verify:
+
+```bash
+redis-cli ping
+# Should return: PONG
+```
+
+**Note**: For local development without auth, leave `REDIS_USERNAME` / `REDIS_PASSWORD` empty in your `.env`.
+
+## 📚 API Documentation
+
+### Base URL
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/websankul1/websankul-backend.git
-git branch -M main
-git push -uf origin main
+Development: http://localhost:2206/api/v1
+Staging:     https://staging.your-domain.com/api/v1
+Production:  https://api.your-domain.com/api/v1
 ```
 
-## Integrate with your tools
+### API Surfaces
 
-* [Set up project integrations](https://gitlab.com/websankul1/websankul-backend/-/settings/integrations)
+The API is split by **caller portal**, not by version. All routes live under `/api/v1`:
 
-## Collaborate with your team
+- **`/api/v1/client/*`**   Mobile App / Student Web Portal
+- **`/api/v1/admin/*`**    Admin React Dashboard
+- **`/api/v1/educator/*`** Educator Portal
+- **`/api/v1/promoter/*`** Promoter Portal
+- **`/api/v1/webhooks/*`** HMAC-verified inbound webhooks
+- **`/share/*`**           Public deep-link / share URLs (no auth)
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+---
 
-## Test and Deploy
+## 🔐 Authentication
 
-Use the built-in continuous integration in GitLab.
+All protected endpoints require a valid JWT in the Authorization header:
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```
+Authorization: Bearer <your_jwt_token>
+```
 
-***
+A refresh token is sent via the `x-refresh-token` header on rotation endpoints.
 
-# Editing this README
+### Authentication Flow (Client)
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+1. **Generate OTP**: `POST /api/v1/client/auth/otp/generate`
+2. **Validate OTP**: `POST /api/v1/client/auth/otp/validate`
+3. **Receive JWT + Refresh Token**
+4. **Refresh**: `POST /api/v1/client/auth/refresh`
 
-## Suggestions for a good README
+### Authentication Flow (Admin / Educator / Promoter)
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. **Login**: `POST /api/v1/{admin|educator|promoter}/auth/login`
+2. **Refresh**: `POST /api/v1/{admin|educator|promoter}/auth/refresh`
+3. **Logout**: `POST /api/v1/{admin|educator|promoter}/auth/logout`
 
-## Name
-Choose a self-explaining name for your project.
+> **Auth contract:** Every route under `/api/v1/admin/*` (except `/auth/login` and `/auth/refresh`) requires a Bearer token — enforced by a master `authenticate` middleware mounted in [admin.routes.ts](src/admin/admin.routes.ts). Per-domain routers additionally apply `requireRole(...)` for finer authorization.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+---
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## 📖 API Endpoints
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### Public Endpoints (No Authentication)
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```
+GET  /api                                           # API health check
+GET  /healthz                                       # Liveness probe
+GET  /readyz                                        # Readiness probe
+GET  /metrics                                       # Prometheus (token-gated)
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+GET  /.well-known/apple-app-site-association        # iOS Universal Links
+GET  /.well-known/assetlinks.json                   # Android App Links
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+GET  /share/*                                       # Deep-link share URLs
+POST /api/v1/webhooks/razorpay-payout               # HMAC-verified payout webhook
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+POST /api/v1/client/auth/otp/generate               # Generate OTP
+POST /api/v1/client/auth/otp/validate               # Validate OTP -> JWT
+POST /api/v1/{admin|educator|promoter}/auth/login   # Portal login
+POST /api/v1/{admin|educator|promoter}/auth/refresh # Refresh JWT
+```
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+---
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+### Client Routes (`/api/v1/client/*`)
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Mounted in [client.routes.ts](src/client/client.routes.ts).
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+##### **Auth & Profile**
+```
+POST   /api/v1/client/auth/*                # OTP, login, refresh, logout
+GET    /api/v1/client/profile               # Get current user profile
+PUT    /api/v1/client/profile               # Update profile
+```
 
-## License
-For open source projects, say how it is licensed.
+##### **Dashboard**
+```
+GET    /api/v1/client/dashboard             # Home dashboard (resume + recommendations)
+GET    /api/v1/client/free-dashboard        # Free-tier dashboard
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+##### **Goals**
+```
+GET    /api/v1/client/goals                 # List goals (exams the user is preparing for)
+```
+
+##### **Courses & Learning**
+```
+GET    /api/v1/client/courses               # List purchasable courses
+GET    /api/v1/client/courses/:id           # Course details + syllabus
+GET    /api/v1/client/learning/*            # Unified Resume-Learning feed + progress
+```
+
+##### **Live Classes**
+```
+GET    /api/v1/client/live-courses/*        # Live-course catalog + enrolment
+GET    /api/v1/client/live-sessions/:id     # Join a live stream
+GET    /api/v1/client/live-chat/:liveClassId/history
+GET    /api/v1/client/live-polls/:liveClassId/active
+POST   /api/v1/client/live-reminders/*      # Reminders for upcoming sessions
+```
+
+##### **Lectures, Notes & Materials**
+```
+GET    /api/v1/client/lecture-notes/*       # Lecture text notes
+GET    /api/v1/client/lecture-audio-notes/* # Audio notes
+GET    /api/v1/client/materials/*           # Study materials (grouped by lecture)
+GET    /api/v1/client/material-folders/*    # Folder browsing
+GET    /api/v1/client/video-folders/*       # Video folder browsing
+```
+
+##### **E-Books & Books**
+```
+GET    /api/v1/client/ebooks/*              # E-book catalog + reader
+GET    /api/v1/client/books/*               # Physical books + cart + orders
+```
+
+##### **Quizzes & Test Series**
+```
+GET    /api/v1/client/quizzes/*             # Quizzes (single exams)
+GET    /api/v1/client/test-series/*         # Test series (bundles)
+GET    /api/v1/client/exam-countdowns/*     # Countdown widgets
+```
+
+##### **Packages & Plans**
+```
+GET    /api/v1/client/packages/*            # Bundled offerings
+```
+
+##### **Cart, Payment & Orders**
+```
+GET    /api/v1/client/cart/*                # Unified cart
+POST   /api/v1/client/payment/*             # Razorpay order create / verify
+GET    /api/v1/client/orders/*              # Order history + invoices
+GET    /api/v1/client/purchase-history/*    # Detailed purchase ledger
+GET    /api/v1/client/my-subscriptions      # Active subscriptions
+POST   /api/v1/client/webhook/*             # Payment webhooks (client-side)
+GET    /api/v1/client/tracking              # Shipment tracking
+```
+
+##### **Address**
+```
+GET    /api/v1/client/address               # List addresses
+POST   /api/v1/client/address               # Add address
+PUT    /api/v1/client/address/:id           # Update
+DELETE /api/v1/client/address/:id           # Delete
+```
+
+##### **Promocodes**
+```
+POST   /api/v1/client/promocodes/validate   # Validate a code
+POST   /api/v1/client/promocodes/apply      # Apply to cart
+```
+
+##### **Referral**
+```
+GET    /api/v1/client/referral              # Program details + earnings
+GET    /api/v1/client/referral/transactions
+POST   /api/v1/client/referral/withdraw     # Payout to bank account
+```
+
+##### **Wishlist & Save**
+```
+GET    /api/v1/client/wishlist/*            # Wishlist items
+POST   /api/v1/client/save/answers          # Saved exam answers (legacy compat)
+```
+
+##### **Search & Categories**
+```
+GET    /api/v1/client/search                # Unified search
+GET    /api/v1/client/video-categories/:id/videos
+GET    /api/v1/client/material-categories/:id/materials
+GET    /api/v1/client/exam-categories/:id/exams
+```
+
+##### **Educators & Free Content**
+```
+GET    /api/v1/client/educators/*           # Educator profiles + their courses
+GET    /api/v1/client/free-tests            # Free quizzes
+GET    /api/v1/client/free-materials        # Free materials
+GET    /api/v1/client/free-videos           # Free videos
+```
+
+##### **Offline Centers, Inquiry & Notifications**
+```
+GET    /api/v1/client/offline/*             # Offline study centers
+POST   /api/v1/client/inquiry               # Submit inquiry
+POST   /api/v1/client/contactus             # Contact form
+GET    /api/v1/client/notifications         # User notifications
+GET    /api/v1/client/image-notifications   # Image banners
+```
+
+##### **CMS**
+```
+GET    /api/v1/client/faqs                  # FAQs
+GET    /api/v1/client/popup                 # Active popup
+GET    /api/v1/client/banners               # Home banners
+GET    /api/v1/client/testimonials          # Student testimonials
+GET    /api/v1/client/terms                 # Terms & conditions
+GET    /api/v1/client/version               # App version + force-update gate
+GET    /api/v1/client/upgrade               # Upgrade prompts
+```
+
+---
+
+### Admin Routes (`/api/v1/admin/*`)
+
+Mounted in [admin.routes.ts](src/admin/admin.routes.ts). All routes (except `/auth/login` and `/auth/refresh`) require Bearer auth and are metered by the admin rate-limiter.
+
+##### **Auth, Administrators, Roles & Permissions**
+```
+POST   /api/v1/admin/auth/login
+POST   /api/v1/admin/auth/refresh
+POST   /api/v1/admin/auth/logout
+GET    /api/v1/admin/administrators/*       # Admin user CRUD
+GET    /api/v1/admin/roles/*                # Role CRUD
+GET    /api/v1/admin/permissions/*          # Permission CRUD
+GET    /api/v1/admin/permission-categories/*
+GET    /api/v1/admin/guards                 # Permission catalog
+```
+
+##### **Catalog**
+```
+GET    /api/v1/admin/goals/*
+GET    /api/v1/admin/courses/*
+GET    /api/v1/admin/videos/*
+GET    /api/v1/admin/video-categories/*
+GET    /api/v1/admin/ebooks/*
+GET    /api/v1/admin/books/*
+GET    /api/v1/admin/materials/*
+GET    /api/v1/admin/quizzes/*              # Exams
+GET    /api/v1/admin/test-series/*
+GET    /api/v1/admin/packages/*
+GET    /api/v1/admin/plans/*                # Pricing plans (duration in days)
+GET    /api/v1/admin/master/*               # State / city / misc masters
+```
+
+##### **Live Classes**
+```
+GET    /api/v1/admin/live-sessions/*
+GET    /api/v1/admin/live-courses/*
+GET    /api/v1/admin/live-chat/*
+GET    /api/v1/admin/live-polls/*
+GET    /api/v1/admin/exam-countdowns/*
+```
+
+##### **Customers, Subscriptions & Referrals**
+```
+GET    /api/v1/admin/customers/*
+GET    /api/v1/admin/customer-masters/*     # Bulk customer master ops
+GET    /api/v1/admin/subscriptions/*
+GET    /api/v1/admin/referrals/*
+GET    /api/v1/admin/promoters/*
+```
+
+##### **Marketing & Operations**
+```
+GET    /api/v1/admin/promocodes/*
+GET    /api/v1/admin/cms/*                  # FAQs, banners, popups, testimonials, terms
+GET    /api/v1/admin/inquiries
+GET    /api/v1/admin/departments
+GET    /api/v1/admin/notifications/*
+GET    /api/v1/admin/offline/*
+GET    /api/v1/admin/tracking/*
+GET    /api/v1/admin/dashboard              # KPI dashboard
+GET    /api/v1/admin/address/states/*
+GET    /api/v1/admin/address/cities/*
+```
+
+---
+
+### Educator Routes (`/api/v1/educator/*`)
+
+Mounted in [educator.routes.ts](src/educator/educator.routes.ts).
+
+```
+POST   /api/v1/educator/auth/login
+GET    /api/v1/educator/dashboard           # Educator KPIs
+GET    /api/v1/educator/courses/*           # Their courses + lectures + uploads
+GET    /api/v1/educator/package/*           # Packages they belong to
+```
+
+---
+
+### Promoter Routes (`/api/v1/promoter/*`)
+
+Mounted in [promoter.routes.ts](src/promoter/promoter.routes.ts).
+
+```
+POST   /api/v1/promoter/auth/login
+GET    /api/v1/promoter/dashboard           # Earnings + referrals
+GET    /api/v1/promoter/customer/*          # Customers they brought in
+GET    /api/v1/promoter/promocode/*         # Their assigned codes
+GET    /api/v1/promoter/subscription/*      # Subscriptions tied to their codes
+```
+
+---
+
+### Deep Linking & Share (`/share/*`)
+
+Public, unauthenticated, rate-limit-light. Generates share URLs that resolve to the app via Universal Links / App Links. See [docs/DEEPLINKING_SHARE.md](docs/DEEPLINKING_SHARE.md) and [deeplinking.routes.ts](src/deeplinking/deeplinking.routes.ts).
+
+---
+
+## 📁 Project Structure
+
+```
+new-web-sankul/
+├── prisma/                          # schema.prisma (MySQL, ~121 ws_* models, introspected)
+├── src/
+│   ├── index.ts                     # Application entry point
+│   ├── app.ts                       # Express app, middleware & route mounting
+│   ├── client/                      # Client (mobile/web) API surface
+│   │   ├── client.routes.ts         # Master client router
+│   │   ├── auth/  profile/  dashboard/  course/  learning/
+│   │   ├── live/  live-course/  livechat/  livepoll/  live-reminder/
+│   │   ├── lecture-note/  lecture-audio-note/  material/  folder/
+│   │   ├── ebook/  book/  package/  testSeries/  exam/
+│   │   ├── cart/  payment/  orders/  purchase-history/  my-subscriptions/
+│   │   ├── address/  promocode/  referral/  save/  wishlist/
+│   │   ├── search/  categories/  educator/  free/
+│   │   ├── cms/  inquiry/  notification/  offline/  tracking/  webhook/
+│   │   ├── goal/  examCountdown/
+│   │   └── ... (40+ feature modules)
+│   ├── admin/                       # Admin dashboard API surface
+│   │   ├── admin.routes.ts          # Master admin router (enforces auth globally)
+│   │   ├── auth/  administrator/  role/  permission/  permissionCategory/  guards/
+│   │   ├── course/  video/  videoCategory/  ebook/  book/  material/
+│   │   ├── exam/  testSeries/  package/  plan/  promocode/
+│   │   ├── live/  live-course/  livechat/  livepoll/  examCountdown/
+│   │   ├── customer/  customer-master/  subscription/  referral/  promoter/
+│   │   ├── cms/  inquiry/  notification/  offline/  tracking/  dashboard/
+│   │   ├── address/  master/  goal/
+│   │   └── ... (35+ feature modules)
+│   ├── educator/                    # Educator portal API
+│   │   └── auth/  course/  dashboard/  package/
+│   ├── promoter/                    # Promoter portal API
+│   │   └── auth/  customer/  dashboard/  promocode/  subscription/
+│   ├── deeplinking/                 # Public share / deep-link routes
+│   ├── webhooks/                    # HMAC-verified inbound webhooks (Razorpay payout, ...)
+│   ├── socket/                      # Socket.IO server (live chat / polls / streaming)
+│   ├── modules/                     # MySQL/Prisma business logic (~80 modules)
+│   │   │                            # each: *.repository / *.service / *.transformer
+│   │   │                            #       / *.types / *.validation
+│   ├── middlewares/                 # authenticate, requireRole, errorHandler,
+│   │                                # notFound, metricsMiddleware, requestContext,
+│   │                                # health, validation
+│   ├── config/                      # env, prisma, redis, rateLimiter, storage, mail, etc.
+│   ├── libs/                        # Reusable libs (constants, helpers, validators)
+│   ├── utils/                       # logger, crashReporter, metrics, requestLogger,
+│   │                                # requestContext (AsyncLocalStorage)
+│   └── migrations/                  # Schema/data migration scripts
+├── scripts/                         # One-off backfills (e.g. backfill-lecture-progress-scope.ts)
+├── docs/                            # Internal docs (deeplinking, frontend specs, demos)
+├── public/                          # .well-known files (AASA, assetlinks.json)
+├── secrets/                         # Firebase service account, etc. (gitignored)
+├── logs/                            # Winston daily-rotate log files
+├── dist/                            # Compiled JS output (after `yarn build`)
+├── ecosystem.config.cjs             # PM2 cluster config (production)
+├── docker-compose.yml               # Local MySQL (ws-mysql, port 3307) + Redis stack
+├── redis.conf                       # Local Redis config
+├── tsconfig.json
+├── package.json
+└── README.md
+```
+
+## 🔍 Middleware
+
+### Authentication Middleware
+
+**`authenticate`** ([middlewares/authenticate.ts](src/middlewares/authenticate.ts)): Verifies the JWT Bearer token and attaches the user to `req`.
+
+```typescript
+// Usage in routes
+router.use(authenticate, adminLimiter);
+router.get("/protected", authenticate, controller.handler);
+```
+
+> **Auth required on all APIs** — every route (admin + client + educator + promoter) must require a Bearer token; routes are never public by default. Public exceptions (`/auth/login`, `/auth/refresh`, OTP generate/validate, webhooks, `/share`, `/healthz`) are explicit.
+
+### Authorization Middleware
+
+**`requireRole([roles])`**: Checks that the authenticated user holds the required role / permission. Used per-domain after `authenticate`.
+
+### Validation Middleware
+
+**`validate(schema)`**: Validates `req.body` / `req.query` / `req.params` against a Zod schema.
+
+### Rate Limiting
+
+Three tiers in [config/rateLimiter.ts](src/config/rateLimiter.ts):
+
+- **`globalLimiter`** — applied app-wide
+- **`adminLimiter`** — per-admin-id when authenticated, per-IP otherwise
+- **`authLimiter`** — stricter limits on login / OTP routes
+
+Redis-backed via `rate-limit-redis` so limits hold across PM2 / pod instances.
+
+### Observability Middleware
+
+- **`requestLogger`** — seeds a per-request `traceId`
+- **`requestContextMiddleware`** — AsyncLocalStorage scope so downstream code sees the same context
+- **`metricsMiddleware`** — Prometheus counters/histograms
+- **`captureCrashContextMiddleware`** — feeds the Redis-throttled crash reporter
+
+## 🎯 Database Models
+
+The application uses Prisma ORM with MySQL. Key tables (`ws_*`, mapped via `@@map`, accessed through Prisma) include:
+
+- **Customer** — student accounts (`customer/`)
+- **Course / CourseSubject / Lecture / LectureProgress** — course catalog + progress
+- **Video / VideoCategory / Material / Folder** — content + organization
+- **LiveCourse / LiveSession / LiveChat / LivePoll** — live classes
+- **Ebook / Book** — digital and physical book inventory
+- **Exam / TestSeries / ExamCountdown / ExamResult** — assessments
+- **Package / Plan** — bundles and pricing (`duration` is in **days**)
+- **Order / Payment / Subscription / PurchaseHistory** — commerce
+- **Address / Tracking** — shipping
+- **Promocode / Referral / BankAccount** — marketing & payouts
+- **Notification / ImageNotification / Popup / Banner / FAQ / Testimonial** — CMS & comms
+- **Administrator / Role / Permission / PermissionCategory** — RBAC
+- **Educator / Promoter** — portal users
+- **Goal / OfflineCenter / Inquiry** — misc domains
+
+## 🧪 Testing
+
+Run the type checker:
+
+```bash
+yarn typecheck
+```
+
+> `yarn typecheck` is the project's only verification gate. No automated test suite is configured yet — UI / behavior changes should be manually verified per the project's `/verify` workflow.
+
+## 📊 Monitoring
+
+### Health & Readiness
+
+- `GET /healthz` — liveness (always 200 if the process is up)
+- `GET /readyz` — readiness (checks MySQL + Redis)
+
+### Metrics
+
+- `GET /metrics` — Prometheus exposition; requires `Authorization: Bearer $METRICS_TOKEN`
+
+### Crash Reporting
+
+Crash reporter emails on unhandled errors, throttled via Redis to avoid email storms across pods.
+
+### Real-time (Socket.IO)
+
+The Socket.IO server lives in [src/socket/](src/socket/) and uses the Redis adapter so events fan out across PM2 cluster workers and pods. Used by:
+
+- Live chat (`/live-chat` namespace)
+- Live polls (`/live-polls`)
+- Live streaming (`/live-sessions` — HLS signaling + viewer counts)
+
+## 🐛 Troubleshooting
+
+### Port Already in Use
+
+```bash
+lsof -ti:2206 | xargs kill -9
+```
+
+### MySQL Connection Failed
+
+1. Check the MySQL container is running: `docker compose ps` (start it with `yarn db:up`)
+2. Verify `DATABASE_URL` in `.env` (host `127.0.0.1`, port **3307** for the bundled container)
+3. Confirm the database name in the connection string and that `MYSQL_ROOT_PASSWORD` matches
+4. Sanity-check the connection: `yarn db:verify`
+5. If Prisma errors about the client, run `yarn prisma:generate`
+
+### Redis Connection Failed
+
+1. Check Redis is running: `redis-cli ping` (expect `PONG`)
+2. Verify `REDIS_HOST` / `REDIS_PORT` / `REDIS_USERNAME` / `REDIS_PASSWORD`
+3. If running locally without auth, leave `REDIS_USERNAME` / `REDIS_PASSWORD` empty
+
+### CORS Blocked in Production
+
+`ALLOWED_ORIGINS` is **required** in production — the process exits at boot if it's unset. Add the exact origin (including scheme + port) to the CSV.
+
+### S3 Upload Errors
+
+1. Verify `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_BUCKET`
+2. Confirm the IAM user has `s3:PutObject` on the bucket
+3. Confirm `AWS_REGION` matches the bucket's region
+
+### Prisma Client Not Found
+
+```bash
+yarn prisma:generate
+```
+
+### OTP Not Sending
+
+1. Verify `TWO_FACTOR_API_KEY`
+2. Check 2Factor account balance / template approval
+3. Review `logs/` for upstream errors
+
+### Payment Gateway Issues
+
+1. Verify Razorpay key id + secret
+2. Confirm webhook URL + secret in the Razorpay dashboard match `RAZORPAY_WEBHOOK_SECRET`
+3. The payout webhook verifies HMAC against the raw body — body parsers preserve `req.rawBody`
+
+### Force-Update / Version Endpoint
+
+Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS `version` document — do not bump it via code.
+
+## 🔐 Security Best Practices
+
+- Never commit `.env` or `secrets/` to version control
+- Regularly run `yarn audit`
+- Rotate JWT secrets if exposed; refresh tokens have a separate secret
+- Keep `METRICS_TOKEN` long, random, and out of logs
+- Always set `ALLOWED_ORIGINS` in production (boot will fail otherwise)
+- Never disable Helmet globally — relax CSP per-route as done for `/demo`
+- Webhook endpoints must verify HMAC against `req.rawBody` — never trust signature claims in JSON
+- Monitor `/metrics` + `logs/` for anomalies
+
+## 📝 Environment-Specific Configuration
+
+### Development
+- `.env`, `yarn dev` (tsx watch), detailed logging, demo routes (`/demo/live-chat`, `/demo/live-course`) enabled
+
+### Staging
+- PM2 via `ecosystem.config.cjs`, moderate logging, real third-party endpoints with test credentials
+
+### Production
+- PM2 cluster mode, structured logging, Prometheus scraping, `ALLOWED_ORIGINS` enforced, demo routes disabled
+
+## 🚢 Deployment
+
+### Using PM2
+
+```bash
+yarn build
+yarn start                         # = pm2 start ecosystem.config.cjs
+```
+
+### PM2 Commands
+
+```bash
+pm2 logs                           # tail logs
+pm2 restart all
+pm2 stop all
+pm2 monit
+```
+
+### Docker (local stack)
+
+```bash
+docker compose up -d               # brings up MySQL (ws-mysql, port 3307) + Redis
+```
+
+## 📄 License
+
+ISC License — Copyright (c) WebSankul Developers
+
+## 👥 Authors
+
+**WebSankul Developers**
+
+## 🙋 Support
+
+For support and questions, please contact the development team or create an issue in the repository.
+
+---
+
+**Built with ❤️ for education**
+</content>
+</invoke>

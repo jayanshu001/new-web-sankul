@@ -1,0 +1,50 @@
+-- 2026-08-20 — Live-course subscriptions carry the promocode / referral SNAPSHOT OBJECT.
+--
+-- WHY: ws_live_course_subscription stored only `promocode_id` / `referrer_id` (bare
+-- ints). Nothing reads promocode_id for display, so the live-course subscription report
+-- renders its "Promocode" and "Promoter Name" columns as EMPTY STRINGS
+-- (admin-live-course.service.ts — buildSubExportRow / LIVE_SUB_EXPORT_COLUMNS), and
+-- live-course sales are invisible to promoter attribution (modules/promoter-data reads
+-- ws_package_course_order + ws_ebook_order only).
+--
+-- This mirrors ws_package_course_order.promocode / .refferalcode exactly (see the
+-- 2026-08-18 log entry): a purchase-time SNAPSHOT, not a join.
+--
+-- WHY A SNAPSHOT AND NOT A JOIN: promocode percentages are editable and plans get
+-- repriced. Commission and the reported discount must reflect the terms in force AT
+-- PURCHASE, so the rows are frozen into the subscription. A read-time join would
+-- retroactively rewrite historical reports whenever an admin edits a promocode.
+--
+-- COLUMNS KEPT, NOT REPLACED: `promocode_id` and `referrer_id` stay. `referrer_id` is
+-- load-bearing — `creditReferrer` reads it at payment-verify to credit referral coins
+-- (live-course-order.service.ts) — and ws_package_course_order likewise kept its
+-- `referrer_id` alongside the json. The json columns are ADDITIVE.
+--
+-- SHAPE: identical to ws_package_course_order's, so the same JSON paths resolve
+-- ($.promoterId, $.promocode, $.promotedPackageCourseEbook[0].promoterPercentage).
+-- The embedded plan carries an extra `liveCourseId` key because a live-course plan
+-- (ws_live_course_plan) has no ebook/course/package parent; those three keys stay
+-- present as 0, the legacy "not this entity" sentinel, so path reads never break.
+--
+-- ⚠ plan_kind: promocode→plan links for live courses are `plan_kind = 'livePlan'` in
+-- ws_promoted_package_course_ebook, whose `pcb_price_id` FK points at
+-- ws_package_course_ebook_price. The two plan tables SHARE an id space, so the
+-- snapshot builder must filter on plan_kind — matching on plan id alone would embed
+-- an unrelated course/package plan and pay out its promoter percentage.
+--
+-- NULLABLE, no default: additive and safe on a live table. Existing rows read as NULL
+-- until the backfill runs; the report renders "" for them exactly as it does today.
+--
+-- BACKFILL: scripts/backfill-live-course-code-snapshots.ts (dry-run by default)
+-- rebuilds the object from the existing promocode_id / referrer_id using the SAME
+-- builder as the live write path, so backfilled and new rows are identical.
+--
+-- ORDERING: apply this DDL BEFORE the code deploy. The current build never writes
+-- these columns, so adding them early is inert.
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-20_live_course_subscription_code_snapshot.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_live_course_subscription
+  ADD COLUMN promocode JSON NULL AFTER promocode_id,
+  ADD COLUMN refferalcode JSON NULL AFTER referrer_id;

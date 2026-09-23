@@ -1,0 +1,155 @@
+import { prisma } from "../../config/prisma";
+import { Prisma } from "@prisma/client";
+import type {
+  PromocodeSnapshot,
+  ReferralSnapshot,
+} from "../order-code-snapshot/order-code-snapshot.types";
+
+/**
+ * Prisma persistence for the ebook · order WRITE branch (Phase 3b). Tables:
+ * `ws_ebook_order` (order-of-record) + `ws_ebook_subscription` (entitlement).
+ * NO tracking table (unlike course). Mirrors commerce-order.repository.
+ *
+ * `customer_id` TYPE SPLIT: order table VARCHAR, subscription table INT. Callers
+ * pass the int customer id; we cast to number for the order-row queries (the
+ * VARCHAR column holds the numeric customer id, confirmed in staging).
+ */
+export const ebookOrderRepository = {
+  // ── reads ──────────────────────────────────────────────────────────────────
+
+  /** The ebook order owning this Razorpay id, scoped to the customer. */
+  findOrderByRazorpay: (razorpayOrderId: string, customerIdStr: string) =>
+    prisma.eBookOrder.findFirst({
+      where: { gatewayOrderId: razorpayOrderId, userId: Number(customerIdStr) },
+    }),
+
+  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
+  findOrderByRazorpayOnly: (razorpayOrderId: string) =>
+    prisma.eBookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
+
+  /** A plan row — to read its ebook_id + duration + price. */
+  findPlan: (planId: number) =>
+    prisma.packageCourseEbookPrice.findUnique({
+      where: { id: planId },
+      select: { id: true, ebookId: true, duration: true, price: true, status: true },
+    }),
+
+  /**
+   * The customer's existing ACTIVE, unexpired ebook subscription (for
+   * upsert-extend). Mirrors the Mongo filter
+   *   {customerId, ebookId, status:true, endAt:{$gt:now}}.
+   */
+  findActiveEbookSub: (customerId: number, ebookId: number, now: Date) =>
+    prisma.eBookSubscription.findFirst({
+      where: { customerId, ebookId, status: true, endAt: { gt: now } },
+      orderBy: { endAt: "desc" },
+    }),
+
+  /** The subscription created for a given order (idempotency re-entry). */
+  findSubByOrder: (orderId: number) =>
+    prisma.eBookSubscription.findFirst({ where: { orderId } }),
+
+  // ── write: create the pending order row (create-order endpoint) ────────────
+
+   /**
+   * CODE COLUMN: `promocode` is a `json` column that no code ever wrote — every
+   * ebook order read as "no code redeemed" even when one was. We write the
+   * purchase-time SNAPSHOT object built by `modules/order-code-snapshot`, the same
+   * shape `ws_package_course_order` carries.
+   *
+   * ⚠ The object is required, not cosmetic: `modules/promoter-data` attributes
+   * ebook commission off THIS column via `JSON_EXTRACT(o.promocode,'$.promoterId')`
+   * and `$.promotedPackageCourseEbook[0].promoterPercentage` (see listEbookSubs /
+   * ebookTotals). A bare code string matches neither path.
+   *
+   * Unlike `ws_package_course_order`, this table has NO `refferalcode` column, so a
+   * referral snapshot goes into the SAME `promocode` column — `referrer_id` remains
+   * the discriminator (set for referrals, null for promocodes). Only one code can be
+   * applied per order, so the single column is unambiguous. A referral snapshot
+   * carries no `promoterId` key, so it can never be mistaken for promoter-driven
+   * revenue by the queries above.
+   *
+   * ⚠ `order_price` stays the CHARGED amount. This table has no list-price /
+   * discount split (no `price` + `code_discount` pair like the course/package order
+   * table), so the breakdown cannot be persisted here without DDL — deliberately
+   * out of scope. The code itself needs no schema change, which is why it's fixed.
+   */
+  createPendingOrder: (input: {
+    customerId: number;
+    planId: number;
+    orderPrice: number;
+    razorpayOrderId: string;
+    uniqueId: string;
+    /** Promo OR referral snapshot object → `promocode`. Null when none applied. */
+    code?: PromocodeSnapshot | ReferralSnapshot | null;
+    referrerId?: number | null;
+    coin?: number | null;
+  }) =>
+    prisma.eBookOrder.create({
+      data: {
+        userId: input.customerId,
+        uniqueId: input.uniqueId,
+        planId: input.planId,
+        orderType: "purchase",
+        paymentMethod: "razorpay",
+        orderPrice: Math.round(input.orderPrice),
+        promocode: input.code ?? Prisma.DbNull,
+        gatewayOrderId: input.razorpayOrderId,
+        referrerId: input.referrerId ?? null,
+        walletCoin: input.coin ?? null,
+        status: "pending",
+        // Explicit stamps: the ws_ebook_order columns have no DB default and older
+        // deploys may predate the schema @default(now())/@updatedAt — set them here
+        // so created_at/updated_at are never NULL on new rows.
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    }),
+
+  // ── write: verify fulfillment (ONE transaction) ───────────────────────────
+
+  /**
+   * Transactional ebook fulfillment. Within one $transaction:
+   *  1. flip the order → complete + razorpay_payment_id
+   *  2. create THIS order's subscription row.
+   *
+   * ONE ORDER = ONE SUBSCRIPTION ROW. A renewal writes its own row starting where
+   * the previous one ends instead of folding onto it, so `price` stays the price
+   * actually paid for that row and `order_id` keeps pointing at the order that
+   * bought it (the fold used to repoint it at the newest order, orphaning the
+   * original purchase). The window is computed by the service (DAYS planDuration).
+   */
+  verifyEbookTx: (input: {
+    orderId: number;
+    razorpayPaymentId: string;
+    customerId: number;
+    ebookId: number;
+    price: number;
+    now: Date;
+    startAt: Date;
+    endAt: Date;
+    extended: boolean;
+  }) =>
+    prisma.$transaction(async (tx) => {
+      const order = await tx.eBookOrder.update({
+        where: { id: input.orderId },
+        data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId, updatedAt: input.now },
+      });
+
+      const sub = await tx.eBookSubscription.create({
+        data: {
+          orderId: input.orderId,
+          customerId: input.customerId,
+          ebookId: input.ebookId,
+          price: new Prisma.Decimal(input.price),
+          startAt: input.startAt,
+          endAt: input.endAt,
+          payment_type: "online",
+          status: true,
+          createdAt: input.now,
+          updatedAt: input.now,
+        },
+      });
+      return { order, subscription: sub, extended: input.extended };
+    }),
+};

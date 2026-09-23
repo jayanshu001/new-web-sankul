@@ -1,0 +1,53 @@
+-- 2026-08-20 — Drop ws_live_course_subscription.promocode_id + referrer_id.
+--
+-- Superseded by the snapshot columns added the same day
+-- (2026-08-20_live_course_subscription_code_snapshot.sql). The frozen `promocode` /
+-- `refferalcode` objects carry strictly more than the two ints did — the code, the
+-- promoter/referrer, the plan and the percentages as they stood at purchase — so the
+-- ids are redundant.
+--
+-- ⚠⚠ DESTRUCTIVE AND ORDER-DEPENDENT ⚠⚠
+--
+--   1. apply 2026-08-20_live_course_subscription_code_snapshot.sql   (adds the columns)
+--   2. deploy the backend                                            (writes snapshots)
+--   3. npx tsx scripts/backfill-live-course-code-snapshots.ts --apply
+--   4. THEN apply this file
+--
+-- The backfill's ONLY input is these two columns. Applying this DDL before step 3
+-- permanently loses the attribution of every row that was not already snapshotted —
+-- there is no other record of which code a historical subscription redeemed.
+--
+-- VERIFY BEFORE RUNNING — this must return 0:
+--
+--   SELECT COUNT(*) FROM ws_live_course_subscription
+--    WHERE (referrer_id  IS NOT NULL AND refferalcode IS NULL)
+--       OR (promocode_id IS NOT NULL AND promocode    IS NULL);
+--
+-- A non-zero count is rows whose code is about to become unrecoverable. On staging
+-- (2026-08-20) this returned 1: id=9 has referrer_id=472366 but plan_id IS NULL, so
+-- no snapshot can be built for it at all — that row's referrer is lost by design, and
+-- it is already a verified (not pending) subscription so no credit is outstanding.
+--
+-- CODE DEPENDENCY, ALREADY REWIRED: `referrer_id` was read at payment-verify by
+-- creditReferrer. live-course-order.service now derives the referring customer from
+-- $.refferalcode.promoter.id (referrerIdOf) instead, so the column has no readers
+-- left. `promocode_id` never had a reader.
+--
+-- ⚠ DEPLOY-WINDOW EDGE: a subscription created by the OLD build (referrer_id set,
+-- snapshot NULL) that is still `pending` when this lands would verify without
+-- crediting its referrer. Step 3 closes this for any row with a plan_id. Staging had
+-- 0 such pending rows; re-run the verify query above against prod before applying.
+--
+-- NOT REVERSIBLE by re-running a script: restoring these columns restores NULLs, not
+-- the ids. Take a backup of the two columns first if prod has a non-zero count:
+--
+--   CREATE TABLE ws_lcs_code_ids_backup_20260820 AS
+--     SELECT id, promocode_id, referrer_id FROM ws_live_course_subscription
+--      WHERE promocode_id IS NOT NULL OR referrer_id IS NOT NULL;
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-20_live_course_subscription_drop_code_ids.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_live_course_subscription
+  DROP COLUMN promocode_id,
+  DROP COLUMN referrer_id;

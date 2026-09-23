@@ -1,0 +1,62 @@
+import { Router } from "express";
+import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
+import { CacheEntity } from "../../middlewares/flushGroups";
+import {
+  listBanners, createBanner, updateBanner, deleteBanner, reorderBanners,
+  listCities, getCity, createCity, updateCity, deleteCity,
+  listCenters, getCenter, createCenter, updateCenter, deleteCenter,
+  listBatches, getBatch, createBatch, updateBatch, deleteBatch,
+  listEnquiries, deleteEnquiry,
+  listBatchEnquiries, deleteBatchEnquiry,
+} from "./offline.controller";
+
+const router = Router();
+
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
+
+// Banners
+router.get("/banners", listBanners);
+router.post("/banners", uploadS3.single("image"), createBanner);
+router.post("/banners/reorder", reorderBanners);
+router.put("/banners/:id", uploadS3.single("image"), updateBanner);
+router.delete("/banners/:id", deleteBanner);
+
+// Offline Cities (ws_offline_city) — the Offline Section's OWN city master, with
+// image + manual order + state. Distinct from /admin/address/cities, which is the
+// Address districts master (ws_customer_distict). Do NOT conflate the two: offline
+// centers/batches reference these offline-city ids; customer addresses reference
+// district ids. See docs/admin/OFFLINE_CITY_VS_DISTRICT_ADMIN.md.
+router.get("/cities", listCities);
+router.post("/cities", autoFlushGroup(CacheEntity.Offline), uploadS3.single("image"), createCity);
+router.get("/cities/:id", getCity);
+router.put("/cities/:id", autoFlushGroup(CacheEntity.Offline), uploadS3.single("image"), updateCity);
+router.delete("/cities/:id", autoFlushGroup(CacheEntity.Offline), deleteCity);
+
+// Centers
+router.get("/centers", listCenters);
+router.post("/centers", autoFlushGroup(CacheEntity.Offline), uploadS3.array("images", 10), createCenter);
+router.get("/centers/:id", getCenter);
+router.put("/centers/:id", autoFlushGroup(CacheEntity.Offline), uploadS3.array("images", 10), updateCenter);
+router.delete("/centers/:id", autoFlushGroup(CacheEntity.Offline), deleteCenter);
+
+// Batches
+router.get("/batches", listBatches);
+router.post("/batches", autoFlushGroup(CacheEntity.Offline), uploadS3.single("image"), createBatch);
+router.get("/batches/:id", getBatch);
+router.put("/batches/:id", autoFlushGroup(CacheEntity.Offline), uploadS3.single("image"), updateBatch);
+router.delete("/batches/:id", autoFlushGroup(CacheEntity.Offline), deleteBatch);
+
+// Enquiries (read/delete only — created from client)
+// `/batch-enquiries` is an alias for `/enquiries` (admin UI path); both support
+// server-side search (batchId, search, fromDate, toDate) + pagination (page, limit).
+router.get("/enquiries", listEnquiries);
+router.get("/batch-enquiries", listEnquiries);
+router.delete("/enquiries/:id", deleteEnquiry);
+
+// Batch enquiries — offline-batch "Register" form (read/delete only)
+router.get("/batch-enquiries", listBatchEnquiries);
+router.delete("/batch-enquiries/:id", deleteBatchEnquiry);
+
+export default router;

@@ -1,0 +1,188 @@
+/**
+ * Client category-video reads — SQL branch for
+ *   GET /client/video-categories/:id/videos        (listVideosByCategory)
+ *   GET /client/video-categories/:id/videos/:vid    (getVideoByCategory)
+ *
+ * Gated behind `isMysqlModule("client-category-video")`. Reads ws_video +
+ * ws_video_category + ws_lecture_progress (per-row resume badge). Scope is
+ * resolved by the catalog-category-tree SQL resolver. The encryption envelope
+ * (resolveVideoSource + encrypt) stays controller-owned (DB-agnostic).
+ *
+ * Drift: ws_video has no live-session back-link column → per-row multi-quality
+ * recordings are always empty on SQL (FE falls back to the synthetic ladder),
+ * matching how SQL videos (not promoted-from-live) behave.
+ */
+import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
+
+
+export const parseCvId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+export const findCategory = (id: number) =>
+  prisma.videoCategory.findFirst({ where: { id }, select: { id: true, title: true, image: true } });
+
+/** Category DTO shaped like the Mongo `category` object (passthrough-ish). */
+export const categoryDto = (c: any) => ({ _id: String(c.id), title: c.title ?? null, image: c.image ?? null });
+
+const videoSelect = {
+  id: true, title: true, topic: true, platform: true,
+  youtube_id: true, aws_id: true, vimeo_id: true, priceType: true, videoCategoryId: true,
+} as const;
+
+/** Paginated active videos in a category (+ optional title search / price filter). */
+export const listVideos = async (opts: {
+  categoryId: number; search: string | null; priceType: "free" | "paid" | null; skip: number; limitNum: number;
+}) => {
+  const where: any = { videoCategoryId: opts.categoryId, status: true };
+  const search = buildPrismaSearch(opts.search, ["title"]);
+  if (search) where.AND = search.AND;
+  if (opts.priceType) where.priceType = opts.priceType;
+  const [rows, total] = await Promise.all([
+    prisma.video.findMany({ where, orderBy: [{ order: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.limitNum, select: videoSelect }),
+    prisma.video.count({ where }),
+  ]);
+  return { rows, total };
+};
+
+export const findVideoInCategory = (categoryId: number, videoId: number) =>
+  prisma.video.findFirst({ where: { id: videoId, videoCategoryId: categoryId, status: true }, select: videoSelect });
+
+/** Per-video resume badges for a customer over a set of videoIds. */
+export const progressByVideo = async (customerId: number, videoIds: number[]): Promise<Map<number, any>> => {
+  if (!videoIds.length) return new Map();
+  const rows = await prisma.lectureProgress.findMany({
+    where: { customerId, videoId: { in: videoIds } },
+    select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true },
+  });
+  return new Map(rows.map((r) => [r.videoId!, r]));
+};
+
+/**
+ * Video ids (of the page) the customer has at least one saved note on — text
+ * (`ws_lecture_note`) OR audio (`ws_lecture_audio_note`). Two `findMany`s over the
+ * page's ids, not one query per row.
+ *
+ * Deliberately NOT filtered by `lecture_type` or `course_id`: the notes-list
+ * endpoint keys on (customer, lectureType, videoId) and ignores the container, so
+ * scoping the flag tighter than the list would flag `hasNotes: false` on a video
+ * that still opens with notes in it. `video_id` is only ever set on recorded-video
+ * notes, so the id filter alone is already the right cut.
+ */
+export const videosWithNotes = async (customerId: number, videoIds: number[]): Promise<Set<number>> => {
+  if (!videoIds.length) return new Set();
+  const [text, audio] = await Promise.all([
+    prisma.lectureNote.findMany({ where: { customerId, videoId: { in: videoIds } }, select: { videoId: true }, distinct: ["videoId"] }),
+    prisma.lectureAudioNote.findMany({ where: { customerId, videoId: { in: videoIds } }, select: { videoId: true }, distinct: ["videoId"] }),
+  ]);
+  const out = new Set<number>();
+  for (const r of [...text, ...audio]) if (r.videoId != null) out.add(r.videoId);
+  return out;
+};
+
+/** ALL owning containers for a category (a category may sit under multiple packages). */
+export const scopesForCategory = async (categoryId: number) => {
+  const { resolveVideoScopes } = await import("../catalog-category-tree/category-tree.service");
+  return resolveVideoScopes(categoryId);
+};
+
+/**
+ * The FIRST scope (in course→live→package priority) the customer holds an active
+ * subscription for, or null if none. Unlike isEntitledForScope (which checks ONE
+ * container), this checks EVERY owning container so a buyer of any owning package is
+ * entitled — and returns which one, so the media token can be scoped to a container the
+ * customer actually owns (keeping /media/resolve's single-scope re-check valid). Uses
+ * the same gates as isEntitledForScope (status=true + endAt in future; live also
+ * payment_status=verified).
+ */
+export const entitledScopeFor = async (
+  customerId: number | null,
+  scopes: { kind: string; id: string }[],
+): Promise<{ kind: string; id: string } | null> => {
+  if (customerId == null || !scopes.length) return null;
+  const now = new Date();
+  const num = (s: { id: string }) => Number(s.id);
+  const courseIds = scopes.filter((s) => s.kind === "course").map(num).filter((n) => Number.isInteger(n) && n > 0);
+  const packageIds = scopes.filter((s) => s.kind === "package").map(num).filter((n) => Number.isInteger(n) && n > 0);
+  const liveIds = scopes.filter((s) => s.kind === "liveCourse").map(num).filter((n) => Number.isInteger(n) && n > 0);
+
+  const [pcSubs, liveSubs] = await Promise.all([
+    courseIds.length || packageIds.length
+      ? prisma.packageCourseSubscription.findMany({
+          where: {
+            customerId, status: true, endAt: { gt: now },
+            OR: [
+              ...(courseIds.length ? [{ courseId: { in: courseIds } }] : []),
+              ...(packageIds.length ? [{ packageId: { in: packageIds } }] : []),
+            ],
+          },
+          select: { courseId: true, packageId: true },
+        })
+      : Promise.resolve([]),
+    liveIds.length
+      ? prisma.liveCourseSubscription.findMany({
+          // `paymentStatus` dropped 2026-08-25 — payment lives on ws_live_course_order
+          // and a subscription row exists only for a paid one, so `status` is the gate.
+          where: { customerId, status: true, endAt: { gt: now }, liveCourseId: { in: liveIds } },
+          select: { liveCourseId: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const ownedCourses = new Set(pcSubs.map((s) => s.courseId).filter((x): x is number => x != null));
+  const ownedPackages = new Set(pcSubs.map((s) => s.packageId).filter((x): x is number => x != null));
+  const ownedLives = new Set(liveSubs.map((s) => s.liveCourseId));
+
+  for (const s of scopes) {
+    const idn = Number(s.id);
+    if (s.kind === "course" && ownedCourses.has(idn)) return s;
+    if (s.kind === "package" && ownedPackages.has(idn)) return s;
+    if (s.kind === "liveCourse" && ownedLives.has(idn)) return s;
+  }
+  return null;
+};
+
+/**
+ * Is the customer entitled to PAID content under this resolved category scope?
+ *
+ * Mirrors the exact gates used by lecture-detail (client-lecture.hasActive*Sub)
+ * and the progress heartbeat (client-lecture-progress.reportContainerProgress)
+ * so all three package/course-scoped video endpoints agree. Free videos never
+ * reach here — the caller only gates paid rows. Returns false for a missing
+ * user, a null/unknown scope, or no active subscription.
+ *
+ * Parity note: ws_package_course_subscription has no payment_status column, so
+ * the course/package gate collapses to status=true; ws_live_course_subscription
+ * keeps the verified check.
+ */
+export const isEntitledForScope = async (
+  customerId: number | null,
+  scope: { kind: string; id: string } | null,
+): Promise<boolean> => {
+  if (customerId == null || !scope) return false;
+  const id = Number(scope.id);
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const now = new Date();
+
+  if (scope.kind === "course") {
+    const sub = await prisma.packageCourseSubscription.findFirst({
+      where: { customerId, courseId: id, status: true, endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  if (scope.kind === "package") {
+    const sub = await prisma.packageCourseSubscription.findFirst({
+      where: { customerId, packageId: id, status: true, endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  if (scope.kind === "liveCourse") {
+    const sub = await prisma.liveCourseSubscription.findFirst({
+      where: { customerId, liveCourseId: id, status: true, endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  return false;
+};
