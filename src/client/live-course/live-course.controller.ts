@@ -261,6 +261,43 @@ export const getLiveCourseRecordingFolder = async (req: Request, res: Response) 
   }
 };
 
+// GET /api/v1/client/live-courses/:id/recordings/:folderId/children
+// Sub-folders of one recording folder, paginated BY FOLDER. Same composition and
+// the same `{ parent, list: [{ category }] }` shape as the other directory
+// drill-downs (/client/material-categories/:id/children et al) — the difference is
+// that this one is scoped to the live course, so a folder id from another course
+// 404s instead of resolving.
+export const listLiveCourseRecordingFolderChildren = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("listLiveCourseRecordingFolderChildren invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id, folderId });
+
+  try {
+    const lid = liveSql.parseLiveId(id);
+    const fid = liveSql.parseLiveId(folderId);
+    if (!lid || !fid) { logger.warn("listLiveCourseRecordingFolderChildren invalid ids (mysql)", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const { search, page, limit } = parseListQuery(req.query);
+    const r = await liveSql.getRecordingFolderChildrenForClient(lid, fid, Number.isInteger(cid) ? cid : null, { search, page, limit });
+    if (r === "not_found") { logger.warn("listLiveCourseRecordingFolderChildren course not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    if (r === "folder_not_found") { logger.warn("listLiveCourseRecordingFolderChildren folder not found (mysql)", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
+    logger.info("listLiveCourseRecordingFolderChildren success (mysql)", { traceId, id, folderId, childCount: r.list.length });
+    // Slim the folder rows the same way /recordings does (image + order are unused
+    // by the app), so a child row here is byte-identical to a hub row.
+    const slimFolder = (f: any) => omit(f, ["image", "order"]);
+    const { liveCourse: _lc, daysLeft: _dl, purchaseOptions: _po, ...restR } = r;
+    return success(
+      res,
+      { ...restR, parent: slimFolder(r.parent), list: r.list.map((row: any) => ({ category: slimFolder(row.category) })), pagination: buildPagination(r.total, r.page, r.limit) },
+      "Folder sub-folders fetched."
+    );
+  } catch (err) {
+    logger.error("listLiveCourseRecordingFolderChildren failed", { traceId, id, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch sub-folders.", 500);
+  }
+};
+
 // GET /api/v1/client/live-courses/:id/lecture/:videoId
 // Gated single-lecture playback for a live course's recorded video. Mirrors
 // the recorded-course GET /courses/lecture flow: verifies the video sits in a
