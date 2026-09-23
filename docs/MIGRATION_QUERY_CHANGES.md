@@ -24,6 +24,61 @@
 `duration ASC, id ASC` — active and inactive plans interleave by duration, and `id`
 makes pagination deterministic on equal durations. Filter (`packageId`, optional
 `status`), count and response shape unchanged.
+## 2026-09-23 — Live-course recording folders follow the catalog directory contract
+
+> **DDL:** none. **Backfill:** none. **Queries:** one new `ws_video_category_relation`
+> read per recordings call (scoped to the course's own folders) + one `ws_video.groupBy`
+> for subtree counts. One **filter-contract change**: folder listings are now ROOTS ONLY.
+
+Requested: the client must be able to render a parent/child folder view, following the
+**existing** material pattern (`/client/catalog/:type/:id/materials` +
+`/client/material-categories/:id/children`), not a new shape.
+
+Live-course folders already nested — admin `lcCreateFolder(parentFolderId)` writes a
+`ws_video_category_relation` edge — but every client reader listed the whole flat set, so a
+sub-folder appeared next to its own parent.
+
+**New queries** (`src/modules/admin-live-course/admin-live-course.service.ts`):
+
+* `buildRecordingFolderTree()` — `prisma.videoCategoryRelation.findMany({ where: { parent: { in: folderIds }, child: { in: folderIds } } })`. Both ends constrained to the course's own
+  folder ids, so a folder that also hangs under another course cannot leak a foreign parent
+  or child. The DAG is collapsed to one parent per folder with the shared
+  `primaryParentMap()`.
+* `getRecordingFolderDetailForClient()` now loads the course's whole folder set (a handful
+  of rows, `RECORDING_FOLDER_SELECT`) instead of one `findFirst` — it is both the hierarchy
+  source and the course-ownership proof (behaviour unchanged: the folder must still be in
+  `{ liveCourseId, status: true }`). Plus one `prisma.video.groupBy({ by: ["videoCategoryId"] })` over the folder's subtree for `count`.
+* **New endpoint** `GET /client/live-courses/:id/recordings/:folderId/children` →
+  `getRecordingFolderChildrenForClient()`. Same composition as
+  `catalog-material.getCategoryChildren` / `catalog-video.getVideoCategoryChildren`
+  (`{ parent, list: [{ category }] }`, each category carrying `count` +
+  `havingChildDirectory`); one `groupBy` over the page's subtrees plus the parent id.
+  Course-scoped, so a foreign folder id 404s — which the generic
+  `/client/video-categories/:id/children` does not do.
+
+**Changed filter contract (breaking for a flat renderer):**
+
+* `GET /client/live-courses/:id/recordings?summary=1` now returns **top-level folders
+  only**. `total` / `pagination` count roots, not all folders. Under `?search=` a root is
+  kept when the match is anywhere in its SUBTREE (it used to be dropped when its own
+  `lectureCount` was 0), so the path to a hit stays walkable.
+* `GET /client/catalog/live-course/:id/videos` (`client-catalog.catalogVideos`) had the
+  identical bug — `roots = every videoCategory with liveCourseId`. It now excludes any
+  folder that is the `child` of an edge between two of the course's own folders. Response
+  shape untouched; `/client/video-categories/:id/children` already drills in.
+* The non-`summary` `GET /:id/recordings` stays FLAT on purpose — it inlines each folder's
+  `lectures[]`, so filtering to roots would hide lectures.
+
+**New response fields** (additive, all three recordings reads): `parent` (string|null),
+`childCategoryIds` (string[]), `havingChildDirectory` (bool), `count`. `count` follows the
+catalog rule — directory node → child-folder count, leaf → subtree lecture count.
+`lectureCount` keeps its old meaning (direct lectures) everywhere.
+
+Supersedes the first cut of this entry, which used the ADMIN PICKER shape
+(`parentId`/`ancestors`/`hasChildren`/`depth`/`totalLectureCount`/`childFolders[]` and a
+`?parentId=` filter). Those fields and that query param were removed before shipping — the
+client-facing directory contract is the catalog one, and there must be only one.
+FE doc: `docs/client/LIVE_COURSE_RECORDING_FOLDER_TREE.md`.
 
 ---
 

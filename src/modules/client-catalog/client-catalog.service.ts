@@ -86,11 +86,22 @@ export const catalogVideos = async (opts: {
   } else if (opts.type === "live-course") {
     // Live courses own their video-category folders directly via liveCourseId
     // (the recordings folders), unlike course/package single-root or subjects.
-    roots = await prisma.videoCategory.findMany({
+    const owned = await prisma.videoCategory.findMany({
       where: { liveCourseId: opts.id, status: true },
       orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       select: { id: true, title: true, image: true },
     });
+    // ROOTS only. Live-course folders nest (admin createFolder(parentFolderId)
+    // writes a ws_video_category_relation edge), and listing a sub-folder next to
+    // its own parent is what made the tree unrenderable — the child is reached by
+    // drilling in, same as every other category listing. Edges are scoped to this
+    // course's own folders, so a folder shared into another tree stays a root here.
+    const ownedIds = owned.map((c) => c.id);
+    const nestedEdges = ownedIds.length
+      ? await prisma.videoCategoryRelation.findMany({ where: { parent: { in: ownedIds }, child: { in: ownedIds } }, select: { child: true } })
+      : [];
+    const nested = new Set(nestedEdges.map((e) => e.child));
+    roots = owned.filter((c) => !nested.has(c.id));
   } else {
     const subs = await prisma.packageSpecificSubject.findMany({ where: { packageId: opts.id, status: true }, select: { subjectId: true, order_by: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] });
     const subIds = subs.map((s) => s.subjectId).filter((n): n is number => n != null);
