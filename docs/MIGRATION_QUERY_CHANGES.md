@@ -15,6 +15,38 @@
 
 ---
 
+## 2026-09-23 — Reports: one permission per report screen (no DDL)
+
+> **DDL:** none. **Data:** boot seeder inserts 3 `ws_permissions` rows + a `reports`
+> `ws_permission_category` (`CATALOG_VERSION` → `2026.09.23-1`). DML to regroup 3 existing
+> rows: `schema-changes/2026-09-23_reports_permission_category.sql` (run after first boot).
+> Response shapes unchanged.
+
+Every screen in the admin **Reports** sidebar now has its own view-only key, grouped under
+"Reports" in the RBAC tree:
+
+| Report | Key | Routes (GET) | Also opened by |
+|---|---|---|---|
+| EBook Subscriptions | `ebooks.subscriptions.view` (existing) | `/ebooks/subscriptions/list`, `/:id`, `/export/:format` | — |
+| Book Orders | `books.orders.view` (existing) | `/books/orders/list`, `/:id`, `/export/:format` | — |
+| Subscription Report | `subscriptions.reports.view` (existing, relabelled) | `/subscriptions`, `/:id`, `/export/:format` | `subscriptions.view`, `subscriptions.material-report.view` |
+| Subscription Material Report | `subscriptions.material-report.view` (NEW) | same as above | `subscriptions.view`, `subscriptions.reports.view` |
+| Live Course Report | `live-courses.report.view` (NEW) | `/live-courses/subscriptions`, `/:id`, `/export/:format` | `live-courses.view` |
+| Test Series Report | `test-series.report.view` (NEW) | `/test-series/subscriptions`, `/:id`, `/export/:format` | `test-series.view` |
+
+- Parent `<module>.view` still opens each report (OR), so no existing role loses access.
+- Subscription and Subscription Material Report are the same endpoint with different
+  filters, so the backend can't tell them apart: either key opens the list. The FE hides
+  the screen the admin doesn't hold.
+- The `export/:format` sync routes for all six were **unmapped** (allowed for any staff);
+  they now gate on the report's keys. The async `/exports` job (report type in the body)
+  is still unmapped.
+- **Summary is super-admin only.** `GET /subscriptions`, `/live-courses/subscriptions`
+  (+ `/live-courses/:id/subscriptions`) and `/test-series/subscriptions` omit the top-level
+  `summary` (Total / Revenue / Active / Expired) unless `isSuperAdmin(req)`
+  (`middlewares/requirePermission.ts`, now exported). `data` + `pagination` unchanged;
+  the admin panel already defaults a missing `summary` to zeros and hides the cards.
+
 ## 2026-09-23 — Admin package Pricing tab no longer orders by status (no DDL)
 
 > **DDL:** none. **Query:** `admin-package.repository.listPlans` (`GET /admin/packages/:id/plans`).

@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.09.17-1";
+export const CATALOG_VERSION = "2026.09.23-1";
 
 export interface CatalogPermission {
   key: string;
@@ -154,9 +154,9 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("ebooks", "Ebooks", "Ebooks / Books"),
   // ebooks.plans removed 2026-07-20 — collapsed into `ebooks`.
   // Reports → view only; their write routes gate on the parent module in rbacRouteMap.
-  mod("ebooks.subscriptions", "Ebook Subscriptions", "Ebooks / Books", { standard: ["view"] }),
+  mod("ebooks.subscriptions", "EBook Subscriptions", "Reports", { standard: ["view"] }),
   mod("books", "Books", "Ebooks / Books"),
-  mod("books.orders", "Book Orders", "Ebooks / Books", { standard: ["view"] }),
+  mod("books.orders", "Book Orders", "Reports", { standard: ["view"] }),
 
   // ── Packages ─────────────────────────────────────────────────────────────
   mod("packages", "Packages", "Packages"),
@@ -199,7 +199,17 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Subscriptions (admin-wide) ───────────────────────────────────────────
   mod("subscriptions", "Subscriptions", "Subscriptions"),
-  mod("subscriptions.reports", "Subscription Reports", "Subscriptions", { standard: ["view"] }),
+
+  // ── Reports (sidebar "Reports") ──────────────────────────────────────────
+  // 2026-09-23: one view-only key per report screen. `ebooks.subscriptions` and
+  // `books.orders` already were; the other four are grantable apart from their
+  // parent module. Parent `<m>.view` still opens each report (OR in rbacRouteMap)
+  // so no existing role loses access. Subscription + Subscription Material
+  // Report share GET /subscriptions (filters differ), so either key opens it.
+  mod("subscriptions.reports", "Subscription Report", "Reports", { standard: ["view"] }),
+  mod("subscriptions.material-report", "Subscription Material Report", "Reports", { standard: ["view"] }),
+  mod("live-courses.report", "Live Course Report", "Reports", { standard: ["view"] }),
+  mod("test-series.report", "Test Series Report", "Reports", { standard: ["view"] }),
 
   // ── RBAC ─────────────────────────────────────────────────────────────────
   mod("administrators", "Administrators", "RBAC"),

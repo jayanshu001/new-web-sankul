@@ -4,6 +4,7 @@ import { success, failure, failureFrom, getErrorMessage } from "../../utils/http
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { PaymentMethod } from "../../shared/enums";
 import { assertReportStatus } from "../../utils/reportFilters";
 
@@ -90,7 +91,8 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
     const r = await liveSql.listSubscriptions({ ...buildSubReportQuery(q, req.params.id), page, limit });
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
-    return res.status(200).json({ success: true, summary: r.summary, data: r.data, pagination: r.pagination });
+    // Summary cards are super-admin only (2026-09-23).
+    return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? r.summary : undefined, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failureFrom(res, err, "Failed to list subscriptions.");
