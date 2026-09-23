@@ -194,6 +194,8 @@ export type InquiryMode = (typeof InquiryMode)[keyof typeof InquiryMode];
 
 export const AdminRole = {
   SUPER_ADMIN: "super_admin",
+  ADMIN: "admin",
+  EDITOR: "editor",
 } as const;
 export type AdminRole = (typeof AdminRole)[keyof typeof AdminRole];
 
