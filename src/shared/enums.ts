@@ -32,7 +32,8 @@ export const ExamResultType = {
   FALSE: "false",
   SKIP: "skip",
 } as const;
-export type ExamResultType = (typeof ExamResultType)[keyof typeof ExamResultType];
+export type ExamResultType =
+  (typeof ExamResultType)[keyof typeof ExamResultType];
 
 export const ExamStatus = {
   DRAFT: "draft",
@@ -48,20 +49,23 @@ export const ExamAttemptStatus = {
   EXPIRED: "expired",
   ABANDONED: "abandoned",
 } as const;
-export type ExamAttemptStatus = (typeof ExamAttemptStatus)[keyof typeof ExamAttemptStatus];
+export type ExamAttemptStatus =
+  (typeof ExamAttemptStatus)[keyof typeof ExamAttemptStatus];
 
 export const ExamQuestionType = {
   SINGLE: "single",
   MULTI: "multi",
 } as const;
-export type ExamQuestionType = (typeof ExamQuestionType)[keyof typeof ExamQuestionType];
+export type ExamQuestionType =
+  (typeof ExamQuestionType)[keyof typeof ExamQuestionType];
 
 export const ExamDifficulty = {
   EASY: "easy",
   MEDIUM: "medium",
   HARD: "hard",
 } as const;
-export type ExamDifficulty = (typeof ExamDifficulty)[keyof typeof ExamDifficulty];
+export type ExamDifficulty =
+  (typeof ExamDifficulty)[keyof typeof ExamDifficulty];
 
 export const ExamLanguage = {
   ENGLISH: "en",
@@ -150,7 +154,8 @@ export const BookOrderStatus = {
   CANCELLED: "cancelled",
   FAILED: "failed",
 } as const;
-export type BookOrderStatus = (typeof BookOrderStatus)[keyof typeof BookOrderStatus];
+export type BookOrderStatus =
+  (typeof BookOrderStatus)[keyof typeof BookOrderStatus];
 
 export const BookCourier = {
   MAHAVIR: "mahavir",
@@ -189,8 +194,6 @@ export type InquiryMode = (typeof InquiryMode)[keyof typeof InquiryMode];
 
 export const AdminRole = {
   SUPER_ADMIN: "super_admin",
-  ADMIN: "admin",
-  EDITOR: "editor",
 } as const;
 export type AdminRole = (typeof AdminRole)[keyof typeof AdminRole];
 
