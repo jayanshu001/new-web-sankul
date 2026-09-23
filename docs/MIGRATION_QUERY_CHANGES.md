@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-09-23 — Admin package Pricing tab no longer orders by status (no DDL)
+
+> **DDL:** none. **Query:** `admin-package.repository.listPlans` (`GET /admin/packages/:id/plans`).
+
+`ws_package_course_ebook_price` for a package was ordered
+`status DESC, duration ASC` (active block first, inactive after). Now
+`duration ASC, id ASC` — active and inactive plans interleave by duration, and `id`
+makes pagination deterministic on equal durations. Filter (`packageId`, optional
+`status`), count and response shape unchanged.
+
+---
+
 ## 2026-09-22 — `shareableLink` carries an encrypted id token (no DDL, no query change)
 
 > **DDL:** none. **Queries:** none — no repository, service or Prisma call was
