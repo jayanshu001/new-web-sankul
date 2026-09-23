@@ -7,6 +7,7 @@ import { success, failure, failureFrom, getErrorMessage } from "../../utils/http
 import logger from "../../utils/logger";
 import * as tsSql from "../../modules/admin-testseries/admin-testseries.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { parseListQuery } from "../../utils/listQuery";
 import { assertReportStatus } from "../../utils/reportFilters";
 import {
@@ -539,7 +540,8 @@ export const listSubscriptions = async (req: Request, res: Response) => {
       limit: l,
     });
     logger.info("listSubscriptions success", { traceId, total: pagination.total });
-    return res.status(200).json({ success: true, summary, data, pagination });
+    // Summary cards are super-admin only (2026-09-23).
+    return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? summary : undefined, data, pagination });
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failureFrom(res, err, "Failed to list subscriptions.");

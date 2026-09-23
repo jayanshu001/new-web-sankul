@@ -19,6 +19,7 @@ import {
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { isSuperAdmin } from "../../middlewares/requirePermission";
 
 // Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
 // 422 from assertReportStatus) instead of flattening every failure to 500. These
@@ -68,7 +69,8 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
     const { summary, data, pagination } = await subSql.listCourseSubscriptions({
       ...reportQueryFrom(q), page: pageNum, limit: limitNum,
     });
-    return res.status(200).json({ success: true, summary, data, pagination });
+    // Summary cards (Total/Revenue/Active/Expired) are super-admin only (2026-09-23).
+    return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? summary : undefined, data, pagination });
   } catch (error: any) {
     return res.status(errStatus(error)).json({ success: false, message: error.message });
   }
