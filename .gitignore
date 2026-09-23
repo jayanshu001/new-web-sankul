@@ -50,3 +50,6 @@ graphify-out/
 /loadtest
 # Local tooling binaries (k6 load-test runner) — install per-machine, never commit
 /.tools/
+
+# Generated per-env Redis config (contains the password) — scripts/redis.sh
+/.redis-*/

@@ -142,6 +142,25 @@ Responsibilities:
   live Socket.io progress (`POST /admin/ebooks/:id/pdf`) — distinct from presign and bulk.
 - Courier: **Tirupati** is the only live AWB API; **Mahavir** is a page link only. Orders
   ≥ `TIRUPATI_INITIAL_NUMBER` route to Tirupati.
+- **Directory listings have ONE contract — the catalog one.** Any client list of a nestable
+  thing (category / folder) returns **top-level rows only**, each as
+  `{ category: { _id|folderId, title, parent, childCategoryIds, havingChildDirectory, count, … } }`
+  with `totals`/`pagination`, and drill-down happens through a sibling
+  `GET …/:id/children` → `{ parent, list: [{ category }] }`. **`count` is
+  context-dependent**: a directory node reports its CHILD-FOLDER count, a leaf reports its
+  SUBTREE item count (a directory's own direct count is 0 and reporting that is the bug).
+  Reference impls: `client-catalog.catalogMaterials`/`catalogVideos`,
+  `catalog-material.getCategoryChildren`, `catalog-video.getVideoCategoryChildren`,
+  `admin-live-course.getRecordingFolderChildrenForClient`. Never list a child next to its own
+  parent, and never invent a second hierarchy shape.
+  Hierarchy sources: `utils/videoCategoryRelation.ts` (`primaryParentMap` — video
+  categories/folders read from the `ws_video_category_relation` DAG, NOT the legacy `parent`
+  column); material/exam use their `parent` self-FK. The ADMIN pickers are a different
+  contract (`parentId`/`ancestors[{id,name}]`/`hasChildren` via
+  `utils/categoryAncestors.ts`) — do not mix the two.
+- **Every new/changed client endpoint ships a frontend doc** in `docs/client/<FEATURE>.md`
+  — full envelope, exact error strings, and any deviation from what the FE asked for.
+  Write it unasked, in addition to the `docs/MIGRATION_QUERY_CHANGES.md` entry.
 
 ## Rules when modifying code
 
@@ -154,6 +173,17 @@ Responsibilities:
 7. Log query/schema/migration changes in `docs/MIGRATION_QUERY_CHANGES.md` + update `docs/migration/*`.
 8. Don't hand-edit `schema.prisma` carelessly — prefer `yarn db:pull` + `yarn prisma:generate`.
 9. Secrets in `.env` (validated at boot); add new required vars to `config/env.ts` + `.env.example`.
+10. **Consistency is a hard requirement.** If the same kind of logic already exists
+    anywhere in the repo, the new code MUST reuse it — the same helper, the same field
+    names, the same DTO shape, the same ordering/pagination/search conventions. Grep for
+    the pattern before writing. When one read gains a field, every sibling read of the
+    same resource gains it in the same call (see `shapeRecordingLectures` — one shaper,
+    three endpoints, byte-identical rows). Two shapes for one concept is a bug.
+11. **Work in `/ponytail:ponytail` mode, always.** Laziest thing that actually works:
+    does it need to exist → is it already in this codebase → stdlib → already-installed
+    dep → one line → only then new code. Read and trace the whole flow first; the ladder
+    shortens the solution, never the reading. Additive over rewrites, shortest correct
+    diff wins. Never lazy about auth, validation, entitlement or response contracts.
 
 ## Implementation Strategy
 
@@ -166,6 +196,8 @@ Existing pattern first. Before creating new code:
 5. Reuse existing transformers when possible.
 6. Keep naming consistent with neighboring modules.
 7. Prefer consistency over cleverness.
+8. When a response needs more data, EXTEND the existing shaper/DTO for every endpoint
+   that serves the same resource — never fork a per-endpoint variant.
 
 ## Common Mistakes
 
@@ -179,6 +211,8 @@ Existing pattern first. Before creating new code:
 - Do not create public routes unless explicitly documented.
 - Do not hand-edit `schema.prisma` when introspection is the source of truth.
 - Do not introduce a new architectural pattern when an existing one already exists.
+- Do not emit a second field name for something the codebase already names (`havingChildDirectory`/`count`/`childCategoryIds` on client directory rows, `parentId`/`ancestors`/`hasChildren` on admin pickers, `_id`, `folderId`, `pagination`).
+- Do not return a flat list for nested data and leave the client to infer the tree.
 
 ## When Unsure
 

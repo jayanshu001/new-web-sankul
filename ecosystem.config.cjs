@@ -14,7 +14,7 @@
 module.exports = {
   apps: [
     {
-      name: process.env.PM2_API_NAME || "websankul-api",
+      name: process.env.PM2_APP_NAME || "websankul-api",
       script: "dist/index.js",
       instances: Number(process.env.API_INSTANCES) || 2,
       exec_mode: "cluster",

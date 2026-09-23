@@ -11,6 +11,7 @@ import {
   listSessionsForCourseClient,
   listLiveCourseRecordings,
   getLiveCourseRecordingFolder,
+  listLiveCourseRecordingFolderChildren,
   listLiveCourseSessionRecordings,
   getLiveCourseLecture,
   getLiveCourseSchedule,
@@ -44,6 +45,7 @@ router.get("/:id",                  cacheRoute(LC), getLiveCourseForClient);    
 router.get("/:id/sessions",            cacheRoute(LC), listSessionsForCourseClient);       // GET /api/v1/client/live-courses/:id/sessions
 router.get("/:id/recordings",          listLiveCourseRecordings);          // GET /api/v1/client/live-courses/:id/recordings  (folder videos; ?summary=1 → folder rows + lectureCount, no lectures[])
 router.get("/:id/recordings/:folderId", getLiveCourseRecordingFolder);     // GET /api/v1/client/live-courses/:id/recordings/:folderId  (one folder's lectures, paginated by lecture)
+router.get("/:id/recordings/:folderId/children", listLiveCourseRecordingFolderChildren); // GET /api/v1/client/live-courses/:id/recordings/:folderId/children  (sub-folders, paginated by folder — mirrors /client/material-categories/:id/children)
 router.get("/:id/session-recordings",  listLiveCourseSessionRecordings);   // GET /api/v1/client/live-courses/:id/session-recordings  (raw Streamos recordings)
 router.get("/:id/schedule",                       getLiveCourseSchedule);   // GET /api/v1/client/live-courses/:id/schedule  (timetable + scheduleFolders)
 router.get("/:id/schedule-folders/:folderId",     getMyScheduleFolder);     // GET /api/v1/client/live-courses/:id/schedule-folders/:folderId  (folder detail screen)
