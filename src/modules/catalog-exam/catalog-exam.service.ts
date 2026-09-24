@@ -250,7 +250,8 @@ export const createCategory = async (input: {
     image: input.image ?? null,
     parent,
     status: input.status ?? true,
-    order_by: input.orderBy ?? 0,
+    // Default: after the last sibling under the same parent (same max+1 rule as quizzes).
+    order_by: input.orderBy ?? (await repo.maxCategoryOrder(parent)) + 1,
     deleted: false,
     created_at: now,
     updated_at: now,
