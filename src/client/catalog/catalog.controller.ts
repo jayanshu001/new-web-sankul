@@ -71,13 +71,13 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
 
     const idNum = catSql.parseCatId(id);
     if (idNum == null) return failure(res, "Invalid id.", 422);
-    const sp = await catSql.loadParent(type, idNum);
+    const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
+    const sp = await catSql.loadParent(type, idNum, userNum);
     if (!sp) return failure(res, `${type} not found.`, 404);
     const search = getSearch(req);
     const catIds = typeof req.query.categoryIds === "string" && req.query.categoryIds.trim()
       ? req.query.categoryIds.split(",").map((s) => catSql.parseCatId(s.trim())).filter((n): n is number => n != null)
       : null;
-    const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
     // catalogVideos() takes `customerId`, but for type=package|live-course it never
     // reads it — see modules/client-catalog/client-catalog.service.ts: the only
     // customerId-dependent branch (`if (opts.type === "course")`) returns early, so
@@ -123,9 +123,9 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
 
     const idNum = catSql.parseCatId(id);
     if (idNum == null) return failure(res, "Invalid id.", 422);
-    const sp = await catSql.loadParent(type, idNum);
-    if (!sp) return failure(res, `${type} not found.`, 404);
     const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
+    const sp = await catSql.loadParent(type, idNum, userNum);
+    if (!sp) return failure(res, `${type} not found.`, 404);
     const r = await catSql.catalogMaterials({ type, id: idNum, search: getSearch(req) || null, customerId: userNum });
     // Drop unused top-level `parent` + category `ancestors`/`__v` (docs/api-optimization).
     const paged = paginateCategories(req, r);
@@ -152,7 +152,8 @@ export const getCatalogTests = async (req: Request, res: Response) => {
 
     const idNum = catSql.parseCatId(id);
     if (idNum == null) return failure(res, "Invalid id.", 422);
-    const sp = await catSql.loadParent(type, idNum);
+    const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
+    const sp = await catSql.loadParent(type, idNum, userNum);
     if (!sp) return failure(res, `${type} not found.`, 404);
     const r = await catSql.catalogTests({ type, id: idNum, search: getSearch(req) || null });
     // Drop unused top-level `parent` (docs/api-optimization GET_client_catalog_type_id_tests).

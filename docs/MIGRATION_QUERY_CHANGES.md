@@ -15,6 +15,31 @@
 
 ---
 
+## 2026-09-24 — Client: inactive package still reachable by its subscribers (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. FE doc: `docs/client/PACKAGE_INACTIVE_SUBSCRIBER_ACCESS.md`.
+
+**Bug:** a subscriber opening Package → Catalog → Videos got `404 "package not found."`
+whenever admin had set the package to inactive. The client lookups filtered on `active = 1`
+and never checked for a subscription.
+
+**Query changes:**
+
+- `client-catalog.service.loadParent` (used by `GET /client/catalog/:type/:id/{videos,materials,tests}`),
+  package branch: `findFirst({ id, active: true })` → `findFirst({ id })` selecting `active`.
+  If `active = 0`, it lets the request through only when
+  `commerce-subscription.hasActivePackageSubscription(customerId, id)` is true
+  (`ws_package_course_subscription`: `status = 1`, `end_at > now`). The controller now passes `req.user.id`.
+- `catalog-package.detail.sql.buildPackageDetailShared` (the shared, cached part of
+  `GET /client/packages/:id`): the `active: true` filter is removed so the cache entry
+  doesn't depend on who asked first. `buildPackageDetailSql` returns null (→ 404) when
+  `!pkg.active && !activeSub`. It reuses the subscription lookup that already runs for `isPurchased`,
+  so there's no extra query.
+
+Course (no status filter) and live-course (`status = 1`, not changed here) are not affected.
+
+---
+
 ## 2026-09-23 — Reports: one permission per report screen (no DDL)
 
 > **DDL:** none. **Data:** boot seeder inserts 3 `ws_permissions` rows + a `reports`
