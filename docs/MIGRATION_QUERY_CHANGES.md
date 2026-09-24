@@ -26,9 +26,11 @@
 (`PATCH …/reorder`) is unchanged.
 
 `POST /admin/quizzes/categories` likewise: when the body omits `orderBy`,
-`ws_exam_category.order_by` = `MAX(order_by) + 1` among non-deleted siblings with the
-same `parent_id` (new `catalogExamRepository.maxCategoryOrder(parent)`), instead of `0`.
-An explicit `orderBy` still wins.
+`ws_exam_category.order_by` = table-wide `MAX(order_by) + 1` (all levels, incl.
+soft-deleted rows, so a number is never reused) via `catalogExamRepository.maxCategoryOrder()`,
+instead of `0`. An explicit (non-blank) `orderBy` still wins. It was briefly scoped per
+`parent_id`, which duplicated numbers in the flat admin list — the legacy data is one
+sequence across all levels.
 
 ---
 
