@@ -38,6 +38,14 @@ Past (legacy / old-app) attempts showed a blank solution and blank time. Cause, 
   `"MM:SS"`. `normalizeTiming()` maps the legacy form to `"03:31"` on every result DTO
   (client `toResultDto`/`toFullResultDto`/`toAttemptDto`/past-daily, admin `toResultDto`).
   Stored data is untouched.
+## 2026-09-24 — Client: live-course recording lectures gain `isFree` (no DDL)
+
+> **DDL:** none. **Queries:** unchanged. **Response shapes:** additive only.
+
+`shapeRecordingLectures` (the one shaper behind `GET /client/live-courses/:id/recordings`,
+`?summary=1`, and `/recordings/:folderId`) now emits `isFree: v.priceType === "free"` on
+every lecture row. Derived from the already-selected `ws_video.price_type`; no new
+column read. FE doc: `docs/client/LIVE_COURSE_RECORDING_FOLDER_TREE.md` §7.
 
 ---
 

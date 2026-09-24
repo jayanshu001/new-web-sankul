@@ -1914,7 +1914,7 @@ const shapeRecordingLectures = async (
         ? signMediaToken({ k: "liveRecording", id: v.id, free: true, cust: customerId })
         : signMediaToken({ k: "liveRecording", id: v.id, scope: { kind: "liveCourse", id: courseId }, cust: customerId });
     return {
-      _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
+      _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, isFree: v.priceType === "free", order: v.order,
       locked: !canPlay,
       preferredStream: (hasHls ? "hls" : "mp4") as "hls" | "mp4",
       qualities: qualitiesFromSessionRecordings(hlsList),
