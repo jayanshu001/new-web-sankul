@@ -6,7 +6,7 @@ import type { ReportSource } from "../../utils/reportStream";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
-import { adminBookRepository as repo } from "./admin-book.repository";
+import { adminBookRepository as repo, type OrderExportCursor } from "./admin-book.repository";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import type { Book } from "@prisma/client";
 import { fmtExportDate } from "../../utils/csvExport";
@@ -417,7 +417,8 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
     orderIdsIn,
     receiptSearch,
     bookOrderKeysIn,
-    sortBy: q.sortBy ?? "createdAt",
+    // Default report order: newest tracking id (AWB) first.
+    sortBy: q.sortBy ?? "trackingId",
     sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
   };
 };
@@ -585,13 +586,17 @@ const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrd
 // Walk the whole filtered set in keyset batches (no cap); yields flattened export
 // rows per batch. `opts` is the resolved order filter (caller handles the empty case).
 async function* iterateOrderExportRows(opts: NonNullable<Awaited<ReturnType<typeof resolveOrderOpts>>>) {
-  let beforeId: number | undefined;
+  // Tracked orders first (tracking_id DESC), then the untracked tail (id DESC).
+  let cursor: OrderExportCursor = { untracked: false };
   for (;;) {
-    const rows = await repo.listOrdersPageKeyset(opts, beforeId, ORDERS_EXPORT_BATCH);
-    if (!rows.length) break;
-    yield flattenOrdersToExportRows(await enrichOrders(rows));
-    if (rows.length < ORDERS_EXPORT_BATCH) break;
-    beforeId = rows[rows.length - 1].id;
+    const rows = await repo.listOrdersPageKeyset(opts, cursor, ORDERS_EXPORT_BATCH);
+    if (rows.length) yield flattenOrdersToExportRows(await enrichOrders(rows));
+    if (rows.length === ORDERS_EXPORT_BATCH) {
+      const last = rows[rows.length - 1];
+      cursor = cursor.untracked ? { untracked: true, beforeId: last.id } : { untracked: false, beforeTracking: last.trackingId!, beforeId: last.id };
+    } else if (!cursor.untracked) {
+      cursor = { untracked: true };
+    } else break;
   }
 }
 

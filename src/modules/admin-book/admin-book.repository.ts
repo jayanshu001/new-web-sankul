@@ -71,18 +71,25 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders,
-  // ordered id DESC, rows strictly older than the last id seen — no deep OFFSET, no row
-  // cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
-  listOrdersPageKeyset: (opts: Parameters<typeof buildOrderWhere>[0], beforeId: number | undefined, take: number) => {
+  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders, in the
+  // report's order (tracking_id DESC, then untracked rows id DESC) — no deep OFFSET, no
+  // row cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
+  // Keyset is (tracking_id, id) — tracking_id isn't unique-constrained (admin can set
+  // it); the NULL-tracking tail is walked separately by id since NULL can't be compared.
+  listOrdersPageKeyset: (opts: Parameters<typeof buildOrderWhere>[0], cursor: OrderExportCursor, take: number) => {
     const base = buildOrderWhere(opts);
+    const page: Prisma.BookOrderWhereInput = cursor.untracked
+      ? { trackingId: null, ...(cursor.beforeId ? { id: { lt: cursor.beforeId } } : {}) }
+      : cursor.beforeTracking != null
+        ? { OR: [{ trackingId: { lt: cursor.beforeTracking } }, { trackingId: cursor.beforeTracking, id: { lt: cursor.beforeId } }] }
+        : { trackingId: { not: null } };
     return prisma.bookOrder.findMany({
-      where: beforeId ? { AND: [base, { id: { lt: beforeId } }] } : base,
+      where: { AND: [base, page] },
       include: {
         user: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } },
         shipping: true,
       },
-      orderBy: { id: "desc" },
+      orderBy: cursor.untracked ? { id: "desc" } : [{ trackingId: "desc" }, { id: "desc" }],
       take,
     });
   },
@@ -184,10 +191,13 @@ function buildWhere(opts: { search?: string; language?: string; isMagazine?: boo
   return where;
 }
 
+export type OrderExportCursor = { untracked: boolean; beforeTracking?: bigint; beforeId?: number };
+
 function orderSortCol(sortBy: string): string {
   if (sortBy === "amount" || sortBy === "order_price") return "amount";
   if (sortBy === "status") return "status";
   if (sortBy === "updatedAt" || sortBy === "updated_at") return "updatedAt";
+  if (sortBy === "trackingId" || sortBy === "tracking_id") return "trackingId";
   return "createdAt";
 }
 
