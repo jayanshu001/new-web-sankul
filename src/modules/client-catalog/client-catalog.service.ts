@@ -21,6 +21,7 @@ import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import { signMediaToken } from "../../utils/mediaToken";
 import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
+import { hasActivePackageSubscription } from "../commerce-subscription/commerce-subscription.service";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
@@ -39,7 +40,9 @@ const descendantIds = async (table: string, parentCol: string, rootId: number): 
 };
 
 // ── parent existence ──────────────────────────────────────────────────────────
-export const loadParent = async (type: "course" | "package" | "live-course", id: number): Promise<{ name: string } | null> => {
+// An inactive package is hidden from the catalog, but a customer who already holds
+// an active subscription to it keeps access — deactivation must not lock out payers.
+export const loadParent = async (type: "course" | "package" | "live-course", id: number, customerId: number | null = null): Promise<{ name: string } | null> => {
   if (type === "course") {
     const c = await prisma.course.findFirst({ where: { id }, select: { name: true } });
     return c ? { name: c.name ?? "" } : null;
@@ -48,8 +51,10 @@ export const loadParent = async (type: "course" | "package" | "live-course", id:
     const lc = await prisma.liveCourse.findFirst({ where: { id, status: true }, select: { name: true } });
     return lc ? { name: lc.name } : null;
   }
-  const p = await prisma.package.findFirst({ where: { id, active: true }, select: { name: true } });
-  return p ? { name: p.name } : null;
+  const p = await prisma.package.findFirst({ where: { id }, select: { name: true, active: true } });
+  if (!p) return null;
+  if (!p.active && !(customerId && (await hasActivePackageSubscription(customerId, id)))) return null;
+  return { name: p.name };
 };
 
 // Live courses store their material/exam category refs as a JSON array on the
