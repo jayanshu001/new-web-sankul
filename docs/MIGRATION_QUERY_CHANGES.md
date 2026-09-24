@@ -25,6 +25,11 @@
 (`maxQuestionOrder`). `order_by` is table-wide (not per category). Reorder
 (`PATCH …/reorder`) is unchanged.
 
+`POST /admin/quizzes/categories` likewise: when the body omits `orderBy`,
+`ws_exam_category.order_by` = `MAX(order_by) + 1` among non-deleted siblings with the
+same `parent_id` (new `catalogExamRepository.maxCategoryOrder(parent)`), instead of `0`.
+An explicit `orderBy` still wins.
+
 ---
 
 ## 2026-09-24 — Client: inactive package still reachable by its subscribers (no DDL)
