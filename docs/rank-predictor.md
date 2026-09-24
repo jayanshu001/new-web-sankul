@@ -436,7 +436,7 @@ Prisma confined to the repository:
 | File | Change |
 |---|---|
 | `prisma/schema.prisma` | +184 lines, **0 deletions**. Seven models, three enums. `Customer` untouched; `OcrProfile` since gained the three candidate columns — see §3.8 |
-| `docs/migration/schema-changes/2026-09-21_ocr_rank_predictor_tables.sql` | New, additive, idempotent |
+| `docs/migration/schema-changes/2026-09-20_ocr_rank_predictor_tables.sql` | New, additive, idempotent |
 | `src/admin/admin.routes.ts` | Mount `/rank-predictor` |
 | `src/client/client.routes.ts` | Mount, before the catch-alls |
 | `src/admin/permission/permissions.catalog.ts` | Three `mod()` entries (papers and submissions carry `delete`), `CATALOG_VERSION` → `2026.09.21-4` |
@@ -571,7 +571,7 @@ cd ~/Desktop/websankul-backend
 # 1. Create the tables. Additive and idempotent — re-running is a no-op.
 #    One file, by name. NOT `yarn db:migrate` — see the warning above.
 npx prisma db execute \
-  --file docs/migration/schema-changes/2026-09-21_ocr_rank_predictor_tables.sql \
+  --file docs/migration/schema-changes/2026-09-20_ocr_rank_predictor_tables.sql \
   --schema prisma/schema.prisma
 
 # 2. Verify — expect 7 rows.

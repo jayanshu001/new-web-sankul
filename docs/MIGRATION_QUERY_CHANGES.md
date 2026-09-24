@@ -593,7 +593,7 @@ FE/app doc: `docs/client/SHARE_LINK_CIPHER.md`.
 
 ## 2026-09-21 — Exam Rank Predictor: seven new `ws_ocr_*` tables
 
-> **DDL:** `docs/migration/schema-changes/2026-09-21_ocr_rank_predictor_tables.sql`.
+> **DDL:** `docs/migration/schema-changes/2026-09-20_ocr_rank_predictor_tables.sql`.
 > Purely additive — seven new tables, no existing table read, altered or dropped.
 > Safe to apply before the application code. Re-running is a clean no-op.
 
