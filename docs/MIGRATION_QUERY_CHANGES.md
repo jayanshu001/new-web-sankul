@@ -501,6 +501,123 @@ FE/app doc: `docs/client/SHARE_LINK_CIPHER.md`.
 
 ---
 
+## 2026-09-22 — Rank predictor: raw leaderboard/rank queries moved to tagged `$queryRaw`
+
+- **No schema change. No response-shape change.** Cleanup pass over the rank-predictor
+  module (comments removed, shared constants/enums extracted into
+  `rank-predictor.types.ts`).
+- **`src/modules/rank-predictor/rank-predictor.repository.ts`:** the three raw MySQL
+  reads — `rankForExam`, `countCandidates`, `leaderboardPage` — moved from
+  `prisma.$queryRawUnsafe<any[]>(sql, ...args)` to the tagged-template
+  `prisma.$queryRaw` form. Same SQL, same `?` parameter binding, same indexes
+  (`idx_ocr_scores_leaderboard`), same row mapping; the change is that the result rows
+  are typed instead of `any[]` and the SQL can no longer be built by concatenation.
+- **String statuses replaced by constants** in the repository's `where` clauses
+  (`SUBMISSION_STATUS.FAILED` / `.PROCESSED`) — the emitted values are byte-identical
+  to the literals they replace.
+- **Regression QA:** exam leaderboard paging (ties share a rank), `GET
+  /rank-predictor/papers/:examId/rank/me` (rank, percentile, nearby strip), the admin
+  leaderboard, and the review queue filtered by status.
+
+---
+
+## 2026-09-21 — Candidate profile: three new NULLable columns on `ws_ocr_profiles`
+
+> **DDL:** `docs/migration/schema-changes/2026-09-21_ocr_profile_candidate_fields.sql`.
+> Additive — three NULLable columns on `ws_ocr_profiles`, `ALGORITHM=INSTANT`.
+> **Not idempotent** — MySQL has no `ADD COLUMN IF NOT EXISTS`, so a re-run fails with
+> 1060; `SHOW COLUMNS FROM ws_ocr_profiles` first. **`ws_customer` is not touched.**
+
+- **Why:** the Score & Rank Checker ranks everyone on one flat list. Category-wise
+  standing (open/SEBC/EWS/SC/ST), the female quota and the ex-servicemen quota are what
+  a Gujarat government-exam candidate actually compares against, and none of it was on
+  file. A blocking first-visit gate on the rank pages now collects the three answers.
+- **Columns:** `caste_category` `varchar(10) NULL` (`open|sebc|ews|sc|st`), `gender`
+  `varchar(10) NULL` (`male|female`), `is_ex_serviceman` `tinyint(1) NULL`.
+- **Why not `ws_customer`, where these belong.** They describe the person, not the
+  attempt, and `gender` already exists there — it was the first choice and it was
+  attempted. MySQL refused it twice:
+  ```
+  ALGORITHM=INSTANT is not supported. Reason: InnoDB presently supports one
+  FULLTEXT index creation at a time. Try ALGORITHM=COPY/INPLACE.
+  ALGORITHM=INPLACE is not supported. Reason: ... Try ALGORITHM=COPY.
+  ```
+  The FULLTEXT wording is boilerplate; the rule is that InnoDB will not `ADD COLUMN` on
+  a table carrying a FULLTEXT index either instantly or online. Only `COPY` remains,
+  which blocks writes for a full rebuild of a table the Laravel app shares — a
+  scheduled window, not an incidental migration. **Note for whoever schedules it:** the
+  same constraint applies to any future `ws_customer` column, so batch them.
+- **NULL is load-bearing:** it means "never asked", which is the state the gate tests.
+  `is_ex_serviceman = 0` is a real answer, so the completeness check is a null check,
+  never a falsiness check (`toRankCandidateProfileDto`).
+- **Prisma:** `OcrProfile` gains `casteCategory`, `gender`, `isExServiceman`.
+  `Customer` is unchanged — an earlier revision of this entry added two columns there,
+  and adding them to the model before the DDL existed broke **every** full-row customer
+  read (`GET /client/profile` included) with `The column ws_customer.caste_category
+  does not exist`. Schema and database move together or not at all.
+- **Queries:** one new one, `upsertCandidateProfile` in `rank-predictor.repository.ts`,
+  keyed on the PK. It is an upsert because the gate usually creates the row, and it
+  sets `show_real_name` only on create so saving the gate cannot clobber a leaderboard
+  preference. Reads reuse the existing `findProfile`. No new index: the PK serves both.
+- **Endpoints:** `GET`/`PUT /api/v1/client/rank-predictor/me/candidate-profile`. The
+  `GET /client/profile` contract is deliberately NOT extended — it drops `gender` at
+  the controller edge for the RN app, and that payload stays frozen.
+
+---
+
+## 2026-09-21 — Exam Rank Predictor: seven new `ws_ocr_*` tables
+
+> **DDL:** `docs/migration/schema-changes/2026-09-21_ocr_rank_predictor_tables.sql`.
+> Purely additive — seven new tables, no existing table read, altered or dropped.
+> Safe to apply before the application code. Re-running is a clean no-op.
+
+- **Why:** the rank predictor ran as a standalone platform (its own Node API, its own
+  Postgres, its own Redis, its own admin console) with a shared service key that let the
+  caller assert any student id it liked — a second database of students living outside
+  `ws_customer`. These tables bring it home, so a student is a `ws_customer` row and
+  nothing else, and the service key is revoked.
+- **Tables:** `ws_ocr_exams`, `ws_ocr_answer_keys`, `ws_ocr_submissions`, `ws_ocr_scores`,
+  `ws_ocr_ranks`, `ws_ocr_audit_logs`, `ws_ocr_profiles`. Prisma models `OcrExam`,
+  `OcrAnswerKey`, `OcrSubmission`, `OcrScore`, `OcrRank`, `OcrAuditLog`, `OcrProfile`.
+- **Foreign keys into `ws_customer`** from `ws_ocr_submissions`, `ws_ocr_scores` and
+  `ws_ocr_profiles`, all **RESTRICT, not CASCADE**. Two reasons: MySQL refuses
+  `ON DELETE CASCADE` on a column that feeds a STORED generated column (see below), and
+  customers are soft-deleted here, so a hard `DELETE` is an accident and should fail
+  loudly rather than silently erase a student's exam history. `Customer` gains three
+  back-relation fields in `schema.prisma` only — **no column is added to `ws_customer`.**
+- **One attempt per student per exam is enforced by the database,** not by a
+  check-then-insert, which races two concurrent uploads into two rows:
+  `ws_ocr_submissions.active_customer_id` is a STORED generated column resolving to
+  `NULL` when `status='failed'`, under `uq_ocr_submissions_exam_active (exam_id,
+  active_customer_id)`. MySQL ignores NULLs in a unique index, so a sheet we could not
+  read never burns the student's one attempt. Same trick as `ws_customer.phone_active`.
+  A duplicate surfaces as Prisma `P2002` and must be returned as `409 already_submitted`.
+  **`active_customer_id` is deliberately absent from the Prisma model** — `db pull` adds
+  it back, and it must be removed again or every `create()` will try to write it.
+- **`ws_ocr_scores` is the leaderboard.** `exam_id`/`customer_id`/`raw_score` are
+  denormalised off the submission so ranking never joins. `UNIQUE (exam_id, customer_id)`
+  means a rescore UPDATEs in place and a student can never appear twice — the DB-level
+  equivalent of the retired Redis `ZADD`-by-user-id. Ranking is two index probes against
+  `idx_ocr_scores_leaderboard (exam_id, raw_score)`:
+  `COUNT(*) WHERE exam_id = ?` and `COUNT(*) WHERE exam_id = ? AND raw_score > ?`,
+  rank = higher + 1. **No Redis sorted set** — the precedent is
+  `client-exam.repository.ts::rankForExam`.
+- **Ties now share a rank**, where Redis `ZREVRANK` gave tied students arbitrary distinct
+  ranks by insertion order. Matches `client-exam` and is the more defensible answer.
+- **Percentile is `(total - rank) / (total - 1)`, and `100` when `total === 1`** — so the
+  top rank reads 100. The retired service had a bug here: it computed that formula on
+  read but persisted `(total - rank) / total`. One helper now serves both.
+- **Marking scheme lives on the answer-key version** (`marks_correct`/`marks_wrong`), never
+  in code, so an already-published score stays reproducible after a revised key is
+  uploaded as a new version.
+- **Reserved words:** `rank` and `keys` are reserved in MySQL 8 → `rank_position`,
+  `keys_json`.
+- `ws_ocr_ranks` is written once at scoring time and **never read for display** — ranks move
+  whenever anyone else uploads, so the student always sees a live count. It is the audit
+  record of where they stood when scored.
+
+---
+
 ## 2026-09-18 — websankul-jobs-api: public job list/detail also serve `expired` jobs
 
 > **Code-only (jobs-api + websankul-jobs). No DDL, no data writes.**

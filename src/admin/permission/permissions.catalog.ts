@@ -41,11 +41,11 @@ export interface CatalogModule {
 // `list` was dropped (the admin UI gates list screens on `view`) and all
 // sub-feature/extra actions were removed — the admin frontend checks none of them.
 const STANDARD_5: { action: string; suffix: string; verb: string }[] = [
-  { action: "view",          suffix: "view",          verb: "View"           },
-  { action: "create",        suffix: "create",        verb: "Create"         },
-  { action: "edit",          suffix: "edit",          verb: "Edit"           },
-  { action: "delete",        suffix: "delete",        verb: "Delete"         },
-  { action: "toggle-status", suffix: "toggle-status", verb: "Toggle status"  },
+  { action: "view", suffix: "view", verb: "View" },
+  { action: "create", suffix: "create", verb: "Create" },
+  { action: "edit", suffix: "edit", verb: "Edit" },
+  { action: "delete", suffix: "delete", verb: "Delete" },
+  { action: "toggle-status", suffix: "toggle-status", verb: "Toggle status" },
 ];
 
 /**
@@ -62,22 +62,23 @@ const mod = (
     standard?: boolean | string[]; // true (default), false, or subset of action ids
     extras?: CatalogPermission[];
     guard?: Guard; // defaults to "web"
-  } = {}
+  } = {},
 ): CatalogModule => {
   const standard = opts.standard ?? true;
-  const want = standard === true
-    ? STANDARD_5.map((s) => s.action)
-    : standard === false
-      ? []
-      : standard;
+  const want =
+    standard === true
+      ? STANDARD_5.map((s) => s.action)
+      : standard === false
+        ? []
+        : standard;
 
-  const base: CatalogPermission[] = STANDARD_5
-    .filter((s) => want.includes(s.action))
-    .map((s) => ({
-      key: `${key}.${s.suffix}`,
-      label: `${s.verb} ${label.toLowerCase()}`,
-      action: s.action,
-    }));
+  const base: CatalogPermission[] = STANDARD_5.filter((s) =>
+    want.includes(s.action),
+  ).map((s) => ({
+    key: `${key}.${s.suffix}`,
+    label: `${s.verb} ${label.toLowerCase()}`,
+    action: s.action,
+  }));
 
   return {
     key,
@@ -101,7 +102,7 @@ const rawMod = (
   group: string,
   guard: Guard,
   permissions: CatalogPermission[],
-  description?: string
+  description?: string,
 ): CatalogModule => ({ key, label, group, guard, description, permissions });
 
 // NOTE: the `web` catalog is the 5 STANDARD_5 actions per module by default
@@ -154,7 +155,9 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("ebooks", "Ebooks", "Ebooks / Books"),
   // ebooks.plans removed 2026-07-20 — collapsed into `ebooks`.
   // Reports → view only; their write routes gate on the parent module in rbacRouteMap.
-  mod("ebooks.subscriptions", "EBook Subscriptions", "Reports", { standard: ["view"] }),
+  mod("ebooks.subscriptions", "EBook Subscriptions", "Reports", {
+    standard: ["view"],
+  }),
   mod("books", "Books", "Ebooks / Books"),
   mod("books.orders", "Book Orders", "Reports", { standard: ["view"] }),
 
@@ -166,11 +169,19 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Study Materials ──────────────────────────────────────────────────────
   mod("study-materials", "Study Materials", "Study Materials"),
-  mod("study-materials.categories", "Study Material Categories", "Study Materials"),
+  mod(
+    "study-materials.categories",
+    "Study Material Categories",
+    "Study Materials",
+  ),
 
   // ── Exam Countdowns ──────────────────────────────────────────────────────
   mod("exam-countdowns", "Exam Countdowns", "Exam Countdowns"),
-  mod("exam-countdowns.categories", "Exam Countdown Categories", "Exam Countdowns"),
+  mod(
+    "exam-countdowns.categories",
+    "Exam Countdown Categories",
+    "Exam Countdowns",
+  ),
 
   // ── Quizzes ──────────────────────────────────────────────────────────────
   mod("quizzes", "Quizzes", "Quizzes"),
@@ -189,11 +200,36 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // Reads (profile, addresses, every subscription tab) stay on `customers.view`.
   mod("customers", "Customers", "Customers", {
     extras: [
-      { key: "customers.course-subscriptions.create", label: "Add course subscription", action: "create", subResource: "course-subscriptions" },
-      { key: "customers.package-subscriptions.create", label: "Add package subscription", action: "create", subResource: "package-subscriptions" },
-      { key: "customers.live-course-subscriptions.create", label: "Add live course subscription", action: "create", subResource: "live-course-subscriptions" },
-      { key: "customers.test-series-subscriptions.create", label: "Add test series subscription", action: "create", subResource: "test-series-subscriptions" },
-      { key: "customers.ebook-subscriptions.create", label: "Add ebook subscription", action: "create", subResource: "ebook-subscriptions" },
+      {
+        key: "customers.course-subscriptions.create",
+        label: "Add course subscription",
+        action: "create",
+        subResource: "course-subscriptions",
+      },
+      {
+        key: "customers.package-subscriptions.create",
+        label: "Add package subscription",
+        action: "create",
+        subResource: "package-subscriptions",
+      },
+      {
+        key: "customers.live-course-subscriptions.create",
+        label: "Add live course subscription",
+        action: "create",
+        subResource: "live-course-subscriptions",
+      },
+      {
+        key: "customers.test-series-subscriptions.create",
+        label: "Add test series subscription",
+        action: "create",
+        subResource: "test-series-subscriptions",
+      },
+      {
+        key: "customers.ebook-subscriptions.create",
+        label: "Add ebook subscription",
+        action: "create",
+        subResource: "ebook-subscriptions",
+      },
     ],
   }),
 
@@ -206,10 +242,21 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // parent module. Parent `<m>.view` still opens each report (OR in rbacRouteMap)
   // so no existing role loses access. Subscription + Subscription Material
   // Report share GET /subscriptions (filters differ), so either key opens it.
-  mod("subscriptions.reports", "Subscription Report", "Reports", { standard: ["view"] }),
-  mod("subscriptions.material-report", "Subscription Material Report", "Reports", { standard: ["view"] }),
-  mod("live-courses.report", "Live Course Report", "Reports", { standard: ["view"] }),
-  mod("test-series.report", "Test Series Report", "Reports", { standard: ["view"] }),
+  mod("subscriptions.reports", "Subscription Report", "Reports", {
+    standard: ["view"],
+  }),
+  mod(
+    "subscriptions.material-report",
+    "Subscription Material Report",
+    "Reports",
+    { standard: ["view"] },
+  ),
+  mod("live-courses.report", "Live Course Report", "Reports", {
+    standard: ["view"],
+  }),
+  mod("test-series.report", "Test Series Report", "Reports", {
+    standard: ["view"],
+  }),
 
   // ── RBAC ─────────────────────────────────────────────────────────────────
   mod("administrators", "Administrators", "RBAC"),
@@ -220,18 +267,26 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Referrals ────────────────────────────────────────────────────────────
   mod("referrals.referrers", "Referral Referrers", "Referrals"),
-  mod("referrals.report", "Referral Report", "Referrals", { standard: ["view"] }),
-  mod("referrals.transactions", "Referral Transactions", "Referrals", { standard: ["view"] }),
+  mod("referrals.report", "Referral Report", "Referrals", {
+    standard: ["view"],
+  }),
+  mod("referrals.transactions", "Referral Transactions", "Referrals", {
+    standard: ["view"],
+  }),
   mod("referrals.terms", "Referral Terms", "Referrals"),
   mod("referrals.faqs", "Referral FAQs", "Referrals"),
-  mod("referrals.settings", "Referral Settings", "Referrals", { standard: ["view", "edit"] }),
+  mod("referrals.settings", "Referral Settings", "Referrals", {
+    standard: ["view", "edit"],
+  }),
 
   // ── Promoters / Promocodes ───────────────────────────────────────────────
   mod("promoters", "Promoters", "Promoters / Promocodes"),
   // promoters.subscriptions removed 2026-07-20 — collapsed into `promoters`.
   // Aggregated revenue dashboard is grantable separately from the promoter list
   // (2026-09-11; same view-only pattern as subscriptions.reports).
-  mod("promoters.dashboard", "Promoter Dashboard", "Promoters / Promocodes", { standard: ["view"] }),
+  mod("promoters.dashboard", "Promoter Dashboard", "Promoters / Promocodes", {
+    standard: ["view"],
+  }),
   mod("promocodes", "Promocodes", "Promoters / Promocodes"),
 
   // ── CMS ──────────────────────────────────────────────────────────────────
@@ -245,7 +300,9 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("cms.current-affairs", "Current Affairs", "CMS"),
   // Free-delivery is a single settings screen (read + Save) that reads/writes the
   // CMS book-terms row's free-shipping threshold — view + edit only.
-  mod("cms.free-delivery", "Free Delivery", "CMS", { standard: ["view", "edit"] }),
+  mod("cms.free-delivery", "Free Delivery", "CMS", {
+    standard: ["view", "edit"],
+  }),
   mod("cms.app-version", "App Version", "CMS", { standard: ["view", "edit"] }),
   mod("cms.app-update", "App Update", "CMS", { standard: ["view", "edit"] }),
   mod("cms.social-links", "Social Links", "CMS"),
@@ -260,9 +317,28 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Careers ──────────────────────────────────────────────────────────────
   mod("careers.openings", "Career Openings", "Careers"),
-  // Applications are submitted publicly, never created/deleted by an admin —
-  // only viewed and moved through the review-status workflow.
-  mod("careers.applications", "Career Applications", "Careers", { standard: ["view", "edit"] }),
+  mod("careers.applications", "Career Applications", "Careers", {
+    standard: ["view", "edit"],
+  }),
+
+  // ── Rank Predictor ─────────────────────────────────────────────────────────
+  mod("rank-predictor.papers", "Rank Predictor Papers", "Rank Predictor"),
+  mod(
+    "rank-predictor.answer-keys",
+    "Rank Predictor Answer Keys",
+    "Rank Predictor",
+    {
+      standard: ["view", "create", "toggle-status"],
+    },
+  ),
+  mod(
+    "rank-predictor.submissions",
+    "Rank Predictor Submissions",
+    "Rank Predictor",
+    {
+      standard: ["view", "edit", "delete"],
+    },
+  ),
 
   // ── Offline ──────────────────────────────────────────────────────────────
   mod("offline.banners", "Offline Banners", "Offline"),
@@ -274,7 +350,11 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // ── Departments / Inquiries ──────────────────────────────────────────────
   mod("departments", "Departments", "Departments / Inquiries"),
   mod("inquiries", "Inquiries", "Departments / Inquiries"),
-  mod("inquiries.mobile-app", "Mobile App Inquiries", "Departments / Inquiries"),
+  mod(
+    "inquiries.mobile-app",
+    "Mobile App Inquiries",
+    "Departments / Inquiries",
+  ),
 
   // ── Notifications ────────────────────────────────────────────────────────
   mod("notifications", "Notifications", "Notifications"),
@@ -293,23 +373,51 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // historical ones (guard=promoter) and must never be renamed.
   rawMod("promoter", "Promoter Portal", "Promoter Portal", "promoter", [
     { key: "promoter", label: "Access promoter portal", action: "access" },
-    { key: "promoter.dashboard", label: "View promoter dashboard", action: "view-dashboard" },
-    { key: "promoter.customers", label: "Promoter customers", action: "view", subResource: "customers" },
-    { key: "promoter.customers.read", label: "Read promoter customers", action: "read", subResource: "customers" },
-    { key: "promoter.promocodes", label: "Promoter promocodes", action: "view", subResource: "promocodes" },
-    { key: "promoter.promocodes.read", label: "Read promoter promocodes", action: "read", subResource: "promocodes" },
+    {
+      key: "promoter.dashboard",
+      label: "View promoter dashboard",
+      action: "view-dashboard",
+    },
+    {
+      key: "promoter.customers",
+      label: "Promoter customers",
+      action: "view",
+      subResource: "customers",
+    },
+    {
+      key: "promoter.customers.read",
+      label: "Read promoter customers",
+      action: "read",
+      subResource: "customers",
+    },
+    {
+      key: "promoter.promocodes",
+      label: "Promoter promocodes",
+      action: "view",
+      subResource: "promocodes",
+    },
+    {
+      key: "promoter.promocodes.read",
+      label: "Read promoter promocodes",
+      action: "read",
+      subResource: "promocodes",
+    },
   ]),
 
   // ── Educator Portal (guard: educator) ────────────────────────────────────
   // Educator-guard roles (e.g. "WebSankul Educator") are built from this key; it
   // gates the educator dashboard. Same latent-orphan fix as the promoter portal.
   rawMod("educator", "Educator Portal", "Educator Portal", "educator", [
-    { key: "educator.dashboard", label: "View educator dashboard", action: "view-dashboard" },
+    {
+      key: "educator.dashboard",
+      label: "View educator dashboard",
+      action: "view-dashboard",
+    },
   ]),
 ];
 
 export const ALL_CATALOG_KEYS: Set<string> = new Set(
-  PERMISSION_CATALOG.flatMap((m) => m.permissions.map((p) => p.key))
+  PERMISSION_CATALOG.flatMap((m) => m.permissions.map((p) => p.key)),
 );
 
 /**

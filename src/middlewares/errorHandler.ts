@@ -107,6 +107,14 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
 
   const errorObject = appErr.errorObject ?? null;
 
+  const clientErrorData =
+    statusCode < 500 &&
+    typeof errorObject === "object" &&
+    errorObject !== null &&
+    !Array.isArray(errorObject)
+      ? (errorObject as Record<string, unknown>)
+      : {};
+
   if (dbUnavailable && !res.headersSent) {
     res.setHeader("Retry-After", String(SERVICE_UNAVAILABLE_RETRY_SECONDS));
   }
@@ -147,7 +155,7 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
     res.status(statusCode).json({
       success: false,
       code: statusCode,
-      data: dbUnavailable ? { reason: "SERVICE_UNAVAILABLE" } : {},
+      data: dbUnavailable ? { reason: "SERVICE_UNAVAILABLE" } : clientErrorData,
       message: clientMessage,
       messages: {},
     });

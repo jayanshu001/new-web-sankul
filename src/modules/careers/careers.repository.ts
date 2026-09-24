@@ -1,101 +1,86 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-import type {
-  CareerApplicationCreateInput,
-  CareerApplicationStatus,
-  CareerOpeningCreateInput,
-  CareerOpeningUpdateInput,
+import {
+  DEFAULT_EXPERIENCE_LEVEL,
+  DEFAULT_JOB_TYPE,
+  DEFAULT_VACANCIES,
+  OPENING_SEARCH_FIELDS,
+  type CareerApplicationCreateInput,
+  type CareerApplicationFilter,
+  type CareerApplicationListParams,
+  type CareerApplicationStatus,
+  type CareerOpeningCreateInput,
+  type CareerOpeningFilter,
+  type CareerOpeningListParams,
+  type CareerOpeningUpdateInput,
 } from "./careers.types";
 
-const openingWhere = (opts: { search?: string; status?: boolean }) => ({
-  ...(buildPrismaSearch(opts.search, ["title", "department", "location"]) ?? {}),
-  ...(opts.status !== undefined ? { status: opts.status } : {}),
+const definedFields = <T extends object>(input: T): { [K in keyof T]?: T[K] } =>
+  Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as {
+    [K in keyof T]?: T[K];
+  };
+
+const openingWhere = (filter: CareerOpeningFilter): Prisma.CareerOpeningWhereInput => ({
+  ...(buildPrismaSearch(filter.search, [...OPENING_SEARCH_FIELDS]) ?? {}),
+  ...(filter.status === undefined ? {} : { status: filter.status }),
+});
+
+const applicationWhere = (filter: CareerApplicationFilter): Prisma.CareerApplicationWhereInput => ({
+  ...(filter.openingId === undefined ? {} : { openingId: filter.openingId }),
+  ...(filter.status === undefined ? {} : { status: filter.status }),
 });
 
 export const careersRepository = {
-  // ── openings: admin ──────────────────────────────────────────────────────
-  findOpeningsPage: (opts: { search?: string; status?: boolean; skip: number; take: number }) =>
+  findOpeningsPage: (params: CareerOpeningListParams) =>
     prisma.careerOpening.findMany({
-      where: openingWhere(opts),
+      where: openingWhere(params),
       orderBy: { id: "desc" },
-      skip: opts.skip,
-      take: opts.take,
+      skip: params.skip,
+      take: params.take,
     }),
-  countOpenings: (opts: { search?: string; status?: boolean }) =>
-    prisma.careerOpening.count({ where: openingWhere(opts) }),
+
+  countOpenings: (filter: CareerOpeningFilter) =>
+    prisma.careerOpening.count({ where: openingWhere(filter) }),
+
   findOpeningById: (id: bigint) => prisma.careerOpening.findUnique({ where: { id } }),
+
+  findActiveOpenings: () =>
+    prisma.careerOpening.findMany({ where: { status: true }, orderBy: { id: "desc" } }),
+
   createOpening: (input: CareerOpeningCreateInput) =>
     prisma.careerOpening.create({
       data: {
+        ...definedFields(input),
         title: input.title,
-        department: input.department,
-        location: input.location,
-        jobType: input.jobType ?? "full_time",
-        experienceLevel: input.experienceLevel ?? "any",
-        description: input.description,
-        requirements: input.requirements,
-        minSalary: input.minSalary,
-        maxSalary: input.maxSalary,
-        vacancies: input.vacancies ?? 1,
-        lastDate: input.lastDate,
+        jobType: input.jobType ?? DEFAULT_JOB_TYPE,
+        experienceLevel: input.experienceLevel ?? DEFAULT_EXPERIENCE_LEVEL,
+        vacancies: input.vacancies ?? DEFAULT_VACANCIES,
         status: input.status ?? true,
       },
     }),
+
   updateOpening: (id: bigint, input: CareerOpeningUpdateInput) =>
-    prisma.careerOpening.update({
-      where: { id },
-      data: {
-        ...(input.title !== undefined ? { title: input.title } : {}),
-        ...(input.department !== undefined ? { department: input.department } : {}),
-        ...(input.location !== undefined ? { location: input.location } : {}),
-        ...(input.jobType !== undefined ? { jobType: input.jobType } : {}),
-        ...(input.experienceLevel !== undefined ? { experienceLevel: input.experienceLevel } : {}),
-        ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.requirements !== undefined ? { requirements: input.requirements } : {}),
-        ...(input.minSalary !== undefined ? { minSalary: input.minSalary } : {}),
-        ...(input.maxSalary !== undefined ? { maxSalary: input.maxSalary } : {}),
-        ...(input.vacancies !== undefined ? { vacancies: input.vacancies } : {}),
-        ...(input.lastDate !== undefined ? { lastDate: input.lastDate } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-      },
-    }),
+    prisma.careerOpening.update({ where: { id }, data: definedFields(input) }),
+
   deleteOpening: (id: bigint) => prisma.careerOpening.delete({ where: { id } }),
 
-  // ── openings: public (active only) — mirrors legacy `current-openings` ────
-  findActiveOpenings: () =>
-    prisma.careerOpening.findMany({
-      where: { status: true },
+  findApplicationsPage: (params: CareerApplicationListParams) =>
+    prisma.careerApplication.findMany({
+      where: applicationWhere(params),
       orderBy: { id: "desc" },
+      skip: params.skip,
+      take: params.take,
     }),
 
-  // ── applications: admin ──────────────────────────────────────────────────
-  findApplicationsPage: (opts: {
-    openingId?: bigint;
-    status?: CareerApplicationStatus;
-    skip: number;
-    take: number;
-  }) =>
-    prisma.careerApplication.findMany({
-      where: {
-        ...(opts.openingId !== undefined ? { openingId: opts.openingId } : {}),
-        ...(opts.status !== undefined ? { status: opts.status } : {}),
-      },
-      orderBy: { id: "desc" },
-      skip: opts.skip,
-      take: opts.take,
-    }),
-  countApplications: (opts: { openingId?: bigint; status?: CareerApplicationStatus }) =>
-    prisma.careerApplication.count({
-      where: {
-        ...(opts.openingId !== undefined ? { openingId: opts.openingId } : {}),
-        ...(opts.status !== undefined ? { status: opts.status } : {}),
-      },
-    }),
+  countApplications: (filter: CareerApplicationFilter) =>
+    prisma.careerApplication.count({ where: applicationWhere(filter) }),
+
   findApplicationById: (id: bigint) => prisma.careerApplication.findUnique({ where: { id } }),
+
   updateApplicationStatus: (id: bigint, status: CareerApplicationStatus) =>
     prisma.careerApplication.update({ where: { id }, data: { status } }),
 
-  // ── applications: public submit ──────────────────────────────────────────
   createApplication: (input: CareerApplicationCreateInput) =>
     prisma.careerApplication.create({
       data: {

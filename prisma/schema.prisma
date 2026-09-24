@@ -3102,3 +3102,151 @@ model CareerApplication {
   @@index([openingId], map: "ws_career_applications_opening_id_foreign")
   @@map("ws_career_applications")
 }
+
+enum OcrExtractionKind {
+  text_layer
+  omr
+}
+
+enum OcrSubmissionStatus {
+  processing
+  processed
+  failed
+  needs_review
+}
+
+enum OcrAuditActorType {
+  customer
+  admin
+  system
+}
+
+model OcrExam {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  code           String    @unique(map: "uq_ocr_exams_code") @db.VarChar(100)
+  name           String    @db.VarChar(255)
+  totalQuestions Int       @map("total_questions")
+  category       String?   @db.VarChar(255)
+  examDate       DateTime? @map("exam_date") @db.Date
+  paperSeries    Json?     @map("paper_series")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdBy      Int?      @map("created_by")
+  createdAt      DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt      DateTime? @map("updated_at") @db.Timestamp(0)
+
+  answerKeys  OcrAnswerKey[]
+  submissions OcrSubmission[]
+
+  @@index([isActive, examDate], map: "idx_ocr_exams_active_date")
+  @@map("ws_ocr_exams")
+}
+
+model OcrAnswerKey {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  examId       BigInt    @map("exam_id") @db.UnsignedBigInt
+  version      Int       @default(1)
+  isActive     Boolean   @default(true) @map("is_active")
+  series       String?   @db.VarChar(4)
+  sourcePdfKey String?   @map("source_pdf_key") @db.VarChar(1000)
+  keys         Json      @map("keys_json")
+  marksCorrect Decimal   @default(1.0000) @map("marks_correct") @db.Decimal(10, 4)
+  marksWrong   Decimal   @default(0.0000) @map("marks_wrong") @db.Decimal(10, 4)
+  uploadedBy   Int?      @map("uploaded_by")
+  createdAt    DateTime? @map("created_at") @db.Timestamp(0)
+
+  exam   OcrExam    @relation(fields: [examId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ocr_answer_keys_exam")
+  scores OcrScore[]
+
+  @@unique([examId, version], map: "uq_ocr_answer_keys_exam_version")
+  @@index([examId, series, isActive], map: "idx_ocr_answer_keys_active")
+  @@map("ws_ocr_answer_keys")
+}
+
+model OcrSubmission {
+  id                     BigInt              @id @default(autoincrement()) @db.UnsignedBigInt
+  examId                 BigInt              @map("exam_id") @db.UnsignedBigInt
+  customerId             Int                 @map("customer_id")
+  sourcePdfKey           String?             @map("source_pdf_key") @db.VarChar(1000)
+  extractionKind         OcrExtractionKind?  @map("extraction_kind")
+  rollNumber             String?             @map("roll_number") @db.VarChar(64)
+  series                 String?             @db.VarChar(4)
+  rawAnswers             Json                @map("raw_answers")
+  lowConfidenceQuestions Json?               @map("low_confidence_questions")
+  status                 OcrSubmissionStatus @default(processing)
+  failureCode            String?             @map("failure_code") @db.VarChar(64)
+  createdAt              DateTime?           @map("created_at") @db.Timestamp(0)
+  updatedAt              DateTime?           @map("updated_at") @db.Timestamp(0)
+
+  exam  OcrExam   @relation(fields: [examId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ocr_submissions_exam")
+  score OcrScore?
+
+  @@index([customerId, createdAt], map: "idx_ocr_submissions_customer")
+  @@index([examId, status], map: "idx_ocr_submissions_exam_status")
+  @@index([status, createdAt], map: "idx_ocr_submissions_review_queue")
+  @@map("ws_ocr_submissions")
+}
+
+model OcrScore {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  submissionId BigInt    @unique(map: "uq_ocr_scores_submission") @map("submission_id") @db.UnsignedBigInt
+  examId       BigInt    @map("exam_id") @db.UnsignedBigInt
+  customerId   Int       @map("customer_id")
+  answerKeyId  BigInt    @map("answer_key_id") @db.UnsignedBigInt
+  correct      Int
+  wrong        Int
+  unanswered   Int
+  rawScore     Decimal   @map("raw_score") @db.Decimal(10, 4)
+  createdAt    DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt    DateTime? @map("updated_at") @db.Timestamp(0)
+
+  submission OcrSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ocr_scores_submission")
+  answerKey  OcrAnswerKey  @relation(fields: [answerKeyId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ocr_scores_answer_key")
+  rank       OcrRank?
+
+  @@unique([examId, customerId], map: "uq_ocr_scores_exam_customer")
+  @@index([answerKeyId], map: "fk_ocr_scores_answer_key")
+  @@index([customerId], map: "fk_ocr_scores_customer")
+  @@index([examId, rawScore], map: "idx_ocr_scores_leaderboard")
+  @@map("ws_ocr_scores")
+}
+
+model OcrRank {
+  scoreId         BigInt   @id @map("score_id") @db.UnsignedBigInt
+  examId          BigInt   @map("exam_id") @db.UnsignedBigInt
+  rankPosition    Int      @map("rank_position")
+  totalCandidates Int      @map("total_candidates")
+  percentile      Decimal  @db.Decimal(6, 2)
+  computedAt      DateTime @map("computed_at") @db.DateTime(0)
+
+  score OcrScore @relation(fields: [scoreId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ocr_ranks_score")
+
+  @@index([examId], map: "idx_ocr_ranks_exam")
+  @@map("ws_ocr_ranks")
+}
+
+model OcrAuditLog {
+  id         BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  actorType  OcrAuditActorType @default(system) @map("actor_type")
+  actorId    Int?              @map("actor_id")
+  action     String            @db.VarChar(64)
+  entityType String            @map("entity_type") @db.VarChar(32)
+  entityId   String?           @map("entity_id") @db.VarChar(64)
+  metadata   Json?
+  createdAt  DateTime?         @map("created_at") @db.Timestamp(0)
+
+  @@index([createdAt], map: "idx_ocr_audit_created")
+  @@index([entityType, entityId], map: "idx_ocr_audit_entity")
+  @@map("ws_ocr_audit_logs")
+}
+
+model OcrProfile {
+  customerId     Int       @id @map("customer_id")
+  showRealName   Boolean   @default(false) @map("show_real_name")
+  casteCategory  String?   @map("caste_category") @db.VarChar(10)
+  gender         String?   @db.VarChar(10)
+  isExServiceman Boolean?  @map("is_ex_serviceman")
+  createdAt      DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt      DateTime? @map("updated_at") @db.Timestamp(0)
+
+  @@map("ws_ocr_profiles")
+}

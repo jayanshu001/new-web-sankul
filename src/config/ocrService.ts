@@ -1,0 +1,13 @@
+const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_LOW_CONFIDENCE_THRESHOLD_PCT = 5;
+
+export const OCR_SERVICE = {
+  BASE_URL: (process.env.OCR_SERVICE_URL || "").replace(/\/+$/, ""),
+  INTERNAL_TOKEN: process.env.OCR_INTERNAL_TOKEN || "",
+  TIMEOUT_MS: Number(process.env.OCR_EXTRACTION_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
+  LOW_CONFIDENCE_THRESHOLD_PCT:
+    Number(process.env.OCR_LOW_CONFIDENCE_THRESHOLD_PCT) || DEFAULT_LOW_CONFIDENCE_THRESHOLD_PCT,
+} as const;
+
+export const isOcrServiceConfigured = (): boolean =>
+  Boolean(OCR_SERVICE.BASE_URL && OCR_SERVICE.INTERNAL_TOKEN);
