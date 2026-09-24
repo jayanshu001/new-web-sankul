@@ -470,11 +470,8 @@ export const invalidateResult = async (id: number) => {
   return toResultDto({ ...updated, Customer: r.Customer, Exam: r.Exam });
 };
 
-export const getCustomerAnalytics = async (customerId: number) => {
-  const a = await repo.customerAnalytics(customerId);
-  if (!a) return null;
-  return { _id: String(a.id), customerId: String(a.customerId), exams: a.exams, questions: a.questions, attempt: a.attempt, skip: a.skip, success: a.success, failed: a.failed, score: num(a.score) };
-};
+// Same live ws_exam_result aggregate + DTO the client /my/analytics serves.
+export { getOverallAnalytics as getCustomerAnalytics } from "../client-exam/client-exam.service";
 
 export const getExamAnalytics = async (examId: number) => {
   const [overallRows, perQ] = await Promise.all([repo.examOverall(examId), repo.examPerQuestion(examId)]);

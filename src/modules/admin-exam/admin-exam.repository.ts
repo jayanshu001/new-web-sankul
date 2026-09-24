@@ -228,9 +228,6 @@ export const adminExamRepository = {
   invalidateResult: (id: number) =>
     prisma.examResult.update({ where: { id }, data: { status: false, score: 0 } }),
 
-  customerAnalytics: (customerId: number) =>
-    prisma.examResultDetailAnalytics.findFirst({ where: { customerId } }),
-
   // ── analytics (raw SQL aggregates on qresult_* columns) ──────────────────────
   examOverall: (examId: number) =>
     prisma.$queryRawUnsafe<any[]>(

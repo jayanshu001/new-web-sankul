@@ -90,6 +90,14 @@ Every screen in the admin **Reports** sidebar now has its own view-only key, gro
   `summary` (Total / Revenue / Active / Expired) unless `isSuperAdmin(req)`
   (`middlewares/requirePermission.ts`, now exported). `data` + `pagination` unchanged;
   the admin panel already defaults a missing `summary` to zeros and hides the cards.
+## 2026-09-24 — Quiz analytics read live from `ws_exam_result`; `ws_exam_result_detail_analytics` retired (no DDL)
+
+- **Endpoints:** `GET /client/quizzes/my/analytics`, `GET /admin/exams/analytics/customer/:customerId`.
+- **Before:** both read the per-customer rollup row in `ws_exam_result_detail_analytics`. `submitAttempt` (and the unrouted `saveAnswers`) rebuilt that row after every submit. Customers whose attempts came over in the migration but who had no rollup row got `null`.
+- **After:** `client-exam.repository.overallAnalytics` runs the aggregate on every call (the same SQL `recomputeAnalytics` used): `COUNT(DISTINCT qresult_qtest_id)` + `SUM`s over `ws_exam_result WHERE qresult_customer_id=? AND qresult_status=1`. Legacy migrated attempts are now counted. `recomputeAnalytics` is deleted, so nothing writes the rollup table anymore. The admin endpoint re-exports the client service, so both return one DTO.
+- **Shape:** keys unchanged. `_id` is now the customer id as a string, because there is no rollup row id anymore. Still `null` when the customer has no submitted attempt.
+- **Verified:** customer 472384 on local DB gives the same numbers as its old rollup row (id 8).
+- **Table:** `ws_exam_result_detail_analytics` is left in place (no drop without consent). It is no longer read or written.
 
 ## 2026-09-23 — Admin package Pricing tab no longer orders by status (no DDL)
 

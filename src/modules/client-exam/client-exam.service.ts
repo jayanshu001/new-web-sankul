@@ -200,10 +200,12 @@ const toFullResultDto = (r: any) => ({
 // ─── getMyOverallAnalytics ────────────────────────────────────────────────────
 export const getOverallAnalytics = async (customerId: number) => {
   const row = await repo.overallAnalytics(customerId);
-  if (!row) return null;
+  // No submitted attempt = no analytics (same null the missing rollup row gave).
+  if (!row.exams) return null;
   return {
-    _id: String(row.id),
-    customerId: row.customerId != null ? String(row.customerId) : null,
+    // No rollup row anymore; `_id` kept for the frozen shape, one per customer.
+    _id: String(customerId),
+    customerId: String(customerId),
     exams: row.exams,
     questions: row.questions,
     attempt: row.attempt,
@@ -404,8 +406,6 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
     customerId, examId: data.examId, total, attempt, skip, success, failed,
     score: Math.round(score * 100) / 100, timing: data.timing, ratting: data.ratting ?? null, details,
   });
-
-  await repo.recomputeAnalytics(customerId);
 
   // Rank by best score per customer (ties share a rank; higher = better).
   // Counted in SQL — see repo.rankForExam.
@@ -649,8 +649,6 @@ export const submitAttempt = async (
     total, attempt: total - skip, skip, success, failed,
     score: Math.round(score * 100) / 100, timing, ratting: input.ratting ?? attempt.ratting ?? null, submittedAt,
   });
-
-  await repo.recomputeAnalytics(customerId);
 
   const myBest = Math.max(
     num(updated.score),
