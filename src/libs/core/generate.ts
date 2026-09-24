@@ -4,6 +4,7 @@ import puppeteer, { type Browser } from "puppeteer";
 
 import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
+import { normalizeTiming } from "../../modules/client-exam/client-exam.service";
 import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
 
 // Receipt/PDF DB reads. Each generator selects its SQL loader.
@@ -906,7 +907,13 @@ async function loadExamSolutionFromMysql(
       });
   if (!target) throw new Error("No submitted attempt found.");
 
-  const [exam, customer, details] = await Promise.all([
+  const detailSelect = {
+    answerId: true,
+    result: true,
+    point: true,
+    ExamQuestion: { select: { id: true, name: true, answer: true } },
+  } as const;
+  const [exam, customer, linkedDetails] = await Promise.all([
     prisma.exam.findFirst({
       where: { id: exId },
       select: { name: true, positiveMarks: true },
@@ -917,14 +924,18 @@ async function loadExamSolutionFromMysql(
     }),
     prisma.examResultDetail.findMany({
       where: { examResultId: target.id },
-      select: {
-        answerId: true,
-        result: true,
-        point: true,
-        ExamQuestion: { select: { id: true, name: true, answer: true } },
-      },
+      select: detailSelect,
     }),
   ]);
+  // Legacy attempts' detail rows carry a NULL qresult_detail_qresult_id and link
+  // only by (customer, exam) — same fallback as client-exam `detailsForAttempt`.
+  const details = linkedDetails.length
+    ? linkedDetails
+    : await prisma.examResultDetail.findMany({
+        where: { examResultId: null, customerId: custId, examId: exId },
+        orderBy: { id: "asc" },
+        select: detailSelect,
+      });
   if (!exam) throw new Error("Exam not found.");
   if (!customer) throw new Error("Customer not found.");
 
@@ -1009,7 +1020,7 @@ async function loadExamSolutionFromMysql(
     total,
     accuracy,
     rank,
-    timing: target.timing || "00:00",
+    timing: normalizeTiming(target.timing) || "00:00",
     questions,
   };
 }

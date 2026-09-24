@@ -31,7 +31,8 @@ Past (legacy / old-app) attempts showed a blank solution and blank time. Cause, 
   `ref const,const,const`) is the fallback, used only when the id lookup is empty, via the
   shared `detailsForAttempt()` helper. Legacy is one attempt per (customer, exam): 82
   duplicate pairs out of ~3.02M.
-  Used by `GET /client/quizzes/:id/solution` and admin `getResultById`. Admin's duplicate
+  Used by `GET /client/quizzes/:id/solution`, `…/solution/download` (PDF loader in
+  `libs/core/generate.ts`, same fallback inline) and admin `getResultById`. Admin's duplicate
   `detailsForResult` was removed.
 - **Timing:** legacy `qresult_timing` is `"3 Minutes : 31 Seconds"`; the current flow writes
   `"MM:SS"`. `normalizeTiming()` maps the legacy form to `"03:31"` on every result DTO
