@@ -46,6 +46,7 @@ import clientAppVersionRoutes from "./app-version/app-version.routes";
 import clientDownloadsRoutes from "./downloads/downloads.routes";
 import clientSubscriptionsRoutes from "./subscriptions/subscriptions.routes";
 import clientCareersRoutes from "./careers/careers.routes";
+import clientRankPredictorRoutes from "./rank-predictor/rank-predictor.routes";
 import clientEnquiryRoutes from "./inquiry/enquiry.routes";
 
 const router = Router();
@@ -62,7 +63,8 @@ router.use("/auth", clientAuthRoutes); // -> /api/v1/client/auth/*
 // PUBLIC routes — must be mounted BEFORE any `router.use("/", ...)` below whose router
 // applies `authenticate` to every request passing through (cms, inquiry, ...), otherwise
 // they 401 before reaching their own router.
-router.use("/careers", clientCareersRoutes); // -> /api/v1/client/careers/* (current-openings, apply)
+router.use("/careers", clientCareersRoutes); // -> /api/v1/client/careers/*
+router.use("/rank-predictor", clientRankPredictorRoutes); // -> /api/v1/client/rank-predictor/*
 router.use("/enquiry", clientEnquiryRoutes); // -> /api/v1/client/enquiry (public lead form)
 router.use("/profile", clientProfileRoutes); // -> /api/v1/client/profile/*
 router.use("/goals", clientGoalRoutes); // -> /api/v1/client/goals/*

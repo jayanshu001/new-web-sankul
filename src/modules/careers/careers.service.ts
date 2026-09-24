@@ -3,115 +3,107 @@ import { toCareerApplicationDto, toCareerOpeningDto } from "./careers.transforme
 import type {
   CareerApplicationCreateInput,
   CareerApplicationDto,
+  CareerApplicationListParams,
   CareerApplicationStatus,
   CareerOpeningCreateInput,
   CareerOpeningDto,
+  CareerOpeningListParams,
   CareerOpeningUpdateInput,
+  PagedResult,
 } from "./careers.types";
 
-export const parseCareerId = (id: string): bigint | null => {
-  if (!/^\d+$/.test(id)) return null;
-  return BigInt(id);
+export const parseCareerId = (id: string): bigint | null =>
+  /^\d+$/.test(id) ? BigInt(id) : null;
+
+const readById = async <T>(id: string, run: (id: bigint) => Promise<T>): Promise<T | null> => {
+  const parsed = parseCareerId(id);
+  return parsed === null ? null : run(parsed);
 };
 
-// ── openings: admin ──────────────────────────────────────────────────────
-export const listOpeningsPaged = async (q: {
-  search?: string;
-  status?: boolean;
-  skip: number;
-  take: number;
-}): Promise<{ items: CareerOpeningDto[]; total: number }> => {
-  const [rows, total] = await Promise.all([
-    careersRepository.findOpeningsPage(q),
-    careersRepository.countOpenings(q),
-  ]);
-  return { items: rows.map(toCareerOpeningDto), total };
-};
-
-export const getOpeningById = async (id: string): Promise<CareerOpeningDto | null> => {
-  const numId = parseCareerId(id);
-  if (numId === null) return null;
-  const row = await careersRepository.findOpeningById(numId);
-  return row ? toCareerOpeningDto(row) : null;
-};
-
-export const createOpening = async (input: CareerOpeningCreateInput): Promise<CareerOpeningDto> => {
-  const row = await careersRepository.createOpening(input);
-  return toCareerOpeningDto(row);
-};
-
-export const updateOpening = async (
-  id: string,
-  input: CareerOpeningUpdateInput
-): Promise<CareerOpeningDto | null> => {
-  const numId = parseCareerId(id);
-  if (numId === null) return null;
+const writeById = async <T>(id: string, run: (id: bigint) => Promise<T>): Promise<T | null> => {
   try {
-    const row = await careersRepository.updateOpening(numId, input);
-    return toCareerOpeningDto(row);
+    return await readById(id, run);
   } catch {
     return null;
   }
 };
 
+export const listOpeningsPaged = async (
+  params: CareerOpeningListParams
+): Promise<PagedResult<CareerOpeningDto>> => {
+  const [rows, total] = await Promise.all([
+    careersRepository.findOpeningsPage(params),
+    careersRepository.countOpenings(params),
+  ]);
+
+  return { items: rows.map(toCareerOpeningDto), total };
+};
+
+export const getOpeningById = (id: string): Promise<CareerOpeningDto | null> =>
+  readById(id, async (openingId) => {
+    const row = await careersRepository.findOpeningById(openingId);
+    return row ? toCareerOpeningDto(row) : null;
+  });
+
+export const createOpening = async (input: CareerOpeningCreateInput): Promise<CareerOpeningDto> =>
+  toCareerOpeningDto(await careersRepository.createOpening(input));
+
+export const updateOpening = (
+  id: string,
+  input: CareerOpeningUpdateInput
+): Promise<CareerOpeningDto | null> =>
+  writeById(id, async (openingId) =>
+    toCareerOpeningDto(await careersRepository.updateOpening(openingId, input))
+  );
+
 export const deleteOpening = async (id: string): Promise<boolean> => {
-  const numId = parseCareerId(id);
-  if (numId === null) return false;
-  try {
-    await careersRepository.deleteOpening(numId);
-  } catch {
-    return false;
-  }
-  return true;
+  const deleted = await writeById(id, async (openingId) => {
+    await careersRepository.deleteOpening(openingId);
+    return true;
+  });
+
+  return deleted ?? false;
 };
 
-// ── openings: public ──────────────────────────────────────────────────────
-export const listActiveOpenings = async (): Promise<CareerOpeningDto[]> => {
-  const rows = await careersRepository.findActiveOpenings();
-  return rows.map(toCareerOpeningDto);
-};
+export const listActiveOpenings = async (): Promise<CareerOpeningDto[]> =>
+  (await careersRepository.findActiveOpenings()).map(toCareerOpeningDto);
 
-// ── applications: admin ──────────────────────────────────────────────────
-export const listApplicationsPaged = async (q: {
+export const listApplicationsPaged = async (query: {
   openingId?: string;
   status?: CareerApplicationStatus;
   skip: number;
   take: number;
-}): Promise<{ items: CareerApplicationDto[]; total: number }> => {
-  const openingId = q.openingId ? parseCareerId(q.openingId) ?? undefined : undefined;
-  const opts = { openingId, status: q.status, skip: q.skip, take: q.take };
+}): Promise<PagedResult<CareerApplicationDto>> => {
+  const params: CareerApplicationListParams = {
+    openingId: query.openingId ? parseCareerId(query.openingId) ?? undefined : undefined,
+    status: query.status,
+    skip: query.skip,
+    take: query.take,
+  };
+
   const [rows, total] = await Promise.all([
-    careersRepository.findApplicationsPage(opts),
-    careersRepository.countApplications(opts),
+    careersRepository.findApplicationsPage(params),
+    careersRepository.countApplications(params),
   ]);
+
   return { items: rows.map(toCareerApplicationDto), total };
 };
 
-export const getApplicationById = async (id: string): Promise<CareerApplicationDto | null> => {
-  const numId = parseCareerId(id);
-  if (numId === null) return null;
-  const row = await careersRepository.findApplicationById(numId);
-  return row ? toCareerApplicationDto(row) : null;
-};
+export const getApplicationById = (id: string): Promise<CareerApplicationDto | null> =>
+  readById(id, async (applicationId) => {
+    const row = await careersRepository.findApplicationById(applicationId);
+    return row ? toCareerApplicationDto(row) : null;
+  });
 
-export const updateApplicationStatus = async (
+export const updateApplicationStatus = (
   id: string,
   status: CareerApplicationStatus
-): Promise<CareerApplicationDto | null> => {
-  const numId = parseCareerId(id);
-  if (numId === null) return null;
-  try {
-    const row = await careersRepository.updateApplicationStatus(numId, status);
-    return toCareerApplicationDto(row);
-  } catch {
-    return null;
-  }
-};
+): Promise<CareerApplicationDto | null> =>
+  writeById(id, async (applicationId) =>
+    toCareerApplicationDto(await careersRepository.updateApplicationStatus(applicationId, status))
+  );
 
-// ── applications: public submit ──────────────────────────────────────────
 export const submitApplication = async (
   input: CareerApplicationCreateInput
-): Promise<CareerApplicationDto> => {
-  const row = await careersRepository.createApplication(input);
-  return toCareerApplicationDto(row);
-};
+): Promise<CareerApplicationDto> =>
+  toCareerApplicationDto(await careersRepository.createApplication(input));

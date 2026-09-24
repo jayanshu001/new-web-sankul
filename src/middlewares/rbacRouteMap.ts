@@ -577,11 +577,27 @@ crud("/jobs/suggested-products", "jobs.suggested-products");
 // ── /careers/openings → careers.openings ─────────────────────────────────
 crud("/careers/openings", "careers.openings");
 
-// ── /careers/applications → careers.applications (view + status-edit only,
-//    no create/delete — applications arrive from the public apply endpoint) ─
+// ── /careers/applications → careers.applications ─────────────────────────
 R("PUT", "/careers/applications/:id/status", "careers.applications.edit");
 R("GET", "/careers/applications", ...view("careers.applications"));
 R("GET", "/careers/applications/:id", ...view("careers.applications"));
+
+// ── /rank-predictor → rank-predictor.{papers,answer-keys,submissions} ─────
+//    Specific rules first: answer keys and submissions are separate catalog
+//    modules that live under the papers path, so `crud("/rank-predictor/papers")`
+//    would otherwise swallow them.
+R("GET", "/rank-predictor/papers/:examId/answer-keys", ...view("rank-predictor.answer-keys"));
+R("POST", "/rank-predictor/papers/:examId/answer-keys", "rank-predictor.answer-keys.create");
+R("PATCH", "/rank-predictor/answer-keys/:id/status", "rank-predictor.answer-keys.toggle-status");
+R("GET", "/rank-predictor/papers/:examId/leaderboard", ...view("rank-predictor.papers"));
+crud("/rank-predictor/papers", "rank-predictor.papers");
+
+R("GET", "/rank-predictor/submissions", ...view("rank-predictor.submissions"));
+R("GET", "/rank-predictor/submissions/:id", ...view("rank-predictor.submissions"));
+R("GET", "/rank-predictor/submissions/:id/file", ...view("rank-predictor.submissions"));
+R("PUT", "/rank-predictor/submissions/:id/answers", "rank-predictor.submissions.edit");
+R("POST", "/rank-predictor/submissions/:id/rescore", "rank-predictor.submissions.edit");
+R("DELETE", "/rank-predictor/submissions/:id", "rank-predictor.submissions.delete");
 
 // ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────
 

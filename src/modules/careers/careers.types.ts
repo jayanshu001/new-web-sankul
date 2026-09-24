@@ -1,12 +1,83 @@
-export type CareerOpeningJobType = "full_time" | "part_time" | "contract" | "internship";
-export type CareerOpeningExperienceLevel = "fresher" | "experienced" | "any";
-export type CareerApplicationStatus = "new" | "reviewing" | "shortlisted" | "rejected";
+export const CAREER_JOB_TYPE = {
+  FULL_TIME: "full_time",
+  PART_TIME: "part_time",
+  CONTRACT: "contract",
+  INTERNSHIP: "internship",
+} as const;
+
+export type CareerOpeningJobType = (typeof CAREER_JOB_TYPE)[keyof typeof CAREER_JOB_TYPE];
+
+export const CAREER_JOB_TYPES = Object.values(CAREER_JOB_TYPE) as [
+  CareerOpeningJobType,
+  ...CareerOpeningJobType[],
+];
+
+export const CAREER_EXPERIENCE_LEVEL = {
+  FRESHER: "fresher",
+  EXPERIENCED: "experienced",
+  ANY: "any",
+} as const;
+
+export type CareerOpeningExperienceLevel =
+  (typeof CAREER_EXPERIENCE_LEVEL)[keyof typeof CAREER_EXPERIENCE_LEVEL];
+
+export const CAREER_EXPERIENCE_LEVELS = Object.values(CAREER_EXPERIENCE_LEVEL) as [
+  CareerOpeningExperienceLevel,
+  ...CareerOpeningExperienceLevel[],
+];
+
+export const CAREER_APPLICATION_STATUS = {
+  NEW: "new",
+  REVIEWING: "reviewing",
+  SHORTLISTED: "shortlisted",
+  REJECTED: "rejected",
+} as const;
+
+export type CareerApplicationStatus =
+  (typeof CAREER_APPLICATION_STATUS)[keyof typeof CAREER_APPLICATION_STATUS];
+
+export const CAREER_APPLICATION_STATUSES = Object.values(CAREER_APPLICATION_STATUS) as [
+  CareerApplicationStatus,
+  ...CareerApplicationStatus[],
+];
+
+export const APPLICANT_GENDER = {
+  MALE: "male",
+  FEMALE: "female",
+} as const;
+
+export type ApplicantGender = (typeof APPLICANT_GENDER)[keyof typeof APPLICANT_GENDER];
+
+export const APPLICANT_GENDERS = Object.values(APPLICANT_GENDER) as [
+  ApplicantGender,
+  ...ApplicantGender[],
+];
+
+export const APPLICANT_EXPERIENCE = {
+  FRESHER: "fresher",
+  EXPERIENCED: "experienced",
+} as const;
+
+export type ApplicantExperience = (typeof APPLICANT_EXPERIENCE)[keyof typeof APPLICANT_EXPERIENCE];
+
+export const APPLICANT_EXPERIENCES = Object.values(APPLICANT_EXPERIENCE) as [
+  ApplicantExperience,
+  ...ApplicantExperience[],
+];
+
+export const DEFAULT_JOB_TYPE: CareerOpeningJobType = CAREER_JOB_TYPE.FULL_TIME;
+export const DEFAULT_EXPERIENCE_LEVEL: CareerOpeningExperienceLevel = CAREER_EXPERIENCE_LEVEL.ANY;
+export const DEFAULT_VACANCIES = 1;
+
+export const OPENING_SEARCH_FIELDS = ["title", "department", "location"] as const;
+
+export interface PagedResult<T> {
+  items: T[];
+  total: number;
+}
 
 export interface CareerOpeningDto {
   _id: string;
-  // Legacy `websankul-jobs`/`websankul-books` careers UI (pre-existing, not
-  // rewritten for this migration) reads `id` as a number — kept alongside
-  // `_id` (websankul-admin's convention) so neither frontend needs changes.
   id: number;
   title: string;
   department: string | null;
@@ -63,10 +134,6 @@ export interface CareerApplicationDto {
   updated_at: Date | null;
 }
 
-// Public apply payload — every value arrives as a string off the legacy form
-// contract (`websankul-jobs`/`websankul-books` CareerForm.tsx), stored as-is;
-// the underlying columns are VARCHAR too (confirmed via DESCRIBE), not a
-// transformer shortcut.
 export interface CareerApplicationCreateInput {
   openingId?: bigint | null;
   jobTitle?: string | null;
@@ -81,4 +148,24 @@ export interface CareerApplicationCreateInput {
   currentSalary?: string | null;
   expectedSalary: string;
   reason?: string | null;
+}
+
+export interface CareerOpeningFilter {
+  search?: string;
+  status?: boolean;
+}
+
+export interface CareerOpeningListParams extends CareerOpeningFilter {
+  skip: number;
+  take: number;
+}
+
+export interface CareerApplicationFilter {
+  openingId?: bigint;
+  status?: CareerApplicationStatus;
+}
+
+export interface CareerApplicationListParams extends CareerApplicationFilter {
+  skip: number;
+  take: number;
 }

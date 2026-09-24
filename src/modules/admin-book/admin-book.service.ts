@@ -10,6 +10,7 @@ import { adminBookRepository as repo } from "./admin-book.repository";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import type { Book } from "@prisma/client";
 import { fmtExportDate } from "../../utils/csvExport";
+import { BookOrderStatus } from "../../shared/enums";
 
 
 export const parseBookId = (id: string): number | null => {
@@ -362,7 +363,6 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
 export interface OrderReportQuery {
   customerId?: string;
   bookId?: string;
-  status?: string;
   state?: string;
   fromDate?: string;
   toDate?: string;
@@ -404,7 +404,8 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
 
   return {
     customerId,
-    status: q.status,
+    // Report is paid (verified) orders only — no status filter.
+    status: BookOrderStatus.VERIFIED,
     state,
     fromDate,
     toDate,

@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import { BookOrderStatus } from "../../shared/enums";
 import {
   createBookSchema,
   updateBookSchema,
@@ -277,7 +276,6 @@ export const reorderBooks = async (req: Request, res: Response) => {
 export const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
   customerId: q.customerId,
   bookId: q.bookId,
-  status: q.status && Object.values(BookOrderStatus).includes(q.status as BookOrderStatus) ? q.status : undefined,
   state: q.state,
   // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
   // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +

@@ -42,6 +42,7 @@ import adminExportsRoutes from "./exports/exports.routes";
 import adminCacheRoutes from "./cache/cache.routes";
 import adminJobsRoutes from "./jobs/jobs.routes";
 import adminCareersRoutes from "./careers/careers.routes";
+import adminRankPredictorRoutes from "./rank-predictor/rank-predictor.routes";
 import authenticate, { requireRole } from "../middlewares/authenticate";
 import { enforceRbac } from "../middlewares/rbacEnforce";
 import { adminLimiter } from "../config/rateLimiter";
@@ -132,6 +133,7 @@ router.use("/uploads",       adminUploadsRoutes);         // -> /api/v1/admin/up
 router.use("/exports",       adminExportsRoutes);         // -> /api/v1/admin/exports/* (async report export jobs)
 router.use("/cache",         adminCacheRoutes);           // -> /api/v1/admin/cache/* (route-cache flush/stats)
 router.use("/jobs",          adminJobsRoutes);            // -> /api/v1/admin/jobs/* (Jobs Management: content, categories, organizations, papers, suggested products)
-router.use("/careers",       adminCareersRoutes);         // -> /api/v1/admin/careers/* (openings CRUD + applications review)
+router.use("/careers",       adminCareersRoutes);         // -> /api/v1/admin/careers/*
+router.use("/rank-predictor", adminRankPredictorRoutes); // -> /api/v1/admin/rank-predictor/* (papers, answer keys, submissions)
 
 export default router;
