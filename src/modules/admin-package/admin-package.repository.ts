@@ -172,16 +172,14 @@ export const adminPackageRepository = {
    * plan to Inactive made the row VANISH from the Pricing tab with no way to switch
    * it back on from that screen.
    *
-   * Ordered active-first: 251 of 633 package plans on staging are inactive (40%),
-   * several packages have more inactive than active (id 25: 17 vs 4), and the panel
-   * pages at limit=10 — so plain `duration: asc` could fill the first page entirely
-   * with retired plans. Duration remains the tiebreaker, so the active block reads
-   * exactly as it did before.
+   * Ordered by duration only — NOT grouped by status. Active and inactive plans
+   * interleave in duration order so toggling a plan's status doesn't move its row.
+   * `id` is the tiebreaker so paging stays stable across equal durations.
    */
   listPlans: (packageId: number, skip?: number, take?: number, status?: boolean) =>
     prisma.packageCourseEbookPrice.findMany({
       where: { packageId, ...(status === undefined ? {} : { status }) },
-      orderBy: [{ status: "desc" }, { duration: "asc" }],
+      orderBy: [{ duration: "asc" }, { id: "asc" }],
       skip,
       take,
     }),

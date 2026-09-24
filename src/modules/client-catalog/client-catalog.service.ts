@@ -21,6 +21,7 @@ import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import { signMediaToken } from "../../utils/mediaToken";
 import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
+import { hasActivePackageSubscription } from "../commerce-subscription/commerce-subscription.service";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
@@ -39,7 +40,9 @@ const descendantIds = async (table: string, parentCol: string, rootId: number): 
 };
 
 // ── parent existence ──────────────────────────────────────────────────────────
-export const loadParent = async (type: "course" | "package" | "live-course", id: number): Promise<{ name: string } | null> => {
+// An inactive package is hidden from the catalog, but a customer who already holds
+// an active subscription to it keeps access — deactivation must not lock out payers.
+export const loadParent = async (type: "course" | "package" | "live-course", id: number, customerId: number | null = null): Promise<{ name: string } | null> => {
   if (type === "course") {
     const c = await prisma.course.findFirst({ where: { id }, select: { name: true } });
     return c ? { name: c.name ?? "" } : null;
@@ -48,8 +51,10 @@ export const loadParent = async (type: "course" | "package" | "live-course", id:
     const lc = await prisma.liveCourse.findFirst({ where: { id, status: true }, select: { name: true } });
     return lc ? { name: lc.name } : null;
   }
-  const p = await prisma.package.findFirst({ where: { id, active: true }, select: { name: true } });
-  return p ? { name: p.name } : null;
+  const p = await prisma.package.findFirst({ where: { id }, select: { name: true, active: true } });
+  if (!p) return null;
+  if (!p.active && !(customerId && (await hasActivePackageSubscription(customerId, id)))) return null;
+  return { name: p.name };
 };
 
 // Live courses store their material/exam category refs as a JSON array on the
@@ -86,11 +91,22 @@ export const catalogVideos = async (opts: {
   } else if (opts.type === "live-course") {
     // Live courses own their video-category folders directly via liveCourseId
     // (the recordings folders), unlike course/package single-root or subjects.
-    roots = await prisma.videoCategory.findMany({
+    const owned = await prisma.videoCategory.findMany({
       where: { liveCourseId: opts.id, status: true },
       orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       select: { id: true, title: true, image: true },
     });
+    // ROOTS only. Live-course folders nest (admin createFolder(parentFolderId)
+    // writes a ws_video_category_relation edge), and listing a sub-folder next to
+    // its own parent is what made the tree unrenderable — the child is reached by
+    // drilling in, same as every other category listing. Edges are scoped to this
+    // course's own folders, so a folder shared into another tree stays a root here.
+    const ownedIds = owned.map((c) => c.id);
+    const nestedEdges = ownedIds.length
+      ? await prisma.videoCategoryRelation.findMany({ where: { parent: { in: ownedIds }, child: { in: ownedIds } }, select: { child: true } })
+      : [];
+    const nested = new Set(nestedEdges.map((e) => e.child));
+    roots = owned.filter((c) => !nested.has(c.id));
   } else {
     const subs = await prisma.packageSpecificSubject.findMany({ where: { packageId: opts.id, status: true }, select: { subjectId: true, order_by: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] });
     const subIds = subs.map((s) => s.subjectId).filter((n): n is number => n != null);

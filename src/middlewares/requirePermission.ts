@@ -25,7 +25,7 @@ import { getEffectivePermissionKeys } from "../modules/admin-auth/admin-permissi
 export const isRbacEnforced = (): boolean =>
   String(process.env.RBAC_ENFORCE).trim().toLowerCase() === "true";
 
-const isSuperAdmin = (req: Request): boolean =>
+export const isSuperAdmin = (req: Request): boolean =>
   req.user?.role === "super_admin" ||
   (Array.isArray(req.user?.permissions) && req.user!.permissions.includes("*"));
 

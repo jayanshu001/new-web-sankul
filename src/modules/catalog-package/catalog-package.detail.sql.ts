@@ -141,7 +141,10 @@ const populateGoal = async (id: number | null) => {
 // route-cache pitfall to avoid (package.routes.ts must not wrap this in an
 // outer cacheRoute({ scope: CacheScope.User }) either).
 const buildPackageDetailShared = async (packageId: number) => {
-  const pkg = await prisma.package.findFirst({ where: { id: packageId, active: true } });
+  // No `active` filter here: this entry is shared across callers, and an inactive
+  // package must stay reachable for its subscribers. The per-caller gate is in
+  // buildPackageDetailSql below.
+  const pkg = await prisma.package.findFirst({ where: { id: packageId } });
   if (!pkg) return null;
 
   const [videos, materials, tests, plans, availablePromoCode, packageType, goal] = await Promise.all([
@@ -177,6 +180,8 @@ export const buildPackageDetailSql = async (packageId: number, customerId: numbe
   const { pkg, packageType, goal, videos, materials, tests, plans, availablePromoCode } = shared;
 
   const activeSub = customerId ? await getActivePackageSubscription(customerId, packageId) : null;
+  // Inactive package → hidden, except for customers with an active subscription.
+  if (!pkg.active && !activeSub) return null;
   const isPurchased = !!activeSub;
   const daysLeft = isPurchased ? computeDaysLeft(activeSub?.endAt ?? null) : null;
 

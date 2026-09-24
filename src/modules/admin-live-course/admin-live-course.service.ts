@@ -30,6 +30,10 @@ import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, buildPrismaPrefixSearch, matchesAllTokens } from "../../utils/searchFilter";
+// Folder hierarchy for the client recordings reads — same DAG source + ancestor
+// chain the admin category pickers use, so the FE maps one shape everywhere.
+import { primaryParentMap } from "../../utils/videoCategoryRelation";
+import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
 
@@ -1941,10 +1945,98 @@ const recordingFolderWhere = (courseId: number) => ({ liveCourseId: courseId, st
 const RECORDING_FOLDER_ORDER = [{ order_by: "asc" as const }, { created_at: "asc" as const }];
 const RECORDING_FOLDER_SELECT = { id: true, title: true, image: true, order_by: true };
 
+type RecordingFolderRow = { id: number; title: string | null; slug?: string | null; image?: string | null; order_by?: number | null; status?: boolean | null; created_at?: Date | null; updated_at?: Date | null };
+
+/**
+ * Hierarchy overlay for the recordings folder rows.
+ *
+ * Live-course folders NEST — admin createFolder(parentFolderId) writes a
+ * `ws_video_category_relation` edge (see lcCreateFolder) — but the client reads
+ * used to emit a FLAT list with no parent link, so the app could not render a
+ * parent/child view.
+ *
+ * The emitted fields are the catalog directory contract, NOT a new shape:
+ * `parent` / `childCategoryIds` / `havingChildDirectory` / `count`, exactly as
+ * `client-catalog.catalogMaterials` + `catalogVideos` and the
+ * `/client/{material,video,exam}-categories/:id/children` drill-downs already emit
+ * them. `count` is context-dependent the same way: a directory node reports its
+ * CHILD-FOLDER count, a leaf reports its own lecture count — a folder's direct
+ * lecture count is 0 when its lectures live in sub-folders, and reporting that was
+ * the confusing bit.
+ *
+ * Edges are scoped to this course's folders on BOTH ends, so a folder that also
+ * hangs under another course's tree never leaks a foreign parent or child.
+ */
+const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
+  const ids = folders.map((f) => f.id);
+  const edges = ids.length
+    ? await prisma.videoCategoryRelation.findMany({
+        where: { parent: { in: ids }, child: { in: ids } },
+        select: { parent: true, child: true, order: true },
+      })
+    : [];
+  // The relation table is a DAG; collapse to ONE parent per folder so `parent`
+  // stays single-valued (same rule the admin pickers use).
+  const primaryParent = primaryParentMap(edges);
+  const childrenOf = new Map<number, number[]>();
+  for (const e of [...edges].sort((a, b) => a.order - b.order || a.child - b.child)) {
+    // Only the primary edge counts, else a multi-parent folder is listed twice.
+    if (!e.parent || !e.child || primaryParent.get(e.child) !== e.parent) continue;
+    const arr = childrenOf.get(e.parent) ?? [];
+    if (!arr.includes(e.child)) arr.push(e.child);
+    childrenOf.set(e.parent, arr);
+  }
+  const childIds = (id: number): number[] => childrenOf.get(id) ?? [];
+  /** self + every descendant, cycle-guarded (the edge table is a DAG, not a tree). */
+  const subtree = (id: number): number[] => {
+    const out: number[] = [];
+    const seen = new Set<number>();
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      out.push(cur);
+      stack.push(...childIds(cur));
+    }
+    return out;
+  };
+  return {
+    childIds,
+    subtree,
+    /** Top-level folders of this course — the ones with no parent INSIDE the course. */
+    isRoot: (id: number) => (primaryParent.get(id) ?? 0) <= 0,
+    meta: (id: number) => {
+      const parent = primaryParent.get(id) ?? null;
+      const kids = childIds(id);
+      return {
+        parent: parent ? String(parent) : null,
+        childCategoryIds: kids.map(String),
+        havingChildDirectory: kids.length > 0,
+      };
+    },
+  };
+};
+
+/**
+ * `count` per the catalog directory contract: directory node → its child-folder
+ * count, leaf → the lectures in its own subtree.
+ */
+const folderCatalogCount = (
+  tree: { childIds: (id: number) => number[]; subtree: (id: number) => number[] },
+  lecturesByFolder: Map<number, number>,
+  id: number
+): number => {
+  const kids = tree.childIds(id);
+  return kids.length
+    ? kids.length
+    : tree.subtree(id).reduce((n, fid) => n + (lecturesByFolder.get(fid) ?? 0), 0);
+};
+
 export const getRecordingsForClient = async (
   courseId: number,
   customerId: number | null,
-  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+  q: { search?: string; page: number; limit: number; parentId?: string } = { page: 1, limit: 20 }
 ): Promise<"not_found" | any> => {
   const ctx = await loadRecordingsContext(courseId, customerId);
   if (ctx === "not_found") return "not_found";
@@ -1968,8 +2060,21 @@ export const getRecordingsForClient = async (
     byFolder.set(v.videoCategoryId as number, a);
   });
 
+  const tree = await buildRecordingFolderTree(folders);
+  // Lectures per folder, for the catalog-contract `count`.
+  const lecturesByFolder = new Map<number, number>();
+  for (const v of videos) {
+    const fid = v.videoCategoryId as number;
+    lecturesByFolder.set(fid, (lecturesByFolder.get(fid) ?? 0) + 1);
+  }
+  // This mode stays FLAT (every folder, sub-folders included) on purpose: it is the
+  // "everything inline" reader and it ships each folder's `lectures[]`, so hiding
+  // sub-folders would hide lectures. The hierarchy fields let a caller group by
+  // `parent` itself. The TREE screen uses ?summary=1, which is roots-only.
   const allFolders = folders.map((f) => ({
     folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
+    ...tree.meta(f.id),
+    count: folderCatalogCount(tree, lecturesByFolder, f.id),
     lectures: byFolder.get(f.id) ?? [],
   }));
 
@@ -2002,7 +2107,7 @@ export const getRecordingsForClient = async (
 export const getRecordingFolderSummaryForClient = async (
   courseId: number,
   customerId: number | null,
-  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+  q: { search?: string; page: number; limit: number; parentId?: string } = { page: 1, limit: 20 }
 ): Promise<"not_found" | any> => {
   const ctx = await loadRecordingsContext(courseId, customerId);
   if (ctx === "not_found") return "not_found";
@@ -2023,15 +2128,26 @@ export const getRecordingFolderSummaryForClient = async (
     : [];
   const countByFolder = new Map(counts.map((c) => [c.videoCategoryId as number, c._count._all]));
 
-  const allFolders = folders.map((f) => ({
-    folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
-    lectureCount: countByFolder.get(f.id) ?? 0,
-  }));
-  // Search drops folders with no matching lecture — mirrors the full response, which
-  // filters lectures and then drops the now-empty folders. Without a search term
-  // EVERY folder is kept, including empty ones (lectureCount 0).
-  const filteredFolders = q.search ? allFolders.filter((f) => f.lectureCount > 0) : allFolders;
-  const totalLectures = filteredFolders.reduce((n, f) => n + f.lectureCount, 0);
+  const tree = await buildRecordingFolderTree(folders);
+  // Roots only — a sub-folder is reached through GET /recordings/:folderId/children,
+  // exactly like a material category is reached through
+  // /client/material-categories/:id/children. Listing children next to their own
+  // parent is what made the tree unrenderable.
+  const allFolders = folders
+    .filter((f) => tree.isRoot(f.id))
+    .map((f) => ({
+      folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
+      ...tree.meta(f.id),
+      count: folderCatalogCount(tree, countByFolder, f.id),
+      lectureCount: countByFolder.get(f.id) ?? 0,
+    }));
+  // Search drops folders with nothing matching anywhere in their SUBTREE — a hit
+  // inside a sub-folder keeps the path to it walkable. Without a search term EVERY
+  // root folder is kept, including empty ones (count 0).
+  const matchCount = (f: { folderId: string }) =>
+    tree.subtree(Number(f.folderId)).reduce((n, id) => n + (countByFolder.get(id) ?? 0), 0);
+  const filteredFolders = q.search ? allFolders.filter((f) => matchCount(f) > 0) : allFolders;
+  const totalLectures = filteredFolders.reduce((n, f) => n + matchCount(f), 0);
 
   return {
     liveCourse: { _id: String(course.id), name: course.name, image: course.image },
@@ -2057,27 +2173,108 @@ export const getRecordingFolderDetailForClient = async (
   if (ctx === "not_found") return "not_found";
   const { course, subscribed, daysLeft } = ctx;
 
-  // Folder must belong to THIS live course — otherwise any folder id would be
-  // readable through any course id.
-  const folder = await prisma.videoCategory.findFirst({
-    where: { id: folderId, ...recordingFolderWhere(courseId) },
+  // The whole course folder set is needed for the hierarchy overlay (parent chain
+  // + direct children); it is a handful of rows, and it is also what proves the
+  // folder belongs to THIS course — otherwise any folder id would be readable
+  // through any course id.
+  const allFolders = await prisma.videoCategory.findMany({
+    where: recordingFolderWhere(courseId),
+    orderBy: RECORDING_FOLDER_ORDER,
     select: RECORDING_FOLDER_SELECT,
   });
+  const folder = allFolders.find((f) => f.id === folderId);
   if (!folder) return "folder_not_found";
+  const tree = await buildRecordingFolderTree(allFolders);
 
   const where = { videoCategoryId: folder.id, status: true, ...(buildPrismaSearch(q.search, ["title"]) ?? {}) };
-  const [videos, total] = await Promise.all([
+  // Subtree counts drive the catalog-contract `count` on the folder itself.
+  const subtreeIds = tree.subtree(folder.id);
+  const [subtreeCounts, videos, total] = await Promise.all([
+    prisma.video.groupBy({ by: ["videoCategoryId"], where: { videoCategoryId: { in: subtreeIds }, status: true }, _count: { _all: true } }),
     prisma.video.findMany({ where, orderBy: [{ order: "asc" }, { created_at: "asc" }], skip: (q.page - 1) * q.limit, take: q.limit }),
     prisma.video.count({ where }),
   ]);
+  const countByFolder = new Map(subtreeCounts.map((c) => [c.videoCategoryId as number, c._count._all]));
 
   return {
     liveCourse: { _id: String(course.id), name: course.name, image: course.image },
     folderId: String(folder.id), title: folder.title, image: folder.image, order: folder.order_by,
+    // Catalog directory contract. `havingChildDirectory` is the FE's cue to call
+    // GET /recordings/:folderId/children — sub-folders are NOT inlined here, for
+    // the same reason material categories are not: they page separately.
+    ...tree.meta(folder.id),
+    count: folderCatalogCount(tree, countByFolder, folder.id),
     lectureCount: total,
     lectures: await shapeRecordingLectures(courseId, customerId, subscribed, videos),
     subscribed, daysLeft,
     total, page: q.page, limit: q.limit,
+    purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
+  };
+};
+
+/**
+ * GET /:id/recordings/:folderId/children — sub-folders of one recording folder,
+ * paginated by folder.
+ *
+ * Deliberately the SAME composition as the other directory drill-downs
+ * (`catalog-material.getCategoryChildren`, `catalog-video.getVideoCategoryChildren`,
+ * behind `/client/{material,video,exam}-categories/:id/children`): returns
+ * `{ parent, list: [{ category }] }` where each category carries `count` +
+ * `havingChildDirectory`. The live-course variant exists because those generic
+ * endpoints are not course-scoped — a folder id from another course would resolve
+ * there, and this one 404s instead.
+ */
+export const getRecordingFolderChildrenForClient = async (
+  courseId: number,
+  folderId: number,
+  customerId: number | null,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+): Promise<"not_found" | "folder_not_found" | any> => {
+  const ctx = await loadRecordingsContext(courseId, customerId);
+  if (ctx === "not_found") return "not_found";
+  const { course, subscribed, daysLeft } = ctx;
+
+  const allFolders = await prisma.videoCategory.findMany({
+    where: recordingFolderWhere(courseId),
+    orderBy: RECORDING_FOLDER_ORDER,
+    select: RECORDING_FOLDER_SELECT,
+  });
+  const folder = allFolders.find((f) => f.id === folderId);
+  if (!folder) return "folder_not_found";
+  const tree = await buildRecordingFolderTree(allFolders);
+
+  const byId = new Map(allFolders.map((f) => [f.id, f]));
+  // Children keep their admin order (RECORDING_FOLDER_ORDER), not the edge order,
+  // so a folder sorts the same here as it does on the hub.
+  const orderedChildIds = allFolders.map((f) => f.id).filter((id) => tree.childIds(folder.id).includes(id));
+  const matching = orderedChildIds.filter((id) => matchesAllTokens(q.search, [byId.get(id)?.title ?? ""]));
+  const pageIds = matching.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit);
+
+  // One groupBy over every folder in the page's subtrees, PLUS the parent's own —
+  // leaf `count` is a subtree lecture count, so the descendants must be counted
+  // too, and the parent row reports its own `lectureCount` like any hub row.
+  const countIds = [...new Set([folder.id, ...pageIds.flatMap((id) => tree.subtree(id))])];
+  const counts = countIds.length
+    ? await prisma.video.groupBy({ by: ["videoCategoryId"], where: { videoCategoryId: { in: countIds }, status: true }, _count: { _all: true } })
+    : [];
+  const countByFolder = new Map(counts.map((c) => [c.videoCategoryId as number, c._count._all]));
+
+  const folderDto = (id: number) => {
+    const f = byId.get(id)!;
+    return {
+      folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
+      ...tree.meta(f.id),
+      count: folderCatalogCount(tree, countByFolder, f.id),
+      lectureCount: countByFolder.get(f.id) ?? 0,
+    };
+  };
+
+  return {
+    liveCourse: { _id: String(course.id), name: course.name, image: course.image },
+    parent: folderDto(folder.id),
+    list: pageIds.map((id) => ({ category: folderDto(id) })),
+    subscribed, daysLeft,
+    total: matching.length, page: q.page, limit: q.limit,
     purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
   };
 };

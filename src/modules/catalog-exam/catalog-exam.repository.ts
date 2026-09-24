@@ -15,6 +15,11 @@ export const catalogExamRepository = {
     prisma.examCategory.findFirst({ where: { id, deleted: false } }),
 
   // ── category writes ─────────────────────────────────────────────────────────
+  /** Highest order_by across all exam categories, any level (-1 when none). */
+  maxCategoryOrder: async (): Promise<number> => {
+    const top = await prisma.examCategory.findFirst({ orderBy: { order_by: "desc" }, select: { order_by: true } });
+    return top?.order_by ?? -1;
+  },
   createCategory: (data: Prisma.ExamCategoryUncheckedCreateInput) =>
     prisma.examCategory.create({ data }),
   updateCategory: (id: number, data: Prisma.ExamCategoryUncheckedUpdateInput) =>

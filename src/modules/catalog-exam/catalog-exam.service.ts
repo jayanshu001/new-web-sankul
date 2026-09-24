@@ -250,7 +250,9 @@ export const createCategory = async (input: {
     image: input.image ?? null,
     parent,
     status: input.status ?? true,
-    order_by: input.orderBy ?? 0,
+    // Default: after the last category overall — the admin list is flat across
+    // levels and legacy order_by is one table-wide sequence (same rule as quizzes).
+    order_by: input.orderBy ?? (await repo.maxCategoryOrder()) + 1,
     deleted: false,
     created_at: now,
     updated_at: now,

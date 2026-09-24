@@ -14,7 +14,12 @@ export const createCategorySchema = z.object({
   ),
   parentId: z.string().nullable().optional(),
   childCategoryIds: z.array(z.string()).optional(),
-  orderBy: z.coerce.number().int().optional(),
+  // Blank multipart field → absent (coerce would turn "" into 0), so create
+  // falls back to the sibling max+1 default.
+  orderBy: z.preprocess(
+    (v) => (v === "" || v === null ? undefined : v),
+    z.coerce.number().int().optional()
+  ),
   status: z.coerce.boolean().optional(),
 });
 

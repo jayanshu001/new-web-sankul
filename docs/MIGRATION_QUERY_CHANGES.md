@@ -15,6 +15,149 @@
 
 ---
 
+## 2026-09-24 — Admin: new quiz defaults `order_by` to last + 1 (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged.
+
+`POST /admin/quizzes` used to hardcode `ws_exam.order_by = 0`. It now writes
+`MAX(ws_exam.order_by) + 1` (0 when the table is empty) via the new
+`adminExamRepository.maxExamOrder()` — the same max+1 rule questions already use
+(`maxQuestionOrder`). `order_by` is table-wide (not per category). Reorder
+(`PATCH …/reorder`) is unchanged.
+
+`POST /admin/quizzes/categories` likewise: when the body omits `orderBy`,
+`ws_exam_category.order_by` = table-wide `MAX(order_by) + 1` (all levels, incl.
+soft-deleted rows, so a number is never reused) via `catalogExamRepository.maxCategoryOrder()`,
+instead of `0`. An explicit (non-blank) `orderBy` still wins. It was briefly scoped per
+`parent_id`, which duplicated numbers in the flat admin list — the legacy data is one
+sequence across all levels.
+
+---
+
+## 2026-09-24 — Client: inactive package still reachable by its subscribers (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. FE doc: `docs/client/PACKAGE_INACTIVE_SUBSCRIBER_ACCESS.md`.
+
+**Bug:** a subscriber opening Package → Catalog → Videos got `404 "package not found."`
+whenever admin had set the package to inactive. The client lookups filtered on `active = 1`
+and never checked for a subscription.
+
+**Query changes:**
+
+- `client-catalog.service.loadParent` (used by `GET /client/catalog/:type/:id/{videos,materials,tests}`),
+  package branch: `findFirst({ id, active: true })` → `findFirst({ id })` selecting `active`.
+  If `active = 0`, it lets the request through only when
+  `commerce-subscription.hasActivePackageSubscription(customerId, id)` is true
+  (`ws_package_course_subscription`: `status = 1`, `end_at > now`). The controller now passes `req.user.id`.
+- `catalog-package.detail.sql.buildPackageDetailShared` (the shared, cached part of
+  `GET /client/packages/:id`): the `active: true` filter is removed so the cache entry
+  doesn't depend on who asked first. `buildPackageDetailSql` returns null (→ 404) when
+  `!pkg.active && !activeSub`. It reuses the subscription lookup that already runs for `isPurchased`,
+  so there's no extra query.
+
+Course (no status filter) and live-course (`status = 1`, not changed here) are not affected.
+
+---
+
+## 2026-09-23 — Reports: one permission per report screen (no DDL)
+
+> **DDL:** none. **Data:** boot seeder inserts 3 `ws_permissions` rows + a `reports`
+> `ws_permission_category` (`CATALOG_VERSION` → `2026.09.23-1`). DML to regroup 3 existing
+> rows: `schema-changes/2026-09-23_reports_permission_category.sql` (run after first boot).
+> Response shapes unchanged.
+
+Every screen in the admin **Reports** sidebar now has its own view-only key, grouped under
+"Reports" in the RBAC tree:
+
+| Report | Key | Routes (GET) | Also opened by |
+|---|---|---|---|
+| EBook Subscriptions | `ebooks.subscriptions.view` (existing) | `/ebooks/subscriptions/list`, `/:id`, `/export/:format` | — |
+| Book Orders | `books.orders.view` (existing) | `/books/orders/list`, `/:id`, `/export/:format` | — |
+| Subscription Report | `subscriptions.reports.view` (existing, relabelled) | `/subscriptions`, `/:id`, `/export/:format` | `subscriptions.view`, `subscriptions.material-report.view` |
+| Subscription Material Report | `subscriptions.material-report.view` (NEW) | same as above | `subscriptions.view`, `subscriptions.reports.view` |
+| Live Course Report | `live-courses.report.view` (NEW) | `/live-courses/subscriptions`, `/:id`, `/export/:format` | `live-courses.view` |
+| Test Series Report | `test-series.report.view` (NEW) | `/test-series/subscriptions`, `/:id`, `/export/:format` | `test-series.view` |
+
+- Parent `<module>.view` still opens each report (OR), so no existing role loses access.
+- Subscription and Subscription Material Report are the same endpoint with different
+  filters, so the backend can't tell them apart: either key opens the list. The FE hides
+  the screen the admin doesn't hold.
+- The `export/:format` sync routes for all six were **unmapped** (allowed for any staff);
+  they now gate on the report's keys. The async `/exports` job (report type in the body)
+  is still unmapped.
+- **Summary is super-admin only.** `GET /subscriptions`, `/live-courses/subscriptions`
+  (+ `/live-courses/:id/subscriptions`) and `/test-series/subscriptions` omit the top-level
+  `summary` (Total / Revenue / Active / Expired) unless `isSuperAdmin(req)`
+  (`middlewares/requirePermission.ts`, now exported). `data` + `pagination` unchanged;
+  the admin panel already defaults a missing `summary` to zeros and hides the cards.
+
+## 2026-09-23 — Admin package Pricing tab no longer orders by status (no DDL)
+
+> **DDL:** none. **Query:** `admin-package.repository.listPlans` (`GET /admin/packages/:id/plans`).
+
+`ws_package_course_ebook_price` for a package was ordered
+`status DESC, duration ASC` (active block first, inactive after). Now
+`duration ASC, id ASC` — active and inactive plans interleave by duration, and `id`
+makes pagination deterministic on equal durations. Filter (`packageId`, optional
+`status`), count and response shape unchanged.
+## 2026-09-23 — Live-course recording folders follow the catalog directory contract
+
+> **DDL:** none. **Backfill:** none. **Queries:** one new `ws_video_category_relation`
+> read per recordings call (scoped to the course's own folders) + one `ws_video.groupBy`
+> for subtree counts. One **filter-contract change**: folder listings are now ROOTS ONLY.
+
+Requested: the client must be able to render a parent/child folder view, following the
+**existing** material pattern (`/client/catalog/:type/:id/materials` +
+`/client/material-categories/:id/children`), not a new shape.
+
+Live-course folders already nested — admin `lcCreateFolder(parentFolderId)` writes a
+`ws_video_category_relation` edge — but every client reader listed the whole flat set, so a
+sub-folder appeared next to its own parent.
+
+**New queries** (`src/modules/admin-live-course/admin-live-course.service.ts`):
+
+* `buildRecordingFolderTree()` — `prisma.videoCategoryRelation.findMany({ where: { parent: { in: folderIds }, child: { in: folderIds } } })`. Both ends constrained to the course's own
+  folder ids, so a folder that also hangs under another course cannot leak a foreign parent
+  or child. The DAG is collapsed to one parent per folder with the shared
+  `primaryParentMap()`.
+* `getRecordingFolderDetailForClient()` now loads the course's whole folder set (a handful
+  of rows, `RECORDING_FOLDER_SELECT`) instead of one `findFirst` — it is both the hierarchy
+  source and the course-ownership proof (behaviour unchanged: the folder must still be in
+  `{ liveCourseId, status: true }`). Plus one `prisma.video.groupBy({ by: ["videoCategoryId"] })` over the folder's subtree for `count`.
+* **New endpoint** `GET /client/live-courses/:id/recordings/:folderId/children` →
+  `getRecordingFolderChildrenForClient()`. Same composition as
+  `catalog-material.getCategoryChildren` / `catalog-video.getVideoCategoryChildren`
+  (`{ parent, list: [{ category }] }`, each category carrying `count` +
+  `havingChildDirectory`); one `groupBy` over the page's subtrees plus the parent id.
+  Course-scoped, so a foreign folder id 404s — which the generic
+  `/client/video-categories/:id/children` does not do.
+
+**Changed filter contract (breaking for a flat renderer):**
+
+* `GET /client/live-courses/:id/recordings?summary=1` now returns **top-level folders
+  only**. `total` / `pagination` count roots, not all folders. Under `?search=` a root is
+  kept when the match is anywhere in its SUBTREE (it used to be dropped when its own
+  `lectureCount` was 0), so the path to a hit stays walkable.
+* `GET /client/catalog/live-course/:id/videos` (`client-catalog.catalogVideos`) had the
+  identical bug — `roots = every videoCategory with liveCourseId`. It now excludes any
+  folder that is the `child` of an edge between two of the course's own folders. Response
+  shape untouched; `/client/video-categories/:id/children` already drills in.
+* The non-`summary` `GET /:id/recordings` stays FLAT on purpose — it inlines each folder's
+  `lectures[]`, so filtering to roots would hide lectures.
+
+**New response fields** (additive, all three recordings reads): `parent` (string|null),
+`childCategoryIds` (string[]), `havingChildDirectory` (bool), `count`. `count` follows the
+catalog rule — directory node → child-folder count, leaf → subtree lecture count.
+`lectureCount` keeps its old meaning (direct lectures) everywhere.
+
+Supersedes the first cut of this entry, which used the ADMIN PICKER shape
+(`parentId`/`ancestors`/`hasChildren`/`depth`/`totalLectureCount`/`childFolders[]` and a
+`?parentId=` filter). Those fields and that query param were removed before shipping — the
+client-facing directory contract is the catalog one, and there must be only one.
+FE doc: `docs/client/LIVE_COURSE_RECORDING_FOLDER_TREE.md`.
+
+---
+
 ## 2026-09-22 — `shareableLink` carries an encrypted id token (no DDL, no query change)
 
 > **DDL:** none. **Queries:** none — no repository, service or Prisma call was

@@ -164,6 +164,7 @@ R("GET|POST", "/ebooks/reorder", "ebooks.edit");
 R("GET", "/ebooks/pdf-jobs/:id", ...view("ebooks"));
 R("POST", "/ebooks/:id/pdf", "ebooks.edit");
 R("PATCH", "/ebooks/:id/trending", "ebooks.edit");
+R("GET", "/ebooks/subscriptions/export/:format", ...view("ebooks.subscriptions")); // was unmapped
 R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
 // ebooks.subscriptions is a view-only report; its write routes gate on parent `ebooks`.
 // "Add ebook subscription" from the Customers side also unlocks this (2026-09-11).
@@ -249,6 +250,7 @@ R("POST", "/books/reorder", "books.edit");
 // independently. Registered before crud("/books") so :id can't shadow it.
 R("GET", "/books/settings", "cms.free-delivery.view");
 R("PUT", "/books/settings", "cms.free-delivery.edit");
+R("GET", "/books/orders/export/:format", ...view("books.orders")); // was unmapped
 R("GET", "/books/orders/list", ...view("books.orders"));
 R("GET", "/books/orders/:id", ...view("books.orders"));
 R("PATCH", "/books/orders/:id/status", "books.edit");
@@ -370,6 +372,12 @@ R(
   "customers.course-subscriptions.create",
   "customers.package-subscriptions.create"
 );
+// Subscription Report + Subscription Material Report share this list (they
+// differ only in filters), so either report key opens it (2026-09-23).
+const subReport = [...view("subscriptions"), ...view("subscriptions.reports"), ...view("subscriptions.material-report")];
+R("GET", "/subscriptions/export/:format", ...subReport); // was unmapped
+R("GET", "/subscriptions", ...subReport);
+R("GET", "/subscriptions/:id", ...subReport);
 crud("/subscriptions", "subscriptions");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
@@ -490,8 +498,10 @@ R("DELETE", "/live-sessions/:id", "live-sessions.delete"); // was cancel|delete
 R("GET", "/live-courses/plans/:id", ...view("live-courses"));
 R("PUT", "/live-courses/plans/:id", "live-courses.edit");
 R("DELETE", "/live-courses/plans/:id", "live-courses.delete");
-R("GET", "/live-courses/subscriptions", ...view("live-courses"));
-R("GET", "/live-courses/subscriptions/:id", ...view("live-courses"));
+// Live Course Report: own key `live-courses.report` OR parent view (2026-09-23).
+R("GET", "/live-courses/subscriptions/export/:format", ...view("live-courses"), ...view("live-courses.report"));
+R("GET", "/live-courses/subscriptions", ...view("live-courses"), ...view("live-courses.report"));
+R("GET", "/live-courses/subscriptions/:id", ...view("live-courses"), ...view("live-courses.report"));
 R("PUT", "/live-courses/subscriptions/:id", "live-courses.edit");
 R("DELETE", "/live-courses/subscriptions/:id", "live-courses.delete");
 R("GET", "/live-courses/:id/sessions", ...view("live-courses"));
@@ -527,8 +537,10 @@ R("DELETE", "/test-series/papers/:id", "test-series.edit");
 // test-series.plans + test-series.subscriptions collapsed 2026-07-20 into `test-series`.
 R("PUT", "/test-series/prices/:id", "test-series.edit");
 R("DELETE", "/test-series/prices/:id", "test-series.delete");
-R("GET", "/test-series/subscriptions", ...view("test-series"));
-R("GET", "/test-series/subscriptions/:id", ...view("test-series"));
+// Test Series Report: own key `test-series.report` OR parent view (2026-09-23).
+R("GET", "/test-series/subscriptions/export/:format", ...view("test-series"), ...view("test-series.report"));
+R("GET", "/test-series/subscriptions", ...view("test-series"), ...view("test-series.report"));
+R("GET", "/test-series/subscriptions/:id", ...view("test-series"), ...view("test-series.report"));
 R("PUT", "/test-series/subscriptions/:id", "test-series.edit");
 R("DELETE", "/test-series/subscriptions/:id", "test-series.delete");
 R("GET", "/test-series/orders", ...view("test-series"));
