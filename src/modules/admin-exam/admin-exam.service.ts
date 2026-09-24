@@ -1,5 +1,6 @@
 import { adminExamRepository as repo } from "./admin-exam.repository";
 import { setExamCategories, validateLeafCategoryIds } from "../catalog-exam/exam-category-pivot.where";
+import { normalizeTiming, detailsForAttempt } from "../client-exam/client-exam.service";
 
 
 export const parseExamId = (id: string): number | null => {
@@ -69,7 +70,7 @@ const toResultDto = (r: any) => ({
   customerId: toCustomerRef(r.Customer),
   examId: r.Exam ? { _id: String(r.Exam.id), title: r.Exam.name, type: r.Exam.type, durationMinutes: r.Exam.time } : (r.examId != null ? String(r.examId) : null),
   total: r.total, attempt: r.attempt, skip: r.skip, success: r.success, failed: r.failed,
-  score: num(r.score), timing: r.timing, ratting: r.ratting ?? null, status: r.status ?? true,
+  score: num(r.score), timing: normalizeTiming(r.timing), ratting: r.ratting ?? null, status: r.status ?? true,
   createdAt: r.created_at ?? null,
 });
 
@@ -456,7 +457,7 @@ export const getExamSubmissions = async (examId: number, page: number, limit: nu
 export const getResultById = async (id: number) => {
   const r = await repo.findResult(id);
   if (!r) return null;
-  const details = await repo.detailsForResult(id);
+  const details = await detailsForAttempt(r);
   return {
     result: toResultDto(r),
     details: details.map((d) => ({ _id: String(d.id), questionId: d.questionId != null ? String(d.questionId) : null, answerId: d.answerId != null ? String(d.answerId) : null, result: d.result, point: num(d.point) })),
@@ -470,11 +471,8 @@ export const invalidateResult = async (id: number) => {
   return toResultDto({ ...updated, Customer: r.Customer, Exam: r.Exam });
 };
 
-export const getCustomerAnalytics = async (customerId: number) => {
-  const a = await repo.customerAnalytics(customerId);
-  if (!a) return null;
-  return { _id: String(a.id), customerId: String(a.customerId), exams: a.exams, questions: a.questions, attempt: a.attempt, skip: a.skip, success: a.success, failed: a.failed, score: num(a.score) };
-};
+// Same live ws_exam_result aggregate + DTO the client /my/analytics serves.
+export { getOverallAnalytics as getCustomerAnalytics } from "../client-exam/client-exam.service";
 
 export const getExamAnalytics = async (examId: number) => {
   const [overallRows, perQ] = await Promise.all([repo.examOverall(examId), repo.examPerQuestion(examId)]);

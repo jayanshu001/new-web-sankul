@@ -13,6 +13,24 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * Legacy attempts stored timing as "3 Minutes : 31 Seconds"; the current flow
+ * writes "MM:SS" (see computeTimingFromStart). Every read normalises to "MM:SS"
+ * so the app parses one format.
+ */
+export const normalizeTiming = (t: string | null | undefined): string | null => {
+  if (t == null) return null;
+  const m = /^\s*(\d+)\s*Minutes?\s*:\s*(\d+)\s*Seconds?\s*$/i.exec(t);
+  return m ? `${m[1].padStart(2, "0")}:${m[2].padStart(2, "0")}` : t;
+};
+
+/** Detail rows of one attempt, falling back to the legacy (customer, exam) link. */
+export const detailsForAttempt = async (r: { id: number; customerId: number | null; examId: number | null }) => {
+  const details = await repo.detailsForResult(r.id);
+  if (details.length || r.customerId == null || r.examId == null) return details;
+  return repo.legacyDetailsForExam(r.customerId, r.examId);
+};
+
 // Exam → the Mongo-shaped client DTO (matches the controller's .select fields).
 const toExamDto = (e: any) => ({
   _id: String(e.id),
@@ -42,7 +60,7 @@ const toResultDto = (r: any) => ({
   success: r.success,
   failed: r.failed,
   score: num(r.score),
-  timing: r.timing,
+  timing: normalizeTiming(r.timing),
   ratting: r.ratting ?? null,
   createdAt: r.created_at ?? null,
 });
@@ -187,7 +205,7 @@ const toFullResultDto = (r: any) => ({
   success: r.success,
   failed: r.failed,
   score: num(r.score),
-  timing: r.timing,
+  timing: normalizeTiming(r.timing),
   ratting: r.ratting ?? null,
   solution: r.solution ?? null,
   status: r.status ?? null,
@@ -200,10 +218,12 @@ const toFullResultDto = (r: any) => ({
 // ─── getMyOverallAnalytics ────────────────────────────────────────────────────
 export const getOverallAnalytics = async (customerId: number) => {
   const row = await repo.overallAnalytics(customerId);
-  if (!row) return null;
+  // No submitted attempt = no analytics (same null the missing rollup row gave).
+  if (!row.exams) return null;
   return {
-    _id: String(row.id),
-    customerId: row.customerId != null ? String(row.customerId) : null,
+    // No rollup row anymore; `_id` kept for the frozen shape, one per customer.
+    _id: String(customerId),
+    customerId: String(customerId),
     exams: row.exams,
     questions: row.questions,
     attempt: row.attempt,
@@ -237,7 +257,7 @@ export const listPastDailyResults = async (customerId: number, page: number, lim
     success: r.success,
     failed: r.failed,
     score: num(r.score),
-    timing: r.timing,
+    timing: normalizeTiming(r.timing),
     submittedAt: r.submittedAt ?? null,
     createdAt: r.created_at ?? null,
     exam: r.Exam
@@ -405,8 +425,6 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
     score: Math.round(score * 100) / 100, timing: data.timing, ratting: data.ratting ?? null, details,
   });
 
-  await repo.recomputeAnalytics(customerId);
-
   // Rank by best score per customer (ties share a rank; higher = better).
   // Counted in SQL — see repo.rankForExam.
   const myBest = Math.max(
@@ -426,7 +444,7 @@ export const getSolution = async (customerId: number, examId: number, attemptId?
     : await repo.latestResultForExam(customerId, examId);
   if (!target) return null;
 
-  const details = await repo.detailsForResult(target.id);
+  const details = await detailsForAttempt(target);
   const qIds = details.map((d) => d.questionId).filter((x): x is number => x != null);
   const questions = qIds.length ? await repo.questionsByIds(qIds) : [];
   const qById = new Map(questions.map((q) => [q.id, q]));
@@ -485,7 +503,7 @@ const toAttemptDto = (r: any) => ({
   success: r.success,
   failed: r.failed,
   score: num(r.score),
-  timing: r.timing,
+  timing: normalizeTiming(r.timing),
   ratting: r.ratting ?? null,
   status: r.status ?? false,
   inProgress: r.inProgress ?? false,
@@ -649,8 +667,6 @@ export const submitAttempt = async (
     total, attempt: total - skip, skip, success, failed,
     score: Math.round(score * 100) / 100, timing, ratting: input.ratting ?? attempt.ratting ?? null, submittedAt,
   });
-
-  await repo.recomputeAnalytics(customerId);
 
   const myBest = Math.max(
     num(updated.score),
