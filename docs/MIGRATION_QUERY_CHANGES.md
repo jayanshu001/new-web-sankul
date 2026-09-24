@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-09-24 — Admin book-orders report: verified orders only, status filter removed (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. Admin-only (no client doc).
+
+`GET /admin/book/orders/list`, `/orders/export/csv`, `/orders/export/excel` and the
+`bookOrder` export job all resolve filters via `adminBook.resolveOrderOpts`. With no
+`?status=`, `buildOrderWhere` previously applied **no status condition**, so unpaid
+`pending` checkouts were listed and counted alongside paid orders.
+
+- **Now:** always `WHERE ws_book_order.status = 'verified'`. Live data holds only
+  `verified` / `pending` — the payment-verify path is the only status writer
+  (`updateOrderStatus` is a no-op on MySQL), so shipped/delivered never occur.
+- The `?status=` query param is **removed** (ignored if sent) — `parseOrderReportQuery`
+  and `OrderReportQuery` no longer carry it. Pending orders are not reachable via the report.
+- **QA:** report totals + `pagination.total` drop by the pending-row count.
+
+---
+
 ## 2026-09-24 — Client + admin: legacy exam attempts show solution + timing (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged (same keys); `timing` value normalised.
