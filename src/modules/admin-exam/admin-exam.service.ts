@@ -223,7 +223,8 @@ export const createExam = async (input: ExamWriteInput): Promise<{ error: string
     startAt: input.startAt ?? now,
     endAt: input.endAt ?? null,
     status: input.status ?? false,
-    order_by: 0,
+    // New quiz lands after the current last one (same max+1 rule as questions).
+    order_by: (await repo.maxExamOrder()) + 1,
     send_push: input.sendPush ?? false,
     createAt: now,
     updatedAt: now,

@@ -103,6 +103,10 @@ export const adminExamRepository = {
       },
       select: { id: true, name: true, startAt: true, endAt: true },
     }),
+  maxExamOrder: async (): Promise<number> => {
+    const top = await prisma.exam.findFirst({ orderBy: { order_by: "desc" }, select: { order_by: true } });
+    return top?.order_by ?? -1;
+  },
   createExam: (data: Prisma.ExamUncheckedCreateInput) => prisma.exam.create({ data }),
   updateExam: (id: number, data: Prisma.ExamUncheckedUpdateInput) => prisma.exam.update({ where: { id }, data }),
   setExamStatus: (id: number, status: boolean) => prisma.exam.update({ where: { id }, data: { status, updatedAt: new Date() } }),
