@@ -33,7 +33,13 @@ export const coercePaymentMethod = (v?: string): PaymentMethod | undefined =>
 export const parseDateBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
+  // "YYYY-MM-DDTHH:mm" (the report date-time picker) is IST wall-clock too; the
+  // to-bound covers the whole picked minute.
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
+    ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`)
+    : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)
+      ? new Date(`${s}:${end ? "59.999" : "00.000"}+05:30`)
+      : new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
