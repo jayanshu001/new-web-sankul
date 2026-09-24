@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-09-24 — Admin: new quiz defaults `order_by` to last + 1 (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged.
+
+`POST /admin/quizzes` used to hardcode `ws_exam.order_by = 0`. It now writes
+`MAX(ws_exam.order_by) + 1` (0 when the table is empty) via the new
+`adminExamRepository.maxExamOrder()` — the same max+1 rule questions already use
+(`maxQuestionOrder`). `order_by` is table-wide (not per category). Reorder
+(`PATCH …/reorder`) is unchanged.
+
+---
+
 ## 2026-09-24 — Client: inactive package still reachable by its subscribers (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged. FE doc: `docs/client/PACKAGE_INACTIVE_SUBSCRIBER_ACCESS.md`.
