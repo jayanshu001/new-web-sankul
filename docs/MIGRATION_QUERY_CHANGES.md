@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-09-24 — Admin book-orders report: default order tracking_id DESC (no DDL)
+
+> **DDL:** none (FK index on `ws_book_order.tracking_id` serves the sort). **Response shapes:** unchanged.
+
+- **List** (`GET /admin/book/orders/list`): default `sortBy` `createdAt` → `trackingId`
+  (`ORDER BY tracking_id DESC, id DESC`). Explicit `?sortBy=` still wins; `trackingId` /
+  `tracking_id` added as accepted values. NULL tracking ids sort last (MySQL DESC).
+- **CSV/Excel + `bookOrder` export job:** keyset walk changed from `id DESC` to
+  `(tracking_id, id) DESC` over tracked rows, then the `tracking_id IS NULL` tail by
+  `id DESC` — same row order as the list. Composite key because `tracking_id` is not
+  unique-constrained (admin `/tracking` PATCH can set it).
+
+---
+
 ## 2026-09-24 — Admin book-orders report: verified orders only, status filter removed (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged. Admin-only (no client doc).
