@@ -109,9 +109,26 @@ export const clientExamRepository = {
   findResult: (id: number, customerId: number) =>
     prisma.examResult.findFirst({ where: { id, customerId } }),
 
-  /** Lifetime aggregate analytics row for a customer (one per customer). */
-  overallAnalytics: (customerId: number) =>
-    prisma.examResultDetailAnalytics.findFirst({ where: { customerId } }),
+  /**
+   * Lifetime analytics for a customer, aggregated live from submitted
+   * ws_exam_result rows (legacy migrated attempts included). The
+   * ws_exam_result_detail_analytics rollup is deliberately NOT used.
+   */
+  overallAnalytics: async (customerId: number) => {
+    const agg = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT COUNT(DISTINCT qresult_qtest_id) exams, COALESCE(SUM(qresult_total),0) questions,
+              COALESCE(SUM(qresult_attempt),0) attempt, COALESCE(SUM(qresult_skip),0) skip,
+              COALESCE(SUM(qresult_true),0) success, COALESCE(SUM(qresult_false),0) failed,
+              COALESCE(SUM(qresult_result),0) score
+       FROM ws_exam_result WHERE qresult_customer_id=? AND qresult_status=1`, customerId
+    );
+    const a = agg[0] ?? {};
+    return {
+      exams: Number(a.exams) || 0, questions: Number(a.questions) || 0, attempt: Number(a.attempt) || 0,
+      skip: Number(a.skip) || 0, success: Number(a.success) || 0, failed: Number(a.failed) || 0,
+      score: Number(a.score) || 0,
+    };
+  },
 
   /** First result row for (customer, exam) — mirrors Mongo findOne natural order. */
   findResultByExam: (customerId: number, examId: number) =>
@@ -225,34 +242,6 @@ export const clientExamRepository = {
       return result;
     }),
 
-  /** Recompute the analytics rollup for a customer (upsert into the analytics table). */
-  recomputeAnalytics: async (customerId: number) => {
-    const agg = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT COUNT(DISTINCT qresult_qtest_id) exams, COALESCE(SUM(qresult_total),0) questions,
-              COALESCE(SUM(qresult_attempt),0) attempt, COALESCE(SUM(qresult_skip),0) skip,
-              COALESCE(SUM(qresult_true),0) success, COALESCE(SUM(qresult_false),0) failed,
-              COALESCE(SUM(qresult_result),0) score
-       FROM ws_exam_result WHERE qresult_customer_id=? AND qresult_status=1`, customerId
-    );
-    const a = agg[0] ?? {};
-    const data = {
-      exams: Number(a.exams) || 0, questions: Number(a.questions) || 0, attempt: Number(a.attempt) || 0,
-      skip: Number(a.skip) || 0, success: Number(a.success) || 0, failed: Number(a.failed) || 0,
-      score: Number(a.score) || 0,
-    };
-    // Needs idx_exam_result_analytics_user (userId) — without it this findFirst
-    // scans the whole one-row-per-customer table on every submit.
-    const existing = await prisma.examResultDetailAnalytics.findFirst({
-      where: { customerId },
-      select: { id: true },
-    });
-    if (existing) {
-      await prisma.examResultDetailAnalytics.update({ where: { id: existing.id }, data });
-    } else {
-      await prisma.examResultDetailAnalytics.create({ data: { customerId, ...data } });
-    }
-  },
-
   /**
    * This customer's best submitted score for an exam. Uses
    * idx_exam_result_cust_exam_status (customer, exam, status) — index-only.
@@ -315,6 +304,13 @@ export const clientExamRepository = {
     prisma.examResult.findFirst({ where: { id, customerId, examId, status: true } }),
   detailsForResult: (resultId: number) =>
     prisma.examResultDetail.findMany({ where: { examResultId: resultId } }),
+  /**
+   * Legacy (pre-cutover / old-app) attempts wrote their detail rows with a NULL
+   * qresult_detail_qresult_id — they link to the attempt only by (customer, exam).
+   * Legacy allowed one attempt per pair. Served by the `all_fields` index.
+   */
+  legacyDetailsForExam: (customerId: number, examId: number) =>
+    prisma.examResultDetail.findMany({ where: { examResultId: null, customerId, examId }, orderBy: { id: "asc" } }),
   questionsByIds: (ids: number[]) =>
     prisma.examQuestion.findMany({ where: { id: { in: ids } } }),
 

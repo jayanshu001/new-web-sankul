@@ -223,13 +223,9 @@ export const adminExamRepository = {
         Exam: { select: { id: true, name: true, type: true, time: true } },
       },
     }),
-  detailsForResult: (resultId: number) => prisma.examResultDetail.findMany({ where: { examResultId: resultId } }),
 
   invalidateResult: (id: number) =>
     prisma.examResult.update({ where: { id }, data: { status: false, score: 0 } }),
-
-  customerAnalytics: (customerId: number) =>
-    prisma.examResultDetailAnalytics.findFirst({ where: { customerId } }),
 
   // ── analytics (raw SQL aggregates on qresult_* columns) ──────────────────────
   examOverall: (examId: number) =>

@@ -15,6 +15,31 @@
 
 ---
 
+## 2026-09-24 — Client + admin: legacy exam attempts show solution + timing (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged (same keys); `timing` value normalised.
+> FE doc: `docs/client/EXAM_LEGACY_ATTEMPTS.md`.
+
+Past (legacy / old-app) attempts showed a blank solution and blank time. Cause, from the data:
+
+- **Solution:** ~60.5M of the ~60.5M `ws_exam_result_detail` rows have
+  `qresult_detail_qresult_id = NULL`; they link to their attempt only by
+  `(qresult_detail_customer_id, qresult_detail_qtest_id)`. `detailsForResult(resultId)`
+  matched only on the id, so every legacy attempt returned `[]`. New
+  `clientExamRepository.legacyDetailsForExam(customerId, examId)`
+  (`WHERE qresult_detail_qresult_id IS NULL AND customer=? AND qtest=?`, index `all_fields`,
+  `ref const,const,const`) is the fallback, used only when the id lookup is empty, via the
+  shared `detailsForAttempt()` helper. Legacy is one attempt per (customer, exam): 82
+  duplicate pairs out of ~3.02M.
+  Used by `GET /client/quizzes/:id/solution` and admin `getResultById`. Admin's duplicate
+  `detailsForResult` was removed.
+- **Timing:** legacy `qresult_timing` is `"3 Minutes : 31 Seconds"`; the current flow writes
+  `"MM:SS"`. `normalizeTiming()` maps the legacy form to `"03:31"` on every result DTO
+  (client `toResultDto`/`toFullResultDto`/`toAttemptDto`/past-daily, admin `toResultDto`).
+  Stored data is untouched.
+
+---
+
 ## 2026-09-24 — Admin: new quiz defaults `order_by` to last + 1 (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged.
@@ -90,6 +115,14 @@ Every screen in the admin **Reports** sidebar now has its own view-only key, gro
   `summary` (Total / Revenue / Active / Expired) unless `isSuperAdmin(req)`
   (`middlewares/requirePermission.ts`, now exported). `data` + `pagination` unchanged;
   the admin panel already defaults a missing `summary` to zeros and hides the cards.
+## 2026-09-24 — Quiz analytics read live from `ws_exam_result`; `ws_exam_result_detail_analytics` retired (no DDL)
+
+- **Endpoints:** `GET /client/quizzes/my/analytics`, `GET /admin/exams/analytics/customer/:customerId`.
+- **Before:** both read the per-customer rollup row in `ws_exam_result_detail_analytics`. `submitAttempt` (and the unrouted `saveAnswers`) rebuilt that row after every submit. Customers whose attempts came over in the migration but who had no rollup row got `null`.
+- **After:** `client-exam.repository.overallAnalytics` runs the aggregate on every call (the same SQL `recomputeAnalytics` used): `COUNT(DISTINCT qresult_qtest_id)` + `SUM`s over `ws_exam_result WHERE qresult_customer_id=? AND qresult_status=1`. Legacy migrated attempts are now counted. `recomputeAnalytics` is deleted, so nothing writes the rollup table anymore. The admin endpoint re-exports the client service, so both return one DTO.
+- **Shape:** keys unchanged. `_id` is now the customer id as a string, because there is no rollup row id anymore. Still `null` when the customer has no submitted attempt.
+- **Verified:** customer 472384 on local DB gives the same numbers as its old rollup row (id 8).
+- **Table:** `ws_exam_result_detail_analytics` is left in place (no drop without consent). It is no longer read or written.
 
 ## 2026-09-23 — Admin package Pricing tab no longer orders by status (no DDL)
 
