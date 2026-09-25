@@ -66,6 +66,9 @@ router.use("/auth", clientAuthRoutes); // -> /api/v1/client/auth/*
 router.use("/careers", clientCareersRoutes); // -> /api/v1/client/careers/*
 router.use("/rank-predictor", clientRankPredictorRoutes); // -> /api/v1/client/rank-predictor/*
 router.use("/enquiry", clientEnquiryRoutes); // -> /api/v1/client/enquiry (public lead form)
+// Razorpay payment + StreamOS recording webhooks: HMAC/provider-called, no Bearer. Mounted
+// below the cms router they 401'd every call and Razorpay auto-disabled the webhook.
+router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
 router.use("/profile", clientProfileRoutes); // -> /api/v1/client/profile/*
 router.use("/goals", clientGoalRoutes); // -> /api/v1/client/goals/*
 router.use("/courses", clientCourseRoutes); // -> /api/v1/client/courses/*
@@ -91,7 +94,6 @@ router.use("/cart", clientCartRoutes); // -> /api/v1/client/cart/*
 router.use("/payment", clientPaymentRoutes); // -> /api/v1/client/payment/*
 router.use("/purchase-history", clientPurchaseHistoryRoutes); // -> /api/v1/client/purchase-history/*
 router.use("/my-subscriptions", clientMySubscriptionsRoutes); // -> /api/v1/client/my-subscriptions
-router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
 router.use("/tracking", clientTrackingRoutes); // -> /api/v1/client/tracking
 router.use("/save", clientSaveRoutes); // -> /api/v1/client/save/answers (old-API compat)
 router.use("/", clientCategoriesRoutes); // -> /api/v1/client/{video|material|exam}-categories/:id/{videos|materials|exams}
