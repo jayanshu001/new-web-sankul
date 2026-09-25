@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-09-25 — Admin book-orders export: tracking_id ASC (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged (row order only). Admin-only (no client doc).
+
+- **CSV/Excel + `bookOrder` export job:** keyset walk flipped from `(tracking_id, id) DESC`
+  to `(tracking_id, id) ASC` over tracked rows, then the `tracking_id IS NULL` tail by
+  `id ASC`. Untracked orders still come last. The on-screen list
+  (`GET /admin/book/orders/list`) is unchanged: default `tracking_id DESC`.
+
+---
+
 ## 2026-09-24 — Admin book-orders report: default order tracking_id DESC (no DDL)
 
 > **DDL:** none (FK index on `ws_book_order.tracking_id` serves the sort). **Response shapes:** unchanged.

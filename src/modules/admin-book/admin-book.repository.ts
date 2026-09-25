@@ -71,17 +71,17 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders, in the
-  // report's order (tracking_id DESC, then untracked rows id DESC) — no deep OFFSET, no
-  // row cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
+  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders, ordered
+  // tracking_id ASC, then untracked rows id ASC — no deep OFFSET, no row cap, so the
+  // caller can walk the full filtered set (lakhs) in O(take) pages.
   // Keyset is (tracking_id, id) — tracking_id isn't unique-constrained (admin can set
   // it); the NULL-tracking tail is walked separately by id since NULL can't be compared.
   listOrdersPageKeyset: (opts: Parameters<typeof buildOrderWhere>[0], cursor: OrderExportCursor, take: number) => {
     const base = buildOrderWhere(opts);
     const page: Prisma.BookOrderWhereInput = cursor.untracked
-      ? { trackingId: null, ...(cursor.beforeId ? { id: { lt: cursor.beforeId } } : {}) }
-      : cursor.beforeTracking != null
-        ? { OR: [{ trackingId: { lt: cursor.beforeTracking } }, { trackingId: cursor.beforeTracking, id: { lt: cursor.beforeId } }] }
+      ? { trackingId: null, ...(cursor.afterId ? { id: { gt: cursor.afterId } } : {}) }
+      : cursor.afterTracking != null
+        ? { OR: [{ trackingId: { gt: cursor.afterTracking } }, { trackingId: cursor.afterTracking, id: { gt: cursor.afterId } }] }
         : { trackingId: { not: null } };
     return prisma.bookOrder.findMany({
       where: { AND: [base, page] },
@@ -89,7 +89,7 @@ export const adminBookRepository = {
         user: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } },
         shipping: true,
       },
-      orderBy: cursor.untracked ? { id: "desc" } : [{ trackingId: "desc" }, { id: "desc" }],
+      orderBy: cursor.untracked ? { id: "asc" } : [{ trackingId: "asc" }, { id: "asc" }],
       take,
     });
   },
@@ -191,7 +191,7 @@ function buildWhere(opts: { search?: string; language?: string; isMagazine?: boo
   return where;
 }
 
-export type OrderExportCursor = { untracked: boolean; beforeTracking?: bigint; beforeId?: number };
+export type OrderExportCursor = { untracked: boolean; afterTracking?: bigint; afterId?: number };
 
 function orderSortCol(sortBy: string): string {
   if (sortBy === "amount" || sortBy === "order_price") return "amount";
