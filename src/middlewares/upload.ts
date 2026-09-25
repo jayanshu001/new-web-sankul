@@ -50,8 +50,8 @@ const PDF_FIELDS = new Set(["demoUrl", "bookUrl", "file", "solutionPdfUrl"]);
 const IMAGE_TYPES = /jpeg|jpg|png|webp/;
 const PDF_TYPES = /pdf/;
 const AUDIO_TYPES = /mp3|mpeg|m4a|aac|wav|webm|ogg|opus/;
-const DOCUMENT_EXT = /\.(pdf|csv|xlsx|xls|md|txt)$/i;
-const DOCUMENT_MIME = /^(application\/pdf|text\/csv|text\/markdown|text\/plain|application\/octet-stream|application\/vnd\.ms-excel|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet)$/i;
+const DOCUMENT_EXT = /\.(pdf|csv|xlsx|xls|md|txt|doc|docx|ppt|pptx|zip)$/i;
+const DOCUMENT_MIME = /^(application\/pdf|text\/csv|text\/markdown|text\/plain|application\/octet-stream|application\/vnd\.ms-excel|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.ms-powerpoint|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation|application\/(x-)?zip|application\/x-zip-compressed)$/i;
 
 export const uploadS3 = multer({
   ...MULTER_UTF8,
@@ -167,7 +167,7 @@ export const uploadS3Document = multer({
     }
     const ext = path.extname(file.originalname).toLowerCase();
     if (DOCUMENT_EXT.test(ext) && DOCUMENT_MIME.test(file.mimetype)) return cb(null, true);
-    cb(new Error("Invalid file type. Only PDF, CSV, XLSX, XLS, MD, and TXT are allowed."));
+    cb(new Error("Invalid file type. Only PDF, Word, Excel, PowerPoint, CSV, MD, TXT, and ZIP are allowed."));
   },
 });
 
