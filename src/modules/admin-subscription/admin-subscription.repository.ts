@@ -47,18 +47,18 @@ export const adminSubscriptionRepository = {
       orderBy: { id: "desc" },
       take,
     }),
-  // Material-report export order: tracking DESC, then the untracked tail id DESC — same
-  // (tracking, id) keyset shape as admin-book listOrdersPageKeyset. tracking isn't unique,
-  // so id breaks ties; NULL can't be compared, so the untracked tail is walked by id alone.
+  // Material-report export order: tracking ASC, then the untracked tail id ASC — same
+  // (tracking, id) keyset as admin-book listOrdersPageKeyset. tracking isn't unique, so
+  // id breaks ties; NULL can't be compared, so the untracked tail is walked by id alone.
   listCourseSubsTrackingPageKeyset: (where: Prisma.PackageCourseSubscriptionWhereInput, cursor: SubTrackingExportCursor, take: number) => {
     const page: Prisma.PackageCourseSubscriptionWhereInput = cursor.untracked
-      ? { trackingId: null, ...(cursor.beforeId ? { id: { lt: cursor.beforeId } } : {}) }
-      : cursor.beforeTracking != null
-        ? { OR: [{ trackingId: { lt: cursor.beforeTracking } }, { trackingId: cursor.beforeTracking, id: { lt: cursor.beforeId } }] }
+      ? { trackingId: null, ...(cursor.afterId ? { id: { gt: cursor.afterId } } : {}) }
+      : cursor.afterTracking != null
+        ? { OR: [{ trackingId: { gt: cursor.afterTracking } }, { trackingId: cursor.afterTracking, id: { gt: cursor.afterId } }] }
         : { trackingId: { not: null } };
     return prisma.packageCourseSubscription.findMany({
       where: andWhere(where, page),
-      orderBy: cursor.untracked ? { id: "desc" } : [{ trackingId: "desc" }, { id: "desc" }],
+      orderBy: cursor.untracked ? { id: "asc" } : [{ trackingId: "asc" }, { id: "asc" }],
       take,
     });
   },
@@ -367,7 +367,7 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
 // re-exported combinator used by the service to AND the status fragment on.
 export { andWhere };
 
-export type SubTrackingExportCursor = { untracked: boolean; beforeTracking?: bigint; beforeId?: number };
+export type SubTrackingExportCursor = { untracked: boolean; afterTracking?: bigint; afterId?: number };
 
 function buildEbookSubWhere(opts: { customerId?: number; ebookId?: number; status?: boolean; fromDate?: Date; toDate?: Date }): Prisma.EBookSubscriptionWhereInput {
   const where: Prisma.EBookSubscriptionWhereInput = {};

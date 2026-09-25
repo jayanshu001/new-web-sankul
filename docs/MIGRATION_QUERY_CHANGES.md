@@ -15,14 +15,14 @@
 
 ---
 
-## 2026-09-25 — Admin subscription-material export: tracking DESC + Tracking ID column (no DDL)
+## 2026-09-25 — Admin subscription-material export: tracking ASC + Tracking ID column (no DDL)
 
 > **DDL:** none. **Response shapes:** additive only. Admin-only (no client doc).
 
 - **CSV/Excel + `subscription` export job, when `hasMaterial=true`** (the Material
   report always sends it): keyset walk over `ws_package_course_subscription` is
-  `(tracking, id) DESC` over tracked rows, then the `tracking IS NULL` tail by `id DESC`
-  — book-orders keyset shape, DESC direction. Export only; the on-screen list is unchanged. Without `hasMaterial=true` the export is
+  `(tracking, id) ASC` over tracked rows, then the `tracking IS NULL` tail by `id ASC`
+  — same walk as the book-orders export. Export only; the on-screen list is unchanged. Without `hasMaterial=true` the export is
   unchanged (`id DESC`). `tracking` has no index, so each batch sorts the filtered set.
 - New export column **"Tracking ID"** (2nd, after Created At) for both reports.
 - `GET /admin/subscriptions/:id` (and the PUT/POST that return it) gains `trackingId`
