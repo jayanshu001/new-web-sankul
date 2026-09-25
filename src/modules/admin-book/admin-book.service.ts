@@ -395,15 +395,11 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
     if (!bookOrderKeysIn.length) return null;
   }
 
-  let customerIdsIn: number[] | undefined;
   let orderIdsIn: string[] | undefined;
   let receiptSearch: string | undefined;
   if (q.search) {
     receiptSearch = q.search;
-    [customerIdsIn, orderIdsIn] = await Promise.all([
-      repo.findCustomerIdsBySearch(q.search),
-      repo.findOrderKeysByBookSearch(q.search),
-    ]);
+    orderIdsIn = await repo.findOrderKeysByBookSearch(q.search);
   }
 
   return {
@@ -413,7 +409,6 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
     state,
     fromDate,
     toDate,
-    customerIdsIn,
     orderIdsIn,
     receiptSearch,
     bookOrderKeysIn,

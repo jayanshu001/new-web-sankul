@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaPrefixSearch, buildLikeTokens } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
@@ -53,7 +53,6 @@ export const adminBookRepository = {
     fromDate?: Date;
     toDate?: Date;
     orderIdsIn?: string[]; // VARCHAR business keys (search match on items)
-    customerIdsIn?: number[]; // search match on customer
     receiptSearch?: string;
     bookOrderKeysIn?: string[]; // AND restriction: orders containing a given book
     sortBy: string;
@@ -93,7 +92,7 @@ export const adminBookRepository = {
       take,
     });
   },
-  countOrders: (opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
+  countOrders: (opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
     prisma.bookOrder.count({ where: buildOrderWhere(opts) }),
 
   findOrderById: (id: number) =>
@@ -120,42 +119,22 @@ export const adminBookRepository = {
       ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, thumbnail: true, author: true, weight: true } })
       : Promise.resolve([]),
 
-  /** Customer ids whose name/phone matches the search (for order search). */
-  findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
-    const rows = await prisma.customer.findMany({
-      where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
-      select: { id: true },
-    });
-    return rows.map((r) => r.id);
-  },
-
   /**
-   * Order business keys whose items match a book name. Legacy orders keep their
-   * items in the `order_items` JSON column (the child table is near-empty), and
-   * the Mongo path searches the embedded `items.name` — so we scan BOTH: child
-   * rows (book name → bookId → item rows) AND the JSON snapshot's item `name`
-   * (raw LIKE on the order_items text, mirroring the Mongo `{"items.name": rx}`).
+   * Order business keys whose CHILD item rows match a book name (book name →
+   * bookId → ws_book_order_item.order_id). The legacy `order_items` JSON snapshot
+   * and the customer match are applied in-query by buildOrderWhere — never
+   * materialized as id lists, since a 1-char search over ws_customer (1M+ rows)
+   * blew MySQL's 65,535-placeholder cap (ER 1390) on `customer_id IN (...)`.
    */
   findOrderKeysByBookSearch: async (q: string): Promise<string[]> => {
-    const keys = new Set<string>();
     const books = await prisma.book.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } });
-    if (books.length) {
-      const items = await prisma.bookOrderItem.findMany({
-        where: { bookId: { in: books.map((b) => b.id) } },
-        select: { order_id: true },
-      });
-      for (const it of items) keys.add(it.order_id);
-    }
-    // JSON-snapshot match: the order_items text contains every search token.
-    const like = buildLikeTokens(q, ["order_items"]);
-    if (like) {
-      const rows = await prisma.$queryRawUnsafe<Array<{ order_id: string }>>(
-        `SELECT order_id FROM ws_book_order WHERE ${like.sql}`,
-        ...like.params
-      );
-      for (const r of rows) keys.add(r.order_id);
-    }
-    return [...keys];
+    if (!books.length) return [];
+    const items = await prisma.bookOrderItem.findMany({
+      where: { bookId: { in: books.map((b) => b.id) } },
+      select: { order_id: true },
+      distinct: ["order_id"],
+    });
+    return items.map((it) => it.order_id);
   },
 
   /**
@@ -201,7 +180,7 @@ function orderSortCol(sortBy: string): string {
   return "createdAt";
 }
 
-function buildOrderWhere(opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }): Prisma.BookOrderWhereInput {
+function buildOrderWhere(opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; receiptSearch?: string; bookOrderKeysIn?: string[] }): Prisma.BookOrderWhereInput {
   const where: Prisma.BookOrderWhereInput = {};
   if (opts.customerId !== undefined) where.userId = opts.customerId;
   if (opts.status) where.status = opts.status;
@@ -215,12 +194,17 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; state?: n
   // bookId filter: AND restriction to orders that contain the book (by business
   // key). Empty array → matches nothing (no order has that book).
   if (opts.bookOrderKeysIn) where.receiptId = { in: opts.bookOrderKeysIn };
-  // Search OR: receiptId match | order belongs to a matched customer | order_id
-  // appears in the item-matched key set. Each clause optional; AND with filters.
+  // Search OR: receiptId match | order belongs to a matching customer | items
+  // JSON matches | order_id appears in the child-item-matched key set. Each clause optional; AND with filters.
   const or: Prisma.BookOrderWhereInput[] = [];
   const receiptSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["receiptId"]);
   if (receiptSearch) or.push(receiptSearch);
-  if (opts.customerIdsIn?.length) or.push({ userId: { in: opts.customerIdsIn } });
+  // Customer name/phone/email + JSON-snapshot item name resolve as SQL (relation
+  // subquery / LIKE on order_items), not as bound id lists — see findOrderKeysByBookSearch.
+  const customerSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["fullName", "phoneNumber", "emailAddress"]);
+  if (customerSearch) or.push({ user: { is: customerSearch } });
+  const itemsSearch = buildPrismaSearch(opts.receiptSearch, ["orderItems"]);
+  if (itemsSearch) or.push(itemsSearch);
   if (opts.orderIdsIn?.length) or.push({ receiptId: { in: opts.orderIdsIn } });
   if (or.length) where.OR = or;
   return where;

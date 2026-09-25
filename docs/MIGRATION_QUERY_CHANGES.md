@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-09-25 — Admin book-orders search: fix ER 1390 "too many placeholders" (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. **Match semantics:** unchanged. Admin-only (no client doc).
+
+- **Bug:** `GET /admin/books/orders/list?search=v` (and the CSV/Excel exports) returned 500.
+  The service pulled EVERY matching customer id (`full_name/phone/email LIKE 'v%'` over
+  ws_customer, 1M+ rows) into memory and bound it back as `customer_id IN (?,?,…)`.
+  That went over MySQL's 65,535 prepared-statement placeholder limit.
+- **Fix (`admin-book.repository.buildOrderWhere`):** the customer match is now a Prisma
+  relation filter `user: { is: <prefix search> }`, which becomes a SQL subquery with no
+  bound id list. The `order_items` JSON-snapshot match (`LIKE '%token%'`) moved from a
+  separate raw query into the same WHERE as `orderItems contains`. Only the
+  child-item book match (`ws_book_order_item`, near-empty) is still resolved up front,
+  now with `DISTINCT order_id`. `findCustomerIdsBySearch` was removed from admin-book.
+- **Same latent bug, not yet fixed:** the admin-ebook, admin-testseries,
+  admin-subscription and admin-live-course report searches all use the same
+  `customerIdsIn` id-list pattern.
+
+---
+
 ## 2026-09-25 — Admin book-orders export: tracking_id ASC (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged (row order only). Admin-only (no client doc).
