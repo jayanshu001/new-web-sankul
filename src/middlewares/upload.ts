@@ -79,9 +79,9 @@ export const uploadS3 = multer({
 // Multer applies one `fileSize` limit per uploader instance, so per-field
 // caps are enforced inside `fileFilter` by reading the multipart Content-Length
 // header part-by-part. The outer `limits.fileSize` is set to the largest
-// allowed (PDFs at 50 MB); images get rejected earlier inside the filter.
+// allowed (PDFs at 300 MB); images get rejected earlier inside the filter.
 const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
-const PDF_MAX_BYTES = 50 * 1024 * 1024;
+const PDF_MAX_BYTES = 300 * 1024 * 1024;
 
 export const uploadS3Mixed = multer({
   ...MULTER_UTF8,
@@ -135,7 +135,7 @@ export const enforceMixedSizeLimits = async (
     )
   );
   const first = oversized[0];
-  const cap = IMAGE_FIELDS.has(first.fieldname) ? "3 MB" : "50 MB";
+  const cap = IMAGE_FIELDS.has(first.fieldname) ? "3 MB" : "300 MB";
   next(new Error(`${first.fieldname} exceeds the ${cap} limit.`));
 };
 

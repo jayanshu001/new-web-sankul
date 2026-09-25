@@ -1,6 +1,5 @@
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
 import { nextOrder } from "../../utils/listOrdering";
-import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import type { MaterialCategory, Material } from "@prisma/client";
@@ -113,11 +112,9 @@ export const createCategory = async (d: CategoryWriteInput) => {
   const now = new Date();
   // root = parent 0 sentinel (ws_material_category.parent is NOT NULL).
   const parent = d.parent ? parseMaterialId(d.parent) ?? ROOT : ROOT;
-  // No explicit order → previous row + 1 within the sibling list (scoped to the same
-  // parent, which is exactly how the list is filtered). See utils/listOrdering.
-  const catOrder = d.order ?? nextOrder(
-    (await prisma.materialCategory.findFirst({ where: { parent }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by,
-  );
+  // No explicit order → MAX(order_by) + 1 across all categories, any level — last
+  // in the app (same table-wide rule as exam categories).
+  const catOrder = d.order ?? nextOrder(await repo.maxCategoryOrder());
   const created = await repo.createCategory({
     name: d.title ?? "",
     slug: d.slug || slugify(d.title ?? ""),
@@ -286,11 +283,9 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
   // free material. See docs/client (study-materials-always-paid). The remaining
   // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
   // downloadCount) are still dropped on this admin write path.
-  // No explicit order → previous row + 1 within its category (the list is filtered
-  // by materialCategoryId). See utils/listOrdering.
-  const matOrder = d.order ?? nextOrder(
-    (await prisma.material.findFirst({ where: { materialCategoryId: catId }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by,
-  );
+  // No explicit order → MAX(order_by) + 1 across all materials — last in the app
+  // whichever category it lands in (same table-wide rule as exams).
+  const matOrder = d.order ?? nextOrder(await repo.maxMaterialOrder());
   const created = await repo.createMaterial({
     materialCategoryId: catId,
     name: d.title ?? "",

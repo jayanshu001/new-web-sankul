@@ -42,6 +42,9 @@ export const adminMaterialRepository = {
       : Promise.resolve([]),
   materialCountForCategory: (id: number) => prisma.material.count({ where: { materialCategoryId: id } }),
 
+  /** Highest order_by across all material categories, any level (null when none). */
+  maxCategoryOrder: async (): Promise<number | null> =>
+    (await prisma.materialCategory.findFirst({ orderBy: { order_by: "desc" }, select: { order_by: true } }))?.order_by ?? null,
   createCategory: (data: Prisma.MaterialCategoryUncheckedCreateInput) => prisma.materialCategory.create({ data }),
   updateCategory: (id: number, data: Prisma.MaterialCategoryUncheckedUpdateInput) => prisma.materialCategory.update({ where: { id }, data }),
   deleteCategory: (id: number) => prisma.materialCategory.delete({ where: { id } }),
@@ -102,6 +105,9 @@ export const adminMaterialRepository = {
   findMaterialById: (id: number) => prisma.material.findUnique({ where: { id }, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   findMaterialBare: (id: number) => prisma.material.findUnique({ where: { id } }),
 
+  /** Highest order_by across all materials, any category (null when none). */
+  maxMaterialOrder: async (): Promise<number | null> =>
+    (await prisma.material.findFirst({ orderBy: { order_by: "desc" }, select: { order_by: true } }))?.order_by ?? null,
   createMaterial: (data: Prisma.MaterialUncheckedCreateInput) => prisma.material.create({ data, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   updateMaterial: (id: number, data: Prisma.MaterialUncheckedUpdateInput) => prisma.material.update({ where: { id }, data, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   deleteMaterial: (id: number) => prisma.material.delete({ where: { id } }),

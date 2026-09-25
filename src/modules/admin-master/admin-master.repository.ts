@@ -124,6 +124,9 @@ export const adminMasterRepository = {
   // ── VideoCategory ────────────────────────────────────────────────────────────
   vcList: () => prisma.videoCategory.findMany({ orderBy: { order_by: "asc" } }),
   vcFind: (id: number) => prisma.videoCategory.findUnique({ where: { id } }),
+  /** Highest order_by across all video categories, any level (null when none). */
+  vcMaxOrder: async (): Promise<number | null> =>
+    (await prisma.videoCategory.findFirst({ orderBy: { order_by: "desc" }, select: { order_by: true } }))?.order_by ?? null,
   vcCreate: (data: { title: string; slug: string; image: string; parent: number; order_by: number; status: boolean; educatorId?: number | null; pdf?: string | null }) =>
     prisma.videoCategory.create({ data: { ...data, created_at: new Date(), updated_at: new Date() } }),
   vcUpdate: (id: number, data: Record<string, unknown>) =>

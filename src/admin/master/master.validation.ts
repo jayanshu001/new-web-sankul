@@ -60,7 +60,9 @@ export const createVideoCategorySchema = z.object({
   slug: z.string().min(1, "Slug is required"),
   image: z.string().url("Image must be a valid URL"),
   courseId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId").optional(),
-  order_by: z.number().int().optional().default(0),
+  // No `.default(0)`: an omitted order must stay undefined so vcCreate can assign
+  // MAX(order_by) + 1 (last in the app). An explicit order is still honoured.
+  order_by: z.number().int().optional(),
   status: z.boolean().optional().default(true),
 });
 

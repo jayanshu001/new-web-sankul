@@ -10,7 +10,7 @@ import * as tsOrderSql from "../../modules/test-series-order/test-series-order.s
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
 
 function verifySignature(rawBody: string, signature: string): boolean {
-  if (!RAZORPAY_WEBHOOK_SECRET) return false;
+  if (!RAZORPAY_WEBHOOK_SECRET || signature.length !== 64) return false;
   const expected = crypto
     .createHmac("sha256", RAZORPAY_WEBHOOK_SECRET)
     .update(rawBody)
@@ -32,16 +32,17 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     const rawBodyBuf = (req as any).rawBody as Buffer | undefined;
     const rawBody = rawBodyBuf ? rawBodyBuf.toString("utf8") : JSON.stringify(req.body);
 
-    if (RAZORPAY_WEBHOOK_SECRET) {
-      if (!signature || !verifySignature(rawBody, signature)) {
-        logger.warn("paymentWebhook signature mismatch", {
-          traceId,
-          event: req.body?.event,
-          orderId: req.body?.payload?.payment?.entity?.order_id,
-          hasRawBody: !!rawBodyBuf,
-        });
-        return res.status(401).json({ success: false, message: "Invalid signature." });
-      }
+    // Fail closed: the route is public (no Bearer), so the signature is the only
+    // gate — a missing secret must reject, never accept unverified fulfillment.
+    if (!signature || !verifySignature(rawBody, signature)) {
+      logger.warn("paymentWebhook signature mismatch", {
+        traceId,
+        event: req.body?.event,
+        orderId: req.body?.payload?.payment?.entity?.order_id,
+        hasRawBody: !!rawBodyBuf,
+        secretSet: !!RAZORPAY_WEBHOOK_SECRET,
+      });
+      return res.status(401).json({ success: false, message: "Invalid signature." });
     }
 
     const event = req.body?.event as string;

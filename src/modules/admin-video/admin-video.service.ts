@@ -101,10 +101,10 @@ export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; rea
   if (!catId || !(await repo.categoryExists(catId))) return { ok: false, reason: "category" };
   const slug = await uniqueSlug(d.slug);
   const platform = pickPlatform(d)!;
-  // No explicit order → previous row + 1 (utils/listOrdering). The admin list is
-  // unaffected either way — it sorts by recency; this only positions the row in the
-  // CLIENT catalog's `order ASC`.
-  const order = d.order ?? nextOrder(await repo.prevOrder());
+  // No explicit order → MAX(order) + 1, i.e. last in the app (same rule as exams).
+  // The admin list is unaffected either way — it sorts by recency; this only
+  // positions the row in the CLIENT catalog's `order ASC`.
+  const order = d.order ?? nextOrder(await repo.maxOrder());
   const created = await repo.create({
     videoCategoryId: catId, title: d.name, slug, topic: d.topic, order, priceType: d.type, platform,
     youtube_id: platform === "youtube" ? d.youtubeId ?? null : null,
