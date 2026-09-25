@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt } from "../../utils/planDuration";
-import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
+import { adminSubscriptionRepository as repo, type SubTrackingExportCursor } from "./admin-subscription.repository";
 import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 import { andWhere, statusWhere, normalizeStatus, reportRow, blankStrToNull, decToNum, rowHasMaterial, trackingToNumber } from "../../utils/reportFilters";
 import { PaymentMethod } from "../../shared/enums";
@@ -278,6 +278,22 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
   const resolved = await resolveCourseSubWhere(withListDateDefaults(q), now);
   if (!resolved) return;
   const { listWhere } = resolved;
+  // Material report: tracked rows first (tracking DESC), then the untracked tail (id DESC)
+  // — same keyset walk as the admin book-orders export, opposite direction.
+  if (q.hasMaterial === true) {
+    let cursor: SubTrackingExportCursor = { untracked: false };
+    for (;;) {
+      const rows = await repo.listCourseSubsTrackingPageKeyset(listWhere, cursor, EXPORT_BATCH);
+      if (rows.length) yield await hydrateCourseSubRows(rows, now);
+      if (rows.length === EXPORT_BATCH) {
+        const last = rows[rows.length - 1];
+        cursor = cursor.untracked ? { untracked: true, beforeId: last.id } : { untracked: false, beforeTracking: last.trackingId!, beforeId: last.id };
+      } else if (!cursor.untracked) {
+        cursor = { untracked: true };
+      } else break;
+    }
+    return;
+  }
   let beforeId: number | undefined;
   for (;;) {
     const rows = await repo.listCourseSubsPageKeyset(listWhere, beforeId, EXPORT_BATCH);

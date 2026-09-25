@@ -5,6 +5,7 @@ import {
   submitAttemptSchema,
 } from "./exam.validation";
 import logger from "../../utils/logger";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { omit, omitList } from "../../utils/pick";
@@ -209,6 +210,8 @@ export const saveAnswers = async (req: Request, res: Response) => {
       test: parsedTest.map((t) => ({ questionId: t.questionId as number, answerId: t.answerId })),
     });
     if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+    // Exam lists embed per-user isCompleted/lastResult under a 24h cache — drop this user's keys.
+    await flushUserRouteCache(cid);
     logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });
     return res.status(200).json({ success: true, data: { examResult: result.examResult, rank: result.rank } });
   } catch (error: any) {
@@ -566,6 +569,8 @@ export const submitAttempt = async (req: Request, res: Response) => {
     const data = submitAttemptSchema.parse(req.body ?? {});
     const r = await svcSubmitAttempt(cid, eid, aid, { timing: data.timing, ratting: data.ratting ?? null });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    // Exam lists embed per-user isCompleted/lastResult under a 24h cache — drop this user's keys.
+    await flushUserRouteCache(cid);
     logger.info("submitAttempt success (sql)", { traceId, customerId, examId, attemptId });
     return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
