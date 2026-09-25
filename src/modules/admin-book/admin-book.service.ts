@@ -586,14 +586,14 @@ const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrd
 // Walk the whole filtered set in keyset batches (no cap); yields flattened export
 // rows per batch. `opts` is the resolved order filter (caller handles the empty case).
 async function* iterateOrderExportRows(opts: NonNullable<Awaited<ReturnType<typeof resolveOrderOpts>>>) {
-  // Tracked orders first (tracking_id DESC), then the untracked tail (id DESC).
+  // Tracked orders first (tracking_id ASC), then the untracked tail (id ASC).
   let cursor: OrderExportCursor = { untracked: false };
   for (;;) {
     const rows = await repo.listOrdersPageKeyset(opts, cursor, ORDERS_EXPORT_BATCH);
     if (rows.length) yield flattenOrdersToExportRows(await enrichOrders(rows));
     if (rows.length === ORDERS_EXPORT_BATCH) {
       const last = rows[rows.length - 1];
-      cursor = cursor.untracked ? { untracked: true, beforeId: last.id } : { untracked: false, beforeTracking: last.trackingId!, beforeId: last.id };
+      cursor = cursor.untracked ? { untracked: true, afterId: last.id } : { untracked: false, afterTracking: last.trackingId!, afterId: last.id };
     } else if (!cursor.untracked) {
       cursor = { untracked: true };
     } else break;
