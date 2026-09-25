@@ -278,8 +278,8 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
   const resolved = await resolveCourseSubWhere(withListDateDefaults(q), now);
   if (!resolved) return;
   const { listWhere } = resolved;
-  // Material report: tracked rows first (tracking DESC), then the untracked tail (id DESC)
-  // — same keyset walk as the admin book-orders export, opposite direction.
+  // Material report: tracked rows first (tracking ASC), then the untracked tail (id ASC)
+  // — same walk as the admin book-orders export.
   if (q.hasMaterial === true) {
     let cursor: SubTrackingExportCursor = { untracked: false };
     for (;;) {
@@ -287,7 +287,7 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
       if (rows.length) yield await hydrateCourseSubRows(rows, now);
       if (rows.length === EXPORT_BATCH) {
         const last = rows[rows.length - 1];
-        cursor = cursor.untracked ? { untracked: true, beforeId: last.id } : { untracked: false, beforeTracking: last.trackingId!, beforeId: last.id };
+        cursor = cursor.untracked ? { untracked: true, afterId: last.id } : { untracked: false, afterTracking: last.trackingId!, afterId: last.id };
       } else if (!cursor.untracked) {
         cursor = { untracked: true };
       } else break;
