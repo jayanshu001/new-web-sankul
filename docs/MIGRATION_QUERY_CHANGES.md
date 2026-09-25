@@ -15,6 +15,27 @@
 
 ---
 
+## 2026-09-25 — Videos / materials (+ their categories): default order = table-wide MAX + 1 (no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. Admin create paths only; an explicit order in the payload still wins.
+
+- **Before:** a video, video category, material or material category created without an
+  order took `(order of the most recently created row) + 1` (`utils/listOrdering`). That
+  value could collide with existing rows or land mid-list in the app's `order ASC` lists.
+- **After:** same rule exams + exam categories already use — `MAX(order) + 1` over the
+  whole table (any category / any level), so the new row is always last in the app.
+  - `admin-video.createVideo` → `adminVideoRepository.maxOrder()` (`ws_video.order`)
+  - `admin-master.vcCreate` (`POST /admin/master/video-categories`) and `admin-master.fullVcCreate`
+    (`POST /admin/video-categories`) → `adminMasterRepository.vcMaxOrder()` (`ws_video_category.order_by`;
+    vcCreate still writes the same value to the relation edge). Both create schemas had
+    `order: …default(0)`, which meant the fallback never ran. The default is removed (create only; the update
+    schemas never applied it).
+  - `admin-material.createCategory` → `adminMaterialRepository.maxCategoryOrder()` (`ws_material_category.order_by`, was scoped to same parent)
+  - `admin-material.createMaterial` → `adminMaterialRepository.maxMaterialOrder()` (`ws_material.order_by`, was scoped to same category)
+- Query: `SELECT order FROM <table> ORDER BY order DESC LIMIT 1`. Existing rows are not renumbered.
+
+---
+
 ## 2026-09-25 — Admin book-orders search: fix ER 1390 "too many placeholders" (no DDL)
 
 > **DDL:** none. **Response shapes:** unchanged. **Match semantics:** unchanged. Admin-only (no client doc).

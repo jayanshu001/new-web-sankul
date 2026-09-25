@@ -163,6 +163,13 @@ export const adminAuthRepository = {
       where: { refreshToken, adminUserId, active: true, deleted: false },
     }),
 
+  /** Any live token row for this admin — `authenticate` rejects admin requests without one. */
+  findLiveTokenId: (adminUserId: bigint) =>
+    prisma.adminAccessToken.findFirst({
+      where: { adminUserId, active: true, deleted: false },
+      select: { id: true },
+    }),
+
   deactivateToken: (id: number) =>
     prisma.adminAccessToken.update({
       where: { id },

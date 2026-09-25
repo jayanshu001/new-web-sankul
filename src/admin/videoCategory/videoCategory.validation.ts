@@ -52,7 +52,9 @@ const parseChildIds = z
 export const createVideoCategorySchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   slug: z.string().min(1, "Slug is required").max(255),
-  order: z.coerce.number().int().optional().default(0),
+  // No `.default(0)`: an omitted order must stay undefined so fullVcCreate can
+  // assign MAX(order_by) + 1 (last in the app). An explicit order is still honoured.
+  order: z.coerce.number().int().optional(),
   childCategoryIds: parseChildIds.optional().default([]),
   educatorId: bodyOptionalId,
   status: z.coerce.boolean().optional().default(true),

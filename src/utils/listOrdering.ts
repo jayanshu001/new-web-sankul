@@ -41,6 +41,10 @@
  * in the client's `order ASC` list. An admin can always type an explicit Order,
  * or drag-reorder, to resolve a collision.
  *
+ * EXCEPTIONS — MAX(order) + 1, table-wide (2026-09-25): exams + exam categories,
+ * videos + video categories, materials + material categories. Those pass the
+ * table's highest order instead, so a new row is always last in the app.
+ *
  * Callers pass the previous row's order (`null` when the list is empty).
  */
 export const nextOrder = (currentMax: number | null | undefined): number =>

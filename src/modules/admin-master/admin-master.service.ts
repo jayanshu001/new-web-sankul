@@ -99,10 +99,11 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
 export const vcGet = async (id: number) => { const c = await repo.vcFind(id); return c ? toVcDto(c) : null; };
 export const vcCreate = async (d: any) => {
   const parent = d.parent !== undefined ? toInt(d.parent) : 0;
-  // No explicit order → previous row + 1 among its siblings (see utils/listOrdering).
+  // No explicit order → MAX(order_by) + 1 across all video categories, any level —
+  // last in the app (same table-wide rule as exam categories).
   const order = d.order_by !== undefined && d.order_by !== null && d.order_by !== ""
     ? toInt(d.order_by)
-    : nextOrder((await prisma.videoCategory.findFirst({ where: { parent }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by);
+    : nextOrder(await repo.vcMaxOrder());
   const created = await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" });
   // Mirror the parent link into the pivot the client catalog reads.
   if (parent > 0) {
@@ -248,7 +249,9 @@ export const fullVcCreate = async (d: any): Promise<{ ok: false; reason: "slug" 
     if (resolved === "child") return { ok: false, reason: "child" };
     children = resolved;
   }
-  const created = await repo.vcCreate({ title: d.name, slug: d.slug, image: d.image, parent: 0, order_by: toInt(d.order), status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: "" });
+  // No explicit order → MAX(order_by) + 1, same rule as vcCreate (last in the app).
+  const order = d.order !== undefined && d.order !== null ? toInt(d.order) : nextOrder(await repo.vcMaxOrder());
+  const created = await repo.vcCreate({ title: d.name, slug: d.slug, image: d.image, parent: 0, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: "" });
   if (children.length) await reconcileChildren(created.id, children);
   return { ok: true, data: await loadFullVc(created) };
 };

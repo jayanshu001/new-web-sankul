@@ -6,6 +6,7 @@ import { verifyAccessToken } from "../utils/jwtSigner";
 import { isRevoked, UserType } from "../libs/tokenRevocation";
 import { updateContext } from "../utils/requestContext";
 import { customerAuthRepository } from "../modules/customer-auth/customer-auth.repository";
+import { adminAuthRepository } from "../modules/admin-auth/admin-auth.repository";
 import logger from "../utils/logger";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbAvailability";
 
@@ -63,6 +64,14 @@ const getCustomerGate = async (id: string): Promise<CustomerGate | null> => {
     // Best-effort cache; ignore write failures.
   }
   return gate;
+};
+
+// Admin sessions are live only while ws_admin_access_tokens has an active row
+// for the admin. Read on every request (no cache), so deactivating rows —
+// logout, or a manual DB edit to sign everyone out — takes effect immediately.
+const hasLiveAdminToken = async (id: string): Promise<boolean> => {
+  if (!/^\d+$/.test(id)) return false;
+  return !!(await adminAuthRepository.findLiveTokenId(BigInt(id)));
 };
 
 /** Drop a customer's cached gate so a block/delete/restore takes effect now. */
@@ -172,6 +181,14 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
           reason: "SESSION_REVOKED",
         });
       }
+    }
+
+    // The token table is authoritative for admin sessions too: no live row in
+    // ws_admin_access_tokens → the session is over, even if the JWT is valid.
+    if (userType === "admin" && !(await hasLiveAdminToken(String(decoded.id)))) {
+      return failure(res, "Session was revoked. Please log in again.", 401, {}, {
+        reason: "SESSION_REVOKED",
+      });
     }
 
     // Enforce 1 active device rule for customers

@@ -213,19 +213,21 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
       return { ok: false, message: "Admin not found or disabled." };
     }
 
-    await adminAuthRepository.deactivateToken(dbToken.id);
-
     const dto = await buildSqlAdminDto(row);
     const refreshPayload = { id: dto.id, email: dto.email, role: dto.role, type: "admin" };
     const newToken = signAccessToken(refreshPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
     const newRefreshToken = signRefreshToken(refreshPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
 
+    // Create the new row before retiring the old one: `authenticate` rejects an
+    // admin with no live row, so the reverse order would 401 requests in between.
     await adminAuthRepository.createToken({
       adminUserId: row.id,
       token: newToken,
       refreshToken: newRefreshToken,
       expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
     });
+
+    await adminAuthRepository.deactivateToken(dbToken.id);
 
     await redisClient.set(
       `admin_session:${dto.id}`,

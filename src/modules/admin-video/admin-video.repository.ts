@@ -58,13 +58,12 @@ export const adminVideoRepository = {
     prisma.video.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),
 
   /**
-   * `order` of the PREVIOUS video (most recently created) — input to the +1 calc
-   * on create (see utils/listOrdering). Deliberately NOT scoped to a category:
-   * the admin screen is one list with an optional category filter, and a global
-   * maximum keeps the value unique across BOTH the filtered and unfiltered views.
+   * Highest `order` across ALL videos — input to the +1 calc on create (same
+   * MAX + 1 rule as exams). Deliberately NOT scoped to a category: a table-wide
+   * maximum makes the new video last in every list it can appear in.
    */
-  prevOrder: async (): Promise<number | null> =>
-    (await prisma.video.findFirst({ orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order: true } }))?.order ?? null,
+  maxOrder: async (): Promise<number | null> =>
+    (await prisma.video.findFirst({ orderBy: { order: "desc" }, select: { order: true } }))?.order ?? null,
 
   create: (data: Prisma.VideoUncheckedCreateInput) => prisma.video.create({ data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
   update: (id: number, data: Prisma.VideoUncheckedUpdateInput) => prisma.video.update({ where: { id }, data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
