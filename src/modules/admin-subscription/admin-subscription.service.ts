@@ -296,6 +296,7 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
 // package, so only the matching name column is filled.
 const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
+  { header: "Tracking ID", get: (r) => r.trackingId ?? "" },
   { header: "Order Method", get: (r) => r.orderMethod ?? "" },
   { header: "Customer Name", get: (r) => r.customer?.name ?? "" },
   { header: "Email", get: (r) => r.customer?.email ?? "" },
@@ -414,6 +415,8 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
     razorpayPaymentId: order?.gatewayPaymentId ?? null,
     bankTransactionId: order?.bankTransactionId ?? null,
     withMaterial: rowHasMaterial(r),
+    // courier tracking — same field/helper as the list row; null until assigned
+    trackingId: trackingToNumber(r.trackingId),
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };
 };
