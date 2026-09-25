@@ -68,6 +68,22 @@
 - **Same latent bug, not yet fixed:** the admin-ebook, admin-testseries,
   admin-subscription and admin-live-course report searches all use the same
   `customerIdsIn` id-list pattern.
+## 2026-09-25 — Exam submit flushes the submitter's route cache (no DDL)
+
+> **DDL:** none. **Queries:** unchanged. **Response shapes:** unchanged. Cache invalidation only.
+
+- **Bug:** `GET /client/exam-categories/:id/exams`, `/client/quizzes/categories/:categoryId/exams`
+  and `/client/quizzes/daily` embed per-user `isCompleted`/`lastResult` (read from
+  `ws_exam_result`) but are cached per-user for 24h (`CacheEntity.CatalogExam`). No write path
+  cleared that cache, so after a submit the lists kept returning `isCompleted:false` /
+  `lastResult:null` until the TTL ran out.
+- **Fix:** `submitAttempt` (`POST /client/quizzes/:id/attempts/:attemptId/submit`) and legacy
+  `saveAnswers` (`POST /client/save/answers`) now `await flushUserRouteCache(customerId)` after a
+  successful result write. That is the same per-user sweep used by payment verify and subscription
+  grants. Other users' caches are not touched. This also refreshes the dashboard daily-test and
+  free-exam `lastResult`.
+- **Deploy:** keys cached before the deploy stay stale for up to 24h. Run `POST /admin/cache/flush` once.
+- **Not covered:** admin `invalidateResult` does not flush the affected customer (left to TTL).
 
 ---
 
