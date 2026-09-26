@@ -318,6 +318,14 @@ async function authenticateSocket(
     // rooms read-only to watch live poll counts / chat. They skip the customer
     // lookup and are barred from submit_vote / send_message downstream.
     if (decoded.type === "admin") {
+      // Same 1-active-device rule as REST `authenticate` + camera-ingest.
+      const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
+      if (!activeAdminToken || activeAdminToken !== token) {
+        logger.warn("Live chat auth rejected: admin single-device session pointer mismatch", {
+          id: decoded.id, pointerPresent: !!activeAdminToken, tokenTail: token.slice(-6),
+        });
+        return null;
+      }
       const adminName = (decoded.email as string) || `Admin_${String(decoded.id).slice(-4)}`;
       return { customerId: `admin:${decoded.id}`, userName: adminName, isAdmin: true };
     }
@@ -329,23 +337,19 @@ async function authenticateSocket(
       return null;
     }
 
-    // TEMP (testing): single-device enforcement DISABLED so the same customer
-    // can connect from multiple devices/sessions at once — mirrors the REST
-    // side, where the `customer_session` pointer check is also commented out in
-    // middlewares/authenticate.ts. RESTORE this block (and the REST one) before
-    // re-enabling 1-session-per-user.
-    //
-    // const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
-    // if (!activeToken || activeToken !== token) {
-    //   logger.warn("Live chat auth rejected: single-device session pointer mismatch", {
-    //     id: decoded.id,
-    //     pointerPresent: !!activeToken,
-    //     pointerMatches: activeToken === token,
-    //     pointerTail: activeToken ? activeToken.slice(-6) : null,
-    //     tokenTail: token.slice(-6),
-    //   });
-    //   return null;
-    // }
+    // Single-device enforcement — mirrors the `customer_session` pointer check
+    // in middlewares/authenticate.ts.
+    const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
+    if (!activeToken || activeToken !== token) {
+      logger.warn("Live chat auth rejected: single-device session pointer mismatch", {
+        id: decoded.id,
+        pointerPresent: !!activeToken,
+        pointerMatches: activeToken === token,
+        pointerTail: activeToken ? activeToken.slice(-6) : null,
+        tokenTail: token.slice(-6),
+      });
+      return null;
+    }
 
     // Resolve the customer from the active backend. Mirrors getCustomerGate in
     // middlewares/authenticate.ts: the JWT id is the MySQL integer id.

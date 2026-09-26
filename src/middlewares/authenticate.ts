@@ -192,23 +192,26 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     // Enforce 1 active device rule for customers
-    // if (decoded.type === "customer") {
-    //   const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
-    //   if (!activeToken || activeToken !== token) {
-    //     return failure(res, "Session expired or logged in on another device.", 401);
-    //   }
-    // }
+    if (decoded.type === "customer") {
+      const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
+      if (!activeToken || activeToken !== token) {
+        // SESSION_REVOKED = terminal for the app (no refresh attempt; the refresh
+        // row is already inactive). See docs/client/REFRESH_TOKEN_GUIDE.md.
+        return failure(res, "Session expired or logged in on another device.", 401, {}, {
+          reason: "SESSION_REVOKED",
+        });
+      }
+    }
 
     // Enforce 1 active device rule for admins
-    // Disabled: admins may stay logged in on multiple devices simultaneously.
-    // The DB-side invalidation in adminLogin is also disabled; coarse revocation
-    // (logout-all / password change) above still applies.
-    // if (decoded.type === "admin") {
-    //   const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
-    //   if (!activeAdminToken || activeAdminToken !== token) {
-    //     return failure(res, "Admin session expired or logged in elsewhere.", 401);
-    //   }
-    // }
+    if (decoded.type === "admin") {
+      const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
+      if (!activeAdminToken || activeAdminToken !== token) {
+        return failure(res, "Admin session expired or logged in elsewhere.", 401, {}, {
+          reason: "SESSION_REVOKED",
+        });
+      }
+    }
 
     // Enforce 1 active device rule for educators
     if (decoded.type === "educator") {
