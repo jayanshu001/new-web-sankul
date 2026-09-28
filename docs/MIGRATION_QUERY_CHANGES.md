@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-09-28 — Live-course session feeds: `previewSecondsRemaining` + `viewerCount` per row (no DDL)
+
+> **DDL:** none. **Queries:** unchanged. **Response shape:** ADDITIVE — two new fields on every
+> row of `/client/live-courses/{live-now-sessions,upcoming-sessions,my/upcoming-sessions}`.
+
+- **`admin-live-course.service.ts` `previewLevelMapSql`:** same single `ws_live_session_preview`
+  read, but the map value is now `{ accessLevel, previewSecondsRemaining }` instead of the bare
+  level — the remaining seconds were already computed (`previewRemainingFrom`) to derive the
+  level and were thrown away. `sessionFeed` emits `previewSecondsRemaining` per row with the
+  detail endpoint's semantics: `full → 0`, no trial row → `180`, else remaining, `preview_ended → 0`.
+  Still read-only: no row is created, nothing is charged.
+- **`livechat.socket.ts`:** `viewerCount(liveClassId)` exported (was module-private); no logic change.
+- **`client/live-course/live-course.controller.ts`:** `withViewerCount` attaches `viewerCount` to
+  every feed row via `viewerCount(streamId)` (cluster-wide `fetchSockets` through the Redis
+  adapter) for `status === "CREATED"` rows only; other rows get `0` with no socket round trip.
+- Doc: `docs/client/SHARED_LIVE_SESSION_ACCESS.md` §4.
+
 ## 2026-09-25 — Admin subscription-material export: tracking ASC + Tracking ID column (no DDL)
 ## 2026-09-26 — Single-device enforcement re-enabled (customer + admin, REST + sockets; no DDL)
 

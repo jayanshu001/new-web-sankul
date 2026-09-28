@@ -53,3 +53,4 @@ graphify-out/
 
 # Generated per-env Redis config (contains the password) — scripts/redis.sh
 /.redis-*/
+/graft/

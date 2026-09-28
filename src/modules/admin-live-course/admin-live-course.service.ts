@@ -2607,8 +2607,8 @@ export const previewStopSql = async (
 export const previewLevelMapSql = async (
   customerId: number | null,
   liveSessionIds: number[]
-): Promise<Map<number, "preview" | "preview_ended">> => {
-  const out = new Map<number, "preview" | "preview_ended">();
+): Promise<Map<number, { accessLevel: "preview" | "preview_ended"; previewSecondsRemaining: number }>> => {
+  const out = new Map<number, { accessLevel: "preview" | "preview_ended"; previewSecondsRemaining: number }>();
   if (!customerId || !liveSessionIds.length) return out;
   const rows = await prisma.liveSessionPreview.findMany({
     where: { customerId, liveSessionId: { in: liveSessionIds } },
@@ -2621,7 +2621,8 @@ export const previewLevelMapSql = async (
     // Same watch-time rule as the detail endpoint, including any open window's
     // uncommitted time — a card must not advertise "preview" for a trial the
     // player would immediately end. Still strictly read-only: nothing is charged.
-    out.set(r.liveSessionId, previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now) > 0 ? "preview" : "preview_ended");
+    const remaining = previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now);
+    out.set(r.liveSessionId, { accessLevel: remaining > 0 ? "preview" : "preview_ended", previewSecondsRemaining: remaining });
   }
   return out;
 };
@@ -2804,7 +2805,10 @@ const sessionFeed = async (
       liveCourseIds: ids.map(String),
       liveCourses,
       subscribed,
-      accessLevel: subscribed ? "full" : previewLevels.get(s.id) ?? "preview",
+      // Same numbers the detail endpoint reports: full → 0, untouched trial → the
+      // whole allowance, partly-used trial → what is left (read-only, never charged).
+      accessLevel: subscribed ? "full" : previewLevels.get(s.id)?.accessLevel ?? "preview",
+      previewSecondsRemaining: subscribed ? 0 : previewLevels.get(s.id)?.previewSecondsRemaining ?? LIVE_PREVIEW_SECONDS,
     };
   });
   return { sessions, total, page, limit };

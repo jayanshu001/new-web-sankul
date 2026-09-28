@@ -89,7 +89,7 @@ export async function emitChatUnbannedForCustomer(customerId: string): Promise<v
 // adapter attached, queries EVERY pod in the cluster and returns the union
 // of socket metadata. Without the adapter this would only count sockets on
 // the current pod, giving the wrong "now watching" number in production.
-async function viewerCount(liveClassId: string): Promise<number> {
+export async function viewerCount(liveClassId: string): Promise<number> {
   if (!io) return 0;
   try {
     const sockets = await io.in(roomKey(liveClassId)).fetchSockets();
