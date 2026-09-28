@@ -5,6 +5,7 @@ import {
   DEFAULT_EXPERIENCE_LEVEL,
   DEFAULT_JOB_TYPE,
   DEFAULT_VACANCIES,
+  APPLICATION_SEARCH_FIELDS,
   OPENING_SEARCH_FIELDS,
   type CareerApplicationCreateInput,
   type CareerApplicationFilter,
@@ -27,8 +28,12 @@ const openingWhere = (filter: CareerOpeningFilter): Prisma.CareerOpeningWhereInp
 });
 
 const applicationWhere = (filter: CareerApplicationFilter): Prisma.CareerApplicationWhereInput => ({
+  ...(buildPrismaSearch(filter.search, [...APPLICATION_SEARCH_FIELDS]) ?? {}),
   ...(filter.openingId === undefined ? {} : { openingId: filter.openingId }),
   ...(filter.status === undefined ? {} : { status: filter.status }),
+  ...(filter.experienceLevel === undefined ? {} : { experienceLevel: filter.experienceLevel }),
+  // Applications don't snapshot the job type — filter through the linked opening.
+  ...(filter.jobType === undefined ? {} : { opening: { jobType: filter.jobType } }),
 });
 
 export const careersRepository = {

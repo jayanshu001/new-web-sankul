@@ -11,11 +11,14 @@ import { APPLICATION_NOT_FOUND, orNotFound } from "./careers.helpers";
 
 export const getApplicationList = asyncHandler(async (req: Request, res: Response) => {
   const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
-  const { openingId, status } = applicationListQuerySchema.parse(req.query);
+  const { search, openingId, status, experienceLevel, jobType } = applicationListQuerySchema.parse(req.query);
 
   const { items, total } = await careersService.listApplicationsPaged({
+    search,
     openingId: openingId === undefined ? undefined : String(openingId),
     status,
+    experienceLevel,
+    jobType,
     skip,
     take: limit,
   });
