@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizePaperSeries } from "./rank-predictor.scoring";
 import {
+  CANCELLED_QUESTION,
   CASTE_CATEGORIES,
   GENDERS,
   MAX_PAPER_SERIES,
@@ -28,9 +29,32 @@ const seriesSchema = z
   .toUpperCase()
   .regex(SERIES_LETTER, "Paper series must be a single letter, e.g. A.");
 
+const optionSchema = z.number().int().positive();
+
+/**
+ * Several accepted options are stored sorted and de-duplicated, and a list of one
+ * collapses to a plain number, so the same key is always stored the same way.
+ */
+const acceptedOptionsSchema = z
+  .array(optionSchema)
+  .min(1, "A question needs at least one accepted option.")
+  .transform((options) => {
+    const unique = [...new Set(options)].sort((a, b) => a - b);
+    return unique.length === 1 ? unique[0] : unique;
+  });
+
+const answerKeyEntrySchema = z.union([
+  optionSchema,
+  acceptedOptionsSchema,
+  z.literal(CANCELLED_QUESTION),
+]);
+
 export const answerKeyMapSchema = z
-  .record(z.string().regex(QUESTION_NUMBER), z.number().int().positive())
-  .refine((keys) => Object.keys(keys).length > 0, { message: "The answer key is empty." });
+  .record(z.string().regex(QUESTION_NUMBER), answerKeyEntrySchema)
+  .refine((keys) => Object.keys(keys).length > 0, { message: "The answer key is empty." })
+  .refine((keys) => Object.values(keys).some((entry) => entry !== CANCELLED_QUESTION), {
+    message: "Every question is cancelled, so there is nothing to score.",
+  });
 
 export const examCreateSchema = z.object({
   code: z.string().trim().min(1).max(100),

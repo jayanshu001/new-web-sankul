@@ -1,6 +1,8 @@
 import {
   ANSWER_VERDICT,
+  CANCELLED_QUESTION,
   SKIP_OPTION,
+  type AnswerKeyEntry,
   type AnswerKeyMap,
   type AnswerMap,
   type AnswerReviewItem,
@@ -8,31 +10,54 @@ import {
   type ScoreResult,
 } from "./rank-predictor.types";
 
+/** The options that score for one question, or null when it is cancelled. */
+export const acceptedOptionsOf = (entry: AnswerKeyEntry): number[] | null => {
+  if (entry === CANCELLED_QUESTION) return null;
+  return Array.isArray(entry) ? entry : [entry];
+};
+
+export const cancelledCountOf = (answerKey: AnswerKeyMap): number =>
+  Object.values(answerKey).filter((entry) => entry === CANCELLED_QUESTION).length;
+
 export const buildAnswerReview = (
   answers: AnswerMap,
   answerKey: AnswerKeyMap,
   scheme: MarkingScheme
 ): AnswerReviewItem[] =>
   Object.entries(answerKey)
-    .map(([questionNo, correctOption]) => {
+    .map(([questionNo, entry]) => {
       const chosen = answers[questionNo] ?? null;
+      const accepted = acceptedOptionsOf(entry);
+
+      // Checked before the skip rule: a cancelled question is out of the paper
+      // whatever was marked on it, E included.
+      if (accepted === null) {
+        return {
+          questionNo: Number(questionNo),
+          chosen,
+          correctOptions: [],
+          verdict: ANSWER_VERDICT.CANCELLED,
+          marks: 0,
+        };
+      }
 
       if (chosen === null || chosen === SKIP_OPTION) {
         return {
           questionNo: Number(questionNo),
           chosen,
-          correctOption,
+          correctOptions: accepted,
           verdict: ANSWER_VERDICT.UNANSWERED,
           marks: 0,
         };
       }
 
-      const isCorrect = chosen === correctOption;
+      // Any accepted option scores in full — "A & B" means either is right.
+      const isCorrect = accepted.includes(chosen);
 
       return {
         questionNo: Number(questionNo),
         chosen,
-        correctOption,
+        correctOptions: accepted,
         verdict: isCorrect ? ANSWER_VERDICT.CORRECT : ANSWER_VERDICT.WRONG,
         marks: isCorrect ? scheme.marksCorrect : -scheme.marksWrong,
       };
@@ -47,6 +72,9 @@ export const scoreSubmission = (
   const result: ScoreResult = { correct: 0, wrong: 0, unanswered: 0, rawScore: 0 };
 
   for (const item of buildAnswerReview(answers, answerKey, scheme)) {
+    // Cancelled counts toward nothing, so correct + wrong + unanswered is the
+    // number of questions this score is out of — see toRankScoreDto.
+    if (item.verdict === ANSWER_VERDICT.CANCELLED) continue;
     if (item.verdict === ANSWER_VERDICT.CORRECT) result.correct += 1;
     else if (item.verdict === ANSWER_VERDICT.WRONG) result.wrong += 1;
     else result.unanswered += 1;
