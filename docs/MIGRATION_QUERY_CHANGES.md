@@ -16,6 +16,31 @@
 ---
 
 ## 2026-09-25 — Admin subscription-material export: tracking ASC + Tracking ID column (no DDL)
+## 2026-09-26 — Single-device enforcement re-enabled (customer + admin, REST + sockets; no DDL)
+
+> **DDL:** none. **Response shapes:** unchanged. Only the 401 paths return.
+
+- **`middlewares/authenticate.ts`:** the `customer_session:<id>` and `admin_session:<id>`
+  Redis pointer checks are back (they were commented out for testing). A token that is
+  not the pointer value gets `401 "Session expired or logged in on another device."`
+  (customer) / `401 "Admin session expired or logged in elsewhere."` (admin). Same
+  messages as before the pause; no new reason code.
+- **`socket/livechat.socket.ts`:** customer pointer check restored; admin viewers now
+  pass the same `admin_session` check (mirrors `camera-ingest.ts`).
+- **`adminLogin`** now runs `ws_admin_access_tokens` `updateMany({adminUserId}) →
+  active=false, deleted=true` (existing `deactivateAllTokens`) before inserting the new
+  row, so the DB side agrees with the pointer (mirrors customer `validateOtp`). One
+  extra UPDATE per admin login.
+- Effect: a second login on another device logs the first device out on its next
+  request, for both the app and the admin panel.
+- **Response shape (additive):** both single-device 401s now carry
+  `data.reason: "SESSION_REVOKED"` (was `data: {}`), so the app treats them as terminal
+  per `docs/client/REFRESH_TOKEN_GUIDE.md` and skips the doomed refresh call. Message
+  text unchanged.
+
+---
+
+## 2026-09-25 — Admin subscription-material export: tracking DESC + Tracking ID column (no DDL)
 
 > **DDL:** none. **Response shapes:** additive only. Admin-only (no client doc).
 

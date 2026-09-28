@@ -159,9 +159,8 @@ export const customerAuthRepository = {
    * indefinitely. A row is stale when it is flagged `true` but holds no live
    * token (active, not-deleted, unexpired).
    *
-   * NOTE: customers may hold several concurrent device sessions (the single-device
-   * gate in authenticate.ts is disabled for them), so this is "has at least one
-   * live session", which is the only thing one boolean can honestly express.
+   * NOTE: expressed as "has at least one live session" so it stays correct
+   * regardless of the single-device gate in authenticate.ts.
    *
    * Read-only and keyset-paginated (`id > afterId`, ordered by id) so the sweep
    * never runs one unbounded statement: the anti-join against
