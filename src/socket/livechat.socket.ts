@@ -538,7 +538,9 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         if (r === "not_found") { socket.emit("error", { message: "Poll not found" }); return; }
         if (r === "closed") { socket.emit("error", { message: "Poll is closed" }); return; }
         if (r === "invalid_option") { socket.emit("error", { message: "Invalid option" }); return; }
-        // Re-voting is allowed — a customer may change their vote any number of times.
+        // One vote per poll — the FE disables the options after voting and treats
+        // this as a transient error; it exists for modified clients and races.
+        if (r === "already_voted") { socket.emit("error", { message: "You have already voted on this poll." }); return; }
 
         // Broadcast the FULL current poll to everyone in the room so the admin
         // panel re-renders exact tallies in place (options[].votes + totalVotes)

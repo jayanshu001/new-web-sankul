@@ -1361,8 +1361,9 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
  * question, options[{text,votes}], totalVotes, isActive, …) so the socket can
  * broadcast the complete current poll on `poll_update` and the panel re-renders
  * exact tallies in place. Discriminated string results map to the socket's
- * existing error emits. Re-voting is allowed: a customer may change their vote
- * any number of times (the vote row is moved, so each customer still counts once).
+ * existing error emits. ONE vote per (poll, customer): a second submit returns
+ * `"already_voted"` and changes nothing — the lock is server-side, so a modified
+ * client cannot move its vote. A new poll is a new pollId, so it can be answered.
  */
 export const submitPollVote = async (
   pollId: number,
@@ -1373,15 +1374,16 @@ export const submitPollVote = async (
   | "not_found"
   | "closed"
   | "invalid_option"
+  | "already_voted"
 > => {
   const poll = await repo.findPoll(pollId);
   if (!poll) return "not_found";
   if (!poll.isActive) return "closed";
   const options = await repo.pollOptions(pollId);
   if (optionIndex < 0 || optionIndex >= options.length) return "invalid_option";
-  // Re-votable: a customer may change their vote as many times as they want. The
-  // vote row is moved (still one per customer), so counts stay consistent.
-  await repo.upsertPollVote(pollId, customerId, optionIndex);
+  // Existence check + insert + counter bumps run in ONE transaction, so two
+  // concurrent submits from the same customer cannot both count.
+  if (!(await repo.recordPollVoteOnce(pollId, customerId, optionIndex))) return "already_voted";
   const fresh = await repo.findPoll(pollId);
   // Re-read from the fresh row so totalVotes/options reflect the vote just cast.
   return loadPollWithOptions(fresh ?? poll);

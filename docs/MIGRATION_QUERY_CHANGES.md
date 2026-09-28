@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-09-28 — Live poll: one vote per (poll, customer), locked (no DDL)
+
+> **DDL:** none (`uq_lpv` on `ws_live_poll_vote(poll_id, customer_id)` already exists).
+> **Socket contract:** `submit_vote` gains one error string.
+
+- **`admin-live-course.repository.ts`:** `upsertPollVote` → `recordPollVoteOnce`. The
+  "move vote to another option" branch (old option −1 / new option +1) is gone; an existing
+  row now returns `false` inside the same transaction, so a second submit changes no counters.
+- **`admin-live-course.service.ts` `submitPollVote`:** new result `"already_voted"`.
+- **`livechat.socket.ts`:** `"already_voted"` → `socket.emit("error", { message: "You have already voted on this poll." })`.
+- Spec: `docs/client/LIVE_POLL_SINGLE_VOTE_LOCK.md` (FE changes live in the app repo).
+
 ## 2026-09-28 — Live-course session feeds: `previewSecondsRemaining` + `viewerCount` per row (no DDL)
 
 > **DDL:** none. **Queries:** unchanged. **Response shape:** ADDITIVE — two new fields on every
