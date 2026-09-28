@@ -1,12 +1,14 @@
 import { careersRepository } from "./careers.repository";
 import { toCareerApplicationDto, toCareerOpeningDto } from "./careers.transformer";
 import type {
+  ApplicantExperience,
   CareerApplicationCreateInput,
   CareerApplicationDto,
   CareerApplicationListParams,
   CareerApplicationStatus,
   CareerOpeningCreateInput,
   CareerOpeningDto,
+  CareerOpeningJobType,
   CareerOpeningListParams,
   CareerOpeningUpdateInput,
   PagedResult,
@@ -69,14 +71,20 @@ export const listActiveOpenings = async (): Promise<CareerOpeningDto[]> =>
   (await careersRepository.findActiveOpenings()).map(toCareerOpeningDto);
 
 export const listApplicationsPaged = async (query: {
+  search?: string;
   openingId?: string;
   status?: CareerApplicationStatus;
+  experienceLevel?: ApplicantExperience;
+  jobType?: CareerOpeningJobType;
   skip: number;
   take: number;
 }): Promise<PagedResult<CareerApplicationDto>> => {
   const params: CareerApplicationListParams = {
+    search: query.search,
     openingId: query.openingId ? parseCareerId(query.openingId) ?? undefined : undefined,
     status: query.status,
+    experienceLevel: query.experienceLevel,
+    jobType: query.jobType,
     skip: query.skip,
     take: query.take,
   };

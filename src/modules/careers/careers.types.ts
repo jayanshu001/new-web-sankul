@@ -70,6 +70,7 @@ export const DEFAULT_EXPERIENCE_LEVEL: CareerOpeningExperienceLevel = CAREER_EXP
 export const DEFAULT_VACANCIES = 1;
 
 export const OPENING_SEARCH_FIELDS = ["title", "department", "location"] as const;
+export const APPLICATION_SEARCH_FIELDS = ["fullName", "email", "contactNumber", "jobTitle"] as const;
 
 export interface PagedResult<T> {
   items: T[];
@@ -161,8 +162,11 @@ export interface CareerOpeningListParams extends CareerOpeningFilter {
 }
 
 export interface CareerApplicationFilter {
+  search?: string;
   openingId?: bigint;
   status?: CareerApplicationStatus;
+  experienceLevel?: ApplicantExperience;
+  jobType?: CareerOpeningJobType;
 }
 
 export interface CareerApplicationListParams extends CareerApplicationFilter {

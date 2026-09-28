@@ -72,8 +72,11 @@ export const applicationCreateSchema = z.object({
 export type CareerApplicationBody = z.infer<typeof applicationCreateSchema>;
 
 export const applicationListQuerySchema = z.object({
+  search: z.string().optional(),
   openingId: z.coerce.bigint().optional(),
   status: applicationStatusSchema.optional(),
+  experienceLevel: z.enum(APPLICANT_EXPERIENCES).optional(),
+  jobType: jobTypeSchema.optional(),
   page: pageSchema,
   limit: limitSchema,
 });
