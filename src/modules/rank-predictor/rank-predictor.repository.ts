@@ -259,6 +259,7 @@ export const rankPredictorRepository = {
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
       SELECT s.customer_id,
              s.raw_score,
+             s.correct + s.wrong + s.unanswered   AS total_questions,
              RANK() OVER (ORDER BY s.raw_score DESC) AS rank_position,
              sub.created_at                AS submitted_at,
              c.full_name,
@@ -275,6 +276,7 @@ export const rankPredictorRepository = {
     return rows.map((row) => ({
       customer_id: asNumber(row.customer_id),
       raw_score: asNumber(row.raw_score),
+      total_questions: asNumber(row.total_questions),
       rank_position: asNumber(row.rank_position),
       submitted_at: (row.submitted_at as Date | null) ?? null,
       full_name: (row.full_name as string | null) ?? null,

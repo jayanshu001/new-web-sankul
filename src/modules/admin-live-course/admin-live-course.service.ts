@@ -1361,8 +1361,9 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
  * question, options[{text,votes}], totalVotes, isActive, …) so the socket can
  * broadcast the complete current poll on `poll_update` and the panel re-renders
  * exact tallies in place. Discriminated string results map to the socket's
- * existing error emits. Re-voting is allowed: a customer may change their vote
- * any number of times (the vote row is moved, so each customer still counts once).
+ * existing error emits. ONE vote per (poll, customer): a second submit returns
+ * `"already_voted"` and changes nothing — the lock is server-side, so a modified
+ * client cannot move its vote. A new poll is a new pollId, so it can be answered.
  */
 export const submitPollVote = async (
   pollId: number,
@@ -1373,15 +1374,16 @@ export const submitPollVote = async (
   | "not_found"
   | "closed"
   | "invalid_option"
+  | "already_voted"
 > => {
   const poll = await repo.findPoll(pollId);
   if (!poll) return "not_found";
   if (!poll.isActive) return "closed";
   const options = await repo.pollOptions(pollId);
   if (optionIndex < 0 || optionIndex >= options.length) return "invalid_option";
-  // Re-votable: a customer may change their vote as many times as they want. The
-  // vote row is moved (still one per customer), so counts stay consistent.
-  await repo.upsertPollVote(pollId, customerId, optionIndex);
+  // Existence check + insert + counter bumps run in ONE transaction, so two
+  // concurrent submits from the same customer cannot both count.
+  if (!(await repo.recordPollVoteOnce(pollId, customerId, optionIndex))) return "already_voted";
   const fresh = await repo.findPoll(pollId);
   // Re-read from the fresh row so totalVotes/options reflect the vote just cast.
   return loadPollWithOptions(fresh ?? poll);
@@ -2607,8 +2609,8 @@ export const previewStopSql = async (
 export const previewLevelMapSql = async (
   customerId: number | null,
   liveSessionIds: number[]
-): Promise<Map<number, "preview" | "preview_ended">> => {
-  const out = new Map<number, "preview" | "preview_ended">();
+): Promise<Map<number, { accessLevel: "preview" | "preview_ended"; previewSecondsRemaining: number }>> => {
+  const out = new Map<number, { accessLevel: "preview" | "preview_ended"; previewSecondsRemaining: number }>();
   if (!customerId || !liveSessionIds.length) return out;
   const rows = await prisma.liveSessionPreview.findMany({
     where: { customerId, liveSessionId: { in: liveSessionIds } },
@@ -2621,7 +2623,8 @@ export const previewLevelMapSql = async (
     // Same watch-time rule as the detail endpoint, including any open window's
     // uncommitted time — a card must not advertise "preview" for a trial the
     // player would immediately end. Still strictly read-only: nothing is charged.
-    out.set(r.liveSessionId, previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now) > 0 ? "preview" : "preview_ended");
+    const remaining = previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now);
+    out.set(r.liveSessionId, { accessLevel: remaining > 0 ? "preview" : "preview_ended", previewSecondsRemaining: remaining });
   }
   return out;
 };
@@ -2804,7 +2807,10 @@ const sessionFeed = async (
       liveCourseIds: ids.map(String),
       liveCourses,
       subscribed,
-      accessLevel: subscribed ? "full" : previewLevels.get(s.id) ?? "preview",
+      // Same numbers the detail endpoint reports: full → 0, untouched trial → the
+      // whole allowance, partly-used trial → what is left (read-only, never charged).
+      accessLevel: subscribed ? "full" : previewLevels.get(s.id)?.accessLevel ?? "preview",
+      previewSecondsRemaining: subscribed ? 0 : previewLevels.get(s.id)?.previewSecondsRemaining ?? LIVE_PREVIEW_SECONDS,
     };
   });
   return { sessions, total, page, limit };

@@ -420,7 +420,7 @@ export const rankPredictorService = {
     return {
       submission_id: String(submission.id),
       status: SUBMISSION_STATUS.PROCESSED,
-      score: toRankScoreDto(score, exam.totalQuestions),
+      score: toRankScoreDto(score),
       rank,
       percentile,
       total_candidates: candidates,
@@ -547,7 +547,7 @@ export const rankPredictorService = {
           rank,
           percentile: percentileFor(rank, candidates),
           total_candidates: candidates,
-          score: toRankScoreDto(submission.score, submission.exam.totalQuestions),
+          score: toRankScoreDto(submission.score),
           submitted_at: submission.createdAt,
           status,
         };
@@ -567,7 +567,7 @@ export const rankPredictorService = {
     return {
       submission: toRankSubmissionDto(submission),
       score: submission.score
-        ? toRankScoreDto(submission.score, submission.exam.totalQuestions)
+        ? toRankScoreDto(submission.score)
         : null,
       answers: answerMapOf(submission),
       source_pdf_key: submission.sourcePdfKey,
@@ -586,12 +586,7 @@ export const rankPredictorService = {
       });
     }
 
-    return toRankAnswerReviewDto(
-      score.submission,
-      score,
-      score.answerKey,
-      score.submission.exam.totalQuestions
-    );
+    return toRankAnswerReviewDto(score.submission, score, score.answerKey);
   },
 
   getLeaderboardPrivacy: async (customerId: number): Promise<{ show_real_name: boolean }> => {

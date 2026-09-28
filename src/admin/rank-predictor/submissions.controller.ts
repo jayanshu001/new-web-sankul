@@ -35,7 +35,7 @@ export const listSubmissions = asyncHandler(async (req: Request, res: Response) 
     exam_code: row.exam.code,
     customer_id: row.customerId,
     customer: customers.get(row.customerId) ?? null,
-    score: row.score ? toRankScoreDto(row.score, row.exam.totalQuestions) : null,
+    score: row.score ? toRankScoreDto(row.score) : null,
   }));
 
   return res.json({ success: true, data, pagination: buildPagination(total, page, limit) });

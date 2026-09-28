@@ -23,6 +23,7 @@ export const ANSWER_VERDICT = {
   CORRECT: "correct",
   WRONG: "wrong",
   UNANSWERED: "unanswered",
+  CANCELLED: "cancelled",
 } as const;
 
 export type AnswerVerdict = (typeof ANSWER_VERDICT)[keyof typeof ANSWER_VERDICT];
@@ -115,6 +116,12 @@ export type Gender = (typeof GENDER)[keyof typeof GENDER];
 export const GENDERS = Object.values(GENDER) as [Gender, ...Gender[]];
 
 export const SKIP_OPTION = 5;
+/**
+ * A question the board dropped. It stays in the key, so the key still covers
+ * every question on the paper, but it is scored for no one: a 200-question paper
+ * with one cancellation is marked out of 199.
+ */
+export const CANCELLED_QUESTION = "*";
 export const NEARBY_RANK_RADIUS = 3;
 export const MASKED_NAME_FALLBACK = "***";
 export const CUSTOMER_HANDLE_PREFIX = "ws_";
@@ -137,13 +144,16 @@ export interface ScoreResult {
 export interface AnswerReviewItem {
   questionNo: number;
   chosen: number | null;
-  correctOption: number;
+  /** Every option that scores; more than one when the board accepted several. Empty when cancelled. */
+  correctOptions: number[];
   verdict: AnswerVerdict;
   marks: number;
 }
 
 export type AnswerMap = Record<string, number | null | undefined>;
-export type AnswerKeyMap = Record<string, number>;
+/** One option, several accepted options (any of them scores), or cancelled. */
+export type AnswerKeyEntry = number | number[] | typeof CANCELLED_QUESTION;
+export type AnswerKeyMap = Record<string, AnswerKeyEntry>;
 
 export interface RankExamDto {
   _id: string;
@@ -169,7 +179,9 @@ export interface RankAnswerKeyDto {
   series: string | null;
   marks_correct: number;
   marks_wrong: number;
+  /** Questions the key covers, cancelled ones included — compared against the paper's count. */
   total_questions: number;
+  cancelled_questions: number;
   has_source_pdf: boolean;
   created_at: Date | null;
 }
@@ -183,13 +195,16 @@ export interface RankScoreDto {
   wrong: number;
   unanswered: number;
   raw_score: number;
+  /** Questions this score was marked out of — the paper's count less any cancelled. */
   total_questions: number;
 }
 
 export interface RankAnswerReviewItemDto {
   question_no: number;
   chosen: number | null;
-  correct_option: number;
+  correct_options: number[];
+  /** The first of `correct_options`, for clients that predate multi-answer keys. Null when cancelled. */
+  correct_option: number | null;
   verdict: AnswerVerdict;
   marks: number;
 }
@@ -259,6 +274,7 @@ export interface RankLeaderboardEntryDto {
   rank: number;
   name: string;
   raw_score: number;
+  total_questions: number;
   is_me: boolean;
   submitted_at: Date | null;
 }
@@ -277,6 +293,7 @@ export interface RankAdminLeaderboardEntryDto {
   name: string;
   shows_real_name: boolean;
   raw_score: number;
+  total_questions: number;
   submitted_at: Date | null;
 }
 
@@ -310,6 +327,7 @@ export interface RankSubmissionDeletionDto {
 export interface LeaderboardRow {
   customer_id: number;
   raw_score: number;
+  total_questions: number;
   rank_position: number;
   submitted_at: Date | null;
   full_name: string | null;

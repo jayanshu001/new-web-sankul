@@ -1,5 +1,5 @@
 import type { OcrAnswerKey, OcrExam, OcrScore, OcrSubmission } from "@prisma/client";
-import { buildAnswerReview, normalizePaperSeries } from "./rank-predictor.scoring";
+import { buildAnswerReview, cancelledCountOf, normalizePaperSeries } from "./rank-predictor.scoring";
 import {
   CUSTOMER_HANDLE_PREFIX,
   MASKED_NAME_FALLBACK,
@@ -139,6 +139,7 @@ export const toRankAnswerKeyDto = (row: OcrAnswerKey): RankAnswerKeyDto => {
     marks_correct: scheme.marksCorrect,
     marks_wrong: scheme.marksWrong,
     total_questions: Object.keys(answerKeyMapOf(row)).length,
+    cancelled_questions: cancelledCountOf(answerKeyMapOf(row)),
     has_source_pdf: Boolean(row.sourcePdfKey),
     created_at: row.createdAt,
   };
@@ -164,12 +165,21 @@ export const toRankSubmissionDto = (row: OcrSubmission): RankSubmissionDto => ({
   created_at: row.createdAt,
 });
 
-export const toRankScoreDto = (row: OcrScore, totalQuestions: number): RankScoreDto => ({
+/**
+ * Scored questions are exactly the three tallies — cancelled ones count toward
+ * none — so the total is read off the score itself rather than the paper. It is
+ * then the total this score was actually marked out of, even after the key or
+ * the paper changes.
+ */
+export const scoredQuestionsOf = (row: Pick<OcrScore, "correct" | "wrong" | "unanswered">) =>
+  row.correct + row.wrong + row.unanswered;
+
+export const toRankScoreDto = (row: OcrScore): RankScoreDto => ({
   correct: row.correct,
   wrong: row.wrong,
   unanswered: row.unanswered,
   raw_score: Number(row.rawScore),
-  total_questions: totalQuestions,
+  total_questions: scoredQuestionsOf(row),
 });
 
 export const toLeaderboardEntryDto = (
@@ -179,6 +189,7 @@ export const toLeaderboardEntryDto = (
   rank: row.rank_position,
   name: displayNameFor(row.full_name, row.show_real_name),
   raw_score: row.raw_score,
+  total_questions: row.total_questions,
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
   submitted_at: row.submitted_at,
 });
@@ -189,14 +200,14 @@ export const toAdminLeaderboardEntryDto = (row: LeaderboardRow): RankAdminLeader
   name: trimmedOrNull(row.full_name) ?? handleFor(row.customer_id),
   shows_real_name: row.show_real_name,
   raw_score: row.raw_score,
+  total_questions: row.total_questions,
   submitted_at: row.submitted_at,
 });
 
 export const toRankAnswerReviewDto = (
   submission: OcrSubmission,
   score: OcrScore,
-  answerKey: OcrAnswerKey,
-  totalQuestions: number
+  answerKey: OcrAnswerKey
 ): RankAnswerReviewDto => {
   const scheme = markingSchemeOf(answerKey);
 
@@ -207,12 +218,13 @@ export const toRankAnswerReviewDto = (
     answer_key_version: answerKey.version,
     marks_correct: scheme.marksCorrect,
     marks_wrong: scheme.marksWrong,
-    score: toRankScoreDto(score, totalQuestions),
+    score: toRankScoreDto(score),
     items: buildAnswerReview(answerMapOf(submission), answerKeyMapOf(answerKey), scheme).map(
       (item) => ({
         question_no: item.questionNo,
         chosen: item.chosen,
-        correct_option: item.correctOption,
+        correct_options: item.correctOptions,
+        correct_option: item.correctOptions[0] ?? null,
         verdict: item.verdict,
         marks: item.marks,
       })
