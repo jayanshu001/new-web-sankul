@@ -80,6 +80,10 @@ export async function adminLogin(
   const token = signAccessToken(tokenPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
   const refreshToken = signRefreshToken(tokenPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
 
+  // 1 active device: retire every earlier token row, then the Redis pointer
+  // below flips to this token. Mirrors validateOtp on the customer side.
+  await adminAuthRepository.deactivateAllTokens(row.id);
+
   await adminAuthRepository.createToken({
     adminUserId: row.id,
     token,
@@ -254,17 +258,9 @@ export async function logoutAdmin(adminId: string, traceId?: string) {
     // NOTE: deliberately does NOT write a token-revocation cutoff, unlike the
     // customer/educator/promoter logouts.
     //
-    // Admins are the one surface where multiple concurrent sessions are
-    // intentional: `adminLogin` does not deactivate prior tokens, and the
-    // single-device pointer check in authenticate.ts is commented out on
-    // purpose. `revokeAllTokensForUser` is coarse — one cutoff per USER — so
-    // calling it here would sign an admin out of every other machine the moment
-    // they logged out of one. Killing just this device needs per-token
-    // revocation (a `jti` claim), which we don't have.
-    //
-    // Consequence, accepted: this admin's access token stays valid until it
-    // expires (1 day). `/admin/auth/logout-all-devices` is the endpoint for
-    // "kill everything now".
+    // Single-device: `adminLogin` retires prior token rows and authenticate.ts
+    // enforces the `admin_session` pointer, so deleting the pointer here ends the
+    // only live session immediately. `revokeAllTokensForUser` is not needed.
     const id = parseAdminId(adminId);
     if (id) await adminAuthRepository.deactivateAllTokens(id);
     await redisClient.del(`admin_session:${adminId}`);
