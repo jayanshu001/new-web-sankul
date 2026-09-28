@@ -6,6 +6,14 @@ import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { pickList, omit, omitList } from "../../utils/pick";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { viewerCount } from "../../socket/livechat.socket";
+
+// Cross-course session-feed rows (upcoming / live-now / my-upcoming) share ONE
+// card shape, so every feed carries `viewerCount`. Only an airing session
+// (status CREATED) has a chat room to count; the rest report 0 without a
+// cluster-wide fetchSockets round trip. Room key = streamId (see live.controller).
+const withViewerCount = (sessions: any[]) =>
+  Promise.all(sessions.map(async (s) => ({ ...s, viewerCount: s.status === "CREATED" && s.streamId ? await viewerCount(String(s.streamId)) : 0 })));
 import { queueCRMLead } from "../../utils/crm";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 
@@ -428,7 +436,7 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
     const r = await liveSql.listMyUpcomingSessions(cid, { search, page, limit });
 
     logger.info("listMyUpcomingSessions success", { traceId, customerId, total: r.total, returned: r.sessions.length });
-    const sessions = omitList(r.sessions, ["liveCourseIds", "hlsUrl", "recordings", "createdAt", "updatedAt"]);
+    const sessions = await withViewerCount(omitList(r.sessions, ["liveCourseIds", "hlsUrl", "recordings", "createdAt", "updatedAt"]));
     return success(
       res,
       { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) },
@@ -460,7 +468,8 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
     // of the feed itself (one pair of queries per page, not per row).
     const cid = liveSql.parseLiveId(String(customerId ?? ""));
     const r = await liveSql.listAllUpcomingSessions(cid, { search, page, limit });
-    return success(res, { sessions: r.sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming sessions fetched.");
+    const sessions = await withViewerCount(r.sessions);
+    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming sessions fetched.");
   } catch (err) {
     logger.error("listAllUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming sessions.", 500);
@@ -487,7 +496,7 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
     // A session shared by several courses is ONE row here, listing every linked
     // course. Tapping it calls /client/live-sessions/:id WITHOUT liveCourseId, so
     // the detail endpoint evaluates all of them (own any → full stream).
-    const sessions = omitList(r.sessions, ["hlsUrl", "recordings", "createdAt", "updatedAt"]);
+    const sessions = await withViewerCount(omitList(r.sessions, ["hlsUrl", "recordings", "createdAt", "updatedAt"]));
     return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Live-now sessions fetched.");
   } catch (err) {
     logger.error("listLiveNowSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
