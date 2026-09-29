@@ -9,6 +9,8 @@ import { customerAuthRepository } from "../modules/customer-auth/customer-auth.r
 import { adminAuthRepository } from "../modules/admin-auth/admin-auth.repository";
 import logger from "../utils/logger";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbAvailability";
+import jwt from "jsonwebtoken";
+import { isGuestPayload, isGuestSessionLive } from "../libs/guestSession";
 
 // Per-request customer gate state, cached briefly in Redis so the live DB read
 // doesn't fire on every authenticated request. Busted on block/delete; the
@@ -93,6 +95,8 @@ declare module "express-serve-static-core" {
       role: "customer" | "admin" | "super_admin" | "editor" | "educator" | "promoter";
       [k: string]: any;
     };
+    /** Live guest token on a guest-browsable GET. Set ONLY by `markGuestBrowse`. */
+    isGuest?: boolean;
   }
 }
 
@@ -110,6 +114,9 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
   // Let CORS preflight through
   if (req.method === "OPTIONS") return next();
 
+  // Guest browse (middlewares/guestBrowse.ts): no req.user, not-purchased view.
+  if (req.isGuest) return next();
+
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
 
@@ -119,6 +126,17 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
 
   try {
     const decoded = verifyAccessToken<any>(token);
+
+    // A guest token never becomes `req.user`. Reaching this point means the route
+    // is not guest-browsable (markGuestBrowse would have flagged it), so a live
+    // guest needs an account (403) and a dead one needs a new session (401).
+    // Applies on every surface — a guest token is rejected on admin routes too.
+    if (isGuestPayload(decoded)) {
+      return (await isGuestSessionLive(decoded.sid))
+        ? failure(res, "Please log in to continue.", 403, {}, { reason: "ACCOUNT_REQUIRED" })
+        : failure(res, "Guest session has expired.", 401, {}, { reason: "GUEST_SESSION_EXPIRED" });
+    }
+
     const role = decoded.role ?? "customer";
 
     // Coarse revocation check: if the user has triggered "logout all devices"
@@ -259,6 +277,11 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       });
       return sendServiceUnavailable(res);
     }
+    // An expired guest JWT: tell the app to open a new guest session rather than
+    // run the customer refresh flow. The unverified peek only picks the reason.
+    if (isGuestPayload(jwt.decode(token))) {
+      return failure(res, "Guest session has expired.", 401, {}, { reason: "GUEST_SESSION_EXPIRED" });
+    }
     // Genuine token faults (malformed, expired, bad signature) stay 401.
     return failure(res, "Invalid or expired token.", 401);
   }
@@ -278,6 +301,7 @@ export const optionalAuthenticate = async (req: Request, _res: Response, next: N
   if (!token) return next();
   try {
     const decoded = verifyAccessToken<any>(token);
+    if (isGuestPayload(decoded)) return next(); // a guest is anonymous, never req.user
     const role = decoded.role ?? "customer";
     req.user = { id: decoded.id, phone: decoded.phone, email: decoded.email, role, ...decoded };
     updateContext({ userId: decoded.id, userRole: role });
@@ -296,6 +320,9 @@ export const requireRole = (...roles: string[]) => {
     // CORS preflight has no Bearer token; authenticate already skips OPTIONS
     // but per-route requireRole must not 403 before cors can answer preflight.
     if (req.method === "OPTIONS") return next();
+
+    // A guest has no role to check; the guest allowlist already scoped the route.
+    if (req.isGuest) return next();
 
     if (!req.user || !roles.includes(req.user.role)) {
       return failure(res, "Access denied. Insufficient permissions.", 403);

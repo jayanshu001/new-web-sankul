@@ -164,7 +164,9 @@ const buildKey = (
   const identity =
     scope === CacheScope.Shared
       ? "shared"
-      : `${user?.id ?? "anon"}:${user?.role ?? "none"}`;
+      : req.isGuest
+        ? "guest:none" // every guest gets the same not-purchased view
+        : `${user?.id ?? "anon"}:${user?.role ?? "none"}`;
   const query = normalizeQuery(req);
   const raw = `${req.method}:${req.baseUrl}${req.path}?${query}:${identity}`;
   const hash = crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
@@ -196,7 +198,7 @@ export const cacheRoute = (opts: number | CacheRouteOptions) => {
     // means cacheRoute ran BEFORE authenticate (or on an unauthenticated route).
     // Caching under "anon:none" would let the next user read this response — a
     // cross-user leak. Skip caching entirely instead.
-    if (scope === CacheScope.User && !user) {
+    if (scope === CacheScope.User && !user && !req.isGuest) {
       logger.warn(
         "cacheRoute: user-scoped route has no req.user — skipping cache (ensure cacheRoute runs AFTER authenticate)",
         { url: req.originalUrl }

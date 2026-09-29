@@ -122,7 +122,11 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
   const promoter = extractPromoterAttribution(order);
 
   const result = await prisma.$transaction(async (tx) => {
-    const o = await tx.testSeriesOrder.update({ where: { id: order.id }, data: { status: "complete", razorpayPaymentId, updatedAt: now } });
+    // Claim the order: only a still-pending row flips. The loser of a concurrent
+    // /verify + webhook matches 0 rows, writes nothing and returns null.
+    const claim = await tx.testSeriesOrder.updateMany({ where: { id: order.id, status: "pending" }, data: { status: "complete", razorpayPaymentId, updatedAt: now } });
+    if (claim.count === 0) return null;
+    const o = await tx.testSeriesOrder.findUniqueOrThrow({ where: { id: order.id } });
     const sub = await tx.testSeriesSubscription.create({
       // created_at has no DB default (introspected legacy table) — set it or the row is
       // invisible to created_at-windowed reads (admin dashboard, purchase history).
@@ -148,6 +152,14 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
     });
     return { sub, o };
   });
+  if (!result) {
+    // Lost the claim: a concurrent /verify or webhook fulfilled this order first.
+    // Return the subscription it created; never create a second one.
+    const existing = await prisma.testSeriesSubscription.findFirst({ where: { orderId: order.id } });
+    const fulfilled = await prisma.testSeriesOrder.findFirst({ where: { id: order.id } });
+    if (!existing || !fulfilled) throw new Error("test-series-order: order is not pending and has no subscription");
+    return toDto(existing, fulfilled);
+  }
   await creditReferrer({ referrerId: order.referrerId, buyerId: order.customerId, orderId: order.id, paidAmount: orderPrice, source: "testSeries" });
   await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.wsCoin, source: "testSeries" });
   return toDto(result.sub, result.o);

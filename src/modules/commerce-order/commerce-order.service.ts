@@ -182,6 +182,31 @@ export const findCourseOrderForVerify = async (
 
 // ── verify: transactional fulfillment ───────────────────────────────────────
 
+/** The entitlement an order already produced, or null if it produced none. */
+const findFulfilled = async (
+  order: CourseOrderRow
+): Promise<VerifiedCourseSubscriptionDto | null> => {
+  const existing = await repo.findSubByOrder(order.id);
+  const orderRow = await repo.findOrderByRazorpay(
+    order.razorpayOrderId ?? "",
+    order.customerIdStr ?? ""
+  );
+  return existing && orderRow ? toVerifiedCourseSubscriptionDto(orderRow, existing) : null;
+};
+
+/**
+ * The claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
+ * first (its transaction has committed — our UPDATE waited on its row lock).
+ * Return what it produced; never fulfil a second time.
+ */
+const alreadyFulfilled = async (
+  order: CourseOrderRow
+): Promise<VerifiedCourseSubscriptionDto> => {
+  const done = await findFulfilled(order);
+  if (!done) throw new Error("commerce-order: order is not pending and has no subscription");
+  return done;
+};
+
 /**
  * Fulfill a verified course payment. Idempotent: if the order is already
  * complete, returns the existing entitlement without re-running side effects.
@@ -198,16 +223,10 @@ export const verifyCourseOrderMysql = async (
 ): Promise<VerifiedCourseSubscriptionDto> => {
   // Idempotency: already verified → return the existing merged doc.
   if (order.paymentStatus !== "pending") {
-    const existing = await repo.findSubByOrder(order.id);
-    const orderRow = await repo.findOrderByRazorpay(
-      order.razorpayOrderId ?? "",
-      order.customerIdStr ?? ""
-    );
-    if (existing && orderRow) {
-      return toVerifiedCourseSubscriptionDto(orderRow, existing);
-    }
-    // Defensive: complete order but no subscription found — fall through to
-    // re-create rather than silently return a partial. (Should not happen.)
+    const done = await findFulfilled(order);
+    if (done) return done;
+    // No subscription for a non-pending order: falls through, the claim in
+    // verifyCourseTx matches 0 rows, and alreadyFulfilled() throws.
   }
 
   if (order.planId == null) {
@@ -264,6 +283,7 @@ export const verifyCourseOrderMysql = async (
     endAt,
     extended: !!existingActive,
   });
+  if (!result) return alreadyFulfilled(order);
   // Reward the referrer (if this order used a referral code). Idempotent +
   // non-throwing — a credit failure never blocks the customer's fulfillment.
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "course" });
@@ -335,9 +355,8 @@ export const verifyPackageOrderMysql = async (
   now: Date = new Date()
 ): Promise<VerifiedCourseSubscriptionDto> => {
   if (order.paymentStatus !== "pending") {
-    const existing = await repo.findSubByOrder(order.id);
-    const orderRow = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerIdStr ?? "");
-    if (existing && orderRow) return toVerifiedCourseSubscriptionDto(orderRow, existing);
+    const done = await findFulfilled(order);
+    if (done) return done;
   }
   if (order.planId == null) throw new Error("package-order: order has no plan id");
   const plan = await repo.findPlan(order.planId);
@@ -367,6 +386,7 @@ export const verifyPackageOrderMysql = async (
     orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
     startAt, endAt, extended: !!existingActive,
   });
+  if (!result) return alreadyFulfilled(order);
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "package" });
   await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "package" });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);

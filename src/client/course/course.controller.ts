@@ -140,17 +140,19 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
   });
 
   try {
-    if (!userId) return failure(res, "Unauthorized request.", 401);
+    if (!userId && !req.isGuest) return failure(res, "Unauthorized request.", 401);
 
     // ─── SQL branch (int id-space) ───
     const cidNum = parseCourseId(courseId);
-    const userNum = parseCourseId(String(userId));
+    const userNum = userId ? parseCourseId(String(userId)) : null;
     if (cidNum == null) return failure(res, "Please select valid package", 400);
     const sqlResponse = await buildCourseDetailsSql(cidNum, userNum ?? undefined);
     if (!sqlResponse) return failure(res, "Please select valid package", 400);
     const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
     (sqlResponse as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
-    queueCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }, { traceId, userId, courseId });
+    if (userId) {
+      queueCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }, { traceId, userId, courseId });
+    }
     logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
     // Drop the nested catalog trees + empty promo list — RN loads tab content via
     // GET /client/catalog/:type/:id/{videos|materials|tests}. Keeps course/scope/

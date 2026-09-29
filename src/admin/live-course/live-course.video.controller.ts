@@ -3,6 +3,7 @@ import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
+import { newEncryptor } from "../../utils/videoEncryption";
 import * as liveCourseSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const objectId = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
@@ -227,6 +228,35 @@ export const getVideoInFolder = async (req: Request, res: Response) => {
   } catch (err) {
     logger.error("getVideoInFolder failed (sql)", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch video.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-courses/:liveCourseId/lecture/:videoId
+// Staff preview of a live-course lecture (admin LectureWatch page). Same
+// ownership check as the client GET /live-courses/:id/lecture/:videoId, but no
+// subscription gate (admins own none) — access is the admin role gate + the
+// `live-courses.view` RBAC rule. Returns the `/v1/lecture` {token, videoURL}
+// contract: videoURL = platform source id encrypted via newEncryptor().
+export const getLectureForAdmin = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const videoId = String(req.params.videoId ?? "");
+  logger.info("getLectureForAdmin invoked", { traceId, path: req.originalUrl, liveCourseId, videoId, userId: req.user?.id });
+
+  try {
+    const cid = liveCourseSql.parseLiveId(liveCourseId);
+    const vid = liveCourseSql.parseLiveId(videoId);
+    if (cid == null || vid == null) { logger.warn("getLectureForAdmin invalid ids (sql)", { traceId, liveCourseId, videoId }); return failure(res, "Invalid live course or video id.", 422); }
+    const r = await liveCourseSql.clientLectureVideoInCourse(cid, vid);
+    if (r === "video_not_found") { logger.warn("getLectureForAdmin video not found (sql)", { traceId, videoId }); return failure(res, "Lecture not found.", 404); }
+    if (r === "mismatch") { logger.warn("getLectureForAdmin course mismatch (sql)", { traceId, liveCourseId, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
+    const sourceId = r.platform === "youtube" ? r.youtube_id : r.platform === "vimeo" ? r.vimeo_id : r.aws_id;
+    const { token, enc } = newEncryptor();
+    logger.info("getLectureForAdmin success (sql)", { traceId, videoId, platform: r.platform });
+    return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, token, videoURL: enc(sourceId) }, "Lecture fetched.");
+  } catch (err) {
+    logger.error("getLectureForAdmin failed (sql)", { traceId, liveCourseId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch lecture.", 500);
   }
 };
 

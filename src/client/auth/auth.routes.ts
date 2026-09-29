@@ -1,11 +1,19 @@
 import { Router } from "express";
-import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler, accountStatusHandler } from "./auth.controller";
+import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler, accountStatusHandler, createGuestSessionHandler } from "./auth.controller";
 import authenticate from "../../middlewares/authenticate";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
-import { otpLimiter } from "../../config/rateLimiter";
+import { otpLimiter, guestLimiter } from "../../config/rateLimiter";
 
 const router = Router();
+
+/**
+ * @route  POST /api/v1/client/auth/guest
+ * @desc   Open a temporary guest session → guest access token for catalog browse.
+ *         See docs/client/GUEST_BROWSE.md.
+ * @access Public
+ */
+router.post("/guest", guestLimiter, createGuestSessionHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/generate

@@ -38,6 +38,7 @@ import {
   createVideoInFolder,
   createVideoFromRecording,
   getVideoInFolder,
+  getLectureForAdmin,
   updateVideoInFolder,
   reorderVideosInFolder,
   deleteVideoInFolder,
@@ -137,5 +138,8 @@ router.post("/:liveCourseId/folders/:folderId/videos/from-recording",       auto
 router.get("/:liveCourseId/folders/:folderId/videos/:videoId",              getVideoInFolder);
 router.put("/:liveCourseId/folders/:folderId/videos/:videoId",              autoFlushGroup(CacheEntity.LiveCourse), updateVideoInFolder);
 router.delete("/:liveCourseId/folders/:folderId/videos/:videoId",           autoFlushGroup(CacheEntity.LiveCourse), deleteVideoInFolder);
+
+// --- Lecture preview (admin LectureWatch page) — uncached: fresh token per request.
+router.get("/:liveCourseId/lecture/:videoId",                               getLectureForAdmin);
 
 export default router;

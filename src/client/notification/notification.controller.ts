@@ -80,6 +80,8 @@ export const getUnreadCount = async (req: Request, res: Response) => {
   logger.info("getUnreadCount invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
+    // A guest has no inbox: same shape, zero — the Home badge call must not 401.
+    if (req.isGuest) return res.status(200).json({ success: true, unreadCount: 0 });
     if (!userId) { logger.warn("getUnreadCount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const cid = notifSql.parseNotifId(String(userId));

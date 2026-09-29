@@ -360,13 +360,17 @@ export const verifyLiveCourseOrderMysql = async (
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
 
   const sub = await prisma.$transaction(async (tx) => {
-    await tx.liveCourseOrder.update({
-      where: { id: order.id },
+    // Claim the order: only a still-pending row flips. The loser of a concurrent
+    // /verify + webhook matches 0 rows, writes nothing and returns null — one
+    // order never yields two subscriptions or two kit dispatches.
+    const claim = await tx.liveCourseOrder.updateMany({
+      where: { id: order.id, status: "pending" },
       // `paid_at` is gone (2026-08-27) — `updated_at` IS the paid-at on an order
       // table, which is where the package receipt has always read it. Verify already
       // wrote both with the same `now`, so no reader's value changes.
       data: { status: "complete", razorpayPaymentId, updatedAt: now },
     });
+    if (claim.count === 0) return null;
 
     // Shipment tracking now lives in ws_live_course_subscription_tracking, the twin of
     // ws_package_course_subscription_tracking (2026-08-27 (c)) — created BEFORE the
@@ -418,6 +422,15 @@ export const verifyLiveCourseOrderMysql = async (
     // only be known after the insert.)
     return created;
   });
+
+  if (!sub) {
+    // Lost the claim: return what the winner produced (its transaction has
+    // committed — our UPDATE waited on its row lock). Same path as the
+    // idempotency check above, on the re-read order.
+    const fulfilled = await prisma.liveCourseOrder.findFirst({ where: { id: order.id } });
+    const existingSub = await prisma.liveCourseSubscription.findFirst({ where: { orderId: order.id } });
+    return toVerifyDto(existingSub, fulfilled ?? order);
+  }
 
   // Referral credit + wallet debit are keyed to the ORDER id (the payment record).
   // Both are idempotent and non-throwing — neither may block fulfilment.

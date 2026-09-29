@@ -128,6 +128,16 @@ Responsibilities:
 
 - **Every route (admin + client) requires a Bearer token.** Never default a new route to
   public; only auth/refresh/webhook/health/share are exceptions.
+- **Guest mode** (App Store 5.1.1(v)): `POST /client/auth/guest` issues a guest token
+  (`libs/guestSession.ts`, Redis-backed, no table). A GET on a path in `GUEST_BROWSE_PATHS`
+  (`middlewares/guestBrowse.ts`) carrying a live guest token is flagged `req.isGuest` and
+  passes `authenticate`/`requireRole` with NO `req.user`; a guest token anywhere else is
+  403 `ACCOUNT_REQUIRED`. To open a read to guests, add its path to that list — never swap in
+  `optionalAuthenticate`, never remove a router's `router.use(authenticate)` (later routers
+  rely on the `/`-mounted gates). Tokenless stays 401 unless the deployment sets
+  `GUEST_TOKENLESS_BROWSE=true` (iOS review host only, never production). Playback, `/my*`, orders and every
+  write stay login-only. Guest handlers must serve `customerId = null` with the SAME keys.
+  Firebase Remote Config is UI-only, never an authz input. Gate: `scripts/verify-guest-browse.ts`.
 - **Video URL responses have a fixed contract** — match `/v1/lecture`'s encryption +
   shape (`utils/videoEncryption.ts`, `utils/videoResolver.ts`).
 - **`duration` on course/package/ebook/live price rows is in DAYS** — compute `endAt`

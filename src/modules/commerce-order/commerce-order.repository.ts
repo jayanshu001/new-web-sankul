@@ -168,10 +168,16 @@ export const commerceOrderRepository = {
     extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
-      const order = await tx.packageCourseOrder.update({
-        where: { id: input.orderId },
+      // Claim the order: only a still-pending row flips. /verify and the Razorpay
+      // webhook (or a retried /verify) can arrive together; the loser matches 0
+      // rows, writes nothing and returns null, so one order never yields two
+      // subscriptions or two kit dispatches.
+      const claim = await tx.packageCourseOrder.updateMany({
+        where: { id: input.orderId, status: "pending" },
         data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId },
       });
+      if (claim.count === 0) return null;
+      const order = await tx.packageCourseOrder.findUniqueOrThrow({ where: { id: input.orderId } });
 
       // A tracking row (the dispatch record) is created ONLY for material plans —
       // the kit still has to ship, so status starts "pending". "Without Material" /
@@ -336,10 +342,16 @@ export const commerceOrderRepository = {
     extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
-      const order = await tx.packageCourseOrder.update({
-        where: { id: input.orderId },
+      // Claim the order: only a still-pending row flips. /verify and the Razorpay
+      // webhook (or a retried /verify) can arrive together; the loser matches 0
+      // rows, writes nothing and returns null, so one order never yields two
+      // subscriptions or two kit dispatches.
+      const claim = await tx.packageCourseOrder.updateMany({
+        where: { id: input.orderId, status: "pending" },
         data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId },
       });
+      if (claim.count === 0) return null;
+      const order = await tx.packageCourseOrder.findUniqueOrThrow({ where: { id: input.orderId } });
 
       // A tracking row (the dispatch record) is created ONLY for material plans —
       // there's a physical kit to ship, so status starts "pending". "Without

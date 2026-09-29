@@ -15,6 +15,152 @@
 
 ---
 
+## 2026-09-29 — Guest mode: guest sessions + guest-browsable catalog GETs (no DDL, no query change)
+
+> **DDL:** none. **Queries:** none changed. **Existing response shapes:** unchanged — guest vs
+> logged-in key sets diffed on 42 endpoints, identical. **New endpoint:**
+> `POST /client/auth/guest`. **FE doc:** `docs/client/GUEST_BROWSE.md`.
+> **AUTH CONTRACT CHANGE** — logged here because it changes who can reach existing reads.
+> **New Redis keys:** `guest_session:<sid>` (TTL 7d), `rl:guest:*` (limiter).
+
+**Why:** App Store Review Guideline 5.1.1(v) — the catalog must be usable without an account.
+Permanent, all environments; Firebase Remote Config `guestMode` only toggles the app's Guest
+button and is never read by the backend.
+
+**Mechanism:**
+
+| File | Change |
+|---|---|
+| `src/libs/guestSession.ts` (new) | guest JWT (`type/role: "guest"`, random `sid`, access key ring) + Redis session key; `createGuestSession`, `isGuestSessionLive`, `liveGuestSid`, `revokeGuestSession` |
+| `src/middlewares/guestBrowse.ts` (new) | `GUEST_BROWSE_PATHS` allowlist + `markGuestBrowse`: sets `req.isGuest` for a **GET** on a listed path carrying a **live guest token**. `:id` = digits only, so `/packages/my`, `/books/orders` never match |
+| `src/middlewares/authenticate.ts` | `authenticate`/`requireRole` pass `req.isGuest`; a guest token anywhere else → 403 `ACCOUNT_REQUIRED` (live) or 401 `GUEST_SESSION_EXPIRED` (dead/expired); `optionalAuthenticate` treats a guest as anonymous |
+| `src/middlewares/cacheRoute.ts` | user-scoped routes cache a guest under the shared identity `guest:none` |
+| `src/config/rateLimiter.ts` | `guestLimiter` — 30 / 15 min per IP (`RATE_LIMIT_GUEST_MAX`) |
+| `src/client/auth/*` | `POST /auth/guest`; successful `otp/validate` ends the guest session whose token rode the request |
+| `src/client/client.routes.ts` | `router.use(markGuestBrowse)` at the top |
+| `src/client/course/course.controller.ts` | `getCourseByIdHandler` no longer 401s a guest; CRM lead only when there is a user |
+
+**Why an allowlist and not per-route middleware (`allowGuest()` on each route):** six routers
+are mounted at `/` with `router.use(authenticate)` (cms, inquiry, dashboard, recently-added,
+free, categories). They gate every request that falls through them, and several later routers
+rely on that and carry no auth of their own (`media`, `tracking`, `GET /offline`). Converting
+the gates to per-route auth would have silently made those public. The gates are untouched.
+
+**Review mode (opt-in per deployment):** `GUEST_TOKENLESS_BROWSE=true` also flags a request
+with NO Authorization header (or `bearer null`) on the same allowlisted GETs — the flow in
+`BE_IOS_REVIEW_GUEST_MODE.md`, where the app opens Home as a Guest without a token. Default
+`false`. Set it on the review/staging host only; production keeps the token requirement.
+
+**App start-up reads also guest-reachable:** `/app-version/check`, `/version`, `/upgrade`,
+`/contactus`, `/image-notifications`, `/notifications/count`. The app fires these before any
+screen; a 401 there surfaced as "session expired" in Guest state. `getUnreadCount` answers a
+guest `{ success: true, unreadCount: 0 }` (same shape, no query).
+
+**Fail-closed rules:** every request still needs a Bearer token (tokenless = 401, unchanged,
+unless the flag above is on).
+A customer token is never a guest, so expired / revoked / single-device-kicked tokens still
+answer 401. A guest token never becomes `req.user` and opens nothing on the admin, educator
+or promoter surfaces. Non-GET methods are never guest-reachable. Sockets already reject any
+token whose `type` is not customer/admin.
+
+**Not built (nothing to operate on):** `ws_guest_session` table, guest-data migration/merge,
+cleanup job. Guests write no data; Redis TTL is the expiry and the cleanup.
+
+**Redis outage:** guest liveness fails OPEN (a guest token only reaches catalog reads), same
+policy as `tokenRevocation.isRevoked`.
+
+**Cache note:** guest entries live under the same `CacheEntity` tags, so existing admin-write
+flush groups sweep them. No flush-group change.
+
+**Verify:** `npx tsx scripts/verify-guest-browse.ts` (372 checks; needs a running server).
+
+---
+
+## 2026-09-29 — My Live Batches: session counts are per class, not per video row (no DDL)
+
+> **DDL:** none. **Response shape:** unchanged (`progress.{completedSessions,totalSessions,percentCompleted}`).
+> **Endpoint:** `GET /client/live-courses/my`. **FE doc:** `docs/client/MY_LIVE_BATCHES_SESSION_COUNT.md`.
+
+**Bug:** the card showed `1 of 3 sessions completed` for a batch with two recorded classes.
+Reported as "live streams are counted before they have a recording" — that was not the cause.
+No path writes a `ws_video` row at session create / schedule / start; rows come only from the
+recording-ready paths. The real cause is that recording promotion dedupes **per folder**
+(`videoCategoryId + aws_id`), so one recording filed into two folders is two rows, and the
+total was `COUNT(ws_video)`.
+
+**Query change** (`listMyLiveCoursesForClient`, new helper `recordingSessionUnits` in
+`admin-live-course.service.ts`):
+
+| | Before | After |
+|---|---|---|
+| Total | `video.count({ status: true, videoCategoryId IN folders })` | `video.findMany` (same filter) → keep rows with a source id → keep live-linked rows whose `ws_live_session` is `READY` with non-empty `recordings` → group by `live_session_id` (manual videos group by their own id) |
+| Completed | `lectureProgress.count({ customerId, liveCourseId, completed, videoId NOT NULL })` | `lectureProgress.findMany({ …, videoId IN <counted video ids> })` → number of groups with at least one completed copy |
+
+Effects: a class filed into N folders counts once; a video whose live session row was deleted
+is not counted; completed can no longer exceed total when a completed video is later disabled
+or deleted.
+
+**Verified on staging data** (key sets identical before/after):
+
+| Live course | Before | After | Reason |
+|---|---|---|---|
+| 9 | 1 of 3 | 1 of 2 | session 22 recording filed into two folders |
+| 1 | 0 of 3 | 0 of 2 | video 990148 points at deleted session 19 |
+| 2 | 0 of 10 | 0 of 9 | video 990147 points at deleted session 19 |
+| 4 | 0 of 1 | 0 of 1 | — |
+
+Check: `npx tsx scripts/verify-my-live-batches-session-count.ts`.
+
+**Known, not changed:** `buildResumeNextCardSql` (live branch) and `containerTotals` in
+`client-lecture-progress.service.ts` still use `liveSessionCourse.count({ liveCourseId })` as
+the live-course `totalLectures` — every linked session, any status. Live cards are excluded
+from the resume feed, so it surfaces only on the live heartbeat's `resumeNext` card.
+
+---
+
+## 2026-09-29 — Order fulfillment: claim the order on `status = 'pending'` (no DDL)
+
+> **DDL:** none. **Response shape:** unchanged on all five paths.
+> **Query change:** the order flip inside each fulfillment transaction went from
+> `UPDATE … WHERE id = ?` to `UPDATE … WHERE id = ? AND status = 'pending'`.
+
+**Bug:** `/client/payment/verify` and the Razorpay webhook (`payment.captured` / `order.paid`)
+routinely arrive together. Both read the order while it is still `pending`, so the
+"already verified" check passed for both and both ran the fulfillment transaction: two
+subscription rows for one payment, and for books / material kits two dispatch rows (two
+parcels). The status check was a read made BEFORE the transaction; nothing inside the
+transaction re-checked it.
+
+**Fix:** the first statement of every fulfillment transaction is now a conditional claim
+(`updateMany({ where: { id, status: "pending" } })`). InnoDB row-locks the order, so the second
+caller waits for the first to commit, re-evaluates the `WHERE`, matches 0 rows, writes nothing
+and returns the entitlement the first caller produced.
+
+| Order type | Table | Where the claim lives |
+|---|---|---|
+| Course / package | `ws_package_course_order` | `commerce-order.repository.ts` `verifyCourseTx`, `verifyPackageTx` |
+| Ebook | `ws_ebook_order` | `ebook-order.repository.ts` `verifyEbookTx` |
+| Book | `ws_book_order` | `book-order.repository.ts` `verifyBookTx` |
+| Live course | `ws_live_course_order` | `live-course-order.service.ts` `verifyLiveCourseOrderMysql` |
+| Test series | `ws_test_series_order` | `test-series-order.service.ts` `verifyOrderMysql` |
+
+- **Book:** the claim now runs BEFORE the `ws_book_tracking` insert (it used to run after), so
+  the losing caller never allocates an AWB. The order is written twice in the winning
+  transaction: claim (`status`, `gateway_transaction_id`, `paid_at`), then `tracking_id`.
+- **Course / package have no webhook branch** — their race is a retried or double-fired
+  `/verify`. Same fix.
+- **Behaviour change (deliberate):** a course / package / test-series order that is NOT
+  `pending` and has NO subscription used to fall through and be fulfilled anyway. It now
+  throws (`… order is not pending and has no subscription`). A `cancel` order that receives a
+  late payment is therefore no longer auto-fulfilled on those three paths (live course, ebook
+  and book never did) — it needs a manual grant.
+- **Referral credit / wallet debit** run only for the caller that won the claim. They were
+  already idempotent on `(source, orderId)`.
+- **Existing duplicates are not repaired** by this change. Find them with
+  `SELECT order_id, COUNT(*) FROM <subscription table> WHERE order_id IS NOT NULL GROUP BY order_id HAVING COUNT(*) > 1`.
+- **Check:** `npx tsx scripts/verify-order-claim-race.ts` (local DB only) fires two concurrent
+  fulfillments at one pending order per type. Before the fix: 2 rows on all six paths. After: 1.
+
 ## 2026-09-28 — Live poll: one vote per (poll, customer), locked (no DDL)
 
 > **DDL:** none (`uq_lpv` on `ws_live_poll_vote(poll_id, customer_id)` already exists).
