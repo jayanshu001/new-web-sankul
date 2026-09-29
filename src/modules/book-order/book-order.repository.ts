@@ -173,9 +173,12 @@ export const bookOrderRepository = {
 
   /**
    * Transactional book fulfillment. Within one $transaction:
-   *  1. insert a ws_book_tracking row → bigint AUTO_INCREMENT hands out the AWB
-   *  2. flip the order → verified + tracking_id + gateway_transaction_id
-   *  3. deactivate the matching active cart(s) (status=0; cart_item rows kept)
+   *  1. claim the order: pending → verified + gateway_transaction_id
+   *  2. insert a ws_book_tracking row → bigint AUTO_INCREMENT hands out the AWB
+   *  3. stamp tracking_id on the order
+   *  4. deactivate the matching active cart(s) (status=0; cart_item rows kept)
+   * Returns null when the order was not pending (a concurrent /verify or webhook
+   * already fulfilled it) — nothing is written, no second AWB is allocated.
    */
   verifyBookTx: (input: {
     orderId: number;
@@ -185,6 +188,24 @@ export const bookOrderRepository = {
     shippingId: number | null;
   }) =>
     prisma.$transaction(async (tx) => {
+      // Claim FIRST, before the AWB insert: only a still-pending order flips. The
+      // loser of a concurrent /verify + webhook matches 0 rows and stops here, so
+      // it never allocates a second AWB (a rolled-back insert would still burn the
+      // AUTO_INCREMENT value) and the parcel ships once.
+      const claim = await tx.bookOrder.updateMany({
+        where: { id: input.orderId, status: "pending" },
+        data: {
+          status: "verified",
+          // Razorpay payment id → gateway_transaction_id (the gateway ref).
+          // The `transaction_id` column that used to receive a duplicate copy of
+          // this same id was dropped 2026-08-18 — nothing ever read it. paid_at
+          // marks when the payment cleared; bump updated_at on this state change.
+          gatewayPaymentId: input.razorpayPaymentId,
+          paidAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      if (claim.count === 0) return null;
       // NOTE: ws_book_tracking.status is varchar(10) — "Order Placed" (12) would
       // overflow. Store the short code "verified" (matches existing rows' short
       // statuses like "pending"/"completed"); the DTO synthesizes the human
@@ -194,17 +215,7 @@ export const bookOrderRepository = {
       });
       const order = await tx.bookOrder.update({
         where: { id: input.orderId },
-        data: {
-          status: "verified",
-          trackingId: tracking.tracking_id,
-          // Razorpay payment id → gateway_transaction_id (the gateway ref).
-          // The `transaction_id` column that used to receive a duplicate copy of
-          // this same id was dropped 2026-08-18 — nothing ever read it. paid_at
-          // marks when the payment cleared; bump updated_at on this state change.
-          gatewayPaymentId: input.razorpayPaymentId,
-          paidAt: new Date(),
-          updatedAt: new Date(),
-        },
+        data: { trackingId: tracking.tracking_id },
       });
       // Deactivate the active cart that placed this order (match shipping, like
       // the Mongo path). cart_item rows are left intact (signed-off D-B2).

@@ -1666,6 +1666,40 @@ const mergeLiveSubsPerCourse = <
   });
 };
 
+/**
+ * The "sessions" behind the My Live Batches card, as unit key → its video ids.
+ *
+ * A unit is ONE class, not one ws_video row: the same recording can be filed into
+ * several folders (promotion dedupes per folder), and counting rows showed
+ * "1 of 3" for a course with two recorded classes. Live-linked rows therefore
+ * collapse per live session; a manually added video is its own unit.
+ *
+ * Only playable rows count: a source id is present, and a live-linked row's
+ * session is READY with recordings stored. A scheduled / live / still-processing
+ * stream has no such row, so it never reaches the total.
+ */
+const recordingSessionUnits = async (folderIds: number[]): Promise<Map<string, number[]>> => {
+  const units = new Map<string, number[]>();
+  if (!folderIds.length) return units;
+  const videos = (
+    await prisma.video.findMany({
+      where: { status: true, videoCategoryId: { in: folderIds } },
+      select: { id: true, liveSessionId: true, aws_id: true, youtube_id: true, vimeo_id: true },
+    })
+  ).filter((v) => v.aws_id || v.youtube_id || v.vimeo_id);
+  const sessionIds = [...new Set(videos.map((v) => v.liveSessionId).filter((n): n is number => n != null))];
+  const sessions = sessionIds.length
+    ? await prisma.liveSession.findMany({ where: { id: { in: sessionIds }, status: "READY" }, select: { id: true, recordings: true } })
+    : [];
+  const ready = new Set(sessions.filter((s) => Array.isArray(s.recordings) && s.recordings.length > 0).map((s) => s.id));
+  for (const v of videos) {
+    if (v.liveSessionId != null && !ready.has(v.liveSessionId)) continue;
+    const key = v.liveSessionId != null ? `s:${v.liveSessionId}` : `v:${v.id}`;
+    units.set(key, [...(units.get(key) ?? []), v.id]);
+  }
+  return units;
+};
+
 export const listMyLiveCoursesForClient = async (
   customerId: number,
   filterStatus: string,
@@ -1693,20 +1727,23 @@ export const listMyLiveCoursesForClient = async (
   // Per-course progress for the card's bar / "X of Y sessions completed" label.
   // A "session" here = a recorded lecture (the unit progress heartbeats actually
   // drive), so numerator and denominator share one universe and the ratio stays
-  // sane (<=100%). total = active videos under the course's folders (same folder->
-  // video counting as getRecordingsForClient's totalLectures); completed = the
-  // customer's completed VIDEO lectures in that live-course container.
+  // sane (<=100%). total = the playable classes under the course's folders (see
+  // recordingSessionUnits); completed = the classes among THOSE the customer has
+  // finished in this live-course container — any one copy of a recording counts.
   const totalByCourse = new Map<number, number>();
   const doneByCourse = new Map<number, number>();
   await Promise.all(courseIds.map(async (id) => {
     const folders = await prisma.videoCategory.findMany({ where: { liveCourseId: id, status: true }, select: { id: true } });
-    const folderIds = folders.map((f) => f.id);
-    const [total, done] = await Promise.all([
-      folderIds.length ? prisma.video.count({ where: { status: true, videoCategoryId: { in: folderIds } } }) : Promise.resolve(0),
-      prisma.lectureProgress.count({ where: { customerId, liveCourseId: id, completed: true, videoId: { not: null } } }),
-    ]);
-    totalByCourse.set(id, total);
-    doneByCourse.set(id, done);
+    const units = [...(await recordingSessionUnits(folders.map((f) => f.id))).values()];
+    const doneRows = units.length
+      ? await prisma.lectureProgress.findMany({
+          where: { customerId, liveCourseId: id, completed: true, videoId: { in: units.flat() } },
+          select: { videoId: true },
+        })
+      : [];
+    const doneIds = new Set(doneRows.map((r) => r.videoId));
+    totalByCourse.set(id, units.length);
+    doneByCourse.set(id, units.filter((ids) => ids.some((v) => doneIds.has(v))).length);
   }));
 
   const liveCourses = subs.map((s) => {

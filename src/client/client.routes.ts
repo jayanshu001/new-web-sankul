@@ -48,6 +48,7 @@ import clientSubscriptionsRoutes from "./subscriptions/subscriptions.routes";
 import clientCareersRoutes from "./careers/careers.routes";
 import clientRankPredictorRoutes from "./rank-predictor/rank-predictor.routes";
 import clientEnquiryRoutes from "./inquiry/enquiry.routes";
+import { markGuestBrowse } from "../middlewares/guestBrowse";
 
 const router = Router();
 
@@ -58,6 +59,11 @@ const router = Router();
  * All traffic originating from the Mobile App
  * or Student Web Portal is channeled here.
  */
+
+// Guest browse (App Store 5.1.1(v)): flags a GET on an allowlisted catalog path that
+// carries a live guest token, so `authenticate` / `requireRole` below let it through as
+// a guest. Must stay ABOVE every router that gates. Allowlist: middlewares/guestBrowse.ts.
+router.use(markGuestBrowse);
 
 router.use("/auth", clientAuthRoutes); // -> /api/v1/client/auth/*
 // PUBLIC routes — must be mounted BEFORE any `router.use("/", ...)` below whose router
