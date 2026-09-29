@@ -151,6 +151,13 @@ export const verifyEbookOrderMysql = async (
     endAt,
     extended: !!existingActive,
   });
+  if (!result) {
+    // Claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
+    // first. Return the order it completed; never create a second subscription.
+    const orderRow = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerIdStr ?? "");
+    if (!orderRow) throw new Error("ebook-order: order is not pending and cannot be re-read");
+    return toEbookOrderDto(orderRow, ebookId);
+  }
   await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: price, source: "ebook" });
   await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "ebook" });
   return toEbookOrderDto(result.order, ebookId);

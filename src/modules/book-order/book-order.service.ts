@@ -223,6 +223,13 @@ export const verifyBookOrderMysql = async (
     shippingId: order.shippingId,
   });
   const items = await repo.findOrderItems(order.orderKey);
+  if (!result) {
+    // Claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
+    // first. Return the order it verified; no second AWB, no second shipment.
+    const raw = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerId);
+    if (!raw) throw new Error("book-order: order is not pending and cannot be re-read");
+    return toBookOrderDto(raw, items);
+  }
   return toBookOrderDto(result.order, items);
 };
 

@@ -131,10 +131,15 @@ export const ebookOrderRepository = {
     extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
-      const order = await tx.eBookOrder.update({
-        where: { id: input.orderId },
+      // Claim the order: only a still-pending row flips. The loser of a concurrent
+      // /verify + webhook matches 0 rows, writes nothing and returns null (see
+      // commerce-order verifyCourseTx).
+      const claim = await tx.eBookOrder.updateMany({
+        where: { id: input.orderId, status: "pending" },
         data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId, updatedAt: input.now },
       });
+      if (claim.count === 0) return null;
+      const order = await tx.eBookOrder.findUniqueOrThrow({ where: { id: input.orderId } });
 
       const sub = await tx.eBookSubscription.create({
         data: {
