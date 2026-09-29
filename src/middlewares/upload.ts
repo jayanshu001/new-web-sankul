@@ -2,6 +2,7 @@ import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import multer from "multer";
 import multerS3 from "multer-s3";
 import path from "path";
+import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 
 // Ensure credentials exist to prevent crypto/SDK crashes
 if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -21,16 +22,40 @@ export const s3Config = new S3Client({
   forcePathStyle: false // Ensures DO virtual routing (bucket.blr1.digitaloceanspaces.com) works perfectly
 });
 
+/**
+ * Route-level folder pick for the multer uploaders below. Mount it right before
+ * the multer middleware: `uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image")`,
+ * or per field for multi-file forms: `uploadTo({ image: …, thumbnail: … })`.
+ * All paths live in `config/uploadFolders.ts`.
+ */
+type FolderPick = string | Record<string, string>;
+
+export const uploadTo = (folder: FolderPick) => (req: any, _res: any, next: () => void) => {
+  req.uploadFolder = folder;
+  next();
+};
+
+const folderFor = (req: any, fieldname: string): string => {
+  const pick: FolderPick | undefined = req?.uploadFolder;
+  if (typeof pick === "string") return pick;
+  // own-key lookup only — a field named e.g. "constructor" must not hit the prototype
+  return (pick && Object.prototype.hasOwnProperty.call(pick, fieldname) && pick[fieldname]) || UPLOAD_FOLDERS.default;
+};
+
+// Bare filename only (the old app keeps just the last path segment). The random
+// suffix keeps multi-file fields (e.g. offline center `images`) from colliding
+// in the same millisecond.
+const uniqueName = (file: Express.Multer.File) =>
+  `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`;
+
 const s3Storage = multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read", // Makes file publicly accessible via CDN URL
   contentType: multerS3.AUTO_CONTENT_TYPE,
   key: function (req, file, cb) {
-    // e.g. admin/profiles/1678123412-image.jpg
-    const extension = path.extname(file.originalname);
-    const filename = `admin/profiles/${Date.now()}-${file.fieldname}${extension}`;
-    cb(null, filename);
+    // e.g. uploads/package/1678123412-123456789.jpg — folder from `uploadTo(...)`
+    cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
 });
 
@@ -141,17 +166,14 @@ export const enforceMixedSizeLimits = async (
 
 // Reference documents attached inline in an editor (e.g. job content
 // download links: admit card/result/answer-key/syllabus PDFs, result CSVs,
-// syllabus sheets). Single file under the `file` field, stored alongside the
-// same prefix convention as other admin uploads.
+// syllabus sheets). Single file under the `file` field; folder from `uploadTo(...)`.
 const documentStorage = multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read",
   contentType: multerS3.AUTO_CONTENT_TYPE,
-  key: function (_req, file, cb) {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const filename = `admin/documents/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    cb(null, filename);
+  key: function (req, file, cb) {
+    cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
 });
 
@@ -182,7 +204,7 @@ const audioStorage = multerS3({
   key: function (req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase() || ".webm";
     const userId = (req as any)?.user?.id || "anon";
-    const filename = `customer/audio-notes/${userId}/${Date.now()}-${Math.round(
+    const filename = `${UPLOAD_FOLDERS.audioNotes}/${userId}/${Date.now()}-${Math.round(
       Math.random() * 1e9
     )}${ext}`;
     cb(null, filename);
@@ -220,7 +242,7 @@ const questionImageStorage = multerS3({
   contentType: multerS3.AUTO_CONTENT_TYPE,
   key: function (_req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
-    const filename = `admin/quiz-questions/${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.fieldname}${ext}`;
+    const filename = `${UPLOAD_FOLDERS.questions}/${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.fieldname}${ext}`;
     cb(null, filename);
   },
 });

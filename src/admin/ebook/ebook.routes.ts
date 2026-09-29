@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getEbooks,
   getEbookById,
@@ -49,12 +50,20 @@ router.post("/reorder", autoFlushGroup(CacheEntity.Ebook), reorderEbooks);
 // PDF-upload status snapshot — must precede `/:id` so it isn't matched as an id.
 router.get("/pdf-jobs/:batchId", getPdfUploadBatch);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Ebook }), getEbookById);
-const ebookUpload = uploadS3Mixed.fields([
-  { name: "image", maxCount: 1 },
-  { name: "thumbnail", maxCount: 1 },
-  { name: "demoUrl", maxCount: 1 },
-  { name: "bookUrl", maxCount: 1 },
-]);
+const ebookUpload = [
+  uploadTo({
+    image: UPLOAD_FOLDERS.ebookImages,
+    thumbnail: UPLOAD_FOLDERS.ebookThumbnail,
+    demoUrl: UPLOAD_FOLDERS.ebookDemo,
+    bookUrl: UPLOAD_FOLDERS.ebookFull,
+  }),
+  uploadS3Mixed.fields([
+    { name: "image", maxCount: 1 },
+    { name: "thumbnail", maxCount: 1 },
+    { name: "demoUrl", maxCount: 1 },
+    { name: "bookUrl", maxCount: 1 },
+  ]),
+];
 
 router.post("/", ebookUpload, enforceMixedSizeLimits, autoFlushGroup(CacheEntity.Ebook), createEbook);
 router.put("/:id", ebookUpload, enforceMixedSizeLimits, autoFlushGroup(CacheEntity.Ebook), updateEbook);

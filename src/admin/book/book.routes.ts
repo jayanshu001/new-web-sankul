@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { autoFlushGroup, autoFlush } from "../../middlewares/autoFlush";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { cacheRoute } from "../../middlewares/cacheRoute";
@@ -29,11 +30,14 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-const bookUploadFields = uploadS3Mixed.fields([
-  { name: "image", maxCount: 1 },
-  { name: "thumbnail", maxCount: 1 },
-  { name: "demoUrl", maxCount: 1 },
-]);
+const bookUploadFields = [
+  uploadTo({ image: UPLOAD_FOLDERS.bookImages, thumbnail: UPLOAD_FOLDERS.bookThumbnail, demoUrl: UPLOAD_FOLDERS.bookDemo }),
+  uploadS3Mixed.fields([
+    { name: "image", maxCount: 1 },
+    { name: "thumbnail", maxCount: 1 },
+    { name: "demoUrl", maxCount: 1 },
+  ]),
+];
 
 // Books CRUD
 // Writes call autoFlushGroup(CacheEntity.Book) so an edit (incl. price columns) instantly

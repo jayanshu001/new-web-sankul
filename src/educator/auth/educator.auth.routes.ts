@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   loginHandler,
   refreshHandler,
@@ -33,7 +34,7 @@ router.post(
   })
 );
 router.get("/me", meHandler);
-router.put("/me", uploadS3.single("image"), updateProfileHandler);
+router.put("/me", uploadTo(UPLOAD_FOLDERS.educator), uploadS3.single("image"), updateProfileHandler);
 router.post("/change-password", changePasswordHandler);
 
 export default router;

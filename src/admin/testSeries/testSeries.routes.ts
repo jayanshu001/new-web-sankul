@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import {
@@ -36,7 +37,7 @@ const router = Router();
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // --- Literal-prefix routes first so they don't collide with /:id patterns ----
-router.put("/content-categories/:categoryId",       autoFlushGroup(CacheEntity.TestSeries), uploadS3.single("icon"), updateContentCategory);
+router.put("/content-categories/:categoryId",       autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("icon"), updateContentCategory);
 router.delete("/content-categories/:categoryId",    autoFlushGroup(CacheEntity.TestSeries), deleteContentCategory);
 
 router.put("/papers/:linkId",                       autoFlushGroup(CacheEntity.TestSeries), updatePaperLink);
@@ -61,14 +62,14 @@ router.get("/orders",                               listOrders);
 
 // --- Test Series CRUD -------------------------------------------------------
 router.get("/",                                     listTestSeries);
-router.post("/",                                    autoFlushGroup(CacheEntity.TestSeries), uploadS3.single("thumbnail"), createTestSeries);
+router.post("/",                                    autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("thumbnail"), createTestSeries);
 router.get("/:id",                                  getTestSeriesById);
-router.put("/:id",                                  autoFlushGroup(CacheEntity.TestSeries), uploadS3.single("thumbnail"), updateTestSeries);
+router.put("/:id",                                  autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("thumbnail"), updateTestSeries);
 router.delete("/:id",                               autoFlushGroup(CacheEntity.TestSeries), deleteTestSeries);
 
 // --- Nested under a series --------------------------------------------------
 router.get("/:id/content-categories",               listContentCategories);
-router.post("/:id/content-categories",              autoFlushGroup(CacheEntity.TestSeries), uploadS3.single("icon"), createContentCategory);
+router.post("/:id/content-categories",              autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("icon"), createContentCategory);
 
 router.get("/:id/papers",                           listPapers);
 router.post("/:id/papers",                          autoFlushGroup(CacheEntity.TestSeries), linkPaper);

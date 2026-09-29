@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getCategoryList,
   getCategoryDetail,
@@ -10,7 +11,7 @@ import {
 } from "./categories.controller";
 
 const router = Router();
-const imageUpload = uploadS3Mixed.fields([{ name: "image", maxCount: 1 }]);
+const imageUpload = [uploadTo(UPLOAD_FOLDERS.jobsCategories), uploadS3Mixed.fields([{ name: "image", maxCount: 1 }])];
 
 router.post("/reorder", reorderCategories);
 router.get("/", getCategoryList);

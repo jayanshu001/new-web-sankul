@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { validate } from "../../middlewares/validate";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
@@ -59,10 +60,10 @@ router.delete("/types/:id", autoFlushGroup(CacheEntity.PackageType), deletePacka
 // rewrite ws_material_category_package, which /client/catalog/package/:id/materials
 // and /client/materials read — cached under "material", not "package".
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Package }), listPackages);
-router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), createPackage);
+router.post("/", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), createPackage);
 router.post("/reorder", autoFlushGroup(CacheEntity.Package), reorderPackages);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Package }), getPackageById);
-router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), updatePackage);
+router.put("/:id", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), updatePackage);
 router.delete("/:id", autoFlushGroup(CacheEntity.Package, CacheEntity.Material), deletePackage);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Package), togglePackageStatus);
 

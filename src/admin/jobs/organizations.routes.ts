@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getOrganizationList,
   getOrganizationDetail,
@@ -9,7 +10,7 @@ import {
 } from "./organizations.controller";
 
 const router = Router();
-const logoUpload = uploadS3Mixed.fields([{ name: "logo", maxCount: 1 }]);
+const logoUpload = [uploadTo(UPLOAD_FOLDERS.jobsOrganizations), uploadS3Mixed.fields([{ name: "logo", maxCount: 1 }])];
 
 router.get("/", getOrganizationList);
 router.post("/", logoUpload, enforceMixedSizeLimits, createOrganization);

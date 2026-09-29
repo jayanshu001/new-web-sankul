@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3, uploadS3Mixed, uploadQuestionImages } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed, uploadQuestionImages, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
@@ -46,15 +47,15 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 // Categories
 router.get("/categories/tree", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ExamCategory }), getCategoryTree);
 router.get("/categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ExamCategory }), getCategories);
-router.post("/categories", uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), createCategory);
+router.post("/categories", uploadTo(UPLOAD_FOLDERS.quizCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), createCategory);
 router.get("/categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ExamCategory }), getCategoryById);
 router.get("/categories/:id/packages", getCategoryPackages);
 router.get("/categories/:id/courses", getCategoryCourses);
-router.put("/categories/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), updateCategory);
+router.put("/categories/:id", uploadTo(UPLOAD_FOLDERS.quizCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), updateCategory);
 router.delete("/categories/:id", autoFlushGroup(CacheEntity.ExamCategory), deleteCategory);
 
 // Exams
-const examUpload = uploadS3Mixed.single("solutionPdfUrl");
+const examUpload = [uploadTo(UPLOAD_FOLDERS.quizSolution), uploadS3Mixed.single("solutionPdfUrl")];
 
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Exam }), getExams);
 router.post("/", examUpload, autoFlushGroup(CacheEntity.Exam), createExam);

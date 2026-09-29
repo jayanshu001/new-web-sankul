@@ -2,7 +2,8 @@ import { Router } from "express";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 
 import {
   getStates,
@@ -37,9 +38,9 @@ router.delete("/states/:id", autoFlushGroup(CacheEntity.CustomerLookup), deleteS
 
 // ─── Cities ───────────────────────────────────────────────────────────────────
 router.get("/cities", listCities);
-router.post("/cities", autoFlushGroup(CacheEntity.CustomerLookup), uploadS3.single("image"), createCity);
+router.post("/cities", autoFlushGroup(CacheEntity.CustomerLookup), uploadTo(UPLOAD_FOLDERS.cities), uploadS3.single("image"), createCity);
 router.get("/cities/:id", getCity);
-router.put("/cities/:id", autoFlushGroup(CacheEntity.CustomerLookup), uploadS3.single("image"), updateCity);
+router.put("/cities/:id", autoFlushGroup(CacheEntity.CustomerLookup), uploadTo(UPLOAD_FOLDERS.cities), uploadS3.single("image"), updateCity);
 router.delete("/cities/:id", autoFlushGroup(CacheEntity.CustomerLookup), deleteCity);
 
 export default router;

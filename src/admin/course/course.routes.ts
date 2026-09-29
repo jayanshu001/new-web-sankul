@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getPreRequisites,
   getCourses,
@@ -84,10 +85,10 @@ router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), 
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), getCourseById);
 
 // POST create course
-router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), createCourse);
+router.post("/", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), createCourse);
 
 // PUT update course
-router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), updateCourse);
+router.put("/:id", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), updateCourse);
 
 // DELETE delete course
 router.delete("/:id", autoFlushGroup(CacheEntity.Course, CacheEntity.Material), deleteCourse);

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
@@ -93,12 +94,12 @@ router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);
 // "live-course". Kept route-level (not in FLUSH_GROUPS[LiveCourse]) so the
 // frequent live-session writes that flush "live-course" don't wipe material caches.
 router.get("/",                              cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.LiveCourse }), listLiveCourses);
-router.post("/",                             uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), createLiveCourse);
+router.post("/",                             uploadTo(UPLOAD_FOLDERS.liveCourse), uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), createLiveCourse);
 // Bulk drag-and-drop reorder. MUST stay above the "/:id" routes so "reorder" is
 // never parsed as a course id. Flushes the cached lists like any other write.
 router.post("/reorder",                      autoFlushGroup(CacheEntity.LiveCourse), reorderLiveCourses);
 router.get("/:id",                           cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.LiveCourse }), getLiveCourseById);
-router.put("/:id",                           uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), updateLiveCourse);
+router.put("/:id",                           uploadTo(UPLOAD_FOLDERS.liveCourse), uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), updateLiveCourse);
 router.delete("/:id",                        autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), deleteLiveCourse);
 router.patch("/:id/popular",                 autoFlushGroup(CacheEntity.LiveCourse), toggleLiveCoursePopular);
 router.get("/:id/sessions",                  listSessionsForLiveCourse);
