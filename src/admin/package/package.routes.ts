@@ -55,17 +55,20 @@ router.put("/types/:id", validate({ body: updatePackageTypeSchema }), autoFlushG
 router.delete("/types/:id", autoFlushGroup(CacheEntity.PackageType), deletePackageType);
 
 // Packages
+// create/update/delete + material-categories/reorder also flush "material": they
+// rewrite ws_material_category_package, which /client/catalog/package/:id/materials
+// and /client/materials read — cached under "material", not "package".
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Package }), listPackages);
-router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package), createPackage);
+router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), createPackage);
 router.post("/reorder", autoFlushGroup(CacheEntity.Package), reorderPackages);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Package }), getPackageById);
-router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package), updatePackage);
-router.delete("/:id", autoFlushGroup(CacheEntity.Package), deletePackage);
+router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), updatePackage);
+router.delete("/:id", autoFlushGroup(CacheEntity.Package, CacheEntity.Material), deletePackage);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Package), togglePackageStatus);
 
 // Embedded reorders
 router.patch("/:id/specific-subjects/reorder", autoFlushGroup(CacheEntity.Package), reorderSpecificSubjects);
-router.patch("/:id/material-categories/reorder", autoFlushGroup(CacheEntity.Package), reorderMaterialCategories);
+router.patch("/:id/material-categories/reorder", autoFlushGroup(CacheEntity.Package, CacheEntity.Material), reorderMaterialCategories);
 router.patch("/:id/exam-categories/reorder", autoFlushGroup(CacheEntity.Package), reorderExamCategories);
 
 // Plans

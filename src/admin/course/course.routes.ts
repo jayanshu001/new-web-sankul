@@ -77,17 +77,20 @@ router.delete("/materials/:materialId", autoFlushGroup(CacheEntity.Material), de
 
 // Route-level response cache. Reads tagged entity: CacheEntity.Course; the writes below
 // call autoFlushGroup(CacheEntity.Course) so edits clear these instantly. See cache/ROUTE_CACHE.md.
+// create/update/delete + material-categories/reorder also flush "material": they
+// rewrite ws_material_category_course, which /client/catalog/course/:id/materials
+// and /client/materials read — cached under "material", not "course".
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), getCourses);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), getCourseById);
 
 // POST create course
-router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course), createCourse);
+router.post("/", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), createCourse);
 
 // PUT update course
-router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course), updateCourse);
+router.put("/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), updateCourse);
 
 // DELETE delete course
-router.delete("/:id", autoFlushGroup(CacheEntity.Course), deleteCourse);
+router.delete("/:id", autoFlushGroup(CacheEntity.Course, CacheEntity.Material), deleteCourse);
 
 // PATCH toggle popular flag
 router.patch("/:id/popular", autoFlushGroup(CacheEntity.Course), toggleCoursePopular);
@@ -101,7 +104,7 @@ router.get("/:id/promocodes", getCoursePromocodes);
 router.get("/:id/exam-categories", getCourseExamCategories);
 router.put("/:id/exam-categories/reorder", autoFlushGroup(CacheEntity.Course), reorderCourseExamCategories);
 router.get("/:id/material-categories", getCourseMaterialCategories);
-router.put("/:id/material-categories/reorder", autoFlushGroup(CacheEntity.Course), reorderCourseMaterialCategories);
+router.put("/:id/material-categories/reorder", autoFlushGroup(CacheEntity.Course, CacheEntity.Material), reorderCourseMaterialCategories);
 router.get("/:id/books", getCourseBooks);
 router.post("/:id/books", autoFlushGroup(CacheEntity.Course), linkCourseBooks);
 router.put("/:id/books/reorder", autoFlushGroup(CacheEntity.Course), reorderCourseBooks);
