@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getAdministrators,
   getAdministratorById,
@@ -23,9 +24,9 @@ router.use(enforceRbacStrict);
 router.get("/pre-requisites", getAdministratorPreRequisites);
 
 router.get("/", getAdministrators);
-router.post("/", uploadS3.single("image"), createAdministrator);
+router.post("/", uploadTo(UPLOAD_FOLDERS.users), uploadS3.single("image"), createAdministrator);
 router.get("/:id", getAdministratorById);
-router.put("/:id", uploadS3.single("image"), updateAdministrator);
+router.put("/:id", uploadTo(UPLOAD_FOLDERS.users), uploadS3.single("image"), updateAdministrator);
 router.delete("/:id", deleteAdministrator);
 router.patch("/:id/status", toggleAdministratorStatus);
 

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
@@ -78,25 +79,25 @@ router.delete("/faq-types/:id", autoFlushGroup(CacheEntity.Faq), deleteFaqType);
 
 // Popup
 router.get("/popups", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Popup }), listPopups);
-router.post("/popups", uploadS3.single("image"), attachImage, coercePopup, autoFlushGroup(CacheEntity.Popup), createPopup);
+router.post("/popups", uploadTo(UPLOAD_FOLDERS.popup), uploadS3.single("image"), attachImage, coercePopup, autoFlushGroup(CacheEntity.Popup), createPopup);
 router.get("/popups/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Popup }), getPopup);
-router.put("/popups/:id", uploadS3.single("image"), attachImage, coercePopup, autoFlushGroup(CacheEntity.Popup), updatePopup);
+router.put("/popups/:id", uploadTo(UPLOAD_FOLDERS.popup), uploadS3.single("image"), attachImage, coercePopup, autoFlushGroup(CacheEntity.Popup), updatePopup);
 router.delete("/popups/:id", autoFlushGroup(CacheEntity.Popup), deletePopup);
 
 // Banner
 router.get("/banners", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Banner }), listBanners);
-router.post("/banners", uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), createBanner);
+router.post("/banners", uploadTo(UPLOAD_FOLDERS.banner), uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), createBanner);
 router.post("/banners/reorder", autoFlushGroup(CacheEntity.Banner), reorderBanners);
 router.get("/banners/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Banner }), getBanner);
-router.put("/banners/:id", uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), updateBanner);
+router.put("/banners/:id", uploadTo(UPLOAD_FOLDERS.banner), uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), updateBanner);
 router.delete("/banners/:id", autoFlushGroup(CacheEntity.Banner), deleteBanner);
 
 // Live Banner — same flow as Banner, but `key` is implicit (always LiveCourse).
 router.get("/live-banners", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Banner }), listLiveBanners);
-router.post("/live-banners", uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), createLiveBanner);
+router.post("/live-banners", uploadTo(UPLOAD_FOLDERS.banner), uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), createLiveBanner);
 router.post("/live-banners/reorder", autoFlushGroup(CacheEntity.Banner), reorderLiveBanners);
 router.get("/live-banners/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Banner }), getLiveBanner);
-router.put("/live-banners/:id", uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), updateLiveBanner);
+router.put("/live-banners/:id", uploadTo(UPLOAD_FOLDERS.banner), uploadS3.single("image"), attachImage, coerceBanner, autoFlushGroup(CacheEntity.Banner), updateLiveBanner);
 router.delete("/live-banners/:id", autoFlushGroup(CacheEntity.Banner), deleteLiveBanner);
 
 // Testimonials
@@ -115,17 +116,17 @@ router.delete("/social-link-types/:id", autoFlushGroup(CacheEntity.SocialLink), 
 
 // Social Links
 router.get("/social-links", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.SocialLink }), listSocialLinks);
-router.post("/social-links", uploadS3.single("icon"), attachIcon, coerceSocialLink, autoFlushGroup(CacheEntity.SocialLink), createSocialLink);
+router.post("/social-links", uploadTo(UPLOAD_FOLDERS.socialLinks), uploadS3.single("icon"), attachIcon, coerceSocialLink, autoFlushGroup(CacheEntity.SocialLink), createSocialLink);
 router.get("/social-links/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.SocialLink }), getSocialLink);
-router.put("/social-links/:id", uploadS3.single("icon"), attachIcon, coerceSocialLink, autoFlushGroup(CacheEntity.SocialLink), updateSocialLink);
+router.put("/social-links/:id", uploadTo(UPLOAD_FOLDERS.socialLinks), uploadS3.single("icon"), attachIcon, coerceSocialLink, autoFlushGroup(CacheEntity.SocialLink), updateSocialLink);
 router.delete("/social-links/:id", autoFlushGroup(CacheEntity.SocialLink), deleteSocialLink);
 
 // Current Affairs — image optional on PUT; when absent, attachImage adds
 // nothing and genericUpdate's $set keeps the existing image URL.
 router.get("/current-affairs", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CurrentAffair }), listCurrentAffairs);
-router.post("/current-affairs", uploadS3.single("image"), attachImage, coerceCurrentAffair, autoFlushGroup(CacheEntity.CurrentAffair), createCurrentAffair);
+router.post("/current-affairs", uploadTo(UPLOAD_FOLDERS.currentAffairs), uploadS3.single("image"), attachImage, coerceCurrentAffair, autoFlushGroup(CacheEntity.CurrentAffair), createCurrentAffair);
 router.get("/current-affairs/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CurrentAffair }), getCurrentAffair);
-router.put("/current-affairs/:id", uploadS3.single("image"), attachImage, coerceCurrentAffair, autoFlushGroup(CacheEntity.CurrentAffair), updateCurrentAffair);
+router.put("/current-affairs/:id", uploadTo(UPLOAD_FOLDERS.currentAffairs), uploadS3.single("image"), attachImage, coerceCurrentAffair, autoFlushGroup(CacheEntity.CurrentAffair), updateCurrentAffair);
 router.delete("/current-affairs/:id", autoFlushGroup(CacheEntity.CurrentAffair), deleteCurrentAffair);
 
 // Terms

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3, uploadS3Mixed } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
@@ -37,10 +38,10 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 
 // Categories
 router.get("/categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.MaterialCategory }), listCategories);
-router.post("/categories", uploadS3.single("image"), autoFlushGroup(CacheEntity.MaterialCategory), createCategory);
+router.post("/categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.MaterialCategory), createCategory);
 router.post("/categories/reorder", autoFlushGroup(CacheEntity.MaterialCategory), reorderCategories);
 router.get("/categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.MaterialCategory }), getCategoryById);
-router.put("/categories/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.MaterialCategory), updateCategory);
+router.put("/categories/:id", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.MaterialCategory), updateCategory);
 router.delete("/categories/:id", autoFlushGroup(CacheEntity.MaterialCategory), deleteCategory);
 router.patch("/categories/:id/status", autoFlushGroup(CacheEntity.MaterialCategory), toggleCategoryStatus);
 router.post("/categories/:id/duplicate", autoFlushGroup(CacheEntity.MaterialCategory), duplicateCategory);
@@ -50,12 +51,12 @@ router.get("/categories/:id/materials", getCategoryMaterials);
 
 // Leaf materials
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material }), listMaterials);
-router.post("/", uploadS3Mixed.single("file"), autoFlushGroup(CacheEntity.Material), createMaterial);
+router.post("/", uploadTo(UPLOAD_FOLDERS.materials), uploadS3Mixed.single("file"), autoFlushGroup(CacheEntity.Material), createMaterial);
 router.post("/reorder", autoFlushGroup(CacheEntity.Material), reorderMaterials);
 router.post("/bulk-status", autoFlushGroup(CacheEntity.Material), bulkStatus);
 router.post("/bulk-delete", autoFlushGroup(CacheEntity.Material), bulkDelete);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material }), getMaterialById);
-router.put("/:id", uploadS3Mixed.single("file"), autoFlushGroup(CacheEntity.Material), updateMaterial);
+router.put("/:id", uploadTo(UPLOAD_FOLDERS.materials), uploadS3Mixed.single("file"), autoFlushGroup(CacheEntity.Material), updateMaterial);
 router.delete("/:id", autoFlushGroup(CacheEntity.Material), deleteMaterial);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Material), toggleMaterialStatus);
 

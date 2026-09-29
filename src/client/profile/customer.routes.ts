@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   updateProfileHandler,
   getProfileHandler,
@@ -44,7 +45,7 @@ router.get("/dashboard", authenticate, getProfileDashboardCounts);
 router.put(
   "/profile-picture",
   authenticate,
-  uploadS3.single("image"),
+  uploadTo(UPLOAD_FOLDERS.customers), uploadS3.single("image"),
   upsertProfilePictureHandler
 );
 

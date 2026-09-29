@@ -9,7 +9,8 @@ import {
   adminMeHandler,
 } from "./admin.auth.controller";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 import { failure } from "../../utils/httpResponse";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
@@ -126,7 +127,7 @@ router.post(
 router.put(
   "/profile",
   authenticate,
-  uploadS3.single("image"),
+  uploadTo(UPLOAD_FOLDERS.users), uploadS3.single("image"),
   adminUpdateProfileHandler
 );
 

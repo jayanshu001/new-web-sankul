@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadTo } from "../../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import { cacheRoute } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
@@ -33,34 +34,34 @@ router.get("/educators/:id/live-courses", getEducatorLiveCourses);
 router.get("/educators/:id/video-categories", getEducatorVideoCategories);
 router.get("/educators/:id/live-sessions", getEducatorLiveSessions);
 router.get("/educators/:id/packages", getEducatorPackages);
-router.post("/educators", uploadS3.single("image"), autoFlushGroup(CacheEntity.Educator), createEducator);
-router.put("/educators/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Educator), updateEducator);
+router.post("/educators", uploadTo(UPLOAD_FOLDERS.educator), uploadS3.single("image"), autoFlushGroup(CacheEntity.Educator), createEducator);
+router.put("/educators/:id", uploadTo(UPLOAD_FOLDERS.educator), uploadS3.single("image"), autoFlushGroup(CacheEntity.Educator), updateEducator);
 router.delete("/educators/:id", autoFlushGroup(CacheEntity.Educator), deleteEducator);
 
 // Subject Category Master
 router.get("/subject-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory }), getSubjectCategories);
 router.get("/subject-categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory }), getSubjectCategoryById);
-router.post("/subject-categories", uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), createSubjectCategory);
-router.put("/subject-categories/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), updateSubjectCategory);
+router.post("/subject-categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), createSubjectCategory);
+router.put("/subject-categories/:id", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), updateSubjectCategory);
 router.delete("/subject-categories/:id", autoFlushGroup(CacheEntity.CourseSubjectCategory), deleteSubjectCategory);
 
 // Material Master
 router.get("/materials", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material }), getMaterials);
-router.post("/materials", uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), createMaterial);
-router.put("/materials/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), updateMaterial);
+router.post("/materials", uploadTo(UPLOAD_FOLDERS.pcMaterial), uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), createMaterial);
+router.put("/materials/:id", uploadTo(UPLOAD_FOLDERS.pcMaterial), uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), updateMaterial);
 router.delete("/materials/:id", autoFlushGroup(CacheEntity.Material), deleteMaterial);
 
 // Video Category Master
 router.get("/video-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.VideoCategory }), getVideoCategories);
 router.get("/video-categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.VideoCategory }), getVideoCategoryById);
-router.post("/video-categories", uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), createVideoCategory);
-router.put("/video-categories/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), updateVideoCategory);
+router.post("/video-categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), createVideoCategory);
+router.put("/video-categories/:id", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), updateVideoCategory);
 router.delete("/video-categories/:id", autoFlushGroup(CacheEntity.VideoCategory), deleteVideoCategory);
 
 // Package Category Master (parent = Package from /admin/packages listing)
 router.get("/package-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.PackageCategory }), getPackageCategories);
-router.post("/package-categories", uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), createPackageCategory);
-router.put("/package-categories/:id", uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), updatePackageCategory);
+router.post("/package-categories", uploadTo(UPLOAD_FOLDERS.packageCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), createPackageCategory);
+router.put("/package-categories/:id", uploadTo(UPLOAD_FOLDERS.packageCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), updatePackageCategory);
 router.delete("/package-categories/:id", autoFlushGroup(CacheEntity.PackageCategory), deletePackageCategory);
 
 export default router;

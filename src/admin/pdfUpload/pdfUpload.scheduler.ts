@@ -20,6 +20,7 @@ import {
   ebookExistsSql,
 } from "../../modules/pdf-upload/pdf-upload.service";
 import logger from "../../utils/logger";
+import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   emitPdfJobUpdate,
   emitPdfBatchDone,
@@ -211,7 +212,8 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
     .basename(row.fileName)
     .replace(/[^\w.\-]+/g, "_")
     .slice(-120);
-  const key = `admin/ebooks/${Date.now()}-${safeName}`;
+  const folder = target === "demoUrl" ? UPLOAD_FOLDERS.ebookDemo : UPLOAD_FOLDERS.ebookFull;
+  const key = `${folder}/${Date.now()}-${safeName}`;
   const body = createReadStream(row.tempPath);
   await s3Config.send(
     new PutObjectCommand({

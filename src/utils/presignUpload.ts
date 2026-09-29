@@ -19,6 +19,7 @@ import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
 import { s3Config, DO_BUCKET } from "../middlewares/upload";
+import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 
 // How long the signed PUT URL stays valid. Long enough for a 500 MB upload on
 // a slow connection (~3 Mbps ≈ 22 min), short enough to limit URL leakage.
@@ -34,13 +35,13 @@ export const PRESIGN_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
 // Keeps presign from being an open relay to write arbitrary keys/types.
 const KINDS = {
   ebookPdf: {
-    prefix: "admin/ebooks",
+    prefix: UPLOAD_FOLDERS.ebookFull,
     extPattern: /\.pdf$/i,
     mimePattern: /^application\/pdf$/i,
     maxBytes: PRESIGN_MAX_BYTES,
   },
   jobPreviousPaperPdf: {
-    prefix: "admin/jobs/papers",
+    prefix: UPLOAD_FOLDERS.jobsPapers,
     extPattern: /\.pdf$/i,
     mimePattern: /^application\/pdf$/i,
     maxBytes: PRESIGN_MAX_BYTES,
