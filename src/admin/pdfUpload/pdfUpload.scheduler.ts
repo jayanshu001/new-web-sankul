@@ -7,6 +7,7 @@ import { PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   s3Config,
   DO_BUCKET,
+  publicUrlFor,
   deleteFromS3FileUrl,
   isOwnBucketUrl,
 } from "../../middlewares/upload";
@@ -227,11 +228,7 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   );
   await setProgress(80);
 
-  const endpoint = (
-    process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com"
-  ).replace(/\/+$/, "");
-  const { protocol, host } = new URL(endpoint);
-  const fileUrl = `${protocol}//${DO_BUCKET}.${host}/${key}`;
+  const fileUrl = publicUrlFor(key);
 
   // Attach to the ebook on the requested field (bookUrl or demoUrl) plus its
   // matching *FileName field. Read the OLD url first so we can delete the

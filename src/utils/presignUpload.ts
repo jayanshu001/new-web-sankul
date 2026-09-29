@@ -18,7 +18,7 @@
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
-import { s3Config, DO_BUCKET } from "../middlewares/upload";
+import { s3Config, DO_BUCKET, publicUrlFor } from "../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 
 // How long the signed PUT URL stays valid. Long enough for a 500 MB upload on
@@ -122,12 +122,7 @@ export const buildPresignedUpload = async (
     expiresIn: PRESIGN_EXPIRY_SECONDS,
   });
 
-  const endpoint = (
-    process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com"
-  ).replace(/\/+$/, "");
-  // Public CDN-style URL: https://<bucket>.<region>.digitaloceanspaces.com/<key>
-  const { protocol, host } = new URL(endpoint);
-  const fileUrl = `${protocol}//${DO_BUCKET}.${host}/${key}`;
+  const fileUrl = publicUrlFor(key);
 
   return {
     uploadUrl,
