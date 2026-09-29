@@ -518,6 +518,8 @@ R("POST", "/live-courses/:id/folders/:fid/videos/from-recording", "live-courses.
 R("GET", "/live-courses/:id/folders/:fid/videos", ...view("live-courses"));
 R("POST", "/live-courses/:id/folders/:fid/videos", "live-courses.create");
 R("GET", "/live-courses/:id/folders/:fid/videos/:vid", ...view("live-courses"));
+// Admin lecture preview (LectureWatch) — reading a lecture = view, same as the video GET above.
+R("GET", "/live-courses/:id/lecture/:vid", ...view("live-courses"));
 R("PUT", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.edit");
 R("DELETE", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.delete");
 // Bulk drag-and-drop reorder — an edit, and it must be declared BEFORE crud()
