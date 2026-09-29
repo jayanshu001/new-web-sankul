@@ -23,6 +23,34 @@ export const s3Config = new S3Client({
 });
 
 /**
+ * Public URL for an object key: https://<bucket>.<region>.digitaloceanspaces.com/<key>.
+ * The one place this URL is built — presign, the PDF scheduler and every multer
+ * storage below go through it.
+ */
+export const publicUrlFor = (key: string): string => {
+  const endpoint = (
+    process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com"
+  ).replace(/\/+$/, "");
+  const { protocol, host } = new URL(endpoint);
+  return `${protocol}//${DO_BUCKET}.${host}/${key}`;
+};
+
+/**
+ * multer-s3 copies `file.location` from @aws-sdk/lib-storage's `Location`, which
+ * for a custom endpoint comes back path-style and scheme-less
+ * ("blr1.digitaloceanspaces.com/<bucket>/<key>"). Controllers persist
+ * `file.location` verbatim, so rewrite it here to the canonical public URL.
+ */
+const withPublicUrl = <T extends multer.StorageEngine>(storage: T): T => {
+  const handle = storage._handleFile.bind(storage);
+  storage._handleFile = (req, file, cb) =>
+    handle(req, file, (err, info: any) =>
+      cb(err, info?.key ? { ...info, location: publicUrlFor(info.key) } : info)
+    );
+  return storage;
+};
+
+/**
  * Route-level folder pick for the multer uploaders below. Mount it right before
  * the multer middleware: `uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image")`,
  * or per field for multi-file forms: `uploadTo({ image: …, thumbnail: … })`.
@@ -48,7 +76,7 @@ const folderFor = (req: any, fieldname: string): string => {
 const uniqueName = (file: Express.Multer.File) =>
   `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`;
 
-const s3Storage = multerS3({
+const s3Storage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read", // Makes file publicly accessible via CDN URL
@@ -57,7 +85,7 @@ const s3Storage = multerS3({
     // e.g. uploads/package/1678123412-123456789.jpg — folder from `uploadTo(...)`
     cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
-});
+}));
 
 /**
  * multer 2.x decodes multipart field/file names as **latin1** by default
@@ -167,7 +195,7 @@ export const enforceMixedSizeLimits = async (
 // Reference documents attached inline in an editor (e.g. job content
 // download links: admit card/result/answer-key/syllabus PDFs, result CSVs,
 // syllabus sheets). Single file under the `file` field; folder from `uploadTo(...)`.
-const documentStorage = multerS3({
+const documentStorage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read",
@@ -175,7 +203,7 @@ const documentStorage = multerS3({
   key: function (req, file, cb) {
     cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
-});
+}));
 
 export const uploadS3Document = multer({
   ...MULTER_UTF8,
@@ -196,7 +224,7 @@ export const uploadS3Document = multer({
 // Customer-recorded audio notes attached to a lecture moment. Single file
 // per upload under the `audio` fieldname; stored under a customer-scoped
 // prefix so the bucket browser stays readable.
-const audioStorage = multerS3({
+const audioStorage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read",
@@ -209,7 +237,7 @@ const audioStorage = multerS3({
     )}${ext}`;
     cb(null, filename);
   },
-});
+}));
 
 export const uploadS3Audio = multer({
   ...MULTER_UTF8,
@@ -235,7 +263,7 @@ export const uploadS3Audio = multer({
 // Quiz-question images: question/solution/options. Accepts any field name
 // (the dynamic `optionImage_<i>` fields make a fixed allowlist impractical),
 // caps each file at 2 MB, restricts mimetype to png/jpeg/jpg/webp.
-const questionImageStorage = multerS3({
+const questionImageStorage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read",
@@ -245,7 +273,7 @@ const questionImageStorage = multerS3({
     const filename = `${UPLOAD_FOLDERS.questions}/${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.fieldname}${ext}`;
     cb(null, filename);
   },
-});
+}));
 
 export const uploadQuestionImages = multer({
   ...MULTER_UTF8,
