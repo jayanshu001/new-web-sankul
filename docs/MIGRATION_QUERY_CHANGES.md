@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-09-30 — Book-order + material (subscription) report search: payment / order / user / tracking ids
+
+> **DDL:** none. **Data:** none. Response shape unchanged — only which rows `?search=` matches.
+
+- **`GET /admin/books/orders/list`** (+ `/orders/export/csv|excel`, same `buildOrderWhere`): the
+  search OR gains prefix `LIKE 'x%'` on `gateway_order_id` + `gateway_transaction_id` (Razorpay
+  order/payment id) next to `order_id`, and — only for an all-digit term — exact
+  `customer_id = n` and `tracking_id = n` (BIGINT AWB). Existing name/phone/email/book clauses kept.
+- **`GET /admin/subscriptions`** (material report `?hasMaterial=true`, + `/export/csv|excel`,
+  `buildSubWhere`): search OR gains the linked order's `razorpay_order_id` / `razorpay_payment_id`
+  (prefix, relation subquery on `ws_package_course_order`) and, for an all-digit term, exact
+  `tracking = n` / `customer_id = n` / `order_id = n`.
+- **Fix (same OR):** customer name/phone/email is now a relation subquery
+  (`customer: { is: … }`) instead of a materialized `customer_id IN (…)` list
+  (`customerIdsByText` removed) — the list form hits ER 1390 (65,535 placeholders) on a short
+  search over ws_customer, exactly as admin-book did before. A search with no course/package/customer
+  hit now returns an empty page from the query instead of the old service short-circuit.
+- Helper: `utils/searchFilter.searchNumericId` (digits → `{ big, int? }`; `int` only within signed INT).
+- Perf note: `razorpay_*` columns are unindexed, so an order/payment-id search scans
+  `ws_package_course_order` once (prefix LIKE); ws_book_order was already scanned by the
+  `order_items` contains clause.
+
 ## 2026-09-30 — Study materials: admin Paid/Free option (reverses 2026-07-14 "always paid")
 
 > **DDL:** none (`ws_material.is_paid` already exists, default 1). **Data:** none. Every row is
