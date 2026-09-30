@@ -187,6 +187,7 @@ export const listMaterials = async (req: Request, res: Response) => {
       search,
       materialCategoryId,
       status,
+      isPaid,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -199,6 +200,7 @@ export const listMaterials = async (req: Request, res: Response) => {
       search,
       materialCategoryId: materialCategoryId ? adminMaterial.parseMaterialId(materialCategoryId) ?? undefined : undefined,
       status: status === "true" ? true : status === "false" ? false : undefined,
+      isPaid: isPaid === "true" ? true : isPaid === "false" ? false : undefined,
       page: pageNum, limit: limitNum,
     });
     return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
@@ -247,7 +249,7 @@ export const createMaterial = async (req: Request, res: Response) => {
     applyUploadedFile(req);
     const data = createMaterialSchema.parse(req.body);
     // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/
-    // isPreview/isPaid/downloadCount) are dropped — no SQL columns.
+    // isPreview/downloadCount) are dropped — no SQL columns. isPaid is persisted.
     const res2 = await adminMaterial.createMaterial(data as any);
     if (res2 === "category") return res.status(404).json({ success: false, message: "Category not found." });
     return res.status(201).json({ success: true, data: res2 });

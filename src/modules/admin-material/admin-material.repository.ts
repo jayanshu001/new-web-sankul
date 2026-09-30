@@ -94,10 +94,10 @@ export const adminMaterialRepository = {
   },
 
   // ── materials (leaf) ──────────────────────────────────────────────────────
-  listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; skip: number; take: number }) =>
+  listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean; skip: number; take: number }) =>
     // Recency is the contract on admin lists — see utils/listOrdering.
     prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
-  countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
+  countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
   // Same Materials list as above, scoped to one category → same recency contract.
   materialsForCategory: (categoryId: number, skip: number, take: number, search?: string) =>
     prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ created_at: "desc" }, { id: "desc" }], skip, take }),
@@ -319,11 +319,12 @@ function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.M
   return where;
 }
 
-function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean }): Prisma.MaterialWhereInput {
+function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }): Prisma.MaterialWhereInput {
   const where: Prisma.MaterialWhereInput = {};
   const search = buildPrismaPrefixSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.materialCategoryId !== undefined) where.materialCategoryId = opts.materialCategoryId;
   if (opts.status !== undefined) where.status = opts.status;
+  if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
   return where;
 }
