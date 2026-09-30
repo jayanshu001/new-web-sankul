@@ -50,10 +50,6 @@ export const adminCustomerDetailsRepository = {
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, author: true, publisher: true, image: true, thumbnail: true } }) : Promise.resolve([]),
   ebookOrdersByIds: (ids: number[]) =>
     ids.length ? prisma.eBookOrder.findMany({ where: { id: { in: ids } }, select: { id: true, paymentMethod: true, orderPrice: true, status: true, createdAt: true } }) : Promise.resolve([]),
-  bookOrderItemsByReceipts: (receiptIds: string[]) =>
-    receiptIds.length ? prisma.bookOrderItem.findMany({ where: { order_id: { in: receiptIds } } }) : Promise.resolve([]),
-  booksByIds: (ids: number[]) =>
-    ids.length ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   statesByIds: (ids: number[]) =>
     ids.length ? prisma.customerState.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, state_code: true } }) : Promise.resolve([]),
 
