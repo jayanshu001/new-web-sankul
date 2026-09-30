@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-09-30 — Admin customer DTO: `loginCount`
+
+> **DDL:** none. **Data:** none. Response shape **additive only**.
+
+- `admin-customer.transformer.toCustomerDto` gains `loginCount` = `ws_customer.login_count`
+  (`lastLoginCount`, incremented on each OTP login; NULL → 0). Emitted everywhere that DTO is:
+  `GET /admin/customers` (list), `GET /admin/customers/:id`, `profile` in the customer-details
+  aggregate, and create/update responses. `referralCode` was already on the DTO (NULL until the
+  student claims one via the referral flow).
+
+---
+
 ## 2026-09-30 — Admin customer detail: physical book orders resolve legacy `order_items` JSON + expose tracking id
 
 > **DDL:** none. **Data:** none. Response shape **additive only** — every existing key kept.
