@@ -27,12 +27,19 @@ interface RefDto {
  * firstName, last token → lastName (when >1 token), middle tokens → middleName.
  */
 const splitFullName = (
-  full: string | null | undefined
-): { firstName: string; middleName: string | null; lastName: string | null } => {
+  full: string | null | undefined,
+): {
+  firstName: string;
+  middleName: string | null;
+  lastName: string | null;
+} => {
   const parts = (full ?? "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { firstName: "", middleName: null, lastName: null };
-  if (parts.length === 1) return { firstName: parts[0], middleName: null, lastName: null };
-  if (parts.length === 2) return { firstName: parts[0], middleName: null, lastName: parts[1] };
+  if (parts.length === 0)
+    return { firstName: "", middleName: null, lastName: null };
+  if (parts.length === 1)
+    return { firstName: parts[0], middleName: null, lastName: null };
+  if (parts.length === 2)
+    return { firstName: parts[0], middleName: null, lastName: parts[1] };
   return {
     firstName: parts[0],
     middleName: parts.slice(1, -1).join(" "),
@@ -52,7 +59,7 @@ export const composeFullName = (parts: {
     .join(" ");
 
 const toRef = (
-  rel: { id: number; name: string } | null | undefined
+  rel: { id: number; name: string } | null | undefined,
 ): RefDto | null => (rel ? { _id: String(rel.id), name: rel.name } : null);
 
 export interface CustomerDto {
@@ -70,6 +77,7 @@ export interface CustomerDto {
   profilePicture: string | null;
   referralCode: string | null;
   rewardPoints: number | null;
+  loginCount: number;
   verified: boolean;
   isPhoneVerified: boolean;
   status: boolean;
@@ -99,6 +107,7 @@ export const toCustomerDto = (row: CustomerWithLookups): CustomerDto => {
     profilePicture: row.profile_picture ?? null,
     referralCode: row.referralCode ?? null,
     rewardPoints: row.rewardPoints ?? null,
+    loginCount: row.lastLoginCount ?? 0,
     verified: row.verified,
     isPhoneVerified: row.isPhoneVerified,
     status: row.status,
