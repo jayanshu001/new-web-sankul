@@ -1405,35 +1405,36 @@ export const getPromocodePlansSql = async (query: {
   const entities: any[] = [];
   const examTypes = new Map<string, string>();
 
+  // Only active entities are offered — inactive ones cannot be bought, so a code on them is dead.
   for (const t of requested) {
     let docs: { id: number; name: string | null; goalLabelId?: any }[] = [];
     if (t === "package") {
       const rows = await prisma.package.findMany({
-        where: buildPrismaPrefixSearch(search, ["name"]) ?? {},
+        where: { ...buildPrismaPrefixSearch(search, ["name"]), active: true },
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "course") {
       const rows = await prisma.course.findMany({
-        where: buildPrismaPrefixSearch(search, ["name"]) ?? {},
+        where: { ...buildPrismaPrefixSearch(search, ["name"]), status: true },
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "liveCourse") {
       const rows = await prisma.liveCourse.findMany({
-        where: buildPrismaPrefixSearch(search, ["name"]) ?? {},
+        where: { ...buildPrismaPrefixSearch(search, ["name"]), status: true },
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "ebook") {
       const rows = await prisma.eBook.findMany({
-        where: buildPrismaPrefixSearch(search, ["name"]) ?? {},
+        where: { ...buildPrismaPrefixSearch(search, ["name"]), active: true },
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else {
       const rows = await prisma.testSeries.findMany({
-        where: buildPrismaPrefixSearch(search, ["title"]) ?? {},
+        where: { ...buildPrismaPrefixSearch(search, ["title"]), status: true },
         select: { id: true, title: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.title }));
