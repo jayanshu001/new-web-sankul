@@ -15,6 +15,42 @@
 
 ---
 
+## 2026-09-30 — Guest mode redesign: one static guest token, switched from Firebase (no DDL, no query change)
+
+> **DDL:** none. **Queries:** none. **Existing response shapes:** unchanged.
+> **Supersedes** the session model in the 2026-09-29 entry below (per-session Redis key,
+> 7-day TTL, `guestLimiter`, conversion revoke, `GUEST_TOKENLESS_BROWSE`). The guest-browsable
+> path list and the `req.isGuest` mechanism are unchanged.
+> **FE doc:** `docs/client/GUEST_BROWSE.md`. **Ops doc:** `docs/GUEST_MODE.md`.
+
+**Rule:** guest login works only while Firebase Realtime DB `maintain.env === "staging"`.
+No `.env` flag, no restart. Set it to anything else and the guest token is dead everywhere.
+
+| | Before (2026-09-29) | Now |
+|---|---|---|
+| Switch | `.env` `GUEST_TOKENLESS_BROWSE` per server | Firebase `maintain.env`, read server-side (`src/libs/reviewMode.ts`, Admin SDK live listener, fails closed) |
+| Token | per-session JWT + Redis `guest_session:<sid>`, 7 days | ONE static JWT `{ type, role: "guest" }`, no `iat`, no `exp` — same string for every caller |
+| `POST /client/auth/guest` when off | n/a | 403 `GUEST_MODE_DISABLED` |
+| Guest token when off | n/a | 401 `GUEST_SESSION_EXPIRED` on every route |
+| Tokenless request | 200 on the review host | always 401 |
+| Login while guest | ended that guest session | no effect on the guest token (stateless) |
+| Redis keys | `guest_session:*`, `rl:guest:*` | none |
+
+**Removed:** `guestLimiter` + `RATE_LIMIT_GUEST_MAX` (minting writes nothing now; the client
+limiter covers it), `revokeGuestSession`, `GUEST_TOKENLESS_BROWSE`.
+
+**⚠ Every server that holds this Firebase project's service account follows the same node —
+production included.** There is no per-server opt-in any more. While `maintain.env` is
+`"staging"`, production also issues and honours the guest token (catalog GETs only).
+
+**⚠ A static token cannot be revoked one guest at a time.** Off switch = Firebase, or rotate
+the access signing key.
+
+**Verify:** `npx tsx scripts/verify-guest-browse.ts` — detects the mode from the server's own
+answer: 395 checks with guest mode on, 9 with it off.
+
+---
+
 ## 2026-09-29 — Guest mode: guest sessions + guest-browsable catalog GETs (no DDL, no query change)
 
 > **DDL:** none. **Queries:** none changed. **Existing response shapes:** unchanged — guest vs
