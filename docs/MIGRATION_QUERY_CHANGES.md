@@ -15,6 +15,27 @@
 
 ---
 
+## 2026-09-30 — Study materials: admin Paid/Free option (reverses 2026-07-14 "always paid")
+
+> **DDL:** none (`ws_material.is_paid` already exists, default 1). **Data:** none. Every row is
+> already `is_paid = 1`, so behaviour only changes when an admin marks a material free.
+> **FE doc:** `docs/client/MATERIAL_FREE_PAID.md`.
+
+- **Admin write:** `admin-material.createMaterial` saves `isPaid` (default `true`);
+  `updateMaterial` sets it only when sent (it no longer forces `true`). `toMaterialDto.isPaid`
+  now reads the column (it was hard-coded `false`).
+- **Admin list:** `buildMatWhere` gains an optional `isPaid` filter (`GET /admin/materials?isPaid=`),
+  the same as the admin exam list.
+- **Client gating:** `getPurchasedMaterialIds` checks entitlement for `isPaid` rows only
+  (`.filter(m => m.isPaid)` restored). `shapeMaterial`, `client-catalog.shapeMaterialDoc` and
+  `client-folder.hydrateRefs` use the stored `isPaid`, with `isPurchased = !isPaid || owned`.
+  A free row gets a `free` media token. `client-media` resolve already branched on `m.isPaid`.
+- **`/client/free-materials`:** unchanged (still an empty page). The app has no separate
+  free-materials section; free materials appear only inside their course, package or live
+  course.
+
+---
+
 ## 2026-09-29 — Guest mode: guest sessions + guest-browsable catalog GETs (no DDL, no query change)
 
 > **DDL:** none. **Queries:** none changed. **Existing response shapes:** unchanged — guest vs

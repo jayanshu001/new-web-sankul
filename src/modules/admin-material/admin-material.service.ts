@@ -49,7 +49,7 @@ export const toMaterialDto = (row: MatRow) => ({
   fileMime: null,
   language: null,
   isPreview: false,
-  isPaid: false,
+  isPaid: !!row.isPaid,
   downloadCount: 0,
   order: row.order_by,
   status: row.status,
@@ -258,8 +258,8 @@ export const getCategoryMaterials = async (id: number, page: number, limit: numb
 };
 
 // ── materials (leaf) ────────────────────────────────────────────────────────────
-export const listMaterials = async (q: { search?: string; materialCategoryId?: number; status?: boolean; page: number; limit: number }) => {
-  const opts = { search: q.search, materialCategoryId: q.materialCategoryId, status: q.status };
+export const listMaterials = async (q: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean; page: number; limit: number }) => {
+  const opts = { search: q.search, materialCategoryId: q.materialCategoryId, status: q.status, isPaid: q.isPaid };
   const [rows, total] = await Promise.all([
     repo.listMaterials({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
     repo.countMaterials(opts),
@@ -272,15 +272,14 @@ export const getMaterialById = async (id: number) => {
   return row ? toMaterialDto(row as MatRow) : null;
 };
 
-export interface MaterialWriteInput { title?: string; materialCategoryId?: string; file?: string; fileName?: string; directLink?: string; order?: number; status?: boolean }
+export interface MaterialWriteInput { title?: string; materialCategoryId?: string; file?: string; fileName?: string; directLink?: string; order?: number; status?: boolean; isPaid?: boolean }
 
 export const createMaterial = async (d: MaterialWriteInput): Promise<"category" | any> => {
   const catId = d.materialCategoryId ? parseMaterialId(d.materialCategoryId) : null;
   if (!catId || !(await repo.findCategoryById(catId))) return "category";
   const now = new Date();
-  // Study materials are ALWAYS paid (never a free tier) — force isPaid=true here
-  // regardless of any client payload, so a stray isPaid:false can never create a
-  // free material. See docs/client (study-materials-always-paid). The remaining
+  // Paid/Free is admin-controlled (same as exams' isPaid / videos' priceType);
+  // omitted → paid, so an old admin build that never sends it stays paid. The
   // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
   // downloadCount) are still dropped on this admin write path.
   // No explicit order → MAX(order_by) + 1 across all materials — last in the app
@@ -294,7 +293,7 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
     direct_link: d.directLink ?? null,
     order_by: matOrder,
     status: d.status ?? true,
-    isPaid: true, // hard rule: every study material is paid
+    isPaid: d.isPaid ?? true,
     created_at: now, updated_at: now,
   });
   return toMaterialDto(created as MatRow);
@@ -302,9 +301,8 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
 
 export const updateMaterial = async (id: number, d: MaterialWriteInput): Promise<"not_found" | "category" | any> => {
   if (!(await repo.findMaterialBare(id))) return "not_found";
-  // Study materials are always paid — force isPaid=true on every update, ignoring
-  // any incoming value, so editing a legacy free row also repairs it.
-  const data: any = { updated_at: new Date(), isPaid: true };
+  const data: any = { updated_at: new Date() };
+  if (d.isPaid !== undefined) data.isPaid = d.isPaid;
   if (d.materialCategoryId !== undefined) {
     const catId = parseMaterialId(d.materialCategoryId);
     if (!catId || !(await repo.findCategoryById(catId))) return "category";

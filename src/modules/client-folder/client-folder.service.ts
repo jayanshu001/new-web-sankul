@@ -57,8 +57,8 @@ const hydrateRefs = async (kind: string, refIds: number[], customerId: number | 
     rows.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId as number, isPaid: !!m.isPaid })),
   );
   return new Map(rows.map((m) => {
-    const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
-    const isPurchased = ownedIds.has(m.id);
+    const isPaid = !!m.isPaid;
+    const isPurchased = !isPaid || ownedIds.has(m.id);
     return [m.id, {
       _id: String(m.id), title: m.name, status: m.status,
       file: "", direct_link: null,

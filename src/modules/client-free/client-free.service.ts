@@ -252,10 +252,9 @@ const emptyTestsLevel = (opts: { year?: number; month?: number; week?: number; p
 // Recursive tree TOP-grouped by product; only FREE (isPaid=false) materials.
 // LiveCourse omitted (no SQL material-category pivot — documented drift).
 //
-// HARD RULE: study materials are ALWAYS paid — there is no free tier. So this
-// discovery listing has, by definition, nothing to return. We short-circuit to an
-// empty page in code (not only via the isPaid=false query) so the guarantee holds
-// even on an environment where the one-time data migration hasn't been applied.
+// The app has no separate free-materials section — a free material (isPaid=false)
+// is served inside its course / package / live-course listing instead. So this
+// discovery listing stays an empty page.
 export const freeMaterials = async (_opts: { customerId: number | null; search: string | null; page: number; limit: number; skip: number }) => {
   return { data: [] as any[], total: 0 };
 };

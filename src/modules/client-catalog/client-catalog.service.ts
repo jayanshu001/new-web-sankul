@@ -304,8 +304,8 @@ const shapeMaterialCategoryDoc = (
 // file/directLink gated for unpurchased paid items (mirrors shapeMaterialForClient).
 // description/thumbnail are emitted only when set (Mongoose omits unset optionals).
 const shapeMaterialDoc = (m: any, owned: Set<number>, customerId: number | null = null) => {
-  const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
-  const isPurchased = owned.has(m.id);
+  const isPaid = !!m.isPaid;
+  const isPurchased = !isPaid || owned.has(m.id);
   const isDirectLink = !m.file && !!m.direct_link;
   const out: any = {
     _id: String(m.id),

@@ -158,10 +158,7 @@ export const getPurchasedMaterialIds = async (
 ): Promise<Set<number>> => {
   const owned = new Set<number>();
   if (!customerId) return owned;
-  // Study materials are ALWAYS paid (hard rule) — every material is entitlement-
-  // checked, including any legacy row whose stored isPaid is false, so a historical
-  // free flag can never leak the PDF without a subscription.
-  const paid = materials;
+  const paid = materials.filter((m) => m.isPaid);
   if (!paid.length) return owned;
 
   const leafIds = [...new Set(paid.map((m) => m.materialCategoryId).filter((n) => n != null))];
@@ -230,8 +227,8 @@ export const getPurchasedMaterialIds = async (
  * URL is an external link (open in browser) vs an uploaded PDF (in-app viewer).
  */
 export const shapeMaterial = (m: any, ownedIds: Set<number>, customerId: number | null = null) => {
-  const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
-  const isPurchased = ownedIds.has(m.id);
+  const isPaid = !!m.isPaid;
+  const isPurchased = !isPaid || ownedIds.has(m.id);
   const isDirectLink = !m.file && !!m.direct_link;
   return {
     _id: String(m.id),
