@@ -3,19 +3,21 @@ import logger from "../../utils/logger";
 import { generateOtp, validateOtp, refreshCustomerToken, resendOtp, logoutCustomer } from "./auth.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../../utils/dbAvailability";
-import { createGuestSession, revokeGuestSession } from "../../libs/guestSession";
-import { bearerToken } from "../../middlewares/guestBrowse";
+import { guestToken, isGuestModeOn } from "../../libs/guestSession";
 
 /**
  * POST /api/v1/client/auth/guest
- * Body: none. Returns a guest access token valid for catalog browse only.
+ * Body: none. Returns the static guest token (catalog browse only) while guest mode
+ * is on (Firebase `maintain.env === "staging"`); refuses otherwise.
  */
 export const createGuestSessionHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createGuestSessionHandler invoked", { traceId, path: req.originalUrl });
   try {
-    const session = await createGuestSession();
-    return success(res, { userType: "GUEST", ...session }, "Guest session created.", 200);
+    if (!(await isGuestModeOn())) {
+      return failure(res, "Guest login is not available.", 403, {}, { reason: "GUEST_MODE_DISABLED" });
+    }
+    return success(res, { userType: "GUEST", accessToken: guestToken(), expiresAt: null }, "Guest session created.", 200);
   } catch (err) {
     logger.error("createGuestSessionHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Something went wrong. Please try again later.", 500);
@@ -86,8 +88,6 @@ export const validateOtpHandler = async (req: Request, res: Response) => {
     }
 
     logger.info("validateOtpHandler success", { traceId, isNewUser: result.isNewUser });
-    // Guest → user: the guest token the app was browsing with stops working.
-    await revokeGuestSession(bearerToken(req), (result.customer as any)?._id);
     return success(
       res,
       { user: result.customer, accessToken: result.token, refreshToken: result.refreshToken, isNewUser: result.isNewUser },

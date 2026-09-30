@@ -128,16 +128,20 @@ Responsibilities:
 
 - **Every route (admin + client) requires a Bearer token.** Never default a new route to
   public; only auth/refresh/webhook/health/share are exceptions.
-- **Guest mode** (App Store 5.1.1(v)): `POST /client/auth/guest` issues a guest token
-  (`libs/guestSession.ts`, Redis-backed, no table). A GET on a path in `GUEST_BROWSE_PATHS`
-  (`middlewares/guestBrowse.ts`) carrying a live guest token is flagged `req.isGuest` and
-  passes `authenticate`/`requireRole` with NO `req.user`; a guest token anywhere else is
-  403 `ACCOUNT_REQUIRED`. To open a read to guests, add its path to that list — never swap in
+- **Guest mode:** ONE switch — Firebase RTDB `maintain.env === "staging"`, read server-side
+  (`libs/reviewMode.ts`, Admin SDK, fails closed; NO `.env` flag, and every server on this
+  Firebase project follows it, production included). While on, `POST /client/auth/guest`
+  returns ONE static guest JWT (`libs/guestSession.ts`: no `iat`/`exp`, stateless, no table,
+  no Redis); a GET on a path in `GUEST_BROWSE_PATHS` (`middlewares/guestBrowse.ts`) carrying
+  it is flagged `req.isGuest` and passes `authenticate`/`requireRole` with NO `req.user`; on
+  any other route it is 403 `ACCOUNT_REQUIRED`. While off, the endpoint is 403
+  `GUEST_MODE_DISABLED` and the token is 401 `GUEST_SESSION_EXPIRED` everywhere. Tokenless is
+  always 401. To open a read to guests, add its path to that list — never swap in
   `optionalAuthenticate`, never remove a router's `router.use(authenticate)` (later routers
-  rely on the `/`-mounted gates). Tokenless stays 401 unless the deployment sets
-  `GUEST_TOKENLESS_BROWSE=true` (iOS review host only, never production). Playback, `/my*`, orders and every
-  write stay login-only. Guest handlers must serve `customerId = null` with the SAME keys.
-  Firebase Remote Config is UI-only, never an authz input. Gate: `scripts/verify-guest-browse.ts`.
+  rely on the `/`-mounted gates). Playback, `/my*`, orders and every write stay login-only.
+  Guest handlers must serve `customerId = null` with the SAME keys. A Firebase value SENT BY
+  A CLIENT is never an authz input. Never write the `maintain` node (it drives the live app).
+  Gate: `scripts/verify-guest-browse.ts`.
 - **Video URL responses have a fixed contract** — match `/v1/lecture`'s encryption +
   shape (`utils/videoEncryption.ts`, `utils/videoResolver.ts`).
 - **`duration` on course/package/ebook/live price rows is in DAYS** — compute `endAt`

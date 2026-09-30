@@ -81,6 +81,17 @@ export function buildPrismaPrefixSearch(
   };
 }
 
+// Exact-match companion for numeric id columns a LIKE can't serve (customer id,
+// BIGINT tracking AWB). Returns the trimmed term when it is all digits: `big` for
+// BIGINT columns, `int` only when it fits a signed INT (Prisma throws past 2^31-1).
+// 18 digits max so `big` never overflows signed BIGINT.
+export function searchNumericId(term: string | undefined | null): { big: bigint; int?: number } | undefined {
+  const t = typeof term === "string" ? term.trim() : "";
+  if (!/^\d{1,18}$/.test(t)) return undefined;
+  const big = BigInt(t);
+  return { big, int: big <= BigInt(2147483647) ? Number(big) : undefined };
+}
+
 // Raw-SQL variant for the few repositories that build LIKE clauses by hand (JSON-column
 // / cross-table searches Prisma can't express). Emits one AND-joined group per token;
 // within a group each column is OR-ed. Values are returned separately so callers keep

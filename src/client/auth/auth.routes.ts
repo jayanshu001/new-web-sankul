@@ -3,17 +3,17 @@ import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpH
 import authenticate from "../../middlewares/authenticate";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
-import { otpLimiter, guestLimiter } from "../../config/rateLimiter";
+import { otpLimiter } from "../../config/rateLimiter";
 
 const router = Router();
 
 /**
  * @route  POST /api/v1/client/auth/guest
- * @desc   Open a temporary guest session → guest access token for catalog browse.
- *         See docs/client/GUEST_BROWSE.md.
+ * @desc   "Login as Guest" → static guest token for catalog browse. Works only while
+ *         Firebase `maintain.env === "staging"`. See docs/client/GUEST_BROWSE.md.
  * @access Public
  */
-router.post("/guest", guestLimiter, createGuestSessionHandler);
+router.post("/guest", createGuestSessionHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/generate

@@ -15,6 +15,36 @@
 
 ---
 
+## 2026-09-30 — Book-order + material (subscription) report search: payment / order / user / tracking ids
+
+> **DDL:** none. **Data:** none. Response shape unchanged — only which rows `?search=` matches.
+
+- **`GET /admin/books/orders/list`** (+ `/orders/export/csv|excel`, same `buildOrderWhere`): the
+  search OR gains prefix `LIKE 'x%'` on `gateway_order_id` + `gateway_transaction_id` (Razorpay
+  order/payment id) next to `order_id`, and — only for an all-digit term — exact
+  `customer_id = n` and `tracking_id = n` (BIGINT AWB). Existing name/phone/email/book clauses kept.
+- **`GET /admin/subscriptions`** (material report `?hasMaterial=true`, + `/export/csv|excel`,
+  `buildSubWhere`): search OR gains the linked order's `razorpay_order_id` / `razorpay_payment_id`
+  (prefix, relation subquery on `ws_package_course_order`) and, for an all-digit term, exact
+  `tracking = n` / `customer_id = n` / `order_id = n`.
+- **`GET /admin/live-courses/subscriptions`** (Live Course Report, incl. with-material rows,
+  + its CSV/Excel exports, `admin-live-course buildSubWhere`): search OR gains the linked
+  order's `unique_id` / `razorpay_order_id` / `razorpay_payment_id` (prefix) and, for an
+  all-digit term, exact `tracking = n` (AWB) / `customer_id = n` / `order_id = n`. The service no
+  longer returns an empty page when no customer name matched (ids may still match). Customer
+  search stays an id list here — `ws_live_course_subscription` has no customer relation in
+  the schema, so the ER 1390 risk remains on this report.
+- Package subscriptions also match the order's `unique_id` (receipt key), same as live + book.
+- **Fix (same OR):** customer name/phone/email is now a relation subquery
+  (`customer: { is: … }`) instead of a materialized `customer_id IN (…)` list
+  (`customerIdsByText` removed) — the list form hits ER 1390 (65,535 placeholders) on a short
+  search over ws_customer, exactly as admin-book did before. A search with no course/package/customer
+  hit now returns an empty page from the query instead of the old service short-circuit.
+- Helper: `utils/searchFilter.searchNumericId` (digits → `{ big, int? }`; `int` only within signed INT).
+- Perf note: `razorpay_*` columns are unindexed, so an order/payment-id search scans
+  `ws_package_course_order` once (prefix LIKE); ws_book_order was already scanned by the
+  `order_items` contains clause.
+
 ## 2026-09-30 — Study materials: admin Paid/Free option (reverses 2026-07-14 "always paid")
 
 > **DDL:** none (`ws_material.is_paid` already exists, default 1). **Data:** none. Every row is
@@ -33,6 +63,40 @@
 - **`/client/free-materials`:** unchanged (still an empty page). The app has no separate
   free-materials section; free materials appear only inside their course, package or live
   course.
+
+## 2026-09-30 — Guest mode redesign: one static guest token, switched from Firebase (no DDL, no query change)
+
+> **DDL:** none. **Queries:** none. **Existing response shapes:** unchanged.
+> **Supersedes** the session model in the 2026-09-29 entry below (per-session Redis key,
+> 7-day TTL, `guestLimiter`, conversion revoke, `GUEST_TOKENLESS_BROWSE`). The guest-browsable
+> path list and the `req.isGuest` mechanism are unchanged.
+> **FE doc:** `docs/client/GUEST_BROWSE.md`. **Ops doc:** `docs/GUEST_MODE.md`.
+
+**Rule:** guest login works only while Firebase Realtime DB `maintain.env === "staging"`.
+No `.env` flag, no restart. Set it to anything else and the guest token is dead everywhere.
+
+| | Before (2026-09-29) | Now |
+|---|---|---|
+| Switch | `.env` `GUEST_TOKENLESS_BROWSE` per server | Firebase `maintain.env`, read server-side (`src/libs/reviewMode.ts`, Admin SDK live listener, fails closed) |
+| Token | per-session JWT + Redis `guest_session:<sid>`, 7 days | ONE static JWT `{ type, role: "guest" }`, no `iat`, no `exp` — same string for every caller |
+| `POST /client/auth/guest` when off | n/a | 403 `GUEST_MODE_DISABLED` |
+| Guest token when off | n/a | 401 `GUEST_SESSION_EXPIRED` on every route |
+| Tokenless request | 200 on the review host | always 401 |
+| Login while guest | ended that guest session | no effect on the guest token (stateless) |
+| Redis keys | `guest_session:*`, `rl:guest:*` | none |
+
+**Removed:** `guestLimiter` + `RATE_LIMIT_GUEST_MAX` (minting writes nothing now; the client
+limiter covers it), `revokeGuestSession`, `GUEST_TOKENLESS_BROWSE`.
+
+**⚠ Every server that holds this Firebase project's service account follows the same node —
+production included.** There is no per-server opt-in any more. While `maintain.env` is
+`"staging"`, production also issues and honours the guest token (catalog GETs only).
+
+**⚠ A static token cannot be revoked one guest at a time.** Off switch = Firebase, or rotate
+the access signing key.
+
+**Verify:** `npx tsx scripts/verify-guest-browse.ts` — detects the mode from the server's own
+answer: 395 checks with guest mode on, 9 with it off.
 
 ---
 

@@ -473,8 +473,8 @@ const resolveSubFilter = async (
 
   let customerIdsIn: number[] | undefined;
   if (q.search) {
+    // No "empty" short-circuit: order / payment / tracking ids can still match in-query.
     customerIdsIn = await repo.customerIdsByText(q.search);
-    if (!customerIdsIn.length) return "empty";
   }
 
   const base = repo.buildSubBaseWhere({
@@ -486,7 +486,7 @@ const resolveSubFilter = async (
     toDate: parseDayBoundIst(q.dateTo, true),
     startFrom: q.startFrom ? new Date(q.startFrom) : undefined,
     endTo: q.endTo ? new Date(q.endTo) : undefined,
-    customerIdsIn,
+    customerIdsIn, search: q.search,
   });
   const listWhere = andWhere(base, statusWhere(q.status, now));
   const sortBy = q.sortBy ?? "createdAt";

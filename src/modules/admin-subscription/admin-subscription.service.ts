@@ -89,14 +89,13 @@ export interface CourseSubReportQuery {
 }
 
 // Resolve the composed Prisma where (base filters AND normalized status) for a
-// report query. Returns null when a search matched nothing (→ empty result).
+// report query. Returns null when a promocode filter matched nothing (→ empty result).
 const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
-  let customerIdsIn: number[] | undefined, courseIdsIn: number[] | undefined, packageIdsIn: number[] | undefined;
+  // course/package names resolve to (small) id lists; customer + order/payment/tracking
+  // ids are matched in-query from `search` (repo buildSubWhere).
+  let courseIdsIn: number[] | undefined, packageIdsIn: number[] | undefined;
   if (q.search) {
-    [customerIdsIn, courseIdsIn, packageIdsIn] = await Promise.all([
-      repo.customerIdsByText(q.search), repo.courseIdsByText(q.search), repo.packageIdsByText(q.search),
-    ]);
-    if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length) return null;
+    [courseIdsIn, packageIdsIn] = await Promise.all([repo.courseIdsByText(q.search), repo.packageIdsByText(q.search)]);
   }
   // promocodeId → code → set of matching order ids (JSON snapshot, no live FK).
   // Unknown code or no matching orders ⇒ empty result (null).
@@ -125,7 +124,7 @@ const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
     endFrom: parseDayBound(q.endFrom, false),
     endTo: parseDayBound(q.endTo, true),
     type: (q.type === "course" || q.type === "package" ? q.type : undefined) as "course" | "package" | undefined,
-    customerIdsIn, courseIdsIn, packageIdsIn,
+    courseIdsIn, packageIdsIn, search: q.search,
   });
   const listWhere = andWhere(base, statusWhere(q.status, now));
   const sortBy = q.sortBy ?? "createdAt";

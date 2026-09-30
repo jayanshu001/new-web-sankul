@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaPrefixSearch, buildPrismaSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, buildPrismaSearch, searchNumericId } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
@@ -197,8 +197,15 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; state?: n
   // Search OR: receiptId match | order belongs to a matching customer | items
   // JSON matches | order_id appears in the child-item-matched key set. Each clause optional; AND with filters.
   const or: Prisma.BookOrderWhereInput[] = [];
-  const receiptSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["receiptId"]);
+  // Order id = receipt key OR the Razorpay order/payment id (prefix, same LIKE 'x%').
+  const receiptSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["receiptId", "gatewayOrderId", "gatewayPaymentId"]);
   if (receiptSearch) or.push(receiptSearch);
+  // All-digit term: exact customer id / tracking AWB (BIGINT — LIKE can't serve it).
+  const numericId = searchNumericId(opts.receiptSearch);
+  if (numericId) {
+    or.push({ trackingId: numericId.big });
+    if (numericId.int !== undefined) or.push({ userId: numericId.int });
+  }
   // Customer name/phone/email + JSON-snapshot item name resolve as SQL (relation
   // subquery / LIKE on order_items), not as bound id lists — see findOrderKeysByBookSearch.
   const customerSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["fullName", "phoneNumber", "emailAddress"]);

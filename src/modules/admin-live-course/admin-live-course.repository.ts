@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { buildPrismaSearch, buildPrismaPrefixSearch, searchNumericId } from "../../utils/searchFilter";
 
 /**
  * "This subscription was paid for."
@@ -525,6 +525,9 @@ export interface SubReportFilter {
   // createdAt fromDate/toDate range used by the list's default date filter).
   startFrom?: Date; endTo?: Date;
   customerIdsIn?: number[];
+  // raw search term: receipt / Razorpay order / payment id on the order, and (all
+  // digits) tracking AWB / customer id / order id — matched in-query, see buildSubWhere.
+  search?: string;
 }
 
 // `amount` sorts through the ORDER — paid_amount left the subscription on
@@ -556,9 +559,18 @@ function buildSubWhere(opts: SubReportFilter): Prisma.LiveCourseSubscriptionWher
   }
   if (opts.startFrom) where.startAt = { gte: opts.startFrom };
   if (opts.endTo) where.endAt = { lte: opts.endTo };
-  // cross-table search OR (customer name/phone/email id membership).
+  // cross-table search OR: customer name/phone/email id membership (no customer
+  // relation on this model, so it stays an id list), the order's receipt / Razorpay
+  // ids, and — all-digit term — exact tracking AWB / customer id / order id.
   const or: Prisma.LiveCourseSubscriptionWhereInput[] = [];
   if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
+  const orderSearch = buildPrismaPrefixSearch(opts.search, ["uniqueId", "razorpayOrderId", "razorpayPaymentId"]);
+  if (orderSearch) or.push({ order: { is: orderSearch } });
+  const numericId = searchNumericId(opts.search);
+  if (numericId) {
+    or.push({ tracking: numericId.big });
+    if (numericId.int !== undefined) or.push({ customerId: numericId.int }, { orderId: numericId.int });
+  }
   if (or.length) where.OR = or;
   return where;
 }

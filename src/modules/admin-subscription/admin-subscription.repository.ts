@@ -1,7 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { andWhere } from "../../utils/reportFilters";
-import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { buildPrismaPrefixSearch, searchNumericId } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-subscription MySQL branch (Wave 7).
@@ -27,7 +27,10 @@ export interface CourseSubFilter {
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
   // independent ranges on the subscription's own start/end columns (createdAt is fromDate/toDate)
   startFrom?: Date; startTo?: Date; endFrom?: Date; endTo?: Date;
-  customerIdsIn?: number[]; courseIdsIn?: number[]; packageIdsIn?: number[];
+  courseIdsIn?: number[]; packageIdsIn?: number[];
+  // raw search term: customer name/phone/email, Razorpay order/payment id, and (all
+  // digits) customer id / order id / tracking — matched in-query, see buildSubWhere.
+  search?: string;
 }
 
 export const adminSubscriptionRepository = {
@@ -250,7 +253,6 @@ export const adminSubscriptionRepository = {
   },
 
   // ── search-id resolvers (cross-table search) ────────────────────────────────
-  customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
   courseIdsByText: async (q: string) => (await prisma.course.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
   packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
 
@@ -356,9 +358,20 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   // type: course = courseId>0; package = courseId null/0 AND package_id>0
   if (opts.type === "course") where.courseId = { gt: 0 };
   else if (opts.type === "package") { where.courseId = null; where.packageId = { gt: 0 }; }
-  // cross-table search OR (any of customer/course/package id matches)
+  // cross-table search OR. Customer + order clauses are relation subqueries, never a
+  // materialized customer-id list: a 1-char search over ws_customer (1M+ rows) blew
+  // MySQL's 65,535-placeholder cap (ER 1390) — same fix as admin-book buildOrderWhere.
   const or: Prisma.PackageCourseSubscriptionWhereInput[] = [];
-  if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
+  const customerSearch = buildPrismaPrefixSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
+  if (customerSearch) or.push({ customer: { is: customerSearch } });
+  const orderSearch = buildPrismaPrefixSearch(opts.search, ["uniqueId", "gatewayOrderId", "gatewayPaymentId"]);
+  if (orderSearch) or.push({ packageCourseOrder: { is: orderSearch } });
+  // All-digit term: exact tracking id (BIGINT) / customer id / order id.
+  const numericId = searchNumericId(opts.search);
+  if (numericId) {
+    or.push({ trackingId: numericId.big });
+    if (numericId.int !== undefined) or.push({ customerId: numericId.int }, { orderId: numericId.int });
+  }
   if (opts.courseIdsIn?.length) or.push({ courseId: { in: opts.courseIdsIn } });
   if (opts.packageIdsIn?.length) or.push({ packageId: { in: opts.packageIdsIn } });
   if (or.length) where.OR = or;

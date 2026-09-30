@@ -120,21 +120,6 @@ export const otpLimiter = gate(rateLimit({
   store: redisStore("rl:otp:"),
 }));
 
-// Guest session mint — unauthenticated and each call writes a Redis key, so it
-// gets its own per-IP cap. A device needs one session per 7 days; the headroom is
-// for many devices behind one carrier-NAT address.
-export const guestLimiter = gate(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: parsePositiveInt(process.env.RATE_LIMIT_GUEST_MAX, 30),
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: "Too many requests, please try again later.",
-  },
-  store: redisStore("rl:guest:"),
-}));
-
 // Admin surface limiter — keys by admin user id when authenticated, else IP.
 // Tighter than the global 60/min and keyed per-admin so a chatty session can't
 // crowd out the IP-shared global bucket. Mount AFTER `authenticate` on the
