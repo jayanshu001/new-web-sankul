@@ -27,6 +27,14 @@
   `buildSubWhere`): search OR gains the linked order's `razorpay_order_id` / `razorpay_payment_id`
   (prefix, relation subquery on `ws_package_course_order`) and, for an all-digit term, exact
   `tracking = n` / `customer_id = n` / `order_id = n`.
+- **`GET /admin/live-courses/subscriptions`** (Live Course Report, incl. with-material rows,
+  + its CSV/Excel exports, `admin-live-course buildSubWhere`): search OR gains the linked
+  order's `unique_id` / `razorpay_order_id` / `razorpay_payment_id` (prefix) and, for an
+  all-digit term, exact `tracking = n` (AWB) / `customer_id = n` / `order_id = n`. The service no
+  longer returns an empty page when no customer name matched (ids may still match). Customer
+  search stays an id list here — `ws_live_course_subscription` has no customer relation in
+  the schema, so the ER 1390 risk remains on this report.
+- Package subscriptions also match the order's `unique_id` (receipt key), same as live + book.
 - **Fix (same OR):** customer name/phone/email is now a relation subquery
   (`customer: { is: … }`) instead of a materialized `customer_id IN (…)` list
   (`customerIdsByText` removed) — the list form hits ER 1390 (65,535 placeholders) on a short

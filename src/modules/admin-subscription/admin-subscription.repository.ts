@@ -364,7 +364,7 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   const or: Prisma.PackageCourseSubscriptionWhereInput[] = [];
   const customerSearch = buildPrismaPrefixSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
   if (customerSearch) or.push({ customer: { is: customerSearch } });
-  const orderSearch = buildPrismaPrefixSearch(opts.search, ["gatewayOrderId", "gatewayPaymentId"]);
+  const orderSearch = buildPrismaPrefixSearch(opts.search, ["uniqueId", "gatewayOrderId", "gatewayPaymentId"]);
   if (orderSearch) or.push({ packageCourseOrder: { is: orderSearch } });
   // All-digit term: exact tracking id (BIGINT) / customer id / order id.
   const numericId = searchNumericId(opts.search);
