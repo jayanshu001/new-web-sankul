@@ -1,23 +1,20 @@
 // src/middlewares/guestBrowse.ts
 import { Request, Response, NextFunction } from "express";
-import { liveGuestSid } from "../libs/guestSession";
+import { isLiveGuestToken } from "../libs/guestSession";
 
 /**
- * Guest browse — App Store Review Guideline 5.1.1(v): the catalog must be
- * browsable without an account. PERMANENT for every user on every environment,
- * never a review-only switch (a mode only the reviewer sees is a 2.3.1 "hidden
- * feature" violation). Firebase Remote Config `guestMode` only shows/hides the
- * app's Guest button — it is never consulted here.
+ * Guest browse — what a guest token may read.
  *
- * How it works: `markGuestBrowse` runs once at the top of the client router and
- * sets `req.isGuest` for a GET on an allowlisted path that carries a LIVE GUEST
- * TOKEN (`POST /auth/guest`, libs/guestSession.ts). `authenticate` and
- * `requireRole` let a flagged request through with no `req.user`; controllers
- * then serve the not-purchased view (`customerId = null`).
+ * `markGuestBrowse` runs once at the top of the client router and sets
+ * `req.isGuest` for a GET on an allowlisted path that carries a LIVE GUEST TOKEN
+ * (libs/guestSession.ts: valid signature AND Firebase `maintain.env === "staging"`).
+ * `authenticate` and `requireRole` let a flagged request through with no `req.user`;
+ * controllers then serve the not-purchased view (`customerId = null`).
  *
  * Fail-closed by construction:
- *  - Every request still needs a Bearer token. Tokenless stays 401 — unless the
- *    deployment opts in with GUEST_TOKENLESS_BROWSE=true (see below).
+ *  - Every request needs a Bearer token. Tokenless is always 401.
+ *  - Guest mode off (Firebase not "staging", or unreadable) → the guest token is
+ *    dead everywhere: `authenticate` answers 401 GUEST_SESSION_EXPIRED.
  *  - Anything not listed here keeps strict auth — the per-router
  *    `router.use(authenticate)` gates are untouched. A guest token there is
  *    rejected by `authenticate` (403 ACCOUNT_REQUIRED).
@@ -135,23 +132,10 @@ const GUEST_BROWSE = GUEST_BROWSE_PATHS.map(
 /** True when the path (relative to /api/v1/client) is guest-browsable. */
 export const isGuestBrowsePath = (path: string): boolean => GUEST_BROWSE.some((re) => re.test(path));
 
-/**
- * iOS review mode (docs/client/GUEST_BROWSE.md): the app opens Home as a Guest and
- * sends NO Authorization header (the old app sent `bearer null`). Off by default, so
- * production keeps "every request carries a token"; turned on per deployment.
- */
-const TOKENLESS_BROWSE = process.env.GUEST_TOKENLESS_BROWSE === "true";
-
-/** The literal `null` / `undefined` an empty token store produces counts as no token. */
-export const bearerToken = (req: Request): string | undefined => {
-  const token = /^bearer\s+(\S+)/i.exec(req.headers.authorization || "")?.[1];
-  return token && token !== "null" && token !== "undefined" ? token : undefined;
-};
-
 export const markGuestBrowse = async (req: Request, _res: Response, next: NextFunction) => {
   if (req.method !== "GET" || !isGuestBrowsePath(req.path)) return next();
-  const token = bearerToken(req);
+  const token = /^bearer\s+(\S+)/i.exec(req.headers.authorization || "")?.[1];
   // A dead guest token is left unflagged so `authenticate` answers GUEST_SESSION_EXPIRED.
-  if (token ? await liveGuestSid(token) : TOKENLESS_BROWSE) req.isGuest = true;
+  if (token && (await isLiveGuestToken(token))) req.isGuest = true;
   return next();
 };

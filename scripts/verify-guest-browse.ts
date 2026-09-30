@@ -1,30 +1,33 @@
 /**
- * Regression check — guest sessions + guest browse (App Store 5.1.1(v)).
+ * Regression check — guest login + guest browse.
  *
  *   npx tsx scripts/verify-guest-browse.ts            # against the running dev server
  *   GUEST_PROBE_BASE=https://host/api/v1 npx tsx scripts/verify-guest-browse.ts
- *   GUEST_PROBE_LOGIN=1 npx tsx scripts/verify-guest-browse.ts   # + guest → user conversion
  *
- * Proves, against a RUNNING server + real MySQL + Redis:
- *  1. POST /client/auth/guest issues a guest token;
+ * Guest mode is switched from Firebase (`maintain.env === "staging"`), so the script
+ * reads the server's own answer to `POST /client/auth/guest` and checks the matching
+ * contract. Needs a RUNNING server + MySQL + Redis.
+ *
+ * Guest mode ON:
+ *  1. POST /client/auth/guest returns the static token (same string twice, no exp);
  *  2. every path in GUEST_BROWSE_PATHS answers that token with 200;
- *  3. the same paths answer a bad token with 401, and no token / `bearer null` with
- *     401 — or 200 when the server runs GUEST_TOKENLESS_BROWSE=true (auto-detected);
- *  4. login-only routes answer a guest token with 403 ACCOUNT_REQUIRED (401 tokenless),
- *     on the admin surface too;
- *  5. an expired or revoked guest session answers 401 GUEST_SESSION_EXPIRED;
- *  6. (opt-in) logging in with the guest token attached kills that guest session.
+ *  3. the same paths answer no token / `bearer null` / a bad token with 401;
+ *  4. login-only routes answer the guest token with 403 ACCOUNT_REQUIRED (401
+ *     tokenless), on the admin surface too;
+ *  5. a guest token that does not verify answers 401 GUEST_SESSION_EXPIRED.
+ * Guest mode OFF:
+ *  6. POST /client/auth/guest answers 403 GUEST_MODE_DISABLED and a correctly signed
+ *     guest token answers 401 GUEST_SESSION_EXPIRED on every route.
  *
  * Iterates the allowlist itself, so a path added there is covered here for free.
- * Step 6 logs the MIGRATION_TEST_CUSTOMER_PHONE account in — never point it at prod.
+ * Step 6 signs the token locally, so it needs the server's JWT secret in `.env`.
  */
 import dotenv from "dotenv";
 dotenv.config();
 import { prisma } from "../src/config/prisma";
-import { redisClient } from "../src/config/redis";
 import { GUEST_BROWSE_PATHS } from "../src/middlewares/guestBrowse";
-import { revokeGuestSession } from "../src/libs/guestSession";
-import { signAccessToken } from "../src/utils/jwtSigner";
+import jwt from "jsonwebtoken";
+import { guestToken } from "../src/libs/guestSession";
 
 const ROOT = process.env.GUEST_PROBE_BASE ?? `http://localhost:${process.env.PORT ?? 4001}/api/v1`;
 const BASE = `${ROOT}/client`;
@@ -124,15 +127,6 @@ const call = async (method: string, url: string, token?: string, body?: object):
   return { status: res.status, body: text, reason };
 };
 
-const mintGuest = async (): Promise<string> => {
-  const r = await call("POST", `${BASE}/auth/guest`);
-  const data = JSON.parse(r.body)?.data ?? {};
-  if (r.status !== 200 || data.userType !== "GUEST" || !data.accessToken || Number.isNaN(Date.parse(data.expiresAt))) {
-    throw new Error(`POST /auth/guest → ${r.status} ${r.body.slice(0, 200)}`);
-  }
-  return data.accessToken;
-};
-
 async function main(): Promise<void> {
   let failed = 0;
   let passed = 0;
@@ -144,13 +138,33 @@ async function main(): Promise<void> {
   };
 
   console.log(`guest probe → ${BASE}\n\n[1] POST /auth/guest`);
-  const guest = await mintGuest();
-  passed++;
-  console.log("  ok    guest token issued");
+  const mint = await call("POST", `${BASE}/auth/guest`);
 
-  // Tokenless mode is a server-side env flag; read it off the server's own answer.
-  const tokenless = (await call("GET", `${BASE}/dashboard`)).status === 200 ? 200 : 401;
-  console.log(`[2+3] allowlisted paths: guest token 200; bad token 401; no token / bearer null ${tokenless} (GUEST_TOKENLESS_BROWSE=${tokenless === 200})`);
+  if (mint.status === 403 && mint.reason === "GUEST_MODE_DISABLED") {
+    console.log("  guest mode is OFF on this server (Firebase maintain.env is not \"staging\")\n[6] a guest token must be dead everywhere");
+    passed++;
+    const signed = guestToken();
+    for (const path of ["/dashboard", "/packages", "/cart", "/profile"]) {
+      const r = await call("GET", BASE + path, signed);
+      expect(r.status === 401 && r.reason === "GUEST_SESSION_EXPIRED", `guest token GET ${path}`, r);
+      const t = await call("GET", BASE + path);
+      expect(t.status === 401, `tokenless GET ${path}`, t);
+    }
+    await prisma.$disconnect();
+    console.log(failed ? `\n${passed} passed, ${failed} FAILED` : `\nall ${passed} guest checks passed (guest mode OFF)`);
+    process.exit(failed ? 1 : 0);
+  }
+
+  const data = JSON.parse(mint.body)?.data ?? {};
+  expect(mint.status === 200 && data.userType === "GUEST" && !!data.accessToken && data.expiresAt === null, "POST /auth/guest", mint);
+  const guest: string = data.accessToken;
+  const again = JSON.parse((await call("POST", `${BASE}/auth/guest`)).body)?.data?.accessToken;
+  expect(again === guest, "guest token is static (same string on every call)", mint);
+  const claims = jwt.decode(guest) as any;
+  expect(claims?.type === "guest" && claims?.exp === undefined && claims?.iat === undefined, "guest token carries no exp / iat", mint);
+  console.log("  guest mode is ON; static token issued");
+
+  console.log("[2+3] allowlisted paths: guest token 200; no token / bearer null / bad token 401");
   for (const raw of GUEST_BROWSE_PATHS) {
     for (const path of await resolve(raw)) {
       const g = await call("GET", BASE + path, guest);
@@ -158,9 +172,9 @@ async function main(): Promise<void> {
       else if ([401, 403].includes(g.status) || g.status >= 500) expect(false, `guest GET ${path}`, g);
       else warn.push(`${g.status} ${path} ${g.body.slice(0, 120)}`);
       const t = await call("GET", BASE + path);
-      expect(t.status === tokenless, `tokenless GET ${path} must ${tokenless}`, t);
+      expect(t.status === 401, `tokenless GET ${path} must 401`, t);
       const n = await call("GET", BASE + path, "bearer null");
-      expect(n.status === tokenless, `bearer null GET ${path} must ${tokenless}`, n);
+      expect(n.status === 401, `bearer null GET ${path} must 401`, n);
       const b = await call("GET", BASE + path, "not.a.jwt");
       expect(b.status === 401, `bad token GET ${path} must 401`, b);
     }
@@ -179,41 +193,16 @@ async function main(): Promise<void> {
     expect(g.status === 403 && g.reason === "ACCOUNT_REQUIRED", `guest GET ${path}`, g);
   }
 
-  console.log("[5] expired / revoked guest session → 401 GUEST_SESSION_EXPIRED");
-  const expired = signAccessToken({ type: "guest", role: "guest", sid: "expired-probe" }, { expiresIn: -10 });
+  console.log("[5] a guest token that does not verify → 401 GUEST_SESSION_EXPIRED");
+  const forged = jwt.sign({ type: "guest", role: "guest" }, "not-the-server-secret", { noTimestamp: true });
   for (const path of ["/dashboard", "/cart"]) {
-    const r = await call("GET", BASE + path, expired);
-    expect(r.status === 401 && r.reason === "GUEST_SESSION_EXPIRED", `expired guest GET ${path}`, r);
-  }
-  const revoked = await mintGuest();
-  expect((await call("GET", `${BASE}/dashboard`, revoked)).status === 200, "fresh guest GET /dashboard", await call("GET", `${BASE}/dashboard`, revoked));
-  await revokeGuestSession(revoked);
-  for (const path of ["/dashboard", "/cart"]) {
-    const r = await call("GET", BASE + path, revoked);
-    expect(r.status === 401 && r.reason === "GUEST_SESSION_EXPIRED", `revoked guest GET ${path}`, r);
-  }
-
-  if (process.env.GUEST_PROBE_LOGIN === "1") {
-    console.log("[6] guest → user conversion kills the guest session");
-    const phone = process.env.MIGRATION_TEST_CUSTOMER_PHONE;
-    const otp = process.env.MIGRATION_TEST_CUSTOMER_OTP;
-    if (!phone || !otp) throw new Error("GUEST_PROBE_LOGIN needs MIGRATION_TEST_CUSTOMER_PHONE + MIGRATION_TEST_CUSTOMER_OTP");
-    const conv = await mintGuest();
-    const gen = await call("POST", `${BASE}/auth/otp/generate`, conv, { phoneNumber: phone });
-    expect(gen.status === 200, "otp/generate with guest token attached", gen);
-    const login = await call("POST", `${BASE}/auth/otp/validate`, conv, { phoneNumber: phone, otp });
-    expect(login.status === 200, "otp/validate with guest token attached", login);
-    const after = await call("GET", `${BASE}/dashboard`, conv);
-    expect(after.status === 401 && after.reason === "GUEST_SESSION_EXPIRED", "converted guest token must be dead", after);
-    const userToken = JSON.parse(login.body)?.data?.accessToken;
-    const asUser = await call("GET", `${BASE}/dashboard`, userToken);
-    expect(asUser.status === 200, "new customer token GET /dashboard", asUser);
+    const r = await call("GET", BASE + path, forged);
+    expect(r.status === 401 && r.reason === "GUEST_SESSION_EXPIRED", `forged guest GET ${path}`, r);
   }
 
   await prisma.$disconnect();
-  redisClient.disconnect();
   if (warn.length) console.log(`\n${warn.length} non-200 non-auth answers (probe id unusable — check by hand):\n  ${[...new Set(warn)].join("\n  ")}`);
-  console.log(failed ? `\n${passed} passed, ${failed} FAILED` : `\nall ${passed} guest checks passed`);
+  console.log(failed ? `\n${passed} passed, ${failed} FAILED` : `\nall ${passed} guest checks passed (guest mode ON)`);
   process.exit(failed ? 1 : 0);
 }
 

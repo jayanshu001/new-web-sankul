@@ -10,7 +10,7 @@ import { adminAuthRepository } from "../modules/admin-auth/admin-auth.repository
 import logger from "../utils/logger";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbAvailability";
 import jwt from "jsonwebtoken";
-import { isGuestPayload, isGuestSessionLive } from "../libs/guestSession";
+import { isGuestPayload, isGuestModeOn } from "../libs/guestSession";
 
 // Per-request customer gate state, cached briefly in Redis so the live DB read
 // doesn't fire on every authenticated request. Busted on block/delete; the
@@ -128,11 +128,12 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     const decoded = verifyAccessToken<any>(token);
 
     // A guest token never becomes `req.user`. Reaching this point means the route
-    // is not guest-browsable (markGuestBrowse would have flagged it), so a live
-    // guest needs an account (403) and a dead one needs a new session (401).
+    // is not guest-browsable, or guest mode is off (markGuestBrowse would have
+    // flagged it otherwise): mode on → this route needs an account (403); mode off
+    // → the guest token is dead everywhere (401).
     // Applies on every surface — a guest token is rejected on admin routes too.
     if (isGuestPayload(decoded)) {
-      return (await isGuestSessionLive(decoded.sid))
+      return (await isGuestModeOn())
         ? failure(res, "Please log in to continue.", 403, {}, { reason: "ACCOUNT_REQUIRED" })
         : failure(res, "Guest session has expired.", 401, {}, { reason: "GUEST_SESSION_EXPIRED" });
     }
@@ -277,8 +278,9 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       });
       return sendServiceUnavailable(res);
     }
-    // An expired guest JWT: tell the app to open a new guest session rather than
-    // run the customer refresh flow. The unverified peek only picks the reason.
+    // A guest token that no longer verifies (key rotated out): tell the app to fetch
+    // the guest token again rather than run the customer refresh flow. The
+    // unverified peek only picks the reason.
     if (isGuestPayload(jwt.decode(token))) {
       return failure(res, "Guest session has expired.", 401, {}, { reason: "GUEST_SESSION_EXPIRED" });
     }
