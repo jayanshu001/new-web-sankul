@@ -175,35 +175,45 @@ export const toEbookDto = (
 };
 
 // ── Physical book order ────────────────────────────────────────────────────────
+// Takes admin-book's enrichOrders() output, so line items resolve the same way as
+// the Book Orders report: ws_book_order_item child rows, else the legacy
+// `order_items` JSON snapshot (legacy orders have NO child rows).
 type BookOrderRow = {
-  id: number; receiptId: string; amount: unknown; paymentMethod: string;
-  status: string; paidAt: Date | null; createdAt: Date | null;
+  id: number; receiptId: string; trackingId: bigint | null; amount: unknown;
+  gatewayOrderId: string; gatewayPaymentId: string | null; paymentMethod: string; status: string; paidAt: Date | null; createdAt: Date | null;
 };
-type BookItemRow = { order_id: string; bookId: number | null; qty: number };
+type EnrichedBookOrder = {
+  row: BookOrderRow;
+  lineItems: { bookId: number | null; name: string | null; qty: number; price: number; shippingPrice: number }[];
+  books: Map<number, { name: string; image: string | null }>;
+  shippingPrice: number | null;
+};
 
-export const toPhysicalBookDto = (
-  o: BookOrderRow,
-  itemsByReceipt: Map<string, BookItemRow[]>,
-  books: Lookup<{ name: string; image: string | null }>
-) => {
-  const items = (itemsByReceipt.get(o.receiptId) ?? []).map((it) => {
+export const toPhysicalBookDto = ({ row: o, lineItems, books, shippingPrice }: EnrichedBookOrder) => ({
+  _id: String(o.id),
+  receiptId: o.receiptId,
+  // Courier AWB; null until fulfilled. String, same as the Book Orders report.
+  trackingId: o.trackingId != null ? String(o.trackingId) : null,
+  items: lineItems.map((it) => {
     const book = it.bookId != null ? books.get(it.bookId) : undefined;
     return {
-      name: book?.name ?? null,
+      name: it.name ?? book?.name ?? null,
       qty: it.qty,
+      price: it.price,
+      shippingPrice: it.shippingPrice,
       bookId: ref(it.bookId, book && { name: book.name, image: book.image }),
     };
-  });
-  return {
-    _id: String(o.id),
-    items,
-    amount: dec(o.amount),
-    paymentMethod: o.paymentMethod,
-    status: o.status,
-    paidAt: o.paidAt,
-    createdAt: o.createdAt,
-  };
-};
+  }),
+  amount: dec(o.amount),
+  shippingPrice,
+  paymentMethod: o.paymentMethod,
+  // Razorpay identifiers, same as the Book Orders report; empty gateway id → null.
+  razorpayOrderId: o.gatewayOrderId ? o.gatewayOrderId : null,
+  razorpayPaymentId: o.gatewayPaymentId ?? null,
+  status: o.status,
+  paidAt: o.paidAt,
+  createdAt: o.createdAt,
+});
 
 // ── Address ────────────────────────────────────────────────────────────────────
 type AddressRow = {

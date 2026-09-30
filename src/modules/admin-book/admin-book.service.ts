@@ -420,7 +420,7 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
 
 // An order row hydrated with its resolved line items, the referenced book map and
 // the derived report totals. Shared intermediate for the list DTO + the export.
-type EnrichedOrder = {
+export type EnrichedOrder = {
   row: any;
   lineItems: OrderItemShape[];
   books: Map<number, any>;
@@ -430,7 +430,7 @@ type EnrichedOrder = {
 
 // Resolve each order's line items (child rows preferred, else order_items JSON),
 // hydrate the referenced books in one query, and derive the report totals.
-const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
+export const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
   const childRows = await repo.findOrderItems(rows.map((r) => r.receiptId));
   const childByKey = new Map<string, any[]>();
   for (const it of childRows) {

@@ -8,6 +8,7 @@ import {
   toPhysicalBookDto,
   toAddressDto,
 } from "./admin-customer-details.transformer";
+import { enrichOrders } from "../admin-book/admin-book.service";
 
 const uniqIds = (xs: (number | null | undefined)[]): number[] =>
   [...new Set(xs.filter((x): x is number => x != null && x > 0))];
@@ -37,14 +38,13 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
 
   const courseRows = pkgSubs.filter((s) => s.courseId != null);
   const packageRows = pkgSubs.filter((s) => s.courseId == null && s.packageId != null);
-  const receiptIds = [...new Set(bookOrders.map((o) => o.receiptId))];
 
   // Hydrate every referenced entity in parallel, then index by id. (mapById is
   // applied after the await — passing it point-free to `.then` widens the element
   // type to `{ id }` because of the empty-array fallback in the repository.)
   const [
     courseArr, packageArr, planArr, liveArr, livePlanArr,
-    tsArr, tsPriceArr, ebookArr, ebookOrderArr, bookItems, stateArr,
+    tsArr, tsPriceArr, ebookArr, ebookOrderArr, enrichedBookOrders, stateArr,
   ] = await Promise.all([
     repo.coursesByIds(uniqIds(courseRows.map((s) => s.courseId))),
     repo.packagesByIds(uniqIds(packageRows.map((s) => s.packageId))),
@@ -55,7 +55,7 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
     repo.testSeriesPricesByIds(uniqIds(testSubs.map((s) => s.planId))),
     repo.ebooksByIds(uniqIds(ebookSubs.map((s) => s.ebookId))),
     repo.ebookOrdersByIds(uniqIds(ebookSubs.map((s) => s.orderId))),
-    repo.bookOrderItemsByReceipts(receiptIds),
+    enrichOrders(bookOrders),
     repo.statesByIds(uniqIds(addrRows.map((a) => a.state))),
   ]);
 
@@ -70,21 +70,13 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
   const ebookOrders = mapById(ebookOrderArr);
   const states = mapById(stateArr);
 
-  const books = mapById(await repo.booksByIds(uniqIds(bookItems.map((it) => it.bookId))));
-  const itemsByReceipt = new Map<string, typeof bookItems>();
-  for (const it of bookItems) {
-    const list = itemsByReceipt.get(it.order_id) ?? [];
-    list.push(it);
-    itemsByReceipt.set(it.order_id, list);
-  }
-
   const purchases = {
     courses: courseRows.map((s) => toCourseDto(s, courses, plans, now)),
     packages: packageRows.map((s) => toPackageDto(s, packages, plans, now)),
     liveCourses: liveSubs.map((s) => toLiveCourseDto(s, liveCourses, livePlans, now)),
     testSeries: testSubs.map((s) => toTestSeriesDto(s, testSeries, testPrices, now)),
     ebooks: ebookSubs.map((s) => toEbookDto(s, ebooks, ebookOrders, now)),
-    physicalBooks: bookOrders.map((o) => toPhysicalBookDto(o, itemsByReceipt, books)),
+    physicalBooks: enrichedBookOrders.map(toPhysicalBookDto),
   };
   const addresses = addrRows.map((a) => toAddressDto(a, states));
 
@@ -211,16 +203,7 @@ export const listCustomerBookOrders = async (
     repo.pageBookOrders(customerId, skip, take),
     repo.countBookOrders(customerId),
   ]);
-  const receiptIds = [...new Set(rows.map((o) => o.receiptId))];
-  const bookItems = await repo.bookOrderItemsByReceipts(receiptIds);
-  const books = mapById(await repo.booksByIds(uniqIds(bookItems.map((it) => it.bookId))));
-  const itemsByReceipt = new Map<string, typeof bookItems>();
-  for (const it of bookItems) {
-    const list = itemsByReceipt.get(it.order_id) ?? [];
-    list.push(it);
-    itemsByReceipt.set(it.order_id, list);
-  }
-  return { data: rows.map((o) => toPhysicalBookDto(o, itemsByReceipt, books)), total };
+  return { data: (await enrichOrders(rows)).map(toPhysicalBookDto), total };
 };
 
 export const listCustomerAddresses = async (

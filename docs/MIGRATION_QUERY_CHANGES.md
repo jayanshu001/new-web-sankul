@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-09-30 — Admin customer detail: physical book orders resolve legacy `order_items` JSON + expose tracking id
+
+> **DDL:** none. **Data:** none. Response shape **additive only** — every existing key kept.
+
+- **`GET /admin/customers/:id/book-orders`** and the `purchases.physicalBooks` block of
+  **`GET /admin/customers/:id`** read line items ONLY from `ws_book_order_item` child rows.
+  Legacy orders have no child rows (items live in the `ws_book_order.order_items` JSON
+  snapshot), so Items/Qty rendered `-` (e.g. customer 842792: 2 orders, 0 child rows).
+- Both now reuse `admin-book.service.enrichOrders` (exported) — the same resolver as
+  `/admin/books/orders/list`: child rows preferred, else the JSON snapshot; books hydrated
+  in one query. The admin-customer repo's `bookOrderItemsByReceipts`/`booksByIds` are removed.
+- `toPhysicalBookDto` gains `receiptId`, `trackingId` (AWB string or null — same as the
+  orders report), `razorpayOrderId` / `razorpayPaymentId` (gateway ids, empty → null — same as
+  the orders report), order-level `shippingPrice` (Σ unit shipping × qty), and per-item
+  `price` + `shippingPrice`. `items[].name` now falls back to the snapshot name.
+
 ## 2026-09-30 — Book-order + material (subscription) report search: payment / order / user / tracking ids
 
 > **DDL:** none. **Data:** none. Response shape unchanged — only which rows `?search=` matches.
