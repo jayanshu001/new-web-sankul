@@ -128,7 +128,7 @@ instead of opening the WebView. Returns whatever the Tirupati API returns.
 | `409` | Order not yet verified (no trackingId) | hide live tab / show "processing" |
 | `404` | No tracking allocated yet | same as above |
 | `422` | Mahavir order — no live API | **fall back to `trackingUrl` WebView** (response includes `data.trackingUrl`) |
-| `502` | Courier API call failed | fall back to WebView; offer retry |
+| `502` | Courier API call failed (network/timeout, or courier replied `OpStatus: "FAILED…"`) — body `{ success:false, message:"Failed to fetch live tracking." }` | fall back to WebView; offer retry |
 
 > Because of the `422`/`502` cases, the **WebView (Endpoint 2) is the reliable fallback** even if you build the native timeline. Always keep it as the safety net.
 

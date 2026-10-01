@@ -7,14 +7,21 @@ import logger from "../../utils/logger";
 // book-order-courier-tracking.md). Two steps: fetch a token (Redis-cached 3h),
 // then query AWB data with that token + trackingId. Mahavir has no API, so live
 // status only works for trackingIds in the Tirupati range.
+// Mirrors websankul-api libs/utils.js (same URLs, 10s/15s timeouts, 3h cache).
 
 const TOKEN_CACHE_KEY = "courier_token_tirupati";
 const TOKEN_TTL_SECONDS = 10800; // 3 hours, matching the old backend.
 
+// The courier answers HTTP 200 for everything: a bad UID/PWD comes back as the
+// plain text "UNAUTHORIZED ACCESS" from the token URL, and a bad token as
+// `OpStatus: "FAILED: UN-AUTHORIZED ACCESS.."` from the AWB URL.
+const isUnauthorized = (v: unknown) => /UN-?AUTHORI[SZ]ED/i.test(String(v ?? ""));
+
 // Fetch (and cache) the courier auth token. Cached in Redis under
 // `courier_token_tirupati` for 3h so we don't re-authenticate on every request.
 // Falls back to a live fetch when Redis is unavailable (graceful degradation —
-// the doc calls out the Redis dependency as a caution).
+// the doc calls out the Redis dependency as a caution). Only a real token is
+// cached — a rejection is thrown, never stored for 3h.
 export async function getTrackingUserTokenForCourier(): Promise<any> {
   if (isRedisReady()) {
     try {
@@ -25,8 +32,11 @@ export async function getTrackingUserTokenForCourier(): Promise<any> {
     }
   }
 
-  const resp = await axios.get(COURIER.TIRUPATI.GET_TOKEN_URL);
+  const resp = await axios.get(COURIER.TIRUPATI.GET_TOKEN_URL, { timeout: 10000 });
   const token = resp?.data;
+  if (!token || typeof token !== "string" || isUnauthorized(token)) {
+    throw new Error("Courier token request rejected (check TIRUPATI_GET_TOKEN_URL credentials)");
+  }
 
   if (isRedisReady()) {
     try {
@@ -50,14 +60,30 @@ export async function getTrackingAWBDataForCourier(params: {
 }): Promise<any> {
   const { userToken, trackingId } = params;
   const url = `${COURIER.TIRUPATI.AWB_DATA_URL}?Token=${userToken}&AWBNo=${trackingId}`;
-  const resp = await axios.get(url);
+  const resp = await axios.get(url, { timeout: 15000 });
   return resp?.data;
 }
 
-// Convenience: token + AWB data in one call.
+// Convenience: token + AWB data in one call. A cached token the courier no
+// longer accepts is evicted and re-fetched once; any remaining `FAILED`
+// OpStatus throws so callers answer 502 (FE falls back to the WebView) instead
+// of a 200 with an empty timeline.
 export async function fetchLiveAWBData(
   trackingId: number | string
 ): Promise<any> {
-  const userToken = await getTrackingUserTokenForCourier();
-  return getTrackingAWBDataForCourier({ userToken, trackingId });
+  let data = await getTrackingAWBDataForCourier({
+    userToken: await getTrackingUserTokenForCourier(),
+    trackingId,
+  });
+  if (isUnauthorized(data?.OpStatus)) {
+    if (isRedisReady()) await redisClient.del(TOKEN_CACHE_KEY).catch(() => undefined);
+    data = await getTrackingAWBDataForCourier({
+      userToken: await getTrackingUserTokenForCourier(),
+      trackingId,
+    });
+  }
+  if (typeof data?.OpStatus === "string" && data.OpStatus.startsWith("FAILED")) {
+    throw new Error(`Courier AWB lookup failed: ${data.OpStatus}`);
+  }
+  return data;
 }

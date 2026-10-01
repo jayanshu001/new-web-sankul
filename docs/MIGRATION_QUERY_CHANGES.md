@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-10-01 — Live courier tracking: parity with websankul-api + no cached rejections
+
+> **DDL:** none. **Data:** none. **Queries:** none. Response shape unchanged.
+
+- `libs/courier/tracking.ts` (used by `GET /client/books/orders/:id/tracking/live` and
+  `GET /client/purchase-history/subscriptions/:id/tracking/live`) now mirrors
+  `websankul-api` `libs/utils.js`: 10s token / 15s AWB timeouts.
+- The Tirupati API answers HTTP 200 even on failure. Before this change, the plain-text
+  `UNAUTHORIZED ACCESS` token reply was cached in Redis for 3h, and the endpoint returned
+  `200 { OpStatus: "FAILED: UN-AUTHORIZED ACCESS.." }` with an empty timeline. Now a
+  rejected token is never cached. A cached token the courier rejects is evicted and
+  re-fetched once. Any remaining `FAILED…` `OpStatus` throws, so the endpoint returns the
+  documented `502` and the FE falls back to the WebView.
+- The cause in this environment was that `TIRUPATI_GET_TOKEN_URL` in `.env` had a
+  UID/PWD the courier rejects. `websankul-api`'s `constants.js` credentials work (verified:
+  AWB 119401175771 → `SUCCEED`, `DELIVERED ON 28-09-2026`, 4 events). Set the env var to
+  those credentials on every deployment.
+
+---
+
 ## 2026-10-01 — Admin video-category DTO: recursive child tree + `hasVideos`
 
 > **DDL:** none. **Data:** none. Response shape **additive only**. FE doc:
