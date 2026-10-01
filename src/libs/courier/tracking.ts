@@ -85,5 +85,39 @@ export async function fetchLiveAWBData(
   if (typeof data?.OpStatus === "string" && data.OpStatus.startsWith("FAILED")) {
     throw new Error(`Courier AWB lookup failed: ${data.OpStatus}`);
   }
-  return data;
+  return { ...data, ...deriveDeliveryStatus(data) };
+}
+
+// Courier "DD-MM-YYYY" + "hh:mm AM" (IST) → Date; null when unparseable.
+function parseCourierDateTime(date?: string, time?: string): Date | null {
+  const d = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(date ?? "").trim());
+  if (!d) return null;
+  const t = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(time ?? "").trim());
+  let h = t ? Number(t[1]) % 12 : 0;
+  if (t && t[3].toUpperCase() === "PM") h += 12;
+  const iso = `${d[3]}-${d[2]}-${d[1]}T${String(h).padStart(2, "0")}:${t ? t[2] : "00"}:00+05:30`;
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+const DELIVERED_RE = /(?<!UN|NOT )DELIVERED/i;
+
+// Normalised status on top of the raw courier payload. `CurStatus` is the LAST
+// scan, not the delivery state — the courier often logs an "In-Scan Reach At"
+// after the DRS delivery (e.g. AWB 119401175732), so delivery is read from the
+// scan events first.
+export function deriveDeliveryStatus(data: any): {
+  deliveryStatus: "delivered" | "in_transit" | "booked" | "awaiting_pickup";
+  deliveredAt: Date | null;
+} {
+  const events: any[] = Array.isArray(data?.TrackData) ? data.TrackData : [];
+  const drs = events.find((e) => DELIVERED_RE.test(String(e?.Description ?? "")));
+  if (drs) return { deliveryStatus: "delivered", deliveredAt: parseCourierDateTime(drs.OpDate, drs.OpTime) };
+  const cur = /DELIVERED ON (\d{2}-\d{2}-\d{4})/i.exec(String(data?.CurStatus ?? ""));
+  if (cur && DELIVERED_RE.test(data.CurStatus)) {
+    return { deliveryStatus: "delivered", deliveredAt: parseCourierDateTime(cur[1]) };
+  }
+  if (events.length) return { deliveryStatus: "in_transit", deliveredAt: null };
+  if (data?.AWBDate) return { deliveryStatus: "booked", deliveredAt: null };
+  return { deliveryStatus: "awaiting_pickup", deliveredAt: null };
 }

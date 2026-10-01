@@ -122,6 +122,50 @@ instead of opening the WebView. Returns whatever the Tirupati API returns.
 { "success": true, "data": { /* raw Tirupati AWB payload */ } }
 ```
 
+Example (order 486268, AWB 119401175732), with `ImageID` shortened:
+```json
+{
+  "success": true,
+  "data": {
+    "OpStatus": "SUCCEED",
+    "AWBNo": "119401175732",
+    "AWBDate": "23-09-2026",
+    "AWBTime": "04:47 PM",
+    "AWBFrom": "GANDHINAGAR-KUDASAN",
+    "AWBTo": "NADIAD",
+    "ConsigneeNM": "MAYUR SODHA",
+    "CurStatus": "REACH AT NADIAD ON DATED 24-09-2026",
+    "TrackData": [
+      { "OpType": "Out-Scan", "OpDate": "23-09-2026", "OpTime": "08:33 PM", "Receiver": "", "Description": "Out To AHMEDABAD R.O.-NAROL From GANDHINAGAR-KUDASAN", "ImageID": "" },
+      { "OpType": "Out-Scan", "OpDate": "23-09-2026", "OpTime": "10:47 PM", "Receiver": "", "Description": "Out To NADIAD R.O. From AHMEDABAD R.O.-NAROL", "ImageID": "" },
+      { "OpType": "DRS", "OpDate": "24-09-2026", "OpTime": "10:00 AM", "Receiver": "MAYUR SODHA", "Description": "DELIVERED BY NADIAD", "ImageID": "…" },
+      { "OpType": "In-Scan", "OpDate": "24-09-2026", "OpTime": "10:02 AM", "Receiver": "", "Description": "Reach At NADIAD From NADIAD R.O.", "ImageID": "" }
+    ],
+    "LastLocation": [{ "BranchNM": "NADIAD", "Address": "…", "ContactNo": "02682550379,9879204663,-" }],
+    "deliveryStatus": "delivered",
+    "deliveredAt": "2026-09-24T04:30:00.000Z"
+  }
+}
+```
+
+**Use `deliveryStatus` / `deliveredAt` for the status badge, not `CurStatus`.**
+`CurStatus` is the courier's *last scan*. The courier often logs an "In-Scan Reach At"
+after the delivery, so `CurStatus` can say "REACH AT …" for a delivered parcel, as in
+the example above. The backend adds these two fields, worked out from the scan events:
+
+| `deliveryStatus` | Meaning |
+|---|---|
+| `delivered` | A scan says "DELIVERED" (or `CurStatus` says "DELIVERED ON …"). `deliveredAt` = that scan's time (ISO, UTC) |
+| `in_transit` | Has scans, none of them a delivery |
+| `booked` | Courier has booked the AWB (`AWBDate` set) but there are no scans yet |
+| `awaiting_pickup` | AWB allocated by us; courier hasn't booked it yet |
+
+`deliveredAt` is `null` unless `deliveryStatus` is `delivered`. Do **not** use the
+`currentStatus` from `/tracking`, or `tracking.status` from purchase-history, as the
+delivery state. Those come from the AWB-allocation row, which is always `"pending"`.
+`GET /client/purchase-history/subscriptions/:id/tracking/live` returns the same two
+fields.
+
 ### Errors — handle these explicitly
 | Code | Meaning | FE action |
 |---|---|---|

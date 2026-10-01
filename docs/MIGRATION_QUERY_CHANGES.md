@@ -15,6 +15,21 @@
 
 ---
 
+## 2026-10-01 — Live tracking: `deliveryStatus` / `deliveredAt` (additive)
+
+> **DDL:** none. **Data:** none. **Queries:** none. Response **additive only**.
+
+- `fetchLiveAWBData` now adds `deliveryStatus` (`delivered|in_transit|booked|awaiting_pickup`)
+  and `deliveredAt`, worked out from `TrackData` (`libs/courier/tracking.ts#deriveDeliveryStatus`).
+  This covers both `/client/books/orders/:id/tracking/live` and
+  `/client/purchase-history/subscriptions/:id/tracking/live`.
+- Why: `ws_book_tracking.status` is only the AWB-allocation row. It is created `pending` and
+  never updated by any system (248,968 `pending` / 2 `verified`). The courier's `CurStatus`
+  is the last scan, so it can read "REACH AT…" after a DRS delivery (AWB 119401175732:
+  delivered 24-09 10:00, In-Scan 10:02).
+
+---
+
 ## 2026-10-01 — Live courier tracking: parity with websankul-api + no cached rejections
 
 > **DDL:** none. **Data:** none. **Queries:** none. Response shape unchanged.
