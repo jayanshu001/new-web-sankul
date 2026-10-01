@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-material MySQL branch.
@@ -256,9 +256,11 @@ function catOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): Prisma.Mat
 
 function buildCatWhere(opts: { parent?: number | "root"; search?: string; status?: boolean }): Prisma.MaterialCategoryWhereInput {
   const where: Prisma.MaterialCategoryWhereInput = {};
+  // Unanchored `contains` (not buildPrismaPrefixSearch): no index on ws_material_category.title, so a
+  // prefix anchor only dropped mid-title matches. See pcmWhere in admin-master.repository.
   if (opts.parent === "root") where.parent = ROOT;
   else if (typeof opts.parent === "number") where.parent = opts.parent;
-  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+  const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;
@@ -321,7 +323,9 @@ function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.M
 
 function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }): Prisma.MaterialWhereInput {
   const where: Prisma.MaterialWhereInput = {};
-  const search = buildPrismaPrefixSearch(opts.search, ["name"]);
+  // Unanchored `contains` (not buildPrismaPrefixSearch): no index on ws_material.title, so a
+  // prefix anchor only dropped mid-title matches. See pcmWhere in admin-master.repository.
+  const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);
   if (opts.materialCategoryId !== undefined) where.materialCategoryId = opts.materialCategoryId;
   if (opts.status !== undefined) where.status = opts.status;

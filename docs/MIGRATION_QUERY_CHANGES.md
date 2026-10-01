@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-10-01 — Admin videos / study materials / courses (+ their categories): search matches anywhere again
+
+> **DDL:** none. **Data:** none. Response shape **unchanged** — only which rows match `search`.
+
+- `1f9eb48` swapped these lists from `buildPrismaSearch` (`LIKE '%t%'`) to
+  `buildPrismaPrefixSearch` (`LIKE 't%'` on the first token). None of the columns is indexed
+  (`ws_video.title/slug/topic`, `ws_video_category.title/slug`, `ws_material.title`,
+  `ws_material_category.title`, `ws_course.name/description`), so the anchor bought no range
+  scan and only dropped mid-title matches (`search=Week` missed "Physics Week 01").
+- Reverted to `buildPrismaSearch` (same tokenize/AND/OR shape) in:
+  - `admin-video.repository` — `buildWhere` (`GET /admin/videos`), `listActiveCategories`
+    (`GET /admin/videos/pre-requisites`).
+  - `admin-master.repository` — `vcListFiltered`/`vcCountFiltered` (`GET /admin/video-categories`),
+    `subCategoriesForCategory`/`countSubCategoriesForCategory` (`…/:id/sub-categories`),
+    `videosForCategory`/`countVideosForCategory` (`…/:id/videos`).
+  - `admin-material.repository` — `buildCatWhere` (material category list), `buildMatWhere`
+    (materials list).
+  - `admin-course.repository` — `buildCourseWhere` (`GET /admin/courses`).
+- Same precedent as `pcmWhere`/`subjWhere`. `ws_customer` (1M+ rows) keeps the prefix search.
+
+---
+
 ## 2026-09-30 — Admin customer DTO: `loginCount`
 
 > **DDL:** none. **Data:** none. Response shape **additive only**.
