@@ -190,6 +190,21 @@ export const adminMasterRepository = {
     ]);
     return cats.map((r) => ({ id: r.id, name: r.title, parent: parents.get(r.id) ?? null }));
   },
+  // Brief rows for the child tree (same columns vcChildren selects).
+  vcBriefByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, slug: true, status: true, order_by: true } })
+      : Promise.resolve([]),
+  // Which of the given categories directly hold ≥1 video (drives `hasVideos`).
+  vcIdsWithVideos: async (ids: number[]): Promise<Set<number>> => {
+    if (!ids.length) return new Set();
+    const rows = await prisma.video.findMany({
+      where: { videoCategoryId: { in: ids } },
+      select: { videoCategoryId: true },
+      distinct: ["videoCategoryId"],
+    });
+    return new Set(rows.map((r) => r.videoCategoryId as number));
+  },
   // Existing ids among the given set — used to validate childCategoryIds before binding.
   vcExistingIds: (ids: number[]) =>
     prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),

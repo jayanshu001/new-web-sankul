@@ -221,8 +221,9 @@ export const FLUSH_GROUPS: Partial<Record<CacheEntity, CacheEntity[]>> = {
   [CacheEntity.Exam]: [CacheEntity.Exam, CacheEntity.CatalogExam, CacheEntity.ClientDashboard, CacheEntity.Categories],
   [CacheEntity.ExamCountdown]: [CacheEntity.ExamCountdown, CacheEntity.CatalogCourse, CacheEntity.ClientDashboard],
 
-  // Recorded video/lecture: embedded in course detail + category-video listings.
-  [CacheEntity.Video]: [CacheEntity.Video, CacheEntity.CatalogCourse, CacheEntity.Categories, CacheEntity.Free],
+  // Recorded video/lecture: embedded in course detail + category-video listings, and
+  // drives `hasVideos` on the cached admin video-category list/get.
+  [CacheEntity.Video]: [CacheEntity.Video, CacheEntity.CatalogCourse, CacheEntity.Categories, CacheEntity.Free, CacheEntity.VideoCategory],
   [CacheEntity.Material]: [CacheEntity.Material, CacheEntity.Categories, CacheEntity.CatalogPackage, CacheEntity.CatalogCourse],
 
   // ── CMS (mostly self-contained; banner/testimonial also hit the dashboard) ─

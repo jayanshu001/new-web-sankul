@@ -147,7 +147,39 @@ export const vcDelete = async (id: number): Promise<{ ok: boolean; deletedRelati
 // `duplicate` clones along the single-parent tree (the Mongo DAG collapses to a
 // tree on SQL) — see fullVcDuplicate.
 // ════════════════════════════════════════════════════════════════════════════
-const toFullVcDto = (c: any, children: any[], educator: any | null, ancestors: { id: string; name: string }[] = []) => ({
+// One node of the recursive child tree on the admin form (`hasVideos` = holds ≥1 video).
+type VcChildNode = { id: string; name: string; slug: string | null; status: boolean; order: number; hasVideos: boolean; hasChildren: boolean; child_categories: VcChildNode[] };
+
+// Full descendant tree for the given categories, from the ws_video_category_relation DAG
+// in 3 queries regardless of page size (edges, brief rows, video presence). Siblings sort
+// by the child's own order_by, same as vcChildren; a per-path guard stops cycles.
+const loadVcTree = async (rootIds: number[]) => {
+  const kidsOf = new Map<number, number[]>();
+  for (const e of await repo.vcAllEdges()) {
+    if (!e.parent || e.parent <= 0 || !e.child || e.child <= 0) continue;
+    const list = kidsOf.get(e.parent) ?? kidsOf.set(e.parent, []).get(e.parent)!;
+    if (!list.includes(e.child)) list.push(e.child);
+  }
+  const ids = new Set<number>(rootIds);
+  const queue = [...rootIds];
+  while (queue.length) {
+    for (const k of kidsOf.get(queue.shift()!) ?? []) if (!ids.has(k)) { ids.add(k); queue.push(k); }
+  }
+  const [rows, withVideos] = await Promise.all([repo.vcBriefByIds([...ids]), repo.vcIdsWithVideos([...ids])]);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const build = (parentId: number, path: Set<number>): VcChildNode[] =>
+    (kidsOf.get(parentId) ?? [])
+      .filter((k) => byId.has(k) && !path.has(k))
+      .map((k) => byId.get(k)!)
+      .sort((a, b) => (a.order_by ?? 0) - (b.order_by ?? 0) || a.id - b.id)
+      .map((cc) => {
+        const sub = build(cc.id, new Set(path).add(cc.id));
+        return { id: String(cc.id), name: cc.title, slug: cc.slug ?? null, status: cc.status, order: cc.order_by ?? 0, hasVideos: withVideos.has(cc.id), hasChildren: sub.length > 0, child_categories: sub };
+      });
+  return { childrenOf: (id: number) => build(id, new Set([id])), hasVideos: (id: number) => withVideos.has(id) };
+};
+
+const toFullVcDto = (c: any, children: VcChildNode[], educator: any | null, ancestors: { id: string; name: string }[] = [], hasVideos = false) => ({
   id: String(c.id),
   name: c.title,
   slug: c.slug,
@@ -158,7 +190,8 @@ const toFullVcDto = (c: any, children: any[], educator: any | null, ancestors: {
   parentId: c.parent && c.parent > 0 ? String(c.parent) : null,
   ancestors,
   hasChildren: children.length > 0,
-  child_categories: children.map((cc) => ({ id: String(cc.id), name: cc.title, slug: cc.slug ?? null, status: cc.status, order: cc.order_by ?? 0 })),
+  hasVideos,
+  child_categories: children,
   educator: educator ? { id: String(educator.id), name: educator.name } : null,
   status: c.status,
   created_at: c.created_at ?? null,
@@ -172,13 +205,14 @@ const loadFullVc = async (
   c: any,
   ancestors: { id: string; name: string }[] = [],
   primaryParent?: number | null,
+  tree?: Awaited<ReturnType<typeof loadVcTree>>,
 ) => {
-  const [children, educator] = await Promise.all([
-    repo.vcChildren(c.id),
+  const [t, educator] = await Promise.all([
+    tree ?? loadVcTree([c.id]),
     c.educatorId && c.educatorId > 0 ? repo.educator(c.educatorId) : Promise.resolve(null),
   ]);
   const parent = primaryParent !== undefined ? primaryParent : (await repo.vcPrimaryParents([c.id])).get(c.id) ?? null;
-  return toFullVcDto({ ...c, parent }, children, educator, ancestors);
+  return toFullVcDto({ ...c, parent }, t.childrenOf(c.id), educator, ancestors, t.hasVideos(c.id));
 };
 
 export const fullVcList = async (q: { search?: string; status?: string; educatorId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
@@ -196,8 +230,11 @@ export const fullVcList = async (q: { search?: string; status?: string; educator
   // ancestors resolve up that same relation via the batched vcCategoriesByIds loader.
   const primaryParent = await repo.vcPrimaryParents(rows.map((r) => r.id));
   const parentOf = (id: number) => primaryParent.get(id) ?? null;
-  const ancestorsFor = await resolveAncestors(rows.map((r) => parentOf(r.id)), repo.vcCategoriesByIds);
-  const items = await Promise.all(rows.map((c) => loadFullVc(c, ancestorsFor(parentOf(c.id)), parentOf(c.id))));
+  const [ancestorsFor, tree] = await Promise.all([
+    resolveAncestors(rows.map((r) => parentOf(r.id)), repo.vcCategoriesByIds),
+    loadVcTree(rows.map((r) => r.id)),
+  ]);
+  const items = await Promise.all(rows.map((c) => loadFullVc(c, ancestorsFor(parentOf(c.id)), parentOf(c.id), tree)));
   return { items, total };
 };
 

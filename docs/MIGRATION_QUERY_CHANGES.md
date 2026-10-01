@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-10-01 — Admin video-category DTO: recursive child tree + `hasVideos`
+
+> **DDL:** none. **Data:** none. Response shape **additive only**. FE doc:
+> `docs/backend-requests/2026-10-01-video-category-child-picker-RESPONSE.md`.
+
+- `admin-master.service.toFullVcDto` (list / get / create / update of
+  `/admin/video-categories`): `child_categories` is now the full descendant tree (each node
+  gains `hasVideos`, `hasChildren`, nested `child_categories`); the row gains `hasVideos`.
+- New `loadVcTree`: per request, `loadAllEdges` (whole `ws_video_category_relation`) +
+  `vcBriefByIds` + `vcIdsWithVideos` (`SELECT DISTINCT vcategory_id FROM ws_video WHERE
+  vcategory_id IN (…)`). This replaces the per-row `vcChildren` query on the list (N+1 → 3).
+  First-level children and their order are unchanged (verified on 50 rows).
+- No link rule on videos: a category with videos can be picked as a child (a guard was
+  tried and dropped the same day — a leaf holding videos is the normal child).
+- `flushGroups`: `CacheEntity.Video` writes now also flush `CacheEntity.VideoCategory`.
+
+---
+
 ## 2026-10-01 — Admin videos / study materials / courses (+ their categories): search matches anywhere again
 
 > **DDL:** none. **Data:** none. Response shape **unchanged** — only which rows match `search`.
