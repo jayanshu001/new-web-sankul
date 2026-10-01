@@ -171,16 +171,13 @@ export const enforceMixedSizeLimits = async (
   _res: any,
   next: (err?: any) => void
 ) => {
-  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
+  // `.fields()` gives { field: File[] }, `.array()` gives a flat File[] — accept both.
+  const files = req.files as Record<string, Express.MulterS3.File[]> | Express.MulterS3.File[] | undefined;
   if (!files) return next();
-  const oversized: Express.MulterS3.File[] = [];
-  for (const field of Object.keys(files)) {
-    const isImage = IMAGE_FIELDS.has(field);
-    const cap = isImage ? IMAGE_MAX_BYTES : PDF_MAX_BYTES;
-    for (const f of files[field] || []) {
-      if (f.size > cap) oversized.push(f);
-    }
-  }
+  const all = Array.isArray(files) ? files : Object.values(files).flat();
+  const oversized = all.filter(
+    (f) => f.size > (IMAGE_FIELDS.has(f.fieldname) ? IMAGE_MAX_BYTES : PDF_MAX_BYTES)
+  );
   if (oversized.length === 0) return next();
   await Promise.all(
     oversized.map((f) =>
@@ -209,7 +206,7 @@ export const uploadS3Document = multer({
   ...MULTER_UTF8,
   storage: documentStorage,
   limits: {
-    fileSize: 25 * 1024 * 1024, // 25 MB ceiling
+    fileSize: PDF_MAX_BYTES, // 300 MB — same ceiling as job paper PDFs
   },
   fileFilter: (_req, file, cb) => {
     if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
