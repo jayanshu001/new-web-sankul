@@ -60,7 +60,14 @@ export const getContentById = async (id: string): Promise<JobContentDto | null> 
   const numId = parseContentId(id);
   if (numId === null) return null;
   const row = await contentRepository.findById(numId);
-  return row ? toContentDto(row) : null;
+  if (!row) return null;
+  const dto = toContentDto(row);
+  if (dto.products.length === 0) return dto;
+  const names = await contentRepository.findProductNames(dto.products);
+  return {
+    ...dto,
+    products: dto.products.map((p) => ({ ...p, productName: names.get(`${p.productType}:${p.productId}`) })),
+  };
 };
 
 const resolveSlug = async (input: ContentWriteInput, excludeId?: bigint): Promise<string> =>

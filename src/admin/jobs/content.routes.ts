@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { uploadS3, uploadS3Mixed, uploadS3Document, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed, uploadS3Document, enforceMixedSizeLimits, uploadTo, watermarkPdfs } from "../../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getContentList,
@@ -25,7 +25,7 @@ const contentUpload = [
 
 router.post("/reorder", reorderContent);
 router.post("/inline-image", uploadTo(UPLOAD_FOLDERS.jobsEditor), uploadS3.single("image"), uploadInlineImage);
-router.post("/document", uploadTo(UPLOAD_FOLDERS.jobsContentFiles), uploadS3Document.single("file"), uploadDocument);
+router.post("/document", uploadTo(UPLOAD_FOLDERS.jobsContentFiles), watermarkPdfs, uploadS3Document.single("file"), uploadDocument);
 
 router.get("/", getContentList);
 router.post("/", contentUpload, enforceMixedSizeLimits, createContent);

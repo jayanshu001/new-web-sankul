@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-import type { ContentListQuery, ContentWriteInput, JobContentType } from "./content.types";
+import type { ContentListQuery, ContentWriteInput, JobContentType, JobProductType } from "./content.types";
 
 // `wsj_content_seo`/`_facts`/`_products`/`_sections`(+items)/`_steps`/
 // `_date_items`/`_fee_items`/`_payment_modes`/`_notes`/`_related_posts` and
@@ -209,6 +209,27 @@ export const contentRepository = {
   count: (q: Partial<ContentListQuery>) => prisma.jobContent.count({ where: buildWhere(q) }),
 
   findById: (id: bigint) => prisma.jobContent.findUnique({ where: { id }, include: CONTENT_FULL_INCLUDE }),
+
+  /** `{type}:{id}` → catalog name, so the editor can label saved study material. */
+  findProductNames: async (products: { productType: JobProductType; productId: string }[]) => {
+    const idsOf = (type: JobProductType) =>
+      products.filter((p) => p.productType === type).map((p) => Number(p.productId)).filter(Number.isInteger);
+    const select = { id: true, name: true } as const;
+    const [courses, packages, books, ebooks] = await Promise.all([
+      prisma.course.findMany({ where: { id: { in: idsOf("course") } }, select }),
+      prisma.package.findMany({ where: { id: { in: idsOf("package") } }, select }),
+      prisma.book.findMany({ where: { id: { in: idsOf("book") } }, select }),
+      prisma.eBook.findMany({ where: { id: { in: idsOf("ebook") } }, select }),
+    ]);
+    const names = new Map<string, string>();
+    const add = (type: JobProductType, rows: { id: number; name: string | null }[]) =>
+      rows.forEach((r) => r.name && names.set(`${type}:${r.id}`, r.name));
+    add("course", courses);
+    add("package", packages);
+    add("book", books);
+    add("ebook", ebooks);
+    return names;
+  },
 
   findBySlug: (type: JobContentType, slug: string) =>
     prisma.jobContent.findUnique({ where: { type_slug: { type, slug } } }),

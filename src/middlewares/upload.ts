@@ -1,8 +1,9 @@
-import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import multer from "multer";
 import multerS3 from "multer-s3";
 import path from "path";
 import { UPLOAD_FOLDERS } from "../config/uploadFolders";
+import { watermarkPdf } from "../utils/pdfWatermark";
 
 // Ensure credentials exist to prevent crypto/SDK crashes
 if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -76,7 +77,77 @@ const folderFor = (req: any, fieldname: string): string => {
 const uniqueName = (file: Express.Multer.File) =>
   `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`;
 
-const s3Storage = withPublicUrl(multerS3({
+/**
+ * Route-level opt-in: PDFs in this request get the websankul.com watermark
+ * (utils/pdfWatermark.ts) before they reach Spaces. Mount next to `uploadTo`:
+ * `uploadTo(UPLOAD_FOLDERS.jobsPapers), watermarkPdfs, uploadS3Mixed.array(…)`.
+ * Only govt-jobs routes use it — paid content (ebooks, materials) stays clean.
+ */
+export const watermarkPdfs = (req: any, _res: any, next: () => void) => {
+  req.watermarkPdfs = true;
+  next();
+};
+
+const isPdfFile = (file: Express.Multer.File) =>
+  file.mimetype === "application/pdf" || path.extname(file.originalname).toLowerCase() === ".pdf";
+
+/**
+ * Wraps a multer-s3 storage so that, on `watermarkPdfs` routes, PDFs are
+ * buffered, stamped and then PUT to the same bucket/key layout. Anything else
+ * (images, CSVs, non-opted-in routes) streams through the wrapped storage
+ * untouched. A PDF that can't be stamped (encrypted/corrupt) uploads as-is.
+ */
+const withPdfWatermark = <T extends multer.StorageEngine>(storage: T): T => {
+  const handle = storage._handleFile.bind(storage);
+  storage._handleFile = (req: any, file, cb) => {
+    if (!req?.watermarkPdfs || !isPdfFile(file)) return handle(req, file, cb);
+
+    const chunks: Buffer[] = [];
+    let truncated = false;
+    file.stream.on("limit", () => {
+      truncated = true;
+    });
+    file.stream.on("data", (chunk: Buffer) => {
+      if (!truncated) chunks.push(chunk);
+    });
+    file.stream.on("error", (err) => cb(err));
+    file.stream.on("end", async () => {
+      // multer already rejects the request with LIMIT_FILE_SIZE — don't upload a partial file.
+      if (truncated) return cb(null, {});
+      try {
+        const original = Buffer.concat(chunks);
+        chunks.length = 0;
+        const stamped = await watermarkPdf(original);
+        const body = stamped ? Buffer.from(stamped) : original;
+        const key = `${folderFor(req, file.fieldname)}/${uniqueName(file)}`;
+        await s3Config.send(
+          new PutObjectCommand({
+            Bucket: DO_BUCKET,
+            Key: key,
+            Body: body,
+            ContentType: "application/pdf",
+            ACL: "public-read",
+          })
+        );
+        // Same shape as multer-s3's info, so `_removeFile`, `enforceMixedSizeLimits`
+        // and the controllers (`file.location`) work unchanged.
+        cb(null, {
+          bucket: DO_BUCKET,
+          key,
+          acl: "public-read",
+          contentType: "application/pdf",
+          size: body.length,
+          location: publicUrlFor(key),
+        } as any);
+      } catch (err) {
+        cb(err as Error);
+      }
+    });
+  };
+  return storage;
+};
+
+const s3Storage = withPdfWatermark(withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read", // Makes file publicly accessible via CDN URL
@@ -85,7 +156,7 @@ const s3Storage = withPublicUrl(multerS3({
     // e.g. uploads/package/1678123412-123456789.jpg — folder from `uploadTo(...)`
     cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
-}));
+})));
 
 /**
  * multer 2.x decodes multipart field/file names as **latin1** by default
@@ -192,7 +263,7 @@ export const enforceMixedSizeLimits = async (
 // Reference documents attached inline in an editor (e.g. job content
 // download links: admit card/result/answer-key/syllabus PDFs, result CSVs,
 // syllabus sheets). Single file under the `file` field; folder from `uploadTo(...)`.
-const documentStorage = withPublicUrl(multerS3({
+const documentStorage = withPdfWatermark(withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
   acl: "public-read",
@@ -200,7 +271,7 @@ const documentStorage = withPublicUrl(multerS3({
   key: function (req, file, cb) {
     cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
-}));
+})));
 
 export const uploadS3Document = multer({
   ...MULTER_UTF8,

@@ -89,6 +89,8 @@ export interface ProductDto {
   _id: string;
   productType: JobProductType;
   productId: string;
+  /** Catalog name — only on the single-content read, for the admin editor. */
+  productName?: string;
   isFeatured: boolean;
 }
 

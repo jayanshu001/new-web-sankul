@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo, watermarkPdfs } from "../../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../../config/uploadFolders";
 import {
   getPaperList,
@@ -12,7 +12,7 @@ import {
 
 const router = Router();
 const previewUpload = [uploadTo(UPLOAD_FOLDERS.jobsPaperPreviews), uploadS3Mixed.fields([{ name: "previewImage", maxCount: 1 }])];
-const filesUpload = [uploadTo(UPLOAD_FOLDERS.jobsPapers), uploadS3Mixed.array("file", 10)];
+const filesUpload = [uploadTo(UPLOAD_FOLDERS.jobsPapers), watermarkPdfs, uploadS3Mixed.array("file", 10)];
 
 router.post("/files", filesUpload, enforceMixedSizeLimits, uploadPaperFiles);
 
