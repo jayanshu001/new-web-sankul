@@ -28,6 +28,7 @@ import { syncPermissionCatalog } from "./admin/permission/permissions.seeder";
 import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
+import { isReviewModeOn } from "./libs/reviewMode";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
 import { initExportScheduler } from "./admin/exports/export.scheduler";
 import { initJobsScheduler, shutdownJobsScheduler } from "./admin/jobs/jobs.scheduler";
@@ -213,6 +214,9 @@ const startServer = async () => {
     const io = initLiveChatSocket(httpServer, allowedOrigins);
     const wss = initCameraIngest(httpServer);
     initPdfProgressSocket();
+    // Open the guest-mode Firebase listener now, so the first guest request on each
+    // PM2 instance does not race the initial snapshot and answer "off".
+    void isReviewModeOn();
 
     installGracefulShutdown({
       httpServer,
