@@ -44,7 +44,7 @@ export const toContentDto = (row: ContentRow): JobContentDto => {
     title: row.title,
     subtitle: row.subtitle ?? undefined,
     organization: toRef(row.organization),
-    category: toRef(row.category),
+    relatedJob: toRef(row.relatedJob ? { id: row.relatedJob.id, name: row.relatedJob.title, slug: row.relatedJob.slug } : null),
     status: row.status,
     publishedAt: row.publishedAt ?? undefined,
     featured: row.featured,
@@ -135,6 +135,11 @@ export const toContentDto = (row: ContentRow): JobContentDto => {
             applicationEnd: date(merged.application_end),
             location: str(merged.location),
             qualification: str(merged.qualification),
+            qualifications: strArr(merged.qualifications).length
+              ? strArr(merged.qualifications)
+              : str(merged.qualification)
+                ? [str(merged.qualification) as string]
+                : [],
             excerpt: str(merged.excerpt),
             totalPosts: str(merged.total_posts),
             applyUrl: str(merged.apply_url),

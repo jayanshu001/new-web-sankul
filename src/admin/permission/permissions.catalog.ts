@@ -310,7 +310,7 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Jobs ─────────────────────────────────────────────────────────────────
   mod("jobs.content", "Job Content", "Jobs"),
-  mod("jobs.categories", "Job Categories", "Jobs"),
+  // jobs.categories removed 2026-10-02 — job listings filter by organization now.
   mod("jobs.organizations", "Job Organizations", "Jobs"),
   mod("jobs.previous-papers", "Previous Papers", "Jobs"),
   mod("jobs.suggested-products", "Jobs Suggested Products", "Jobs"),

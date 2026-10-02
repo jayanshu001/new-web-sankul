@@ -17,17 +17,21 @@ import type { ContentListQuery, ContentWriteInput, JobContentType } from "./cont
 // already-migrated production rows.
 export const CONTENT_LIST_INCLUDE = {
   organization: true,
-  category: true,
 } as const;
 
-export const CONTENT_FULL_INCLUDE = CONTENT_LIST_INCLUDE;
+export const CONTENT_FULL_INCLUDE = {
+  ...CONTENT_LIST_INCLUDE,
+  relatedJob: { select: { id: true, title: true, slug: true } },
+} as const;
+
+/** A job post never links to another job — only the other content types do. */
+const relatedJobIdOf = (input: ContentWriteInput) => (input.type === "job" ? null : (input.relatedJobId ?? null));
 
 const buildWhere = (q: Partial<ContentListQuery>) => {
   const where: Record<string, unknown> = {};
   if (q.type) where.type = q.type;
   if (q.status) where.status = q.status;
   if (q.organizationId) where.organizationId = q.organizationId;
-  if (q.categoryId) where.categoryId = q.categoryId;
   const search = buildPrismaSearch(q.search, ["title", "subtitle"]);
   if (search) where.AND = search.AND;
   return where;
@@ -85,9 +89,14 @@ const buildCardAndDetail = async (
 
   if (input.type === "job" && input.jobFields) {
     const f = input.jobFields;
+    const qualifications = (f.qualifications ?? (f.qualification ? [f.qualification] : []))
+      .map((q) => q.trim())
+      .filter(Boolean);
     Object.assign(card, {
       location: f.location ?? null,
-      qualification: f.qualification ?? null,
+      // `qualification` stays a single joined string for listing cards and the legacy Laravel admin.
+      qualifications,
+      qualification: qualifications.join(", ") || null,
       excerpt: f.excerpt ?? null,
       total_posts: f.totalPosts ?? null,
       apply_url: f.applyUrl ?? null,
@@ -213,7 +222,7 @@ export const contentRepository = {
         title: input.title,
         subtitle: input.subtitle,
         organizationId: input.organizationId ?? undefined,
-        categoryId: input.categoryId ?? undefined,
+        relatedJobId: relatedJobIdOf(input) ?? undefined,
         status: input.status,
         publishedAt: input.publishedAt ?? undefined,
         featured: input.featured ?? false,
@@ -239,12 +248,13 @@ export const contentRepository = {
         title: input.title,
         subtitle: input.subtitle,
         organizationId: input.organizationId ?? null,
-        categoryId: input.categoryId ?? null,
+        relatedJobId: relatedJobIdOf(input),
         status: input.status,
         publishedAt: input.publishedAt ?? null,
-        featured: input.featured ?? false,
-        badge: input.badge,
-        sortOrder: input.sortOrder ?? 0,
+        // Not edited in the admin form any more — keep whatever the row already has.
+        featured: input.featured,
+        badge: input.badge ?? null,
+        sortOrder: input.sortOrder,
         bodyHtml: input.bodyHtml,
         card: card as never,
         detail: detail as never,

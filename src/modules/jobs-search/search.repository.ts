@@ -7,7 +7,6 @@ export interface SearchDocumentWrite {
   title: string;
   subtitle?: string | null;
   orgName?: string | null;
-  categorySlugs?: string | null;
   href: string;
   publishedAt?: Date | null;
 }

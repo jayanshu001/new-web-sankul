@@ -39,7 +39,6 @@ export const UPLOAD_FOLDERS = {
   offlineCenters: "uploads/websankul_static/offline_centers",
   offlineBatches: "uploads/websankul_static/offline_batches",
   jobsOrganizations: "uploads/govt-jobs/organizations", // GovtJobFileService.php
-  jobsCategories: "uploads/govt-jobs/categories",
   jobsOgImages: "uploads/govt-jobs/og-images", // featured + OG images
   jobsEditor: "uploads/govt-jobs/editor", // inline editor images
   jobsContentFiles: "uploads/govt-jobs/content-files", // editor document attachments

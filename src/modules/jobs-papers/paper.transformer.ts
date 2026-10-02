@@ -70,7 +70,6 @@ export const toPaperDto = (row: PaperRow): PaperDto => ({
   language: row.language ?? undefined,
   isSolved: row.isSolved ?? false,
   organizationId: row.organizationId ? String(row.organizationId) : undefined,
-  categoryId: row.categoryId ? String(row.categoryId) : undefined,
   previewUrl: row.previewUrl ?? undefined,
   description: row.description ?? undefined,
   status: row.status,

@@ -53,7 +53,8 @@ export type JobProductType = (typeof JOB_PRODUCT_TYPES)[number];
 // that now lives in one JSON blob (`wsj_contents.detail`) instead of 20+
 // child tables. Per-item `_id`s are generated at write time (the repository
 // already does a full replace on every save, so there was never any
-// expectation of id stability across edits). `wsj_content_categories` (the
+// expectation of id stability across edits). Categories are no longer used —
+// listings filter by organization; the old `category_id` column is left untouched. `wsj_content_categories` (the
 // many-to-many join) is also gone — a content row now has at most ONE
 // category via the plain `category_id` column, not many.
 
@@ -156,7 +157,7 @@ export interface JobContentDto {
   title: string;
   subtitle?: string;
   organization?: RefDto;
-  category?: RefDto;
+  relatedJob?: RefDto;
   status: JobContentStatus;
   publishedAt?: Date;
   featured: boolean;
@@ -181,6 +182,7 @@ export interface JobContentDto {
     applicationEnd?: Date;
     location?: string;
     qualification?: string;
+    qualifications: string[];
     excerpt?: string;
     totalPosts?: string;
     applyUrl?: string;
@@ -227,7 +229,7 @@ export interface ContentWriteInput {
   slug?: string;
   subtitle?: string;
   organizationId?: bigint | null;
-  categoryId?: bigint | null;
+  relatedJobId?: bigint | null;
   status: JobContentStatus;
   publishedAt?: Date | null;
   featured?: boolean;
@@ -264,7 +266,9 @@ export interface ContentWriteInput {
     applicationStart?: Date | null;
     applicationEnd?: Date | null;
     location?: string;
+    /** Legacy single value — still accepted; folded into `qualifications`. */
     qualification?: string;
+    qualifications?: string[];
     excerpt?: string;
     totalPosts?: string;
     applyUrl?: string;
@@ -325,7 +329,6 @@ export interface ContentListQuery {
   type?: JobContentType;
   status?: JobContentStatus;
   organizationId?: bigint;
-  categoryId?: bigint;
   search?: string;
   skip: number;
   take: number;

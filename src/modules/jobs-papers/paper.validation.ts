@@ -15,7 +15,6 @@ export const paperWriteSchema = z.object({
   language: z.string().max(255).optional(),
   isSolved: zBool.optional(),
   organizationId: z.coerce.bigint().optional(),
-  categoryId: z.coerce.bigint().optional(),
   previewUrl: z.string().max(1000).optional(),
   description: z.string().optional(),
   status: z.enum(JOB_PAPER_STATUSES),

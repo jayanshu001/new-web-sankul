@@ -562,10 +562,6 @@ R("POST", "/jobs/content/inline-image", "jobs.content.create", "jobs.content.edi
 R("POST", "/jobs/content/document", "jobs.content.create", "jobs.content.edit");
 crud("/jobs/content", "jobs.content");
 
-// ── /jobs/categories → jobs.categories ──────────────────────────────────
-R("POST", "/jobs/categories/reorder", "jobs.categories.edit");
-crud("/jobs/categories", "jobs.categories");
-
 // ── /jobs/organizations → jobs.organizations ────────────────────────────
 crud("/jobs/organizations", "jobs.organizations");
 

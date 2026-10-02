@@ -75,12 +75,10 @@ export const getContentList = asyncHandler(async (req: Request, res: Response) =
   const type = resolveContentType(req.query.type as string | undefined);
   const status = req.query.status as JobContentStatus | undefined;
   const organizationId = parseOptionalBigInt(req.query.organizationId);
-  const categoryId = parseOptionalBigInt(req.query.categoryId);
   const { items, total } = await contentService.listContentPaged({
     type,
     status,
     organizationId,
-    categoryId,
     search,
     skip,
     take: limit,

@@ -32,7 +32,6 @@ export interface PaperDto {
   language?: string;
   isSolved: boolean;
   organizationId?: string;
-  categoryId?: string;
   previewUrl?: string;
   description?: string;
   status: JobPaperStatus;
@@ -57,7 +56,6 @@ export interface PaperWriteInput {
   language?: string;
   isSolved?: boolean;
   organizationId?: bigint | null;
-  categoryId?: bigint | null;
   previewUrl?: string | null;
   description?: string;
   status: JobPaperStatus;
@@ -72,7 +70,6 @@ export interface PaperListQuery {
   status?: JobPaperStatus;
   tier?: JobPaperTier;
   organizationId?: bigint;
-  categoryId?: bigint;
   search?: string;
   skip: number;
   take: number;

@@ -42,6 +42,7 @@ const jobFieldsSchema = z.object({
   applicationEnd: zDate.optional().nullable(),
   location: z.string().optional(),
   qualification: z.string().optional(),
+  qualifications: zStringArray.optional(),
   excerpt: z.string().optional(),
   totalPosts: z.string().optional(),
   applyUrl: z.string().optional(),
@@ -121,7 +122,8 @@ export const contentWriteSchema = z.object({
   slug: z.string().max(300).optional(),
   subtitle: z.string().max(255).optional(),
   organizationId: z.coerce.bigint().optional(),
-  categoryId: z.coerce.bigint().optional(),
+  /** Job post this result / call letter / answer key / syllabus / exam belongs to. */
+  relatedJobId: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.bigint().optional()),
   status: z.enum(JOB_CONTENT_STATUSES),
   publishedAt: zDate.optional().nullable(),
   featured: zBool.optional(),

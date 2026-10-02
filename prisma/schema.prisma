@@ -2865,29 +2865,8 @@ model JobOrganization {
 
   contents       JobContent[]
   previousPapers JobPreviousPaper[]
-  categories     JobCategory[]
 
   @@map("wsj_organizations")
-}
-
-model JobCategory {
-  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  slug           String    @unique(map: "wsj_categories_slug_unique") @db.VarChar(100)
-  label          String    @db.VarChar(255)
-  organizationId BigInt?   @map("organization_id") @db.UnsignedBigInt
-  sortOrder      Int       @default(0) @map("sort_order")
-  imageUrl   String?   @map("image_url") @db.VarChar(1000)
-  imageAlt   String?   @map("image_alt") @db.VarChar(255)
-  showOnHome Boolean   @default(false) @map("show_on_home")
-  isActive   Boolean   @default(true) @map("is_active")
-  createdAt  DateTime? @map("created_at") @db.Timestamp(0)
-  updatedAt  DateTime? @map("updated_at") @db.Timestamp(0)
-
-  organization JobOrganization? @relation(fields: [organizationId], references: [id], map: "fk_wsj_categories_organization")
-  contents     JobContent[]
-
-  @@index([organizationId], map: "idx_wsj_categories_organization_id")
-  @@map("wsj_categories")
 }
 
 model JobContent {
@@ -2897,7 +2876,6 @@ model JobContent {
   title            String            @db.VarChar(255)
   subtitle         String?           @db.VarChar(255)
   organizationId   BigInt?           @map("organization_id") @db.UnsignedBigInt
-  categoryId       BigInt?           @map("category_id") @db.UnsignedBigInt
   relatedJobId     BigInt?           @map("related_job_id") @db.UnsignedBigInt
   status           JobContentStatus  @default(draft)
   publishedAt      DateTime?         @map("published_at") @db.DateTime(0)
@@ -2911,7 +2889,6 @@ model JobContent {
   updatedAt        DateTime?         @map("updated_at") @db.Timestamp(0)
 
   organization JobOrganization? @relation(fields: [organizationId], references: [id])
-  category     JobCategory?     @relation(fields: [categoryId], references: [id])
 
   relatedJob  JobContent?  @relation("JobContentRelatedJob", fields: [relatedJobId], references: [id])
   relatedFrom JobContent[] @relation("JobContentRelatedJob")
@@ -2919,7 +2896,6 @@ model JobContent {
   linkedPapers JobPreviousPaper[]
 
   @@unique([type, slug], map: "wsj_contents_type_slug_unique")
-  @@index([categoryId], map: "wsj_contents_category_id_index")
   @@index([organizationId], map: "wsj_contents_organization_id_index")
   @@index([relatedJobId], map: "wsj_contents_related_job_id_index")
   @@index([status, type, publishedAt], map: "wsj_contents_status_type_published_idx")
@@ -2934,7 +2910,6 @@ model JobPreviousPaper {
   jobIds          Json?           @map("job_ids")
   recruitmentId   BigInt?         @map("recruitment_id") @db.UnsignedBigInt
   organizationId  BigInt?         @map("organization_id") @db.UnsignedBigInt
-  categoryId      BigInt?         @map("category_id") @db.UnsignedBigInt
   year            Int?            @db.SmallInt
   title           String?         @db.VarChar(255)
   subtitle        String?         @db.VarChar(255)
@@ -2962,7 +2937,6 @@ model JobPreviousPaper {
 
   @@index([tier], map: "idx_tier")
   @@index([year], map: "idx_year")
-  @@index([categoryId], map: "wsj_previous_papers_category_id_index")
   @@index([contentId], map: "wsj_previous_papers_content_id_index")
   @@index([organizationId], map: "wsj_previous_papers_organization_id_index")
   @@index([recruitmentId], map: "wsj_previous_papers_recruitment_id_index")
@@ -3003,7 +2977,6 @@ model JobSearchDocument {
   title         String    @db.VarChar(255)
   subtitle      String?   @db.VarChar(255)
   orgName       String?   @map("org_name") @db.VarChar(255)
-  categorySlugs String?   @map("category_slugs") @db.VarChar(500)
   href          String    @db.VarChar(500)
   publishedAt   DateTime? @map("published_at") @db.DateTime(0)
   updatedAt     DateTime? @map("updated_at") @db.DateTime(0)

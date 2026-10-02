@@ -11,7 +11,6 @@ const buildWhere = (q: Partial<PaperListQuery>) => {
   if (q.status) where.status = q.status;
   if (q.tier) where.tier = q.tier;
   if (q.organizationId) where.organizationId = q.organizationId;
-  if (q.categoryId) where.categoryId = q.categoryId;
   const search = buildPrismaSearch(q.search, ["title", "subtitle", "subject"]);
   if (search) where.AND = search.AND;
   return where;
@@ -83,7 +82,6 @@ export const paperRepository = {
         data: {
           ...baseData(input),
           organizationId: input.organizationId ?? undefined,
-          categoryId: input.categoryId ?? undefined,
           previewUrl: input.previewUrl ?? undefined,
           publishedAt: input.publishedAt ?? (input.status === "published" ? new Date() : undefined),
           createdAt: new Date(),
@@ -102,7 +100,6 @@ export const paperRepository = {
         data: {
           ...baseData(input),
           organizationId: input.organizationId ?? null,
-          categoryId: input.categoryId ?? null,
           ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
           publishedAt: input.publishedAt ?? existing.publishedAt ?? (input.status === "published" ? new Date() : null),
           updatedAt: new Date(),

@@ -36,12 +36,10 @@ export const getPaperList = asyncHandler(async (req: Request, res: Response) => 
   const status = req.query.status as JobPaperStatus | undefined;
   const tier = req.query.tier as JobPaperTier | undefined;
   const organizationId = parseOptionalBigInt(req.query.organizationId);
-  const categoryId = parseOptionalBigInt(req.query.categoryId);
   const { items, total } = await paperService.listPapersPaged({
     status,
     tier,
     organizationId,
-    categoryId,
     search,
     skip,
     take: limit,
