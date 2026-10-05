@@ -10,6 +10,13 @@ import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 import { andWhere, statusWhere, normalizeStatus, reportRow, blankStrToNull, decToNum, rowHasMaterial, trackingToNumber } from "../../utils/reportFilters";
 import { PaymentMethod } from "../../shared/enums";
 import { fmtExportDate } from "../../utils/csvExport";
+import {
+  adminDisplayName,
+  appendAdminRemark,
+  movedRemarkText,
+  parseRemarkHistory,
+  planDeactivation,
+} from "../../utils/subscriptionRemarkHistory";
 
 // Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
 // from `paymentMethod` (= payment_type online|backend, the activation channel). FE
@@ -468,14 +475,38 @@ export const updateCourseSubscription = async (
   // change exists to remove.
   if (touchesPayment && existing.orderId == null) return "no_order";
 
+  const changes: string[] = [];
+  const track = (label: string, from: string, to: string) => {
+    if (from !== to) changes.push(`${label} ${from || "none"} -> ${to || "none"}`);
+  };
+
+  if (patch.startAt !== undefined) track("start date", fmtExportDate(existing.startAt), fmtExportDate(patch.startAt));
+  if (patch.endAt !== undefined) track("end date", fmtExportDate(existing.endAt), fmtExportDate(patch.endAt));
+  if (patch.status !== undefined) track("status", activeLabel(existing.status), activeLabel(patch.status));
+  if (patch.shippingId !== undefined) track("shipping", idStr(existing.shippingId) ?? "", idStr(patch.shippingId) ?? "");
+  if (patch.trackingId !== undefined) track("tracking", existing.trackingId?.toString() ?? "", patch.trackingId?.toString() ?? "");
+
+  if (touchesPayment) {
+    const [order] = await repo.ordersByIds([existing.orderId as number]);
+    if (patch.paymentMethod !== undefined) track("payment method", String(order?.paymentMethod ?? ""), patch.paymentMethod);
+    if (patch.bankTransactionId !== undefined) track("bank transaction id", order?.bankTransactionId ?? "", patch.bankTransactionId ?? "");
+    if (patch.razorpayOrderId !== undefined) track("razorpay order id", order?.gatewayOrderId ?? "", patch.razorpayOrderId ?? "");
+    if (patch.razorpayPaymentId !== undefined) track("razorpay payment id", order?.gatewayPaymentId ?? "", patch.razorpayPaymentId ?? "");
+  }
+
   const now = new Date();
+  const hasHistoryEntry = changes.length > 0 || !!patch.remark?.trim();
+  const remarks = hasHistoryEntry
+    ? await withHistory(existing.remarks, changes.length ? `Updated: ${changes.join("; ")}` : "", patch, now)
+    : undefined;
+
   await repo.patchSub(id, {
     startAt: patch.startAt,
     endAt: patch.endAt,
     status: patch.status,
     shippingId: patch.shippingId,
     trackingId: patch.trackingId,
-    remarks: patch.remark,
+    remarks,
     actingAdminId: patch.actingAdminId ?? null,
     now,
   });
@@ -491,6 +522,155 @@ export const updateCourseSubscription = async (
   }
 
   return getCourseSubscriptionById(id);
+};
+
+type HistoryInput = { remark?: string | null; actingAdminId?: number | null };
+
+type Product = { courseId: number | null; packageId: number | null };
+
+const activeLabel = (status: boolean | null | undefined): string => (status ? "active" : "inactive");
+
+const withHistory = (remarks: string | null, what: string, input: HistoryInput, now: Date): Promise<string> =>
+  appendAdminRemark(remarks, { what, remark: input.remark, actingAdminId: input.actingAdminId, now }, repo.adminUsersByIds);
+
+const productOf = (row: { courseId: number | null; packageId: number | null }): Product => ({
+  courseId: row.courseId ?? null,
+  packageId: row.courseId ? null : row.packageId ?? null,
+});
+
+const productLabel = async ({ courseId, packageId }: Product): Promise<string> => {
+  if (courseId) {
+    const [course] = await repo.coursesByIds([courseId]);
+    return `Course "${course?.name ?? ""}" (#${courseId})`;
+  }
+  if (packageId) {
+    const [pkg] = await repo.packagesByIds([packageId]);
+    return `Package "${pkg?.name ?? ""}" (#${packageId})`;
+  }
+  return "none";
+};
+
+export type ChangeProductResult =
+  | { ok: false; reason: "not_found" | "target_not_found" | "same_target" }
+  | { ok: true; customerId: number | null; data: any };
+
+export const changeSubscriptionProduct = async (
+  id: number,
+  input: HistoryInput & { courseId?: number; packageId?: number }
+): Promise<ChangeProductResult> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const current = productOf(existing);
+  const target = productOf({ courseId: input.courseId ?? null, packageId: input.packageId ?? null });
+  const { courseId, packageId } = target;
+
+  const targetRows = courseId ? await repo.coursesByIds([courseId]) : await repo.packagesByIds([packageId as number]);
+  if (!targetRows.length) return { ok: false, reason: "target_not_found" };
+  if (current.courseId === courseId && current.packageId === packageId) return { ok: false, reason: "same_target" };
+
+  const [fromLabel, toLabel] = await Promise.all([productLabel(current), productLabel(target)]);
+  const what = `Course/package changed: ${fromLabel} -> ${toLabel}`;
+
+  const now = new Date();
+  await repo.patchSub(id, {
+    courseId,
+    packageId,
+    remarks: await withHistory(existing.remarks, what, input, now),
+    actingAdminId: input.actingAdminId ?? null,
+    now,
+  });
+
+  return { ok: true, customerId: existing.customerId ?? null, data: await getCourseSubscriptionById(id) };
+};
+
+export type MoveSubscriptionResult =
+  | { ok: false; reason: "not_found" | "customer_not_found" | "same_customer" }
+  | { ok: true; fromCustomerId: number | null; toCustomerId: number; data: any };
+
+export const moveSubscription = async (
+  id: number,
+  input: HistoryInput & { customerId: number }
+): Promise<MoveSubscriptionResult> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const target = await repo.findLiveCustomer(input.customerId);
+  if (!target) return { ok: false, reason: "customer_not_found" };
+  if (existing.customerId === target.id) return { ok: false, reason: "same_customer" };
+
+  const fromCustomerId = existing.customerId ?? null;
+  const [source] = fromCustomerId ? await repo.customersByIds([fromCustomerId]) : [];
+  const what = movedRemarkText(
+    { id: fromCustomerId, phone: source?.phoneNumber },
+    { id: target.id, phone: target.phoneNumber }
+  );
+
+  const now = new Date();
+  await repo.patchSub(id, {
+    customerId: target.id,
+    remarks: await withHistory(existing.remarks, what, input, now),
+    actingAdminId: input.actingAdminId ?? null,
+    now,
+  });
+
+  return { ok: true, fromCustomerId, toCustomerId: target.id, data: await getCourseSubscriptionById(id) };
+};
+
+export type DeactivateSubscriptionResult =
+  | { ok: false; reason: "not_found" | "already_deactivated" }
+  | { ok: true; customerId: number | null; data: any };
+
+export const deactivateSubscription = async (
+  id: number,
+  input: HistoryInput
+): Promise<DeactivateSubscriptionResult> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing || (!existing.courseId && !existing.packageId)) return { ok: false, reason: "not_found" };
+
+  const now = new Date();
+  const deactivation = planDeactivation(existing, now);
+  if (!deactivation) return { ok: false, reason: "already_deactivated" };
+
+  await repo.patchSub(id, {
+    endAt: deactivation.endAt,
+    remarks: await withHistory(existing.remarks, deactivation.what, input, now),
+    actingAdminId: input.actingAdminId ?? null,
+    now,
+  });
+
+  return { ok: true, customerId: existing.customerId ?? null, data: await getCourseSubscriptionById(id) };
+};
+
+export const getSubscriptionHistory = async (id: number): Promise<"not_found" | any> => {
+  const subscription = await repo.findCourseSubById(id);
+  if (!subscription) return "not_found";
+
+  const { created_by: createdById, updated_by: updatedById, customerId } = subscription;
+  const [admins, customers, product] = await Promise.all([
+    repo.adminUsersByIds([createdById, updatedById].filter((x): x is number => x != null && x > 0)),
+    customerId ? repo.customersByIds([customerId]) : Promise.resolve([]),
+    productLabel(productOf(subscription)),
+  ]);
+
+  const adminRef = (adminId: number | null) => {
+    if (adminId == null) return null;
+    const admin = admins.find((a) => Number(a.id) === adminId);
+    return { _id: String(adminId), name: admin ? adminDisplayName(admin) || null : null };
+  };
+
+  return {
+    _id: String(subscription.id),
+    customerId: customerRef(customers[0]),
+    courseId: idStr(subscription.courseId),
+    packageId: idStr(productOf(subscription).packageId),
+    product,
+    createdAt: subscription.createdAt ?? null,
+    createdBy: adminRef(createdById),
+    updatedAt: subscription.updatedAt ?? null,
+    updatedBy: adminRef(updatedById),
+    history: parseRemarkHistory(subscription.remarks),
+  };
 };
 
 

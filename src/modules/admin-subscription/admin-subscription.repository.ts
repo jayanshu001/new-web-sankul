@@ -187,11 +187,15 @@ export const adminSubscriptionRepository = {
       shippingId?: number | null; trackingId?: bigint | null; remarks?: string; now: Date;
       // Acting admin id (from the JWT) → stamped on updated_by for this edit.
       actingAdminId?: number | null;
+      customerId?: number; courseId?: number | null; packageId?: number | null;
     }
   ) =>
     prisma.packageCourseSubscription.update({
       where: { id },
       data: {
+        ...(d.customerId !== undefined ? { customerId: d.customerId } : {}),
+        ...(d.courseId !== undefined ? { courseId: d.courseId } : {}),
+        ...(d.packageId !== undefined ? { packageId: d.packageId } : {}),
         ...(d.startAt !== undefined ? { startAt: d.startAt } : {}),
         ...(d.endAt !== undefined ? { endAt: d.endAt } : {}),
         ...(d.status !== undefined ? { status: d.status } : {}),
@@ -205,6 +209,9 @@ export const adminSubscriptionRepository = {
       },
     }),
   deleteSub: (id: number) => prisma.packageCourseSubscription.delete({ where: { id } }),
+
+  findLiveCustomer: (id: number) =>
+    prisma.customer.findFirst({ where: { id, isAccountDeleted: false }, select: { id: true, fullName: true, phoneNumber: true } }),
 
   // ── hydration ────────────────────────────────────────────────────────────────
   customersByIds: (ids: number[]) =>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { historyRemarkSchema, positiveIdSchema } from "../subscription/subscription.validation";
 
 const objectId = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
 
@@ -81,4 +82,11 @@ export const reorderLiveCoursesSchema = z.object({
   orders: z
     .array(z.object({ id: z.string().min(1), ordered: z.number().int() }))
     .min(1, "orders array is required"),
+});
+
+export const liveSubscriptionIdParamsSchema = z.object({ subscriptionId: positiveIdSchema });
+
+export const changeLiveCourseSchema = z.object({
+  liveCourseId: positiveIdSchema,
+  remark: historyRemarkSchema,
 });

@@ -58,7 +58,13 @@ import {
   deleteLiveCourseSubscription,
   exportLiveCourseSubscriptionsCsv,
   exportLiveCourseSubscriptionsExcel,
+  changeLiveCourseOfSubscription,
+  moveLiveCourseSubscription,
+  deactivateLiveCourseSubscription,
 } from "./live-course.subscription.controller";
+import { validate } from "../../middlewares/validate";
+import { changeLiveCourseSchema, liveSubscriptionIdParamsSchema } from "./live-course.validation";
+import { deactivateSubscriptionSchema, moveSubscriptionSchema } from "../subscription/subscription.validation";
 
 const router = Router();
 
@@ -82,6 +88,21 @@ router.get("/subscriptions/export/excel",    exportLiveCourseSubscriptionsExcel)
 router.get("/subscriptions/:subscriptionId", getLiveCourseSubscription);
 router.put("/subscriptions/:subscriptionId", updateLiveCourseSubscription);
 router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);
+router.post(
+  "/subscriptions/:subscriptionId/change-course",
+  validate({ params: liveSubscriptionIdParamsSchema, body: changeLiveCourseSchema }),
+  changeLiveCourseOfSubscription
+);
+router.post(
+  "/subscriptions/:subscriptionId/move",
+  validate({ params: liveSubscriptionIdParamsSchema, body: moveSubscriptionSchema }),
+  moveLiveCourseSubscription
+);
+router.post(
+  "/subscriptions/:subscriptionId/deactivate",
+  validate({ params: liveSubscriptionIdParamsSchema, body: deactivateSubscriptionSchema }),
+  deactivateLiveCourseSubscription
+);
 
 // --- Live course CRUD -------------------------------------------------------
 // Master reads cached; every write that changes course content (CRUD, popular,

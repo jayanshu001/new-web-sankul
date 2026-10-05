@@ -18,7 +18,18 @@ import {
   adminCreateCustomerAddress,
   adminUpdateCustomerAddress,
   adminDeleteCustomerAddress,
+  changeSubscriptionProduct,
+  moveSubscription,
+  deactivateSubscription,
+  getSubscriptionHistory,
 } from "./subscription.controller";
+import { validate } from "../../middlewares/validate";
+import {
+  subscriptionIdParamsSchema,
+  changeSubscriptionProductSchema,
+  moveSubscriptionSchema,
+  deactivateSubscriptionSchema,
+} from "./subscription.validation";
 
 const router = Router();
 
@@ -44,6 +55,23 @@ router.get("/customer-addresses/:customerId", listCustomerAddresses);
 router.post("/customer-addresses", adminCreateCustomerAddress);
 router.put("/customer-addresses/:id", adminUpdateCustomerAddress);
 router.delete("/customer-addresses/:id", adminDeleteCustomerAddress);
+
+router.get("/:id/history", validate({ params: subscriptionIdParamsSchema }), getSubscriptionHistory);
+router.post(
+  "/:id/change-product",
+  validate({ params: subscriptionIdParamsSchema, body: changeSubscriptionProductSchema }),
+  changeSubscriptionProduct
+);
+router.post(
+  "/:id/move",
+  validate({ params: subscriptionIdParamsSchema, body: moveSubscriptionSchema }),
+  moveSubscription
+);
+router.post(
+  "/:id/deactivate",
+  validate({ params: subscriptionIdParamsSchema, body: deactivateSubscriptionSchema }),
+  deactivateSubscription
+);
 
 // Course/package subscriptions CRUD
 router.get("/", listCourseSubscriptions);

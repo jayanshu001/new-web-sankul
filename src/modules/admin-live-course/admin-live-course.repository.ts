@@ -212,6 +212,8 @@ export const adminLiveCourseRepository = {
   customersByIds: (ids: number[]) =>
     ids.length ? prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }) : Promise.resolve([]),
   customerExists: (id: number) => prisma.customer.findUnique({ where: { id }, select: { id: true } }),
+  findLiveCustomer: (id: number) =>
+    prisma.customer.findFirst({ where: { id, isAccountDeleted: false }, select: { id: true, phoneNumber: true } }),
   // `educatorId` feeds the report's Educator Name column (→ educatorsByIds).
   coursesByIds: (ids: number[]) =>
     ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, educatorId: true } }) : Promise.resolve([]),

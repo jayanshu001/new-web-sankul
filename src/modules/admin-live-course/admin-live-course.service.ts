@@ -36,6 +36,7 @@ import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
+import { appendAdminRemark, movedRemarkText, planDeactivation } from "../../utils/subscriptionRemarkHistory";
 
 
 export const parseLiveId = (id: string): number | null => {
@@ -1032,6 +1033,106 @@ export const deleteSubscription = async (id: number): Promise<boolean> => {
   if (!(await repo.findSubscriptionById(id))) return false;
   await repo.deleteSubscription(id);
   return true;
+};
+
+type HistoryInput = { remark?: string | null; actingAdminId?: number | null };
+
+const liveCourseLabel = async (liveCourseId: number): Promise<string> => {
+  const [course] = await repo.coursesByIds([liveCourseId]);
+  return `Live course "${course?.name ?? ""}" (#${liveCourseId})`;
+};
+
+const historyPatch = async (remarks: string | null, what: string, input: HistoryInput, now: Date) => ({
+  remarks: await appendAdminRemark(
+    remarks,
+    { what, remark: input.remark, actingAdminId: input.actingAdminId, now },
+    repo.adminUsersByIds
+  ),
+  updatedAt: now,
+  ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
+});
+
+const hydrateOne = async (row: Parameters<typeof hydrateSubs>[0][number]) => (await hydrateSubs([row]))[0];
+
+export type ChangeLiveCourseResult =
+  | { ok: false; reason: "not_found" | "target_not_found" | "same_target" }
+  | { ok: true; customerId: number; data: any };
+
+export const changeSubscriptionLiveCourse = async (
+  id: number,
+  input: HistoryInput & { liveCourseId: number }
+): Promise<ChangeLiveCourseResult> => {
+  const existing = await repo.findSubscriptionById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+  if (!(await repo.exists(input.liveCourseId))) return { ok: false, reason: "target_not_found" };
+  if (existing.liveCourseId === input.liveCourseId) return { ok: false, reason: "same_target" };
+
+  const [fromLabel, toLabel] = await Promise.all([
+    liveCourseLabel(existing.liveCourseId),
+    liveCourseLabel(input.liveCourseId),
+  ]);
+  const what = `Live course changed: ${fromLabel} -> ${toLabel}`;
+
+  const now = new Date();
+  const updated = await repo.updateSubscription(id, {
+    liveCourseId: input.liveCourseId,
+    ...(await historyPatch(existing.remarks, what, input, now)),
+  });
+
+  return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };
+};
+
+export type MoveLiveSubscriptionResult =
+  | { ok: false; reason: "not_found" | "customer_not_found" | "same_customer" }
+  | { ok: true; fromCustomerId: number; toCustomerId: number; data: any };
+
+export const moveLiveSubscription = async (
+  id: number,
+  input: HistoryInput & { customerId: number }
+): Promise<MoveLiveSubscriptionResult> => {
+  const existing = await repo.findSubscriptionById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const target = await repo.findLiveCustomer(input.customerId);
+  if (!target) return { ok: false, reason: "customer_not_found" };
+  if (existing.customerId === target.id) return { ok: false, reason: "same_customer" };
+
+  const [source] = await repo.customersByIds([existing.customerId]);
+  const what = movedRemarkText(
+    { id: existing.customerId, phone: source?.phoneNumber },
+    { id: target.id, phone: target.phoneNumber }
+  );
+
+  const now = new Date();
+  const updated = await repo.updateSubscription(id, {
+    customerId: target.id,
+    ...(await historyPatch(existing.remarks, what, input, now)),
+  });
+
+  return { ok: true, fromCustomerId: existing.customerId, toCustomerId: target.id, data: await hydrateOne(updated) };
+};
+
+export type DeactivateLiveSubscriptionResult =
+  | { ok: false; reason: "not_found" | "already_deactivated" }
+  | { ok: true; customerId: number; data: any };
+
+export const deactivateLiveSubscription = async (
+  id: number,
+  input: HistoryInput
+): Promise<DeactivateLiveSubscriptionResult> => {
+  const existing = await repo.findSubscriptionById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const now = new Date();
+  const deactivation = planDeactivation(existing, now);
+  if (!deactivation) return { ok: false, reason: "already_deactivated" };
+
+  const updated = await repo.updateSubscription(id, {
+    endAt: deactivation.endAt,
+    ...(await historyPatch(existing.remarks, deactivation.what, input, now)),
+  });
+
+  return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };
 };
 
 // ── schedule folders / entries (JSON on ws_live_course; synthetic ids) ──────────

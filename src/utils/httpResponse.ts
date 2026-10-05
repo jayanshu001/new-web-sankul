@@ -144,3 +144,8 @@ export const formatZodIssues = (
     acc[i.path.join(".")] = i.message;
     return acc;
   }, {});
+
+export type ActionError = readonly [status: number, message: string, field?: string];
+
+export const actionFailure = (res: Response, [status, message, field]: ActionError): Response =>
+  failure(res, message, status, field ? { [field]: message } : {});

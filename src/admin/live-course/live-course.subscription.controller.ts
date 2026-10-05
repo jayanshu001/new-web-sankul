@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
+import { success, failure, failureFrom, getErrorMessage, actionFailure, type ActionError } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
@@ -232,5 +232,80 @@ export const deleteLiveCourseSubscription = async (req: Request, res: Response) 
   } catch (err) {
     logger.error("deleteLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete subscription.", 500);
+  }
+};
+
+const actingAdminOf = (req: Request): number | null => liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
+
+const subscriptionIdOf = (req: Request): number => (req.params as unknown as { subscriptionId: number }).subscriptionId;
+
+const SUBSCRIPTION_NOT_FOUND: ActionError = [404, "Subscription not found."];
+
+const logActionFailure = (req: Request, action: string, err: unknown) =>
+  logger.error(`${action} failed`, { traceId: req.traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+
+export const changeLiveCourseOfSubscription = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { liveCourseId: number; remark: string };
+    const result = await liveSql.changeSubscriptionLiveCourse(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        target_not_found: [404, "Live course not found."],
+        same_target: [422, "Subscription is already on this live course.", "liveCourseId"],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    await flushUserRouteCache(result.customerId);
+    return success(res, { subscription: result.data }, "Subscription live course changed.");
+  } catch (err) {
+    logActionFailure(req, "changeLiveCourseOfSubscription", err);
+    return failure(res, "Failed to change live course.", 500);
+  }
+};
+
+export const moveLiveCourseSubscription = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { customerId: number; remark?: string };
+    const result = await liveSql.moveLiveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        customer_not_found: [404, "Customer not found."],
+        same_customer: [422, "Subscription already belongs to this customer.", "customerId"],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    await flushUserRouteCache(result.fromCustomerId);
+    await flushUserRouteCache(result.toCustomerId);
+    return success(res, { subscription: result.data }, "Subscription moved.");
+  } catch (err) {
+    logActionFailure(req, "moveLiveCourseSubscription", err);
+    return failure(res, "Failed to move subscription.", 500);
+  }
+};
+
+export const deactivateLiveCourseSubscription = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { remark: string };
+    const result = await liveSql.deactivateLiveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        already_deactivated: [422, "Subscription is already deactivated."],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    await flushUserRouteCache(result.customerId);
+    return success(res, { subscription: result.data }, "Subscription deactivated.");
+  } catch (err) {
+    logActionFailure(req, "deactivateLiveCourseSubscription", err);
+    return failure(res, "Failed to deactivate subscription.", 500);
   }
 };

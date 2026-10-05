@@ -20,6 +20,7 @@ import type { AddressCreateInput, AddressUpdateInput } from "../../modules/custo
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
+import { success, failure, actionFailure, type ActionError } from "../../utils/httpResponse";
 
 // Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
 // 422 from assertReportStatus) instead of flattening every failure to 500. These
@@ -379,6 +380,86 @@ export const deleteCourseSubscription = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, message: "Subscription deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const actingAdminOf = (req: Request): number | null => subSql.parseSubId(String(req.user?.id ?? "")) ?? null;
+
+const subscriptionIdOf = (req: Request): number => (req.params as unknown as { id: number }).id;
+
+const SUBSCRIPTION_NOT_FOUND: ActionError = [404, "Subscription not found."];
+
+export const changeSubscriptionProduct = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { courseId?: number; packageId?: number; remark: string };
+    const result = await subSql.changeSubscriptionProduct(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const targetField = input.courseId ? "courseId" : "packageId";
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        target_not_found: [404, input.courseId ? "Course not found." : "Package not found."],
+        same_target: [422, "Subscription is already on this course/package.", targetField],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    if (result.customerId) await flushUserRouteCache(result.customerId);
+    return success(res, result.data, "Subscription course/package changed.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
+  }
+};
+
+export const moveSubscription = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { customerId: number; remark?: string };
+    const result = await subSql.moveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        customer_not_found: [404, "Customer not found."],
+        same_customer: [422, "Subscription already belongs to this customer.", "customerId"],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    if (result.fromCustomerId) await flushUserRouteCache(result.fromCustomerId);
+    await flushUserRouteCache(result.toCustomerId);
+    return success(res, result.data, "Subscription moved.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
+  }
+};
+
+export const deactivateSubscription = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { remark: string };
+    const result = await subSql.deactivateSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = {
+        not_found: SUBSCRIPTION_NOT_FOUND,
+        already_deactivated: [422, "Subscription is already deactivated."],
+      };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    if (result.customerId) await flushUserRouteCache(result.customerId);
+    return success(res, result.data, "Subscription deactivated.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
+  }
+};
+
+export const getSubscriptionHistory = async (req: Request, res: Response) => {
+  try {
+    const history = await subSql.getSubscriptionHistory(subscriptionIdOf(req));
+    if (history === "not_found") return actionFailure(res, SUBSCRIPTION_NOT_FOUND);
+    return success(res, history);
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
   }
 };
 

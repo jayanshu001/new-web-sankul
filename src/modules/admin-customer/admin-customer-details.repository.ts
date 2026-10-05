@@ -65,6 +65,15 @@ export const adminCustomerDetailsRepository = {
     prisma.packageCourseSubscription.count({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) } }),
   pagePackageSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
     prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+  latestPackageSubIds: async (customerId: number, packageIds: number[]): Promise<Set<number>> => {
+    if (!packageIds.length) return new Set();
+    const groups = await prisma.packageCourseSubscription.groupBy({
+      by: ["packageId"],
+      where: { customerId, courseId: null, packageId: { in: packageIds } },
+      _max: { id: true },
+    });
+    return new Set(groups.map((g) => g._max.id).filter((id): id is number => id != null));
+  },
 
   countLiveCourseSubs: (customerId: number, status?: boolean) =>
     prisma.liveCourseSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),

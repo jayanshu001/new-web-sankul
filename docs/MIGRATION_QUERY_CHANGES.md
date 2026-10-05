@@ -349,6 +349,44 @@ and returns the entitlement the first caller produced.
 - **Check:** `npx tsx scripts/verify-order-claim-race.ts` (local DB only) fires two concurrent
   fulfillments at one pending order per type. Before the fix: 2 rows on all six paths. After: 1.
 
+---
+
+## 2026-09-29 — Admin subscription course change / move / deactivate + remarks history (no DDL)
+
+> **DDL:** none. History is stored in the existing `ws_package_course_subscription.remarks`
+> (TEXT) in the legacy panel's `[YYYY-MM-DD HH:mm:ss] text` format. The actor is stamped on
+> the existing `updated_by`. Spec: `docs/SUBSCRIPTION_COURSE_CHANGE_ADMIN.md`.
+
+- **New `utils/subscriptionRemarkHistory.ts`:** a TypeScript port of legacy
+  `Subscription::appendRemark` / `formatRemarkHistory`, byte-compatible, so both panels
+  share one history. Entries carry `| by <admin> (#id)`, which `parseRemarkHistory`
+  extracts into `changedBy`. A new entry goes in front before the stable sort, so two
+  writes in the same second still list newest first. (Legacy parity: once dated entries
+  exist, a trailing undated line is read as part of the oldest entry. It is merged, not lost.)
+- **`admin-subscription.repository.ts` `patchSub`:** can now also write `customer_id`,
+  `course_id`, and `package_id` (only when passed). New `findLiveCustomer`
+  (`is_account_deleted = 0`).
+- **Write scope per action (2026-10-05):** change-product writes only `course_id` /
+  `package_id` (`pcb_id` is never touched); move writes only `customer_id`; deactivate
+  writes only `end_at := start_at` (now if no start). Each also writes `remarks`,
+  `updated_by`, `updated_at`.
+- **Live course (`ws_live_course_subscription`, same rules):** `changeSubscriptionLiveCourse`
+  writes only `live_course_id` (`plan_id` untouched), `moveLiveSubscription` only
+  `customer_id`, `deactivateLiveSubscription` only `end_at`, each plus `remarks`,
+  `updated_by`, `updated_at`. Reads `ws_live_course`, `ws_customer`, `ws_users`.
+- **`admin-customer-details.repository.ts` `latestPackageSubIds`:** one `groupBy package_id,
+  MAX(id)` on `ws_package_course_subscription` for the customer's package ids, feeding
+  `isLatest` on `GET /admin/customers/:id/package-subscriptions`.
+- **`admin-subscription.service.ts`:** new `changeSubscriptionProduct`, `moveSubscription`,
+  `deactivateSubscription` (`end_at := start_at`), and `getSubscriptionHistory`.
+- **Behaviour change — `updateCourseSubscription` (PUT `/admin/subscriptions/:id`):**
+  `remark` now **appends** a history entry and no longer overwrites `remarks`. Every
+  changed field is logged as `old -> new`. When payment fields are sent, there is one
+  extra `ws_package_course_order` read to capture their old values.
+- **Routes:** `POST /admin/subscriptions/:id/{change-product,move,deactivate}` and
+  `GET /admin/subscriptions/:id/history`. RBAC rules were added to `rbacRouteMap.ts`
+  (writes: `subscriptions.edit` | `customers.edit`).
+
 ## 2026-09-28 — Live poll: one vote per (poll, customer), locked (no DDL)
 
 > **DDL:** none (`uq_lpv` on `ws_live_poll_vote(poll_id, customer_id)` already exists).

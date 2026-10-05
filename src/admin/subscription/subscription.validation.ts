@@ -132,3 +132,29 @@ export const adminUpdateAddressSchema = z.object({
   label: z.enum(["home", "work", "other"]).optional(),
   status: z.boolean().optional(),
 });
+
+export const positiveIdSchema = z.coerce.number().int().positive("Invalid id.");
+
+export const historyRemarkSchema = z.string().trim().min(1, "Remark is required.").max(500);
+
+export const subscriptionIdParamsSchema = z.object({ id: positiveIdSchema });
+
+export const changeSubscriptionProductSchema = z
+  .object({
+    courseId: positiveIdSchema.optional(),
+    packageId: positiveIdSchema.optional(),
+    remark: historyRemarkSchema,
+  })
+  .refine((d) => !!d.courseId !== !!d.packageId, {
+    message: "Provide exactly one of courseId or packageId.",
+    path: ["courseId"],
+  });
+
+export const moveSubscriptionSchema = z.object({
+  customerId: positiveIdSchema,
+  remark: z.string().trim().max(500).optional(),
+});
+
+export const deactivateSubscriptionSchema = z.object({
+  remark: historyRemarkSchema,
+});

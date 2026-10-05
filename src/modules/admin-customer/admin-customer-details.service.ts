@@ -139,13 +139,16 @@ export const listCustomerPackageSubscriptions = async (
     repo.pagePackageSubs(customerId, skip, take, status),
     repo.countPackageSubs(customerId, status),
   ]);
-  const [packageArr, planArr] = await Promise.all([
-    repo.packagesByIds(uniqIds(rows.map((s) => s.packageId))),
+  const packageIds = uniqIds(rows.map((s) => s.packageId));
+  const [packageArr, planArr, latestIds] = await Promise.all([
+    repo.packagesByIds(packageIds),
     repo.plansByIds(uniqIds(rows.map((s) => s.planId))),
+    repo.latestPackageSubIds(customerId, packageIds),
   ]);
   const packages = mapById(packageArr);
   const plans = mapById(planArr);
-  return { data: rows.map((s) => toPackageDto(s, packages, plans, now)), total };
+  const data = rows.map((s) => ({ ...toPackageDto(s, packages, plans, now), isLatest: latestIds.has(s.id) }));
+  return { data, total };
 };
 
 export const listCustomerLiveCourseSubscriptions = async (
