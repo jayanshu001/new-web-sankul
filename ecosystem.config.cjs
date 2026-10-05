@@ -10,11 +10,17 @@
  * Production:
  *   yarn deploy:prod
  *   # or: pm2 reload ecosystem.config.cjs --env production
+ *
+ * Process names come from THIS checkout's .env (PM2_API_NAME / PM2_WORKER_NAME):
+ * prod and staging share one PM2 daemon, so each deploy must use distinct names or
+ * one checkout's worker silently stands in for (or blocks) the other's.
  */
+require("dotenv").config({ path: `${__dirname}/.env`, quiet: true });
+
 module.exports = {
   apps: [
     {
-      name: process.env.PM2_APP_NAME || "websankul-api",
+      name: process.env.PM2_API_NAME || "websankul-new-production-api",
       script: "dist/index.js",
       instances: Number(process.env.API_INSTANCES) || 2,
       exec_mode: "cluster",
@@ -51,7 +57,9 @@ module.exports = {
       instances: 1,
       exec_mode: "fork",
       watch: false,
-      max_memory_restart: process.env.WORKER_MAX_MEMORY || "768M",
+      // Report exports run 3-wide (export.scheduler concurrency) and peak ~1GB RSS;
+      // 768M restart-looped the worker mid-export so jobs never finished.
+      max_memory_restart: process.env.WORKER_MAX_MEMORY || "1536M",
       wait_ready: true,
       listen_timeout: Number(process.env.PM2_LISTEN_TIMEOUT_MS) || 45_000,
       kill_timeout: Number(process.env.PM2_KILL_TIMEOUT_MS) || 40_000,
