@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-10-02 — Guest mode: Firebase listener opened at boot; `.env.example` URL fix
+
+> **DDL:** none. **Data:** none. **Queries:** none. **Response:** unchanged.
+
+- `src/index.ts` now calls `isReviewModeOn()` once at boot, in HTTP processes only (the worker
+  branch returns earlier). This opens the `maintain` Firebase listener before any request arrives.
+- Why: the listener used to start on the first guest request in each PM2 cluster process, and
+  that request waits at most 5 s. On the staging server the first Firebase connection took
+  longer than 5 s, so every process answered its own first `POST /client/auth/guest` with
+  403 `GUEST_MODE_DISABLED`. That is why it "worked after 3–4 tries" (one failure per instance).
+- `.env.example`: the line `# FIREBASE_DATABASE_URL=...` was copied to the server as the literal
+  value `...`, which failed with `Invalid URL` and turned guest mode off. It now says to leave
+  the variable unset; the default `https://<project_id>.firebaseio.com` is correct for `gpsc-online`.
+- Server runbook: `docs/GUEST_MODE_SERVER_CHECKLIST.md`.
+
+---
+
 ## 2026-10-01 — Live tracking: `deliveryStatus` / `deliveredAt` (additive)
 
 > **DDL:** none. **Data:** none. **Queries:** none. Response **additive only**.
