@@ -1210,6 +1210,7 @@ export const addSubscriptionDays = async (
     data: {
       endAt: addition.endAt,
       remarks,
+      updatedAt: now,
       ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
     },
   });
