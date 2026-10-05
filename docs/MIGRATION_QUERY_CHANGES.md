@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-10-05 — Razorpay orders created with `payment_capture: true`
+
+> **DDL:** none. **Data:** none. **Queries:** none. **Response:** unchanged.
+
+- `createRazorpayOrder` (`src/client/payment/razorpay.ts`) now sends `payment_capture: true` on
+  every `orders.create`. This covers all six purchase types: book, course, package, ebook,
+  live-course and test-series.
+- Why: the Razorpay account is set to manual capture. The new backend sent no `payment_capture`,
+  so payments stayed `authorized` and Razorpay auto-refunded them ("Payment was refunded as it
+  was not manually captured"). `/verify` had already granted access by then. The legacy
+  `websankul-api` (`src/libs/utils.js` `createRazorPayOrder`) always sent
+  `payment_capture: Boolean(RAZORPAY_AUTO_CAPTURE)`, which is `true`. This restores that
+  behaviour, and the `payment.captured` / `order.paid` webhooks fire again.
+
+---
+
 ## 2026-09-30 — Admin customer DTO: `loginCount`
 
 > **DDL:** none. **Data:** none. Response shape **additive only**.

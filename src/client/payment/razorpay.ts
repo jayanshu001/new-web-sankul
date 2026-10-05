@@ -52,7 +52,7 @@ export const createRazorpayOrder = async (
   rp: Razorpay,
   params: Parameters<Razorpay["orders"]["create"]>[0]
 ) =>
-  callOutbound(() => rp.orders.create(params) as Promise<any>, {
+  callOutbound(() => rp.orders.create({ ...params, payment_capture: true }) as Promise<any>, {
     label: "razorpay.orders.create",
     timeoutMs: 6_000,
     attempts: 3,
