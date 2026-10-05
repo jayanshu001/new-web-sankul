@@ -36,7 +36,7 @@ import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
-import { appendAdminRemark, movedRemarkText, planDeactivation } from "../../utils/subscriptionRemarkHistory";
+import { appendAdminRemark, movedRemarkText, planAddDays, planDeactivation } from "../../utils/subscriptionRemarkHistory";
 
 
 export const parseLiveId = (id: string): number | null => {
@@ -1130,6 +1130,28 @@ export const deactivateLiveSubscription = async (
   const updated = await repo.updateSubscription(id, {
     endAt: deactivation.endAt,
     ...(await historyPatch(existing.remarks, deactivation.what, input, now)),
+  });
+
+  return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };
+};
+
+export type AddLiveSubscriptionDaysResult =
+  | { ok: false; reason: "not_found" }
+  | { ok: true; customerId: number; data: any };
+
+export const addLiveSubscriptionDays = async (
+  id: number,
+  input: HistoryInput & { days: number }
+): Promise<AddLiveSubscriptionDaysResult> => {
+  const existing = await repo.findSubscriptionById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const now = new Date();
+  const addition = planAddDays(existing, input.days, now);
+
+  const updated = await repo.updateSubscription(id, {
+    endAt: addition.endAt,
+    ...(await historyPatch(existing.remarks, addition.what, input, now)),
   });
 
   return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };

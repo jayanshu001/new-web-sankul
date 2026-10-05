@@ -740,3 +740,20 @@ export const listOrders = async (req: Request, res: Response) => {
 export const _PaymentMethod = PaymentMethod;
 export const _OrderStatus = PackageCourseEbookOrderStatus;
 export const _OrderType = PackageCourseEbookOrderType;
+
+// POST /api/v1/admin/test-series/subscriptions/:subscriptionId/add-days
+export const addSubscriptionDays = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = Number(req.params.subscriptionId);
+  try {
+    const input = req.body as { days: number; remark?: string };
+    const actingAdminId = tsSql.parseAtsId(String(req.user?.id ?? "")) ?? null;
+    const r = await tsSql.addSubscriptionDays(id, { ...input, actingAdminId });
+    if (!r) return failure(res, "Subscription not found.", 404);
+    if (r.customerId) await flushUserRouteCache(r.customerId);
+    return success(res, { subscription: r.subscription }, "Days added.");
+  } catch (err) {
+    logger.error("addSubscriptionDays failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to add days.", 500);
+  }
+};

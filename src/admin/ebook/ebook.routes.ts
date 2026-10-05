@@ -26,7 +26,10 @@ import {
   getEbookPricesForSubscription,
   exportEbookSubscriptionsCsv,
   exportEbookSubscriptionsExcel,
+  addEbookSubscriptionDays,
 } from "./ebook-subscription.controller";
+import { validate } from "../../middlewares/validate";
+import { addDaysSchema, subscriptionRowParamsSchema } from "../subscription/subscription.validation";
 import {
   uploadEbookPdf,
   getPdfUploadBatch,
@@ -100,6 +103,11 @@ router.post("/subscriptions", createEbookSubscription);
 router.get("/subscriptions/:subscriptionId", getEbookSubscriptionById);
 router.put("/subscriptions/:subscriptionId", updateEbookSubscription);
 router.delete("/subscriptions/:subscriptionId", deleteEbookSubscription);
+router.post(
+  "/subscriptions/:subscriptionId/add-days",
+  validate({ params: subscriptionRowParamsSchema, body: addDaysSchema }),
+  addEbookSubscriptionDays
+);
 
 // Get ebook prices for subscription creation
 router.get("/:ebookId/prices", getEbookPricesForSubscription);

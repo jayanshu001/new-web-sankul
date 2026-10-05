@@ -61,10 +61,11 @@ import {
   changeLiveCourseOfSubscription,
   moveLiveCourseSubscription,
   deactivateLiveCourseSubscription,
+  addLiveCourseSubscriptionDays,
 } from "./live-course.subscription.controller";
 import { validate } from "../../middlewares/validate";
-import { changeLiveCourseSchema, liveSubscriptionIdParamsSchema } from "./live-course.validation";
-import { deactivateSubscriptionSchema, moveSubscriptionSchema } from "../subscription/subscription.validation";
+import { changeLiveCourseSchema } from "./live-course.validation";
+import { addDaysSchema, deactivateSubscriptionSchema, moveSubscriptionSchema, subscriptionRowParamsSchema } from "../subscription/subscription.validation";
 
 const router = Router();
 
@@ -90,18 +91,23 @@ router.put("/subscriptions/:subscriptionId", updateLiveCourseSubscription);
 router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);
 router.post(
   "/subscriptions/:subscriptionId/change-course",
-  validate({ params: liveSubscriptionIdParamsSchema, body: changeLiveCourseSchema }),
+  validate({ params: subscriptionRowParamsSchema, body: changeLiveCourseSchema }),
   changeLiveCourseOfSubscription
 );
 router.post(
   "/subscriptions/:subscriptionId/move",
-  validate({ params: liveSubscriptionIdParamsSchema, body: moveSubscriptionSchema }),
+  validate({ params: subscriptionRowParamsSchema, body: moveSubscriptionSchema }),
   moveLiveCourseSubscription
 );
 router.post(
   "/subscriptions/:subscriptionId/deactivate",
-  validate({ params: liveSubscriptionIdParamsSchema, body: deactivateSubscriptionSchema }),
+  validate({ params: subscriptionRowParamsSchema, body: deactivateSubscriptionSchema }),
   deactivateLiveCourseSubscription
+);
+router.post(
+  "/subscriptions/:subscriptionId/add-days",
+  validate({ params: subscriptionRowParamsSchema, body: addDaysSchema }),
+  addLiveCourseSubscriptionDays
 );
 
 // --- Live course CRUD -------------------------------------------------------

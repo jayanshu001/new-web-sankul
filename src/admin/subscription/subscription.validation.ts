@@ -139,6 +139,8 @@ export const historyRemarkSchema = z.string().trim().min(1, "Remark is required.
 
 export const subscriptionIdParamsSchema = z.object({ id: positiveIdSchema });
 
+export const subscriptionRowParamsSchema = z.object({ subscriptionId: positiveIdSchema });
+
 export const changeSubscriptionProductSchema = z
   .object({
     courseId: positiveIdSchema.optional(),
@@ -157,4 +159,9 @@ export const moveSubscriptionSchema = z.object({
 
 export const deactivateSubscriptionSchema = z.object({
   remark: historyRemarkSchema,
+});
+
+export const addDaysSchema = z.object({
+  days: z.coerce.number().int().positive("Days must be a positive whole number."),
+  remark: z.string().trim().max(500).optional(),
 });

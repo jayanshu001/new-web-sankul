@@ -13,6 +13,8 @@ import { PaymentMethod } from "@prisma/client";
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
 import { buildPagination } from "../../utils/listQuery";
 import { fmtExportDate } from "../../utils/csvExport";
+import { appendAdminRemark, planAddDays } from "../../utils/subscriptionRemarkHistory";
+import { adminSubscriptionRepository } from "../admin-subscription/admin-subscription.repository";
 
 
 export const parseEbookId = (id: string): number | null => {
@@ -613,6 +615,29 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
   const { order, subscription } = await repo.createBackendSubscription(orderInput);
 
   return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };
+};
+
+export const addSubscriptionDays = async (
+  id: number,
+  input: { days: number; remark?: string | null; actingAdminId?: number | null }
+) => {
+  const existing = await repo.findSubscriptionBare(id);
+  if (!existing) return null;
+
+  const now = new Date();
+  const addition = planAddDays(existing, input.days, now);
+  const remarks = await appendAdminRemark(
+    existing.remarks,
+    { what: addition.what, remark: input.remark, actingAdminId: input.actingAdminId, now },
+    adminSubscriptionRepository.adminUsersByIds
+  );
+
+  const subscription = await repo.updateSubscription(id, {
+    endAt: addition.endAt,
+    remarks,
+    ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
+  });
+  return { customerId: existing.customerId, subscription };
 };
 
 export const updateSubscription = async (

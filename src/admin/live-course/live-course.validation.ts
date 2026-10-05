@@ -84,8 +84,6 @@ export const reorderLiveCoursesSchema = z.object({
     .min(1, "orders array is required"),
 });
 
-export const liveSubscriptionIdParamsSchema = z.object({ subscriptionId: positiveIdSchema });
-
 export const changeLiveCourseSchema = z.object({
   liveCourseId: positiveIdSchema,
   remark: historyRemarkSchema,

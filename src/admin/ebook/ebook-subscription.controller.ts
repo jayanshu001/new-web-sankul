@@ -3,6 +3,7 @@ import { createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from 
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 import { isReportStatus, REPORT_STATUSES } from "../../utils/reportFilters";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { success, failure } from "../../utils/httpResponse";
 
 // Shared filter mapping for the report list + its CSV/Excel exports, so all three
 // honor the identical param contract. Returns a 400 message on invalid ids/method.
@@ -178,6 +179,19 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const addEbookSubscriptionDays = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { days: number; remark?: string };
+    const actingAdminId = adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null;
+    const result = await adminEbook.addSubscriptionDays(Number(req.params.subscriptionId), { ...input, actingAdminId });
+    if (!result) return failure(res, "Subscription not found.", 404);
+    if (result.customerId) await flushUserRouteCache(result.customerId);
+    return success(res, { subscription: result.subscription }, "Days added.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
   }
 };
 

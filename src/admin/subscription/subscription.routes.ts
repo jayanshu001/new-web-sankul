@@ -21,6 +21,7 @@ import {
   changeSubscriptionProduct,
   moveSubscription,
   deactivateSubscription,
+  addSubscriptionDays,
   getSubscriptionHistory,
 } from "./subscription.controller";
 import { validate } from "../../middlewares/validate";
@@ -29,6 +30,7 @@ import {
   changeSubscriptionProductSchema,
   moveSubscriptionSchema,
   deactivateSubscriptionSchema,
+  addDaysSchema,
 } from "./subscription.validation";
 
 const router = Router();
@@ -71,6 +73,11 @@ router.post(
   "/:id/deactivate",
   validate({ params: subscriptionIdParamsSchema, body: deactivateSubscriptionSchema }),
   deactivateSubscription
+);
+router.post(
+  "/:id/add-days",
+  validate({ params: subscriptionIdParamsSchema, body: addDaysSchema }),
+  addSubscriptionDays
 );
 
 // Course/package subscriptions CRUD

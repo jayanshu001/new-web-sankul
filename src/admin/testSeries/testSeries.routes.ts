@@ -29,8 +29,11 @@ import {
   getSubscription,
   updateSubscription,
   deleteSubscription,
+  addSubscriptionDays,
   listOrders,
 } from "./testSeries.controller";
+import { validate } from "../../middlewares/validate";
+import { addDaysSchema, subscriptionRowParamsSchema } from "../subscription/subscription.validation";
 
 const router = Router();
 
@@ -57,6 +60,11 @@ router.get("/subscriptions/export/excel",           exportSubscriptionsExcel);
 router.get("/subscriptions/:subscriptionId",        getSubscription);
 router.put("/subscriptions/:subscriptionId",        updateSubscription);
 router.delete("/subscriptions/:subscriptionId",     deleteSubscription);
+router.post(
+  "/subscriptions/:subscriptionId/add-days",
+  validate({ params: subscriptionRowParamsSchema, body: addDaysSchema }),
+  addSubscriptionDays
+);
 
 router.get("/orders",                               listOrders);
 

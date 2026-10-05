@@ -35,6 +35,8 @@ import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/r
 import { buildPagination } from "../../utils/listQuery";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { fmtExportDate } from "../../utils/csvExport";
+import { appendAdminRemark, planAddDays } from "../../utils/subscriptionRemarkHistory";
+import { adminSubscriptionRepository } from "../admin-subscription/admin-subscription.repository";
 
 
 export const parseAtsId = (id: string): number | null => {
@@ -1186,6 +1188,33 @@ export const updateSubscription = async (id: number, data: UpdateSubWrite) => {
 };
 
 /** Returns false when missing. */
+
+/** Returns null when missing. */
+export const addSubscriptionDays = async (
+  id: number,
+  input: { days: number; remark?: string | null; actingAdminId?: number | null }
+) => {
+  const existing = await prisma.testSeriesSubscription.findUnique({ where: { id } });
+  if (!existing) return null;
+
+  const now = new Date();
+  const addition = planAddDays(existing, input.days, now);
+  const remarks = await appendAdminRemark(
+    existing.remarks,
+    { what: addition.what, remark: input.remark, actingAdminId: input.actingAdminId, now },
+    adminSubscriptionRepository.adminUsersByIds
+  );
+
+  const sub = await prisma.testSeriesSubscription.update({
+    where: { id },
+    data: {
+      endAt: addition.endAt,
+      remarks,
+      ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
+    },
+  });
+  return { customerId: existing.customerId, subscription: subscriptionDto(sub) };
+};
 
 /**
  * The customer owning this subscription, or null if it doesn't exist.

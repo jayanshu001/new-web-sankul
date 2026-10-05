@@ -453,6 +453,20 @@ export const deactivateSubscription = async (req: Request, res: Response) => {
   }
 };
 
+export const addSubscriptionDays = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { days: number; remark?: string };
+    const result = await subSql.addSubscriptionDays(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) return actionFailure(res, SUBSCRIPTION_NOT_FOUND);
+
+    if (result.customerId) await flushUserRouteCache(result.customerId);
+    return success(res, result.data, "Days added.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
+  }
+};
+
 export const getSubscriptionHistory = async (req: Request, res: Response) => {
   try {
     const history = await subSql.getSubscriptionHistory(subscriptionIdOf(req));

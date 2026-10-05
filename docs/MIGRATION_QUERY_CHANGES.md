@@ -15,6 +15,29 @@
 
 ---
 
+## 2026-10-05 — Admin "Add Days" extends the subscription row in place (all products)
+
+> **DDL:** none. **Data:** none. **Response:** existing endpoints unchanged; four new routes.
+
+- New `POST …/subscriptions/:id/add-days` `{ days, remark? }` on course/package
+  (`/admin/subscriptions`), live course, test series and ebook. Each one is a single `UPDATE`
+  of the clicked row: `end_at := max(end_at, now) + days` (`utils/planDuration.computeEndAt`,
+  `setDate`), plus an entry appended to `remarks` in the shared history format
+  (`utils/subscriptionRemarkHistory.planAddDays`), plus `updated_by`.
+- Why: the panel's Add Days sent the paid Extend grant (`extend: true`, ₹0, `free`), which by
+  design INSERTs a new subscription row and a ₹0 order row. Legacy Add Days
+  (`Customers::update_subcription`) only edited `end_at` and `remarks` on the row. Each
+  Add Days therefore showed up as a duplicate subscription and an extra report line.
+- Remark is optional. Legacy pre-filled the box with the row's existing remarks (the
+  "template"). The new history keeps those remarks and always records the date change, so a
+  blank remark loses nothing.
+- Paid `extend: true` on the grant endpoints is unchanged (one row per order).
+- Admin panel: `AddDaysModal` now posts the clicked row's `_id` to these routes, and the
+  remark field is optional (max 500).
+- Spec: `docs/SUBSCRIPTION_COURSE_CHANGE_ADMIN.md` § add-days.
+
+---
+
 ## 2026-10-05 — Razorpay orders created with `payment_capture: true`
 
 > **DDL:** none. **Data:** none. **Queries:** none. **Response:** unchanged.

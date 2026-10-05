@@ -1,4 +1,5 @@
 import { fmtExportDate } from "./csvExport";
+import { computeEndAt } from "./planDuration";
 
 export interface RemarkEntry {
   at: string | null;
@@ -116,4 +117,15 @@ export const planDeactivation = (
   const endAt = current.startAt ?? now;
   if (current.endAt?.getTime() === endAt.getTime()) return null;
   return { endAt, what: `Deactivated: end date ${fmtExportDate(current.endAt) || "none"} -> ${fmtExportDate(endAt)}` };
+};
+
+export const planAddDays = (
+  current: { endAt: Date | null },
+  days: number,
+  now: Date
+): { endAt: Date; what: string } => {
+  const from = current.endAt && current.endAt > now ? current.endAt : now;
+  const endAt = computeEndAt({ startAt: from, durationMonths: days, asDays: true });
+  const unit = days === 1 ? "day" : "days";
+  return { endAt, what: `Added ${days} ${unit}: end date ${fmtExportDate(current.endAt) || "none"} -> ${fmtExportDate(endAt)}` };
 };

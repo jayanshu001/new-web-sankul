@@ -171,6 +171,7 @@ R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
 R("POST", "/ebooks/subscriptions", "ebooks.create", "customers.ebook-subscriptions.create");
 R("GET", "/ebooks/subscriptions/:id", ...view("ebooks.subscriptions"));
 R("PUT", "/ebooks/subscriptions/:id", "ebooks.edit");
+R("POST", "/ebooks/subscriptions/:id/add-days", "ebooks.edit", "customers.edit");
 R("DELETE", "/ebooks/subscriptions/:id", "ebooks.delete");
 // ebooks.plans collapsed 2026-07-20 into parent `ebooks`.
 R("GET", "/ebooks/plans/:id", ...view("ebooks"));
@@ -382,6 +383,7 @@ R("GET", "/subscriptions/:id/history", ...subReport, ...view("customers"));
 R("POST", "/subscriptions/:id/change-product", "subscriptions.edit", "customers.edit");
 R("POST", "/subscriptions/:id/move", "subscriptions.edit", "customers.edit");
 R("POST", "/subscriptions/:id/deactivate", "subscriptions.edit", "customers.edit");
+R("POST", "/subscriptions/:id/add-days", "subscriptions.edit", "customers.edit");
 crud("/subscriptions", "subscriptions");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
@@ -510,6 +512,7 @@ R("PUT", "/live-courses/subscriptions/:id", "live-courses.edit");
 R("POST", "/live-courses/subscriptions/:id/change-course", "live-courses.edit", "customers.edit");
 R("POST", "/live-courses/subscriptions/:id/move", "live-courses.edit", "customers.edit");
 R("POST", "/live-courses/subscriptions/:id/deactivate", "live-courses.edit", "customers.edit");
+R("POST", "/live-courses/subscriptions/:id/add-days", "live-courses.edit", "customers.edit");
 R("DELETE", "/live-courses/subscriptions/:id", "live-courses.delete");
 R("GET", "/live-courses/:id/sessions", ...view("live-courses"));
 R("GET", "/live-courses/:id/plans", ...view("live-courses"));
@@ -551,6 +554,7 @@ R("GET", "/test-series/subscriptions/export/:format", ...view("test-series"), ..
 R("GET", "/test-series/subscriptions", ...view("test-series"), ...view("test-series.report"));
 R("GET", "/test-series/subscriptions/:id", ...view("test-series"), ...view("test-series.report"));
 R("PUT", "/test-series/subscriptions/:id", "test-series.edit");
+R("POST", "/test-series/subscriptions/:id/add-days", "test-series.edit", "customers.edit");
 R("DELETE", "/test-series/subscriptions/:id", "test-series.delete");
 R("GET", "/test-series/orders", ...view("test-series"));
 R("GET", "/test-series/:id/content-categories", ...view("test-series"));

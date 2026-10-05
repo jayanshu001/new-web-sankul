@@ -15,6 +15,7 @@ import {
   appendAdminRemark,
   movedRemarkText,
   parseRemarkHistory,
+  planAddDays,
   planDeactivation,
 } from "../../utils/subscriptionRemarkHistory";
 
@@ -635,6 +636,27 @@ export const deactivateSubscription = async (
   await repo.patchSub(id, {
     endAt: deactivation.endAt,
     remarks: await withHistory(existing.remarks, deactivation.what, input, now),
+    actingAdminId: input.actingAdminId ?? null,
+    now,
+  });
+
+  return { ok: true, customerId: existing.customerId ?? null, data: await getCourseSubscriptionById(id) };
+};
+
+export type AddDaysResult =
+  | { ok: false; reason: "not_found" }
+  | { ok: true; customerId: number | null; data: any };
+
+export const addSubscriptionDays = async (id: number, input: HistoryInput & { days: number }): Promise<AddDaysResult> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing || (!existing.courseId && !existing.packageId)) return { ok: false, reason: "not_found" };
+
+  const now = new Date();
+  const addition = planAddDays(existing, input.days, now);
+
+  await repo.patchSub(id, {
+    endAt: addition.endAt,
+    remarks: await withHistory(existing.remarks, addition.what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,
   });

@@ -309,3 +309,18 @@ export const deactivateLiveCourseSubscription = async (req: Request, res: Respon
     return failure(res, "Failed to deactivate subscription.", 500);
   }
 };
+
+export const addLiveCourseSubscriptionDays = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { days: number; remark?: string };
+    const result = await liveSql.addLiveSubscriptionDays(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) return actionFailure(res, SUBSCRIPTION_NOT_FOUND);
+
+    await flushUserRouteCache(result.customerId);
+    return success(res, { subscription: result.data }, "Days added.");
+  } catch (err) {
+    logActionFailure(req, "addLiveCourseSubscriptionDays", err);
+    return failure(res, "Failed to add days.", 500);
+  }
+};

@@ -8,6 +8,7 @@ subscription actions the legacy panel offered on **Customer details → Package/
 | ✏ Update subscription (`Subscriptions::update`)       | `POST /api/v1/admin/subscriptions/:id/change-product`  |
 | ⇄ Move to other customer (`moveSubscription`)         | `POST /api/v1/admin/subscriptions/:id/move`            |
 | ⊘ Deactivate (`deactivateCourse`)                     | `POST /api/v1/admin/subscriptions/:id/deactivate`      |
+| Add Days (`Customers::update_subcription`)             | `POST /api/v1/admin/subscriptions/:id/add-days`        |
 | Remarks history column                                | `GET  /api/v1/admin/subscriptions/:id/history`         |
 
 `:id` = `ws_package_course_subscription.id` (the `id` / `_id` of a subscription row).
@@ -119,6 +120,44 @@ History entry: `Deactivated: end date 2026-12-31 23:59:59 -> 2026-01-01 10:00:00
 
 A row is "deactivated" when `startAt === endAt`. Legacy showed this as a red **Deactivated** label.
 
+## POST `/admin/subscriptions/:id/add-days`
+
+Legacy Add Days edited the clicked row's `end_at` in place. This does the same: no new
+subscription row and no order row. `end_at := max(end_at, now) + days` (calendar days), so
+an expired row gets N days from now. `start_at`, `status`, plan, amount and order are
+not touched.
+
+```json
+{ "days": 10 }
+{ "days": 10, "remark": "Compensation for app outage" }
+```
+
+| Field | Rule |
+|---|---|
+| `days` | required, positive integer |
+| `remark` | optional, max 500 chars — the server always writes the entry below |
+
+200 `message: "Days added."`, `data` = the `GET /admin/subscriptions/:id` DTO.
+
+| Status | message |
+|---|---|
+| 404 | `Subscription not found.` |
+| 422 | `Validation failed.` — `messages.days: "Days must be a positive whole number."` |
+
+History entry: `Added 10 days: end date 2026-10-10 18:00:00 -> 2026-10-20 18:00:00. Remark: Compensation for app outage | by Jane Doe (#5)`
+
+The same action exists for every product with an `endAt`:
+
+| Route | Permission (any of) | 200 `data` |
+|---|---|---|
+| `POST /admin/subscriptions/:id/add-days` (course / package) | `subscriptions.edit`, `customers.edit` | subscription DTO |
+| `POST /admin/live-courses/subscriptions/:id/add-days` | `live-courses.edit`, `customers.edit` | `{ subscription }` (live DTO) |
+| `POST /admin/test-series/subscriptions/:id/add-days` | `test-series.edit`, `customers.edit` | `{ subscription }` (test-series DTO) |
+| `POST /admin/ebooks/subscriptions/:id/add-days` | `ebooks.edit`, `customers.edit` | `{ subscription }` (same as the ebook PUT) |
+
+The paid **Subscription Type = Extend** on Add Subscription is unchanged: it still writes a
+new row tied to its own order.
+
 ## GET `/admin/subscriptions/:id/history`
 
 ```json
@@ -204,5 +243,6 @@ There is no `/history` route for live subscriptions; the history string is the D
 
 - Legacy "Lifetime" toggle (hard-coded package 3 ↔ 64 swap): use `change-product`.
 - Deleting a subscription deletes its history with it, as in legacy.
-- Ebook / test-series subscriptions: not in scope. The helper
-  (`utils/subscriptionRemarkHistory.ts`) works on their `remarks` columns if added later.
+- Ebook / test-series subscriptions: only `add-days` (above). Change / move / deactivate
+  are not in scope; the helper (`utils/subscriptionRemarkHistory.ts`) works on their
+  `remarks` columns if added later.
