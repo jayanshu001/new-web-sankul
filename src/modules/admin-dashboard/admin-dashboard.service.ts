@@ -337,18 +337,26 @@ const rankEbooks = async (since: Date): Promise<RankRow[]> => {
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
 };
 
-// Line items are keyed by the VARCHAR business key (ws_book_order.order_id) and are
-// written without created_at, so the window filters on the order. `price` is per
-// unit; revenue excludes shipping.
 const rankBooks = async (since: Date): Promise<RankRow[]> => {
-  const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
-    `SELECT i.book_id AS id, COUNT(DISTINCT o.id) AS orders, COALESCE(SUM(i.price * i.qty),0) AS revenue
-     FROM ws_book_order o JOIN ws_book_order_item i ON i.order_id = o.order_id
-     WHERE o.created_at >= ? AND o.status = 'verified' AND i.book_id IS NOT NULL
-     GROUP BY i.book_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
-    since
-  );
-  return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
+  const orders = await prisma.bookOrder.findMany({
+    where: { createdAt: { gte: since }, status: "verified" },
+    select: { orderItems: true },
+  });
+  const byBook = new Map<number, RankRow>();
+  for (const order of orders) {
+    const booksInOrder = new Set<number>();
+    for (const item of dashTransformer.itemsFromJson(order.orderItems)) {
+      if (item.bookId == null) continue;
+      const row = byBook.get(item.bookId) ?? { id: item.bookId, orders: 0, revenue: 0 };
+      if (!booksInOrder.has(item.bookId)) row.orders++;
+      row.revenue += item.price * item.qty;
+      booksInOrder.add(item.bookId);
+      byBook.set(item.bookId, row);
+    }
+  }
+  return [...byBook.values()]
+    .sort((a, b) => b.orders - a.orders || b.revenue - a.revenue)
+    .slice(0, TRENDING_LIMIT);
 };
 
 const idsOf = (rows: RankRow[]) => rows.map((r) => r.id).filter((x): x is number => x != null);

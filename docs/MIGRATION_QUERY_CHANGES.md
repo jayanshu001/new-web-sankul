@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-10-06 — Trending books counted from `ws_book_order.order_items`
+
+> **DDL:** none. **Response:** unchanged (`book[]` rows keep `_id/name/image/orders/revenue`).
+
+- `GET /admin/dashboard/trending` → `rankBooks` now reads verified `ws_book_order` rows in the
+  window and tallies the `order_items` JSON (`itemsFromJson`): `orders` = verified orders
+  containing the book, `revenue` = Σ `price × qty` (shipping excluded). It used to INNER JOIN
+  `ws_book_order_item`, which ~75% of verified orders have no rows in, so most sales were
+  dropped.
+
+---
+
 ## 2026-10-06 — Move pulls a queued subscription forward
 
 > **DDL:** none. **Query:** none new (reuses `activeSubsForTarget`). **Response:** unchanged
