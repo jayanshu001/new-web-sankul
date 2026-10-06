@@ -6,7 +6,7 @@
  *
  * Field drift: Mongo PackageCourseSubscription.paidAmount → SQL `amount`;
  * targetPackageId → packageId. EBookOrder revenue = order_price, status enum
- * "complete". BookOrder revenue = order_price (amount), status verified,
+ * "complete". BookOrder revenue = order_price (amount), status "verified",
  * items in order_items JSON. Customer is single `fullName` + `phoneNumber`.
  * Time-series buckets via raw SQL HOUR()/DAYOFMONTH() in IST (CONVERT_TZ).
  */
@@ -26,13 +26,20 @@ const subRevenue = async (w: Win, courseScope: "course" | "package" | "all") => 
   const agg = await prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
+// Same rows as the Ebook Subscriptions list (subscription created_at); revenue is the
+// charged price on their orders. Counting orders instead kept a sale on the dashboard
+// after its subscription was deleted from the list.
 const ebookRevenue = async (w: Win) => {
-  const agg = await prisma.eBookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" as any }, _sum: { orderPrice: true }, _count: { _all: true } });
-  return { revenue: num(agg._sum.orderPrice), count: agg._count._all };
+  const subWhere = { createdAt: { gte: w.start, lte: w.end } };
+  const [count, agg] = await Promise.all([
+    prisma.eBookSubscription.count({ where: subWhere }),
+    prisma.eBookOrder.aggregate({ where: { eBookSubscription: { some: subWhere } }, _sum: { orderPrice: true } }),
+  ]);
+  return { revenue: num(agg._sum.orderPrice), count };
 };
 
 const bookRevenue = async (w: Win) => {
-  const agg = await prisma.bookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: { in: PAID_BOOK_STATUSES } }, _sum: { amount: true }, _count: { _all: true } });
+  const agg = await prisma.bookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "verified" }, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
 // Test-series subscription rows are created ONLY on verify (pending state lives on
@@ -46,11 +53,18 @@ const testSeriesRevenue = async (w: Win) => {
 // single-table, so this had to sum the subscription and exclude pending/folded rows
 // via payment_status. Each purchase is now its own completed order, which also means
 // a renewal is finally counted as its own sale instead of vanishing into a folded row.
+//
+// Same numbers as the Live Course Report summary (admin-live-course repo.aggSubs):
+// count = subscriptions, revenue = their orders — so a deleted subscription leaves both.
 const liveCourseRevenue = async (w: Win) => {
-  const agg = await prisma.liveCourseOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" }, _sum: { amount: true }, _count: { _all: true } });
+  const subWhere = { createdAt: { gte: w.start, lte: w.end } };
+  const [count, agg] = await Promise.all([
+    prisma.liveCourseSubscription.count({ where: subWhere }),
+    prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: subWhere } }, _sum: { amount: true } }),
+  ]);
   // `amount` = ws_live_course_order.discount_price (the charged amount), renamed
   // from paid_amount when the table took the package shape (2026-08-27).
-  return { revenue: num(agg._sum.amount), count: agg._count._all };
+  return { revenue: num(agg._sum.amount), count };
 };
 
 // ── time-series buckets (HOUR / DAYOFMONTH / MONTH, IST) ──────────────────────
@@ -71,6 +85,20 @@ const seriesFor = async (table: string, revenueCol: string, w: Win, unit: Bucket
     `SELECT ${fn}(created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(${revenueCol}),0) AS earnings
      FROM ${table}
      WHERE created_at >= ? AND created_at <= ? ${extraWhere}
+     GROUP BY slot`,
+    w.start, w.end
+  );
+  return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
+};
+
+// Subscription-counted products (ebook, live course): bucket the subscription rows,
+// revenue from each one's order — the chart's view of ebookRevenue/liveCourseRevenue.
+const subSeriesFor = async (subTable: string, orderTable: string, revenueCol: string, w: Win, unit: BucketUnit) => {
+  const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
+  const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
+    `SELECT ${fn}(s.created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(o.${revenueCol}),0) AS earnings
+     FROM ${subTable} s LEFT JOIN ${orderTable} o ON o.id = s.order_id
+     WHERE s.created_at >= ? AND s.created_at <= ?
      GROUP BY slot`,
     w.start, w.end
   );
@@ -147,7 +175,7 @@ export const fetchDashboardData = async (opts: {
     // five fewer connections held for the length of a year-range scan).
     seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NULL"),
     seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NOT NULL"),
-    seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
+    subSeriesFor("ws_ebook_subscription", "ws_ebook_order", "order_price", tot, unit),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
     // Raw column name: `price` → `amount` (2026-08-31). Prisma does not validate
     // strings passed to $queryRawUnsafe, so a rename here only fails at runtime.
@@ -158,7 +186,7 @@ export const fetchDashboardData = async (opts: {
     // `paid_amount` became `discount_price` when the table took the
     // ws_package_course_order shape (2026-08-27). Keep this in step with the Prisma
     // field `amount` used by liveCourseRevenue above.
-    seriesFor("ws_live_course_order", "discount_price", tot, unit, "AND status = 'complete'"),
+    subSeriesFor("ws_live_course_subscription", "ws_live_course_order", "discount_price", tot, unit),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.bookOrder.findMany({ select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
