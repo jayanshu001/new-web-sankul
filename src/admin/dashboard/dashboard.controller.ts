@@ -92,7 +92,8 @@ function resolveRange(preset: RangePreset | undefined, now = new Date()) {
       break;
     }
     case "week": {
-      const day = start.getDay();
+      // Monday-start week, like the old Laravel dashboard (Carbon startOfWeek).
+      const day = (start.getDay() + 6) % 7;
       start.setDate(start.getDate() - day);
       end.setTime(now.getTime());
       prevStart = shiftDays(start, -7);

@@ -19,24 +19,20 @@ export type BucketUnit = "hour" | "day" | "month";
 const num = (v: any) => (v == null ? 0 : Number(v));
 
 // ── revenue + count for a window ───────────────────────────────────────────────
+// Old Laravel dashboard rule: a subscription counts only when its ORDER is complete,
+// dated by the order's created_at (Subscription JOIN ws_package_course_order).
 const subRevenue = async (w: Win, courseScope: "course" | "package" | "all") => {
-  const where: any = { createdAt: { gte: w.start, lte: w.end } };
+  const where: any = { packageCourseOrder: { status: "complete", createdAt: { gte: w.start, lte: w.end } } };
   // Same split as the Subscription Report's type filter (admin-subscription buildCourseSubBaseWhere).
   if (courseScope === "course") where.courseId = { gt: 0 };
   else if (courseScope === "package") { where.courseId = null; where.packageId = { gt: 0 }; }
   const agg = await prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
-// Same rows as the Ebook Subscriptions list (subscription created_at); revenue is the
-// charged price on their orders. Counting orders instead kept a sale on the dashboard
-// after its subscription was deleted from the list.
+// Old Laravel dashboard query: completed ebook orders, SUM(order_price).
 const ebookRevenue = async (w: Win) => {
-  const subWhere = { createdAt: { gte: w.start, lte: w.end } };
-  const [count, agg] = await Promise.all([
-    prisma.eBookSubscription.count({ where: subWhere }),
-    prisma.eBookOrder.aggregate({ where: { eBookSubscription: { some: subWhere } }, _sum: { orderPrice: true } }),
-  ]);
-  return { revenue: num(agg._sum.orderPrice), count };
+  const agg = await prisma.eBookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" as any }, _sum: { orderPrice: true }, _count: { _all: true } });
+  return { revenue: num(agg._sum.orderPrice), count: agg._count._all };
 };
 
 const bookRevenue = async (w: Win) => {
@@ -92,8 +88,22 @@ const seriesFor = async (table: string, revenueCol: string, w: Win, unit: Bucket
   return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
 };
 
-// Subscription-counted products (ebook, live course): bucket the subscription rows,
-// revenue from each one's order — the chart's view of ebookRevenue/liveCourseRevenue.
+// Package/course chart rows under the same rule as subRevenue: completed order,
+// bucketed by the order's created_at, amount from the subscription (= card ₹).
+const pcSeriesFor = async (w: Win, unit: BucketUnit, scopeWhere: string) => {
+  const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
+  const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
+    `SELECT ${fn}(o.created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(s.amount),0) AS earnings
+     FROM ws_package_course_subscription s JOIN ws_package_course_order o ON o.id = s.order_id
+     WHERE o.status = 'complete' AND o.created_at >= ? AND o.created_at <= ? ${scopeWhere}
+     GROUP BY slot`,
+    w.start, w.end
+  );
+  return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
+};
+
+// Subscription-counted products (live course): bucket the subscription rows,
+// revenue from each one's order — the chart's view of liveCourseRevenue.
 const subSeriesFor = async (subTable: string, orderTable: string, revenueCol: string, w: Win, unit: BucketUnit) => {
   const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
   const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
@@ -174,9 +184,9 @@ export const fetchDashboardData = async (opts: {
     // then summed it — so the Total Order Reports card was paying for the range twice.
     // `totals` is now folded from the series rows (identical numbers, half the scans,
     // five fewer connections held for the length of a year-range scan).
-    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NULL AND package_id > 0"),
-    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id > 0"),
-    subSeriesFor("ws_ebook_subscription", "ws_ebook_order", "order_price", tot, unit),
+    pcSeriesFor(tot, unit, "AND s.course_id IS NULL AND s.package_id > 0"),
+    pcSeriesFor(tot, unit, "AND s.course_id > 0"),
+    seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
     // Raw column name: `price` → `amount` (2026-08-31). Prisma does not validate
     // strings passed to $queryRawUnsafe, so a rename here only fails at runtime.
@@ -188,8 +198,8 @@ export const fetchDashboardData = async (opts: {
     // ws_package_course_order shape (2026-08-27). Keep this in step with the Prisma
     // field `amount` used by liveCourseRevenue above.
     subSeriesFor("ws_live_course_subscription", "ws_live_course_order", "discount_price", tot, unit),
-    prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
+    prisma.packageCourseSubscription.findMany({ where: { courseId: null, packageId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
+    prisma.packageCourseSubscription.findMany({ where: { courseId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
     prisma.bookOrder.findMany({ where: { status: "verified" }, select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.eBookSubscription.findMany({ include: { eBook: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
@@ -289,14 +299,14 @@ const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankR
   const rows = scope === "package"
     ? await prisma.packageCourseSubscription.groupBy({
         by: ["packageId"],
-        where: { createdAt: { gte: since }, courseId: null, packageId: { gt: 0 } },
+        where: { packageCourseOrder: { status: "complete", createdAt: { gte: since } }, courseId: null, packageId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { packageId: "desc" } }, { _sum: { amount: "desc" } }],
         take: TRENDING_LIMIT,
       })
     : await prisma.packageCourseSubscription.groupBy({
         by: ["courseId"],
-        where: { createdAt: { gte: since }, courseId: { gt: 0 } },
+        where: { packageCourseOrder: { status: "complete", createdAt: { gte: since } }, courseId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { courseId: "desc" } }, { _sum: { amount: "desc" } }],
         take: TRENDING_LIMIT,
@@ -316,9 +326,8 @@ const rankTestSeries = async (since: Date): Promise<RankRow[]> => {
 };
 
 // RAW SQL — column names are strings, so `yarn typecheck` cannot catch a rename.
-// Live course + ebook rank SUBSCRIPTIONS (what their reports list), revenue from each
-// one's order — same definition as liveCourseRevenue/ebookRevenue. Ranking ebook
-// orders via their plan dropped admin grants, which are written with plan_id = 0.
+// Live course ranks SUBSCRIPTIONS (what its report lists), revenue from each one's
+// order — same definition as liveCourseRevenue.
 const rankSubsWithOrders = async (since: Date, subTable: string, productCol: string, orderTable: string, revenueCol: string): Promise<RankRow[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
     `SELECT s.${productCol} AS id, COUNT(*) AS orders, COALESCE(SUM(o.${revenueCol}),0) AS revenue
@@ -331,8 +340,18 @@ const rankSubsWithOrders = async (since: Date, subTable: string, productCol: str
 };
 const rankLiveCourses = (since: Date) =>
   rankSubsWithOrders(since, "ws_live_course_subscription", "live_course_id", "ws_live_course_order", "discount_price");
-const rankEbooks = (since: Date) =>
-  rankSubsWithOrders(since, "ws_ebook_subscription", "ebook_id", "ws_ebook_order", "order_price");
+// Completed ebook orders (card rule); the ebook id comes from the order's subscription
+// row — the plan link is 0 on admin grants, so it cannot identify the ebook.
+const rankEbooks = async (since: Date): Promise<RankRow[]> => {
+  const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
+    `SELECT s.ebook_id AS id, COUNT(DISTINCT o.id) AS orders, COALESCE(SUM(o.order_price),0) AS revenue
+     FROM ws_ebook_order o JOIN ws_ebook_subscription s ON s.order_id = o.id
+     WHERE o.created_at >= ? AND o.status = 'complete' AND s.ebook_id IS NOT NULL
+     GROUP BY s.ebook_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+    since
+  );
+  return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
+};
 
 // A book "sells" in an order when the Book Orders report's book filter would list that
 // order: the book is in ws_book_order_item OR in the order's order_items JSON
