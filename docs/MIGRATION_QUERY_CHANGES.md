@@ -15,6 +15,15 @@
 
 ---
 
+## 2026-10-06 — Dashboard trending lists every product sold (top-5 cap removed)
+
+> **DDL:** none. **Response:** unchanged keys; each `trending.*` array can now hold more than 5 rows.
+
+- `fetchTrending` (`GET /admin/dashboard/trending?days=7|30`): dropped `TRENDING_LIMIT = 5`
+  — no `take` on the package/course `groupBy`, no `LIMIT` on the test-series / live-course /
+  ebook raw SQL, no `.slice` on the book ranking. Every product with a paid sale in the window
+  is returned, same ordering (orders DESC, revenue DESC). Filters and windows unchanged.
+
 ## 2026-10-06 — Dashboard deltaPct compares against the whole previous period
 
 > **DDL:** none. **Response:** unchanged keys; `prevAmount`/`deltaPct`/`prevWindowEnd` values change.

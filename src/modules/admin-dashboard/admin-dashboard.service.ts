@@ -265,12 +265,11 @@ export const fetchDashboardData = async (opts: {
 // ── trending: top sellers per product type over a rolling window ───────────────
 /**
  * GET /admin/dashboard/trending. Ranks each paid category by number of sales since
- * `since` (ties → revenue), top TRENDING_LIMIT. Each ranking counts exactly what that
+ * `since` (ties → revenue), every product sold — no top-N cap. Each ranking counts exactly what that
  * product's report lists when filtered to the product + the same dates (Subscription /
  * Test Series / Live Course report, Ebook Subscriptions, Book Orders).
  * Grouped rows are id-only; names/images are batch-loaded afterwards.
  */
-const TRENDING_LIMIT = 5;
 type RankRow = { id: number | null; orders: number; revenue: number };
 
 const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankRow[]> => {
@@ -280,14 +279,12 @@ const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankR
         where: { packageCourseOrder: { status: "complete", createdAt: { gte: since } }, courseId: null, packageId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { packageId: "desc" } }, { _sum: { amount: "desc" } }],
-        take: TRENDING_LIMIT,
       })
     : await prisma.packageCourseSubscription.groupBy({
         by: ["courseId"],
         where: { packageCourseOrder: { status: "complete", createdAt: { gte: since } }, courseId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { courseId: "desc" } }, { _sum: { amount: "desc" } }],
-        take: TRENDING_LIMIT,
       });
   return rows.map((r: any) => ({ id: r.packageId ?? r.courseId ?? null, orders: r._count._all, revenue: num(r._sum.amount) }));
 };
@@ -299,7 +296,7 @@ const rankPaidSubs = async (since: Date, subTable: string, orderTable: string, p
     `SELECT s.${productCol} AS id, COUNT(*) AS orders, COALESCE(SUM(o.discount_price),0) AS revenue
      FROM ${subTable} s JOIN ${orderTable} o ON o.id = s.order_id
      WHERE o.status = 'complete' AND o.created_at >= ? AND s.${productCol} IS NOT NULL
-     GROUP BY s.${productCol} ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+     GROUP BY s.${productCol} ORDER BY orders DESC, revenue DESC`,
     since
   );
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
@@ -313,7 +310,7 @@ const rankEbooks = async (since: Date): Promise<RankRow[]> => {
     `SELECT s.ebook_id AS id, COUNT(DISTINCT o.id) AS orders, COALESCE(SUM(o.order_price),0) AS revenue
      FROM ws_ebook_order o JOIN ws_ebook_subscription s ON s.order_id = o.id
      WHERE o.created_at >= ? AND o.status = 'complete' AND s.ebook_id IS NOT NULL
-     GROUP BY s.ebook_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+     GROUP BY s.ebook_id ORDER BY orders DESC, revenue DESC`,
     since
   );
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
@@ -356,8 +353,7 @@ const rankBooks = async (since: Date): Promise<RankRow[]> => {
     }
   }
   return [...byBook.values()]
-    .sort((a, b) => b.orders - a.orders || b.revenue - a.revenue)
-    .slice(0, TRENDING_LIMIT);
+    .sort((a, b) => b.orders - a.orders || b.revenue - a.revenue);
 };
 
 const idsOf = (rows: RankRow[]) => rows.map((r) => r.id).filter((x): x is number => x != null);
