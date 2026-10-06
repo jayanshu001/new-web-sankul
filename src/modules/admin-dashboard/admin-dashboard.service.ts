@@ -189,7 +189,8 @@ export const fetchDashboardData = async (opts: {
     subSeriesFor("ws_live_course_subscription", "ws_live_course_order", "discount_price", tot, unit),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.bookOrder.findMany({ select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
+    // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
+    prisma.bookOrder.findMany({ where: { status: "verified" }, select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.eBookSubscription.findMany({ include: { eBook: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     // TestSeries/LiveCourse subscription models carry only scalar FKs (no Prisma
     // relations) — refs are batch-loaded below.
