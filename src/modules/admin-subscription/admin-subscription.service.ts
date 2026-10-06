@@ -182,7 +182,7 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
       amount: r.amount != null ? Number(r.amount) : 0,
       paymentMethod: r.payment_type === "backend" ? "backend" : "online",
-      status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+      status: normalizeStatus({ status: r.status, startAt: r.startAt, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
     const adminName = admin ? `${admin.firstName ?? ""} ${admin.lastName ?? ""}`.trim() : "";

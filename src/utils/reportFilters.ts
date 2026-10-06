@@ -92,10 +92,12 @@ export function andWhere(...fragments: Array<Record<string, any> | undefined>): 
 
 /** Row-level normalized status for the DTO. */
 export function normalizeStatus(
-  row: { status: boolean | null | undefined; endAt: Date | null | undefined },
+  row: { status: boolean | null | undefined; startAt?: Date | null; endAt: Date | null | undefined },
   now: Date = new Date()
 ): ReportStatus {
   if (!row.status) return "inactive";
+  // Deactivate sets end_at := start_at — a zero-length window is inactive, not active/expired.
+  if (row.startAt && row.endAt && row.startAt.getTime() === row.endAt.getTime()) return "inactive";
   if (row.endAt && row.endAt.getTime() <= now.getTime()) return "expired";
   return "active";
 }

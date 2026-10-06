@@ -657,7 +657,7 @@ export const listSubscriptions = async (q: SubReportQuery & {
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
       amount: pay?.amount != null ? Number(pay.amount) : 0,
       paymentMethod: pay?.razorpayOrderId ? "online" : "backend",
-      status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+      status: normalizeStatus({ status: r.status, startAt: r.startAt, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
     // Code attribution, read from the row's own snapshot columns — no extra query.
@@ -736,7 +736,7 @@ const buildSubExportRow = (
     activationType: method,
     razorpayOrderId: pay?.razorpayOrderId ?? "",
     razorpayPaymentId: pay?.razorpayPaymentId ?? "",
-    status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+    status: normalizeStatus({ status: r.status, startAt: r.startAt, endAt: r.endAt }, now),
     // The 13 report columns, from the one helper the list DTO uses. A spreadsheet
     // cell wants "" where the JSON wants null — the column getters below do that
     // conversion, so the values stay identical to the screen's.

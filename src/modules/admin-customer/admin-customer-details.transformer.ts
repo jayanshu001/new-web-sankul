@@ -2,15 +2,16 @@
  * Transforms ws_* subscription/order rows (+ hydrated reference rows) into the
  * exact DTO shape the legacy Mongo customer-details handler returned, so the
  * admin UI is identical on either backend. Refs are emitted as `{ _id, name, … }`
- * populated sub-objects; Decimals become numbers; `isActive` = status && endAt>now.
+ * populated sub-objects; Decimals become numbers; `isActive` = status && endAt>now,
+ * and never for a zero-length window (Deactivate sets end_at := start_at).
  */
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 
 type Lookup<T> = Map<number, T>;
 
 const dec = (v: unknown): number | null => (v == null ? null : Number(v));
-const isActiveOf = (status: boolean | null | undefined, endAt: Date | null | undefined, now: Date) =>
-  !!(status && endAt && endAt > now);
+const isActiveOf = (s: { status: boolean | null; startAt: Date | null; endAt: Date | null }, now: Date) =>
+  !!(s.status && s.endAt && s.endAt > now && s.endAt.getTime() !== s.startAt?.getTime());
 
 const ref = (
   id: number | null | undefined,
@@ -48,7 +49,7 @@ export const toCourseDto = (
     paymentStatus: s.status ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,
-    isActive: isActiveOf(s.status, s.endAt, now),
+    isActive: isActiveOf(s, now),
   };
 };
 
@@ -67,7 +68,7 @@ export const toPackageDto = (
     paymentStatus: s.status ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,
-    isActive: isActiveOf(s.status, s.endAt, now),
+    isActive: isActiveOf(s, now),
   };
 };
 
@@ -118,7 +119,7 @@ export const toLiveCourseDto = (
       : (s.status ? "verified" : "pending"),
     startAt: s.startAt,
     endAt: s.endAt,
-    isActive: isActiveOf(s.status, s.endAt, now),
+    isActive: isActiveOf(s, now),
   };
 };
 
@@ -145,7 +146,7 @@ export const toTestSeriesDto = (
     price: dec(s.amount),
     startAt: s.startAt,
     endAt: s.endAt,
-    isActive: isActiveOf(s.status, s.endAt, now),
+    isActive: isActiveOf(s, now),
   };
 };
 
@@ -170,7 +171,7 @@ export const toEbookDto = (
     price: dec(s.price),
     startAt: s.startAt,
     endAt: s.endAt,
-    isActive: isActiveOf(s.status, s.endAt, now),
+    isActive: isActiveOf(s, now),
   };
 };
 
