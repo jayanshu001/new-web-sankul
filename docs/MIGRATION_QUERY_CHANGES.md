@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-10-06 — Dashboard deltaPct compares against the whole previous period
+
+> **DDL:** none. **Response:** unchanged keys; `prevAmount`/`deltaPct`/`prevWindowEnd` values change.
+
+- `resolveRange` (`GET /admin/dashboard`): for `today`/`week`/`month`/`year` the previous
+  window now ends at `start − 1ms` (all of yesterday / last week / last month / last year)
+  instead of the same elapsed point in it. `today` ₹260 vs yesterday ₹626 now reads −58%,
+  not +53% against yesterday-until-now. `yesterday`/`prevMonth`/custom unchanged.
+
+---
+
 ## 2026-10-06 — Trending books counted from `ws_book_order.order_items`
 
 > **DDL:** none. **Response:** unchanged (`book[]` rows keep `_id/name/image/orders/revenue`).

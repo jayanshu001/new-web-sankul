@@ -73,9 +73,8 @@ function shiftDays(d: Date, days: number) {
   return r;
 }
 
-// The comparison window is the SAME point in the previous period (today so far vs
-// yesterday up to this time, this month so far vs last month up to this date), so a
-// period that is still running isn't compared against a whole one.
+// The comparison window is the WHOLE previous period (today vs all of yesterday, this
+// month vs all of last month), so deltaPct compares the amounts the cards show.
 function resolveRange(preset: RangePreset | undefined, now = new Date()) {
   const start = new Date(now);
   const end = new Date(now);
@@ -97,14 +96,14 @@ function resolveRange(preset: RangePreset | undefined, now = new Date()) {
       start.setDate(start.getDate() - day);
       end.setTime(now.getTime());
       prevStart = shiftDays(start, -7);
-      prevEnd = shiftDays(now, -7);
+      prevEnd = new Date(start.getTime() - 1);
       break;
     }
     case "month": {
       start.setDate(1);
       end.setTime(now.getTime());
       prevStart = shiftMonths(start, -1);
-      prevEnd = shiftMonths(now, -1);
+      prevEnd = new Date(start.getTime() - 1);
       break;
     }
     case "prevMonth": {
@@ -120,13 +119,13 @@ function resolveRange(preset: RangePreset | undefined, now = new Date()) {
       start.setMonth(0, 1);
       end.setTime(now.getTime());
       prevStart = shiftMonths(start, -12);
-      prevEnd = shiftMonths(now, -12);
+      prevEnd = new Date(start.getTime() - 1);
       break;
     }
     case "today":
     default:
       prevStart = shiftDays(start, -1);
-      prevEnd = shiftDays(now, -1);
+      prevEnd = new Date(start.getTime() - 1);
       break;
   }
 
