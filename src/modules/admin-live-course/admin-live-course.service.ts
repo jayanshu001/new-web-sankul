@@ -36,7 +36,7 @@ import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
-import { appendAdminRemark, movedRemarkText, planAddDays, planDateShift, planDeactivation, planDeactivationRevert, type DateShift } from "../../utils/subscriptionRemarkHistory";
+import { appendAdminRemark, movedRemarkText, planAddDays, planDateShift, planDeactivation, planDeactivationRevert, planQueuedStart, type DateShift } from "../../utils/subscriptionRemarkHistory";
 
 
 export const parseLiveId = (id: string): number | null => {
@@ -1113,14 +1113,16 @@ export const moveLiveSubscription = async (
   );
 
   const now = new Date();
-  const dateShift = planDateShift(existing, await repo.activeSubsForTarget(target.id, existing.liveCourseId, now), now);
+  const targetActives = await repo.activeSubsForTarget(target.id, existing.liveCourseId, now);
+  const dateShift = planDateShift(existing, targetActives, now);
   if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const newDates = dateShift ?? planQueuedStart(existing, targetActives, now);
   const orderId = existing.orderId && (await repo.orderOwnedOnlyBy(existing.orderId, id)) ? existing.orderId : null;
-  const what = [moved, orderId && `Order #${orderId} moved with it`, dateShift?.what].filter(Boolean).join(". ");
+  const what = [moved, orderId && `Order #${orderId} moved with it`, newDates?.what].filter(Boolean).join(". ");
 
   const subUpdate = repo.updateSubscription(id, {
     customerId: target.id,
-    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
+    ...(newDates ? { startAt: newDates.startAt, endAt: newDates.endAt } : {}),
     ...(await historyPatch(existing.remarks, what, input, now)),
   });
   const [updated] = orderId ? await repo.transaction([subUpdate, repo.setOrderCustomer(orderId, target.id)]) : [await subUpdate];

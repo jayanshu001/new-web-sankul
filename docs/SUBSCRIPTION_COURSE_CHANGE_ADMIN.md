@@ -147,6 +147,20 @@ Re-send the same body with `"confirmDates": true` to apply it. The history entry
 the date change appended:
 `Course/package changed: … -> …. Dates moved after active subscription #123: 2026-01-01 00:00:00 - 2026-12-31 00:00:00 -> 2026-12-10 00:00:00 - 2027-03-06 00:00:00 | by Jane Doe (#5)`
 
+### Move only: a queued row is pulled forward
+
+A row that starts in the future was usually queued behind the **old** owner's active
+subscription. That anchor stays with the old owner, so on move (course/package and
+live course) the row is pulled forward instead of keeping a far-off start:
+
+- new `start_at` = the target customer's latest active `end_at` for that product, or
+  **now** when they hold none; new `end_at` = new start + the row's original length
+- only when that is earlier than the row's current `start_at`; running, deactivated and
+  overlapping rows are untouched (the overlap case is the 409 flow above)
+- applied directly — no 409, no `confirmDates` — and recorded in the history entry:
+  `… moved from … to …. Queued dates moved up to start now: 2027-04-01 11:55:37 - 2027-04-15 11:55:37 -> 2026-10-06 13:58:29 - 2026-10-20 13:58:29 | by Jane Doe (#5)`
+  (or `… to follow active subscription #123: …`)
+
 ---
 
 ## POST `/admin/subscriptions/:id/deactivate`

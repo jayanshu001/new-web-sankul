@@ -17,6 +17,7 @@ import {
   parseRemarkHistory,
   planAddDays,
   planDateShift,
+  planQueuedStart,
   planDeactivation,
   planDeactivationRevert,
   type DateShift,
@@ -631,14 +632,16 @@ export const moveSubscription = async (
   );
 
   const now = new Date();
-  const dateShift = planDateShift(existing, await repo.activeSubsForTarget(target.id, productOf(existing), now), now);
+  const targetActives = await repo.activeSubsForTarget(target.id, productOf(existing), now);
+  const dateShift = planDateShift(existing, targetActives, now);
   if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const newDates = dateShift ?? planQueuedStart(existing, targetActives, now);
   const orderId = existing.orderId && (await repo.orderOwnedOnlyBy(existing.orderId, id)) ? existing.orderId : null;
-  const what = [moved, orderId && `Order #${orderId} moved with it`, dateShift?.what].filter(Boolean).join(". ");
+  const what = [moved, orderId && `Order #${orderId} moved with it`, newDates?.what].filter(Boolean).join(". ");
 
   const subUpdate = repo.patchSub(id, {
     customerId: target.id,
-    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
+    ...(newDates ? { startAt: newDates.startAt, endAt: newDates.endAt } : {}),
     remarks: await withHistory(existing.remarks, what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,

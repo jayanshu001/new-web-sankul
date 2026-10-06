@@ -123,6 +123,13 @@ export interface DateShift {
   what: string;
 }
 
+type SubWindow = { id: number; startAt: Date | null; endAt: Date | null };
+
+const latestActive = (actives: SubWindow[], now: Date) =>
+  actives
+    .filter((a): a is SubWindow & { endAt: Date } => !!a.endAt && a.endAt > now && !isDeactivatedWindow(a))
+    .sort((a, b) => b.endAt.getTime() - a.endAt.getTime())[0];
+
 /**
  * Transferring a subscription (change product / move customer) onto a product the
  * customer already holds actively would overlap the two. Instead, the transferred row's
@@ -134,9 +141,7 @@ export const planDateShift = (
   actives: { id: number; startAt: Date | null; endAt: Date | null }[],
   now: Date
 ): DateShift | null => {
-  const active = actives
-    .filter((a): a is { id: number; startAt: Date | null; endAt: Date } => !!a.endAt && a.endAt > now && !isDeactivatedWindow(a))
-    .sort((a, b) => b.endAt.getTime() - a.endAt.getTime())[0];
+  const active = latestActive(actives, now);
   if (!active || !current.endAt) return null;
   if (current.startAt && current.startAt >= active.endAt) return null;
 
@@ -153,6 +158,27 @@ export const planDateShift = (
     what:
       `Dates moved after active subscription #${active.id}: ` +
       `${fmtExportDate(current.startAt) || "none"} - ${fmtExportDate(current.endAt)} -> ${fmtExportDate(startAt)} - ${fmtExportDate(endAt)}`,
+  };
+};
+
+export const planQueuedStart = (
+  current: { startAt: Date | null; endAt: Date | null },
+  actives: SubWindow[],
+  now: Date
+): { startAt: Date; endAt: Date; what: string } | null => {
+  if (!current.startAt || !current.endAt || isDeactivatedWindow(current)) return null;
+  const active = latestActive(actives, now);
+  const anchor = active?.endAt ?? now;
+  if (current.startAt <= anchor) return null;
+
+  const startAt = new Date(anchor.getTime());
+  const endAt = new Date(startAt.getTime() + (current.endAt.getTime() - current.startAt.getTime()));
+  return {
+    startAt,
+    endAt,
+    what:
+      `Queued dates moved up${active ? ` to follow active subscription #${active.id}` : " to start now"}: ` +
+      `${fmtExportDate(current.startAt)} - ${fmtExportDate(current.endAt)} -> ${fmtExportDate(startAt)} - ${fmtExportDate(endAt)}`,
   };
 };
 

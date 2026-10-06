@@ -15,6 +15,21 @@
 
 ---
 
+## 2026-10-06 — Move pulls a queued subscription forward
+
+> **DDL:** none. **Query:** none new (reuses `activeSubsForTarget`). **Response:** unchanged
+> (the 409 `dateShift` contract is untouched).
+
+- `moveSubscription` / `moveLiveSubscription`: when the moved row starts in the future and
+  the target customer has no active row on that product ending at or after it, `start_at`
+  becomes `max(now, target's latest active end_at)` and `end_at` keeps the original length
+  (`planQueuedStart`, `utils/subscriptionRemarkHistory.ts`). Previously the row kept the
+  old owner's queued window, so the new owner held a "purchased" row that had not
+  started and every `daysLeft` read reported `end_at − now` (e.g. sub #26: 191 instead of 14).
+- Already-moved rows are not backfilled.
+
+---
+
 ## 2026-10-06 — Per-action subscription permissions
 
 > **DDL:** none. **Data:** 17 new `ws_permissions` rows (guard `web`, category Customers),
