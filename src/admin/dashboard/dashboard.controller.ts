@@ -214,7 +214,6 @@ export const getDashboard = async (req: Request, res: Response) => {
             liveCourse: { amount: d.revenue.liveCourse.revenue, deltaPct: deltaPct(d.revenue.liveCourse.revenue, d.revenue.liveCoursePrev) },
           },
           totalOrderReports: { range: totalRange || "today", windowStart: totalWindow.start, windowEnd: totalWindow.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
-          newCustomers: d.newCustomers,
           recentPackageSubscriptions: d.recentPackageSubs,
           recentCourseSubscriptions: d.recentCourseSubs,
           recentBookOrders: d.recentBookOrders,
@@ -224,6 +223,21 @@ export const getDashboard = async (req: Request, res: Response) => {
           summary: d.summary,
         },
       });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/admin/dashboard/trending?days=7|30
+// Top sellers per product type over a rolling window ending now. Anything other
+// than 30 falls back to 7 so the shared cache only ever holds two entries.
+export const getDashboardTrending = async (req: Request, res: Response) => {
+  try {
+    const days = req.query.days === "30" ? 30 : 7;
+    const windowEnd = new Date();
+    const windowStart = new Date(windowEnd.getTime() - days * 24 * 60 * 60 * 1000);
+    const trending = await adminDashSql.fetchTrending(windowStart);
+    return res.status(200).json({ success: true, data: { days, windowStart, windowEnd, ...trending } });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

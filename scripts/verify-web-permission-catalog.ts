@@ -19,6 +19,9 @@ import {
 
 const CODE_ONLY = process.argv.includes("--code");
 const CORE = new Set(["view", "create", "edit", "delete", "toggle-status"]);
+// Deliberate exception (2026-10-06): one key per subscription type × admin action on the
+// customer-detail page (customers.<type>-subscriptions.change|move|deactivate|revert|add-days).
+const SUBSCRIPTION_ACTION_KEY = /^customers\.[a-z-]+-subscriptions\.(change|move|deactivate|revert|add-days)$/;
 
 async function main() {
   let failed = false;
@@ -27,7 +30,7 @@ async function main() {
   const web = PERMISSION_CATALOG.filter((m) => m.guard === "web");
   const badActions = web
     .flatMap((m) => m.permissions)
-    .filter((p) => !CORE.has(p.action) || p.key.endsWith(".list"));
+    .filter((p) => (!CORE.has(p.action) && !SUBSCRIPTION_ACTION_KEY.test(p.key)) || p.key.endsWith(".list"));
   const missing = [...RBAC_ROUTE_KEYS].filter((k) => !ALL_CATALOG_KEYS.has(k)).sort();
   const maxActions = Math.max(...web.map((m) => m.permissions.length));
 
@@ -60,6 +63,7 @@ async function main() {
 
       console.log("\n── DB (ws_permissions, guard=web) ───");
       console.log(`total rows: ${rows.length} | .list rows: ${dotList}`);
+
       if (stale.length) {
         console.log(
           `⏳ ${stale.length} stale row(s) still in DB — run cleanup-web-permissions.ts --apply:\n  ` +

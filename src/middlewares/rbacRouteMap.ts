@@ -171,7 +171,7 @@ R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
 R("POST", "/ebooks/subscriptions", "ebooks.create", "customers.ebook-subscriptions.create");
 R("GET", "/ebooks/subscriptions/:id", ...view("ebooks.subscriptions"));
 R("PUT", "/ebooks/subscriptions/:id", "ebooks.edit");
-R("POST", "/ebooks/subscriptions/:id/add-days", "ebooks.edit", "customers.edit");
+R("POST", "/ebooks/subscriptions/:id/add-days", "customers.ebook-subscriptions.add-days");
 R("DELETE", "/ebooks/subscriptions/:id", "ebooks.delete");
 // ebooks.plans collapsed 2026-07-20 into parent `ebooks`.
 R("GET", "/ebooks/plans/:id", ...view("ebooks"));
@@ -380,12 +380,20 @@ R("GET", "/subscriptions/export/:format", ...subReport); // was unmapped
 R("GET", "/subscriptions", ...subReport);
 R("GET", "/subscriptions/:id", ...subReport);
 R("GET", "/subscriptions/:id/history", ...subReport, ...view("customers"));
-R("POST", "/subscriptions/:id/change-product", "subscriptions.edit", "customers.edit");
-R("POST", "/subscriptions/:id/move", "subscriptions.edit", "customers.edit");
-R("POST", "/subscriptions/:id/deactivate", "subscriptions.edit", "customers.edit");
-R("POST", "/subscriptions/:id/add-days", "subscriptions.edit", "customers.edit");
-R("POST", "/subscriptions/:id/revert-deactivation", "subscriptions.edit", "customers.edit");
-crud("/subscriptions", "subscriptions");
+// One route serves course AND package rows, so the map admits either type's key and the
+// controller then requires the row's own type (subscription.controller authorizeSubAction).
+const subAction = (action: string) => [`customers.course-subscriptions.${action}`, `customers.package-subscriptions.${action}`];
+R("POST", "/subscriptions/:id/change-product", ...subAction("change"));
+R("POST", "/subscriptions/:id/move", ...subAction("move"));
+R("POST", "/subscriptions/:id/deactivate", ...subAction("deactivate"));
+R("POST", "/subscriptions/:id/add-days", ...subAction("add-days"));
+R("POST", "/subscriptions/:id/revert-deactivation", ...subAction("revert"));
+// Not crud(): the module has no `edit` / `toggle-status` — the row edit is per type.
+R("GET", "/subscriptions", ...view("subscriptions"));
+R("POST", "/subscriptions", "subscriptions.create");
+R("GET", "/subscriptions/:id", ...view("subscriptions"));
+R("PUT|PATCH", "/subscriptions/:id", ...subAction("edit"));
+R("DELETE", "/subscriptions/:id", "subscriptions.delete");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
 for (const [seg, key] of [
@@ -447,6 +455,7 @@ R("GET", "/promoters/:id/subscriptions", ...view("promoters")); // collapsed fro
 crud("/promoters", "promoters");
 
 // ── /dashboard → dashboard (read-only) ─────────────────────────────────────
+R("GET", "/dashboard/trending", "dashboard.view");
 R("GET", "/dashboard", "dashboard.view");
 
 // ── /tracking → tracking (read-only) ───────────────────────────────────────
@@ -510,11 +519,11 @@ R("GET", "/live-courses/subscriptions/export/:format", ...view("live-courses"), 
 R("GET", "/live-courses/subscriptions", ...view("live-courses"), ...view("live-courses.report"));
 R("GET", "/live-courses/subscriptions/:id", ...view("live-courses"), ...view("live-courses.report"));
 R("PUT", "/live-courses/subscriptions/:id", "live-courses.edit");
-R("POST", "/live-courses/subscriptions/:id/change-course", "live-courses.edit", "customers.edit");
-R("POST", "/live-courses/subscriptions/:id/move", "live-courses.edit", "customers.edit");
-R("POST", "/live-courses/subscriptions/:id/deactivate", "live-courses.edit", "customers.edit");
-R("POST", "/live-courses/subscriptions/:id/add-days", "live-courses.edit", "customers.edit");
-R("POST", "/live-courses/subscriptions/:id/revert-deactivation", "live-courses.edit", "customers.edit");
+R("POST", "/live-courses/subscriptions/:id/change-course", "customers.live-course-subscriptions.change");
+R("POST", "/live-courses/subscriptions/:id/move", "customers.live-course-subscriptions.move");
+R("POST", "/live-courses/subscriptions/:id/deactivate", "customers.live-course-subscriptions.deactivate");
+R("POST", "/live-courses/subscriptions/:id/add-days", "customers.live-course-subscriptions.add-days");
+R("POST", "/live-courses/subscriptions/:id/revert-deactivation", "customers.live-course-subscriptions.revert");
 R("DELETE", "/live-courses/subscriptions/:id", "live-courses.delete");
 R("GET", "/live-courses/:id/sessions", ...view("live-courses"));
 R("GET", "/live-courses/:id/plans", ...view("live-courses"));
@@ -556,7 +565,7 @@ R("GET", "/test-series/subscriptions/export/:format", ...view("test-series"), ..
 R("GET", "/test-series/subscriptions", ...view("test-series"), ...view("test-series.report"));
 R("GET", "/test-series/subscriptions/:id", ...view("test-series"), ...view("test-series.report"));
 R("PUT", "/test-series/subscriptions/:id", "test-series.edit");
-R("POST", "/test-series/subscriptions/:id/add-days", "test-series.edit", "customers.edit");
+R("POST", "/test-series/subscriptions/:id/add-days", "customers.test-series-subscriptions.add-days");
 R("DELETE", "/test-series/subscriptions/:id", "test-series.delete");
 R("GET", "/test-series/orders", ...view("test-series"));
 R("GET", "/test-series/:id/content-categories", ...view("test-series"));

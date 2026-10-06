@@ -134,7 +134,7 @@ export const fetchDashboardData = async (opts: {
     pkgRev, courseRev, ebookRev, bookRev, tsRev, lcRev,
     pkgRevP, courseRevP, ebookRevP, bookRevP, tsRevP, lcRevP,
     pkgSeries, courseSeries, ebookSeries, bookSeries, tsSeries, lcSeries,
-    newCustomers, recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
+    recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
     counters,
   ] = await Promise.all([
     subRevenue(cur, "package"), subRevenue(cur, "course"), ebookRevenue(cur), bookRevenue(cur), testSeriesRevenue(cur), liveCourseRevenue(cur),
@@ -158,7 +158,6 @@ export const fetchDashboardData = async (opts: {
     // ws_package_course_order shape (2026-08-27). Keep this in step with the Prisma
     // field `amount` used by liveCourseRevenue above.
     seriesFor("ws_live_course_order", "discount_price", tot, unit, "AND status = 'complete'"),
-    prisma.customer.findMany({ where: { isAccountDeleted: false }, select: { id: true, fullName: true, phoneNumber: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { not: null } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.bookOrder.findMany({ select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
@@ -227,7 +226,6 @@ export const fetchDashboardData = async (opts: {
       earnings: series.reduce((n, r) => n + r.earnings, 0),
     },
     series,
-    newCustomers,
     recentPackageSubs: recentPackageSubs.map(dashTransformer.toPackageSubDto),
     recentCourseSubs: recentCourseSubs.map(dashTransformer.toCourseSubDto),
     recentBookOrders: recentBookOrders.map((o) =>
@@ -242,5 +240,119 @@ export const fetchDashboardData = async (opts: {
       team: { promoters: counters.totalPromoters, educators: counters.totalEducators },
       enquiries: { offline: counters.pendingOfflineEnquiries, website: counters.pendingInquiries },
     },
+  };
+};
+
+// ── trending: top sellers per product type over a rolling window ───────────────
+/**
+ * GET /admin/dashboard/trending. Ranks each paid category by number of sales since
+ * `since` (ties → revenue), top TRENDING_LIMIT. Same tables + paid filters as the
+ * revenue cards above, so a product's revenue here sums into its category card.
+ * Grouped rows are id-only; names/images are batch-loaded afterwards.
+ */
+const TRENDING_LIMIT = 5;
+type RankRow = { id: number | null; orders: number; revenue: number };
+
+const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankRow[]> => {
+  const rows = scope === "package"
+    ? await prisma.packageCourseSubscription.groupBy({
+        by: ["packageId"],
+        where: { createdAt: { gte: since }, courseId: null, packageId: { not: null } },
+        _count: { _all: true }, _sum: { amount: true },
+        orderBy: [{ _count: { packageId: "desc" } }, { _sum: { amount: "desc" } }],
+        take: TRENDING_LIMIT,
+      })
+    : await prisma.packageCourseSubscription.groupBy({
+        by: ["courseId"],
+        where: { createdAt: { gte: since }, courseId: { not: null } },
+        _count: { _all: true }, _sum: { amount: true },
+        orderBy: [{ _count: { courseId: "desc" } }, { _sum: { amount: "desc" } }],
+        take: TRENDING_LIMIT,
+      });
+  return rows.map((r: any) => ({ id: r.packageId ?? r.courseId ?? null, orders: r._count._all, revenue: num(r._sum.amount) }));
+};
+
+const rankTestSeries = async (since: Date): Promise<RankRow[]> => {
+  const rows = await prisma.testSeriesSubscription.groupBy({
+    by: ["testSeriesId"],
+    where: { createdAt: { gte: since } },
+    _count: { _all: true }, _sum: { amount: true },
+    orderBy: [{ _count: { testSeriesId: "desc" } }, { _sum: { amount: "desc" } }],
+    take: TRENDING_LIMIT,
+  });
+  return rows.map((r) => ({ id: r.testSeriesId, orders: r._count._all, revenue: num(r._sum.amount) }));
+};
+
+const rankLiveCourses = async (since: Date): Promise<RankRow[]> => {
+  const rows = await prisma.liveCourseOrder.groupBy({
+    by: ["liveCourseId"],
+    where: { createdAt: { gte: since }, status: "complete" },
+    _count: { _all: true }, _sum: { amount: true },
+    orderBy: [{ _count: { liveCourseId: "desc" } }, { _sum: { amount: "desc" } }],
+    take: TRENDING_LIMIT,
+  });
+  return rows.map((r) => ({ id: r.liveCourseId, orders: r._count._all, revenue: num(r._sum.amount) }));
+};
+
+// RAW SQL — column names are strings, so `yarn typecheck` cannot catch a rename.
+// Ebook orders carry the ebook only via their plan (ws_package_course_ebook_price).
+const rankEbooks = async (since: Date): Promise<RankRow[]> => {
+  const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
+    `SELECT p.ebook_id AS id, COUNT(*) AS orders, COALESCE(SUM(o.order_price),0) AS revenue
+     FROM ws_ebook_order o JOIN ws_package_course_ebook_price p ON p.id = o.plan_id
+     WHERE o.created_at >= ? AND o.status = 'complete' AND p.ebook_id IS NOT NULL
+     GROUP BY p.ebook_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+    since
+  );
+  return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
+};
+
+// Line items are keyed by the VARCHAR business key (ws_book_order.order_id) and are
+// written without created_at, so the window filters on the order. `price` is per
+// unit; revenue excludes shipping.
+const rankBooks = async (since: Date): Promise<RankRow[]> => {
+  const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
+    `SELECT i.book_id AS id, COUNT(DISTINCT o.id) AS orders, COALESCE(SUM(i.price * i.qty),0) AS revenue
+     FROM ws_book_order o JOIN ws_book_order_item i ON i.order_id = o.order_id
+     WHERE o.created_at >= ? AND o.status = 'verified' AND i.book_id IS NOT NULL
+     GROUP BY i.book_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+    since
+  );
+  return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
+};
+
+const idsOf = (rows: RankRow[]) => rows.map((r) => r.id).filter((x): x is number => x != null);
+
+const withRefs = (rows: RankRow[], refs: { id: number; name: string | null; image: string | null }[]) => {
+  const map = new Map(refs.map((r) => [r.id, r]));
+  return rows
+    .filter((r) => r.id != null)
+    .map((r) => {
+      const ref = map.get(r.id as number);
+      return { _id: String(r.id), name: ref?.name ?? "—", image: ref?.image ?? null, orders: r.orders, revenue: r.revenue };
+    });
+};
+
+export const fetchTrending = async (since: Date) => {
+  const [pkg, course, ebook, book, testSeries, liveCourse] = await Promise.all([
+    rankSubs(since, "package"), rankSubs(since, "course"), rankEbooks(since), rankBooks(since), rankTestSeries(since), rankLiveCourses(since),
+  ]);
+  const ref = { id: true, name: true, image: true } as const;
+  const [pkgRefs, courseRefs, ebookRefs, bookRefs, tsRefs, lcRefs] = await prisma.$transaction([
+    prisma.package.findMany({ where: { id: { in: idsOf(pkg) } }, select: ref }),
+    prisma.course.findMany({ where: { id: { in: idsOf(course) } }, select: ref }),
+    prisma.eBook.findMany({ where: { id: { in: idsOf(ebook) } }, select: ref }),
+    prisma.book.findMany({ where: { id: { in: idsOf(book) } }, select: ref }),
+    // ws_test_series uses title/thumbnail → mapped to name/image below.
+    prisma.testSeries.findMany({ where: { id: { in: idsOf(testSeries) } }, select: { id: true, title: true, thumbnail: true } }),
+    prisma.liveCourse.findMany({ where: { id: { in: idsOf(liveCourse) } }, select: ref }),
+  ]);
+  return {
+    package: withRefs(pkg, pkgRefs),
+    course: withRefs(course, courseRefs),
+    ebook: withRefs(ebook, ebookRefs),
+    book: withRefs(book, bookRefs),
+    testSeries: withRefs(testSeries, tsRefs.map((t) => ({ id: t.id, name: t.title, image: t.thumbnail ?? null }))),
+    liveCourse: withRefs(liveCourse, lcRefs),
   };
 };

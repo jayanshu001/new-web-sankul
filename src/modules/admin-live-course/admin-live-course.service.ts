@@ -1145,6 +1145,7 @@ export const deactivateLiveSubscription = async (
 
   const updated = await repo.updateSubscription(id, {
     endAt: deactivation.endAt,
+    status: deactivation.status,
     ...(await historyPatch(existing.remarks, deactivation.what, input, now)),
   });
 
@@ -1168,6 +1169,7 @@ export const revertLiveSubscriptionDeactivation = async (
   const now = new Date();
   const updated = await repo.updateSubscription(id, {
     endAt: revert.endAt,
+    status: revert.status,
     ...(await historyPatch(existing.remarks, revert.what, input, now)),
   });
 

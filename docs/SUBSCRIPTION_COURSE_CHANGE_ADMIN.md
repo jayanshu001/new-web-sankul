@@ -20,9 +20,27 @@ from the JWT, is stamped on `updated_by`, and is written into each entry.
 
 ## Permissions
 
+One key per subscription type × action (2026-10-06, catalog module **Customers**). The
+old `.edit` keys no longer grant these actions; super-admins always pass.
+
+| Action | Course | Package | Live course | Test series | Ebook |
+|---|---|---|---|---|---|
+| Change product | `customers.course-subscriptions.change` | `customers.package-subscriptions.change` | `customers.live-course-subscriptions.change` | — | — |
+| Move | `….course-subscriptions.move` | `….package-subscriptions.move` | `….live-course-subscriptions.move` | — | — |
+| Deactivate | `….course-subscriptions.deactivate` | `….package-subscriptions.deactivate` | `….live-course-subscriptions.deactivate` | — | — |
+| Revert deactivation | `….course-subscriptions.revert` | `….package-subscriptions.revert` | `….live-course-subscriptions.revert` | — | — |
+| Add days | `….course-subscriptions.add-days` | `….package-subscriptions.add-days` | `….live-course-subscriptions.add-days` | `customers.test-series-subscriptions.add-days` | `customers.ebook-subscriptions.add-days` |
+| Edit (`PUT /subscriptions/:id`: dates, status, shipping, payment) | `….course-subscriptions.edit` | `….package-subscriptions.edit` | — | — | — |
+
+The **Subscriptions** module has no `edit` / `toggle-status` keys any more (view, create,
+delete only); row edits use the per-type keys above.
+
+`/admin/subscriptions/:id/<action>` serves both course and package rows, so the route map
+admits either type's key and the controller (`authorizeSubAction`) then requires the
+row's own type.
+
 | Route | Any of |
 |---|---|
-| `change-product`, `move`, `deactivate` | `subscriptions.edit`, `customers.edit` |
 | `history` | `subscriptions.view`, `subscriptions.reports.view`, `subscriptions.material-report.view`, `customers.view` |
 
 ## Envelope
@@ -134,8 +152,9 @@ the date change appended:
 ## POST `/admin/subscriptions/:id/deactivate`
 
 Same rule as legacy: `end_at := start_at` (or now if there is no start date), so every
-entitlement check closes immediately. `status` is **not** changed, and the row still
-appears in purchase history, where it reads as expired.
+entitlement check closes immediately, **and `status := 0`** (inactive). The previous
+status is recorded in the history entry so Revert can restore it. The row still appears in
+purchase history, where it reads as inactive.
 
 ```json
 { "remark": "Refund issued" }
@@ -150,15 +169,16 @@ appears in purchase history, where it reads as expired.
 | 404 | `Subscription not found.` |
 | 422 | `Subscription is already deactivated.` |
 
-History entry: `Deactivated: end date 2026-12-31 23:59:59 -> 2026-01-01 10:00:00. Remark: Refund issued | by Jane Doe (#5)`
+History entry: `Deactivated: end date 2026-12-31 23:59:59 -> 2026-01-01 10:00:00, status active -> inactive. Remark: Refund issued | by Jane Doe (#5)`
 
 A row is "deactivated" when `startAt === endAt`. Legacy showed this as a red **Deactivated** label.
 
 ## POST `/admin/subscriptions/:id/revert-deactivation`
 
 Undoes the most recent Deactivate. The old end date is read back from the newest
-`Deactivated: end date X -> Y` entry in `remarks`, and `end_at := X`. One `UPDATE` on the
-same row; nothing else is touched.
+`Deactivated: end date X -> Y, status S -> inactive` entry in `remarks`; `end_at := X` and
+`status := S`. Entries written before Deactivate set the status (no `, status …` part)
+restore `status := 1`. One `UPDATE` on the same row; nothing else is touched.
 
 It is refused (nothing written) unless the row's current `end_at` still equals that
 entry's `Y` — i.e. nothing changed the end date after the deactivation (no Add Days,
@@ -182,11 +202,11 @@ carry no old date and cannot be reverted.
 | 422 | `No deactivation with a recorded end date to revert.` |
 | 422 | `Subscription is not deactivated, or was changed after its last deactivation.` |
 
-History entry: `Deactivation reverted: end date 2026-01-01 10:00:00 -> 2026-12-31 23:59:59. Remark: Deactivated by mistake | by Jane Doe (#5)`
+History entry: `Deactivation reverted: end date 2026-01-01 10:00:00 -> 2026-12-31 23:59:59, status inactive -> active. Remark: Deactivated by mistake | by Jane Doe (#5)`
 
 Live course: `POST /admin/live-courses/subscriptions/:id/revert-deactivation`, same body,
-rules and messages; returns `data.subscription`. Permission: `live-courses.edit` or
-`customers.edit` (course/package: `subscriptions.edit` or `customers.edit`).
+rules and messages; returns `data.subscription`. Permission: the type's `.revert` key
+(see Permissions).
 
 The restored end date has second precision (the history stamp's precision); the
 legacy `end_at` column is `datetime`, so nothing finer is lost.
@@ -221,10 +241,10 @@ The same action exists for every product with an `endAt`:
 
 | Route | Permission (any of) | 200 `data` |
 |---|---|---|
-| `POST /admin/subscriptions/:id/add-days` (course / package) | `subscriptions.edit`, `customers.edit` | subscription DTO |
-| `POST /admin/live-courses/subscriptions/:id/add-days` | `live-courses.edit`, `customers.edit` | `{ subscription }` (live DTO) |
-| `POST /admin/test-series/subscriptions/:id/add-days` | `test-series.edit`, `customers.edit` | `{ subscription }` (test-series DTO) |
-| `POST /admin/ebooks/subscriptions/:id/add-days` | `ebooks.edit`, `customers.edit` | `{ subscription }` (same as the ebook PUT) |
+| `POST /admin/subscriptions/:id/add-days` (course / package) | `customers.course-subscriptions.add-days` / `customers.package-subscriptions.add-days` (the row's type) | subscription DTO |
+| `POST /admin/live-courses/subscriptions/:id/add-days` | `customers.live-course-subscriptions.add-days` | `{ subscription }` (live DTO) |
+| `POST /admin/test-series/subscriptions/:id/add-days` | `customers.test-series-subscriptions.add-days` | `{ subscription }` (test-series DTO) |
+| `POST /admin/ebooks/subscriptions/:id/add-days` | `customers.ebook-subscriptions.add-days` | `{ subscription }` (same as the ebook PUT) |
 
 The paid **Subscription Type = Extend** on Add Subscription is unchanged: it still writes a
 new row tied to its own order.
@@ -265,8 +285,8 @@ new row tied to its own order.
 Same three actions on `ws_live_course_subscription`, with the same rules, the same
 history format in its `remarks` column, and the same 422 `messages` map. `:id` is the
 live subscription id. They return `data.subscription` (the
-`GET /admin/live-courses/subscriptions/:id` DTO). Permission: `live-courses.edit` or
-`customers.edit`.
+`GET /admin/live-courses/subscriptions/:id` DTO). Permission: the matching
+`customers.live-course-subscriptions.*` key (see Permissions).
 
 | Route | Body | 200 message |
 |---|---|---|
@@ -279,7 +299,7 @@ live subscription id. They return `data.subscription` (the
   is added. `plan_id`, order, amount, dates and `pc_material_id` are untouched.
   404 `Live course not found.`; 422 `Subscription is already on this live course.` (`messages.liveCourseId`).
 - **move** / **deactivate**: identical to the course/package versions (`customer_id` on the
-  subscription and on its `ws_live_course_order`; `end_at := start_at`, `status` untouched).
+  subscription and on its `ws_live_course_order`; `end_at := start_at`, `status := 0`).
 
 History entry: `Live course changed: Live course "A" (#3) -> Live course "B" (#7). Remark: … | by Jane Doe (#5)`
 
@@ -298,10 +318,11 @@ There is no `/history` route for live subscriptions; the history string is the D
 
 ## Where it lives in the admin panel (`websankul-admin`)
 
-- **Customer details → Courses / Packages tabs:** an **Actions** column (shown when the admin
-  holds `subscriptions.edit` or `customers.edit`) with Change course/package, Move to another
-  customer, and Deactivate. The **Live Courses** tab has the same column (gated on
-  `live-courses.edit` or `customers.edit`), where Change switches to another live course. All three open `SubscriptionActionModal`; after any action the panel stays on the
+- **Customer details → Courses / Packages tabs:** an **Actions** column with Change course/package, Move to another
+  customer, Deactivate and Revert — each button shown only when the admin holds that type's
+  key (see Permissions); the column is hidden when they hold none. The **Live Courses** tab
+  has the same column, where Change switches to another live course. Add Days is gated the
+  same way, per type. All three open `SubscriptionActionModal`; after any action the panel stays on the
   customer and reloads the tables, as legacy does. Legacy gating: every button is disabled
   unless the row is active (`endAt` in the future and `startAt !== endAt`); Add Days is
   disabled on a deactivated row. Deactivation runs in sequence per product: Deactivate

@@ -19,7 +19,7 @@ import {
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
-import { isSuperAdmin } from "../../middlewares/requirePermission";
+import { isSuperAdmin, requirePermission } from "../../middlewares/requirePermission";
 import type { DateShift } from "../../utils/subscriptionRemarkHistory";
 import { success, failure, actionFailure, type ActionError } from "../../utils/httpResponse";
 
@@ -318,6 +318,7 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
     const numId = subSql.parseSubId(req.params.id as string);
     if (!numId)
       return res.status(400).json({ success: false, message: "Invalid subscription id." });
+    if (!(await authorizeSubAction(req, res, "edit", numId))) return;
 
     const data = updateSubscriptionSchema.parse(req.body);
     // Only columns present on ws_package_course_subscription are patched; the
@@ -390,6 +391,25 @@ const subscriptionIdOf = (req: Request): number => (req.params as unknown as { i
 
 const SUBSCRIPTION_NOT_FOUND: ActionError = [404, "Subscription not found."];
 
+/**
+ * The route map can only gate /subscriptions/:id/<action> on "course OR package" (one
+ * route serves both); the row decides which key the caller actually needs. Runs the same
+ * requirePermission check (super-admin bypass, RBAC_ENFORCE shadow/enforce), which sends
+ * the 403 itself — resolves false when it did.
+ */
+const authorizeSubAction = async (
+  req: Request,
+  res: Response,
+  action: "change" | "move" | "deactivate" | "revert" | "add-days" | "edit",
+  id: number = subscriptionIdOf(req)
+): Promise<boolean> => {
+  const kind = await subSql.getSubscriptionKind(id);
+  if (!kind) return true; // the action itself answers 404
+  return new Promise((resolve) => {
+    void requirePermission(`customers.${kind}-subscriptions.${action}`)(req, res, () => resolve(true)).then(() => resolve(false));
+  });
+};
+
 // 409 while a transfer overlaps an active subscription of the same product: nothing is
 // written; the admin re-sends with `confirmDates: true` to apply the queued dates.
 export const dateShiftConfirmation = (res: Response, shift: DateShift): Response =>
@@ -405,6 +425,7 @@ export const dateShiftConfirmation = (res: Response, shift: DateShift): Response
 
 export const changeSubscriptionProduct = async (req: Request, res: Response) => {
   try {
+    if (!(await authorizeSubAction(req, res, "change"))) return;
     const input = req.body as { courseId?: number; packageId?: number; remark?: string; confirmDates?: boolean };
     const result = await subSql.changeSubscriptionProduct(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
@@ -428,6 +449,7 @@ export const changeSubscriptionProduct = async (req: Request, res: Response) => 
 
 export const moveSubscription = async (req: Request, res: Response) => {
   try {
+    if (!(await authorizeSubAction(req, res, "move"))) return;
     const input = req.body as { customerId: number; remark?: string; confirmDates?: boolean };
     const result = await subSql.moveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
@@ -451,6 +473,7 @@ export const moveSubscription = async (req: Request, res: Response) => {
 
 export const deactivateSubscription = async (req: Request, res: Response) => {
   try {
+    if (!(await authorizeSubAction(req, res, "deactivate"))) return;
     const input = req.body as { remark?: string };
     const result = await subSql.deactivateSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
@@ -476,6 +499,7 @@ export const REVERT_DEACTIVATION_ERRORS: Record<"no_record" | "not_deactivated",
 
 export const revertSubscriptionDeactivation = async (req: Request, res: Response) => {
   try {
+    if (!(await authorizeSubAction(req, res, "revert"))) return;
     const input = req.body as { remark?: string };
     const result = await subSql.revertSubscriptionDeactivation(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
@@ -493,6 +517,7 @@ export const revertSubscriptionDeactivation = async (req: Request, res: Response
 
 export const addSubscriptionDays = async (req: Request, res: Response) => {
   try {
+    if (!(await authorizeSubAction(req, res, "add-days"))) return;
     const input = req.body as { days: number; remark?: string };
     const result = await subSql.addSubscriptionDays(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 

@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-10-06 — Per-action subscription permissions
+
+> **DDL:** none. **Data:** 17 new `ws_permissions` rows (guard `web`, category Customers),
+> inserted by the boot catalog sync. **Response:** unchanged.
+
+- New keys `customers.{course,package,live-course}-subscriptions.{change,move,deactivate,revert,add-days}`
+  and `customers.{test-series,ebook}-subscriptions.add-days`. The customer-detail action
+  routes (`/subscriptions/:id/*`, `/live-courses/subscriptions/:id/*`,
+  `/ebooks|test-series/subscriptions/:id/add-days`) now require these instead of
+  `subscriptions.edit` / `live-courses.edit` / `ebooks.edit` / `test-series.edit` /
+  `customers.edit`. No role is granted them automatically — assign in Roles.
+- `customers.{course,package}-subscriptions.edit` gate `PUT|PATCH /subscriptions/:id` (the row's
+  own type, checked in the controller). `subscriptions.edit` and `subscriptions.toggle-status`
+  are dropped from the catalog (the module keeps view / create / delete); their old
+  `ws_permissions` rows stay until `scripts/cleanup-web-permissions.ts --apply`.
+
+---
+
 ## 2026-10-05 — Admin: revert the last subscription deactivation
 
 > **DDL:** none. **Data:** none. **Response:** existing endpoints unchanged; two new routes.
@@ -443,11 +461,12 @@ and returns the entitlement the first caller produced.
   `package_id` (`pcb_id` is never touched); move writes `customer_id` on the subscription and,
   in the same transaction, on its `ws_package_course_order` (skipped when another
   subscription shares that order); deactivate
-  writes only `end_at := start_at` (now if no start). Each also writes `remarks`,
+  writes `end_at := start_at` (now if no start) and `status := 0`; revert restores both.
+  Each also writes `remarks`,
   `updated_by`, `updated_at`.
 - **Live course (`ws_live_course_subscription`, same rules):** `changeSubscriptionLiveCourse`
   writes only `live_course_id` (`plan_id` untouched), `moveLiveSubscription`
-  `customer_id` (plus `ws_live_course_order.customer_id`, same rule), `deactivateLiveSubscription` only `end_at`, each plus `remarks`,
+  `customer_id` (plus `ws_live_course_order.customer_id`, same rule), `deactivateLiveSubscription` `end_at` + `status := 0`, each plus `remarks`,
   `updated_by`, `updated_at`. Reads `ws_live_course`, `ws_customer`, `ws_users`.
 - **`admin-customer-details.repository.ts` `courseSubWindows` / `packageSubWindows` /
   `liveCourseSubWindows`:** one `SELECT id, <product>_id, start_at, end_at` per tab for the

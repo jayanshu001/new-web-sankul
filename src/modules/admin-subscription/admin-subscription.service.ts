@@ -558,6 +558,13 @@ const productLabel = async ({ courseId, packageId }: Product): Promise<string> =
   return "none";
 };
 
+// Which per-type permission key (customers.<kind>-subscriptions.*) a row's actions need.
+export const getSubscriptionKind = async (id: number): Promise<"course" | "package" | null> => {
+  const row = await repo.findCourseSubById(id);
+  if (!row) return null;
+  return row.courseId ? "course" : row.packageId ? "package" : null;
+};
+
 export type ChangeProductResult =
   | { ok: false; reason: "not_found" | "target_not_found" | "same_target" }
   | { ok: false; reason: "needs_confirmation"; dateShift: DateShift }
@@ -659,6 +666,7 @@ export const deactivateSubscription = async (
 
   await repo.patchSub(id, {
     endAt: deactivation.endAt,
+    status: deactivation.status,
     remarks: await withHistory(existing.remarks, deactivation.what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,
@@ -684,6 +692,7 @@ export const revertSubscriptionDeactivation = async (
   const now = new Date();
   await repo.patchSub(id, {
     endAt: revert.endAt,
+    status: revert.status,
     remarks: await withHistory(existing.remarks, revert.what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,

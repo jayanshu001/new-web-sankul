@@ -54,7 +54,8 @@ export const toTestSeriesSubDto = (row: any, customers: Map<number, any>, series
   const ts = row.testSeriesId != null ? series.get(row.testSeriesId) : null;
   return {
     _id: String(row.id),
-    paidAmount: num(row.price),
+    // `price` → `amount` (2026-08-31 rename); reading `price` showed every row as ₹0.
+    paidAmount: num(row.amount),
     status: row.status,
     createdAt: row.createdAt ?? null,
     customerId: toCustomerRef(row.customerId != null ? customers.get(row.customerId) : null),

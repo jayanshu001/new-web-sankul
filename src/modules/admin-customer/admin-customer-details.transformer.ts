@@ -3,7 +3,8 @@
  * exact DTO shape the legacy Mongo customer-details handler returned, so the
  * admin UI is identical on either backend. Refs are emitted as `{ _id, name, … }`
  * populated sub-objects; Decimals become numbers; `isActive` = status && endAt>now,
- * and never for a zero-length window (Deactivate sets end_at := start_at).
+ * and never for a zero-length window (Deactivate sets end_at := start_at and status = 0;
+ * the course/package payment label, derived from status, keeps "verified" for those).
  */
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 import { isDeactivatedWindow } from "../../utils/subscriptionRemarkHistory";
@@ -47,7 +48,7 @@ export const toCourseDto = (
     courseId: ref(s.courseId, course && { name: course.name, image: course.image, level: course.level }),
     packageId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
     paidAmount: dec(s.amount),
-    paymentStatus: s.status ? "verified" : "pending",
+    paymentStatus: s.status || isDeactivatedWindow(s) ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,
     isActive: isActiveOf(s, now),
@@ -66,7 +67,7 @@ export const toPackageDto = (
     targetPackageId: ref(s.packageId, pkg && { name: pkg.name, image: pkg.image }),
     packageId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
     paidAmount: dec(s.amount),
-    paymentStatus: s.status ? "verified" : "pending",
+    paymentStatus: s.status || isDeactivatedWindow(s) ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,
     isActive: isActiveOf(s, now),
@@ -117,7 +118,7 @@ export const toLiveCourseDto = (
     discountAmount: pay && (pay.promocode != null || pay.refferalcode != null) ? liveSubDiscountAmount(pay) : null,
     paymentStatus: pay
       ? (pay.status === "complete" ? "verified" : pay.status === "cancel" ? "failed" : pay.status ?? "pending")
-      : (s.status ? "verified" : "pending"),
+      : (s.status || isDeactivatedWindow(s) ? "verified" : "pending"),
     startAt: s.startAt,
     endAt: s.endAt,
     isActive: isActiveOf(s, now),

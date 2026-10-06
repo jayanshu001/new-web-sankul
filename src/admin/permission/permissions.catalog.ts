@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.09.23-1";
+export const CATALOG_VERSION = "2026.10.06-2";
 
 export interface CatalogPermission {
   key: string;
@@ -108,6 +108,26 @@ const rawMod = (
 // NOTE: the `web` catalog is the 5 STANDARD_5 actions per module by default
 // (2026-07-20). Per-module `extras` are the exception, added only on an explicit
 // product decision (first: `customers`, 2026-09-11). Non-web guards use `rawMod()`.
+
+
+// Per-subscription-type admin actions on the customer-detail page (2026-10-06). One key
+// per type × action, so a role can e.g. add days without being able to deactivate.
+const SUBSCRIPTION_ACTION_LABELS: Record<string, (type: string) => string> = {
+  change: (t) => `Change ${t} subscription to another product`,
+  move: (t) => `Move ${t} subscription to another customer`,
+  deactivate: (t) => `Deactivate ${t} subscription`,
+  revert: (t) => `Revert ${t} subscription deactivation`,
+  "add-days": (t) => `Add days to ${t} subscription`,
+  edit: (t) => `Edit ${t} subscription (dates, status, shipping, payment)`,
+};
+const subscriptionActionKeys = (subResource: string, type: string, actions: string[]): CatalogPermission[] =>
+  actions.map((action) => ({
+    key: `customers.${subResource}.${action}`,
+    label: SUBSCRIPTION_ACTION_LABELS[action](type),
+    action,
+    subResource,
+  }));
+const ALL_SUBSCRIPTION_ACTIONS = ["change", "move", "deactivate", "revert", "add-days"];
 
 export const PERMISSION_CATALOG: CatalogModule[] = [
   // ── Master Data ──────────────────────────────────────────────────────────
@@ -230,11 +250,19 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
         action: "create",
         subResource: "ebook-subscriptions",
       },
+      // `edit` = the general edit on the Subscriptions list (PUT /subscriptions/:id).
+      ...subscriptionActionKeys("course-subscriptions", "course", [...ALL_SUBSCRIPTION_ACTIONS, "edit"]),
+      ...subscriptionActionKeys("package-subscriptions", "package", [...ALL_SUBSCRIPTION_ACTIONS, "edit"]),
+      ...subscriptionActionKeys("live-course-subscriptions", "live course", ALL_SUBSCRIPTION_ACTIONS),
+      ...subscriptionActionKeys("test-series-subscriptions", "test series", ["add-days"]),
+      ...subscriptionActionKeys("ebook-subscriptions", "ebook", ["add-days"]),
     ],
   }),
 
   // ── Subscriptions (admin-wide) ───────────────────────────────────────────
-  mod("subscriptions", "Subscriptions", "Subscriptions"),
+  // No `edit` / `toggle-status` (2026-10-06): editing a row is per type
+  // (customers.<type>-subscriptions.edit and the action keys); there is no status toggle.
+  mod("subscriptions", "Subscriptions", "Subscriptions", { standard: ["view", "create", "delete"] }),
 
   // ── Reports (sidebar "Reports") ──────────────────────────────────────────
   // 2026-09-23: one view-only key per report screen. `ebooks.subscriptions` and

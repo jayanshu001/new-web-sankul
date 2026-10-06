@@ -156,35 +156,48 @@ export const planDateShift = (
   };
 };
 
+const statusLabel = (status: boolean | null | undefined): string => (status ? "active" : "inactive");
+
+// Deactivate closes the window (end_at := start_at) AND sets status = 0. The previous
+// status is written into the entry so Revert can put it back.
 export const planDeactivation = (
-  current: { startAt: Date | null; endAt: Date | null },
+  current: { startAt: Date | null; endAt: Date | null; status: boolean | null },
   now: Date
-): { endAt: Date; what: string } | null => {
+): { endAt: Date; status: false; what: string } | null => {
   const endAt = current.startAt ?? now;
   if (current.endAt?.getTime() === endAt.getTime()) return null;
-  return { endAt, what: `Deactivated: end date ${fmtExportDate(current.endAt) || "none"} -> ${fmtExportDate(endAt)}` };
+  return {
+    endAt,
+    status: false,
+    what:
+      `Deactivated: end date ${fmtExportDate(current.endAt) || "none"} -> ${fmtExportDate(endAt)}, ` +
+      `status ${statusLabel(current.status)} -> inactive`,
+  };
 };
 
-const DEACTIVATED_RE = /^Deactivated: end date (none|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) -> (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
+// Group 3 (the pre-deactivation status) is absent on entries written before Deactivate
+// set status = 0; those rows were active when deactivated (the UI only offers it then).
+const DEACTIVATED_RE = /^Deactivated: end date (none|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) -> (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:, status (active|inactive) -> inactive)?/;
 
 const parseIstStamp = (stamp: string): Date => new Date(`${stamp.replace(" ", "T")}+05:30`);
 
 export const planDeactivationRevert = (
   current: { endAt: Date | null; remarks: string | null }
-): { ok: false; reason: "no_record" | "not_deactivated" } | { ok: true; endAt: Date; what: string } => {
+): { ok: false; reason: "no_record" | "not_deactivated" } | { ok: true; endAt: Date; status: boolean; what: string } => {
   const lastDeactivation = parseRaw(current.remarks)
     .sort(newestFirst)
     .map((e) => e.text.match(DEACTIVATED_RE))
     .find((m): m is RegExpMatchArray => m !== null);
   if (!lastDeactivation || lastDeactivation[1] === "none") return { ok: false, reason: "no_record" };
 
-  const [, previousEnd, deactivatedEnd] = lastDeactivation;
+  const [, previousEnd, deactivatedEnd, previousStatus = "active"] = lastDeactivation;
   if (fmtExportDate(current.endAt) !== deactivatedEnd) return { ok: false, reason: "not_deactivated" };
 
   return {
     ok: true,
     endAt: parseIstStamp(previousEnd),
-    what: `Deactivation reverted: end date ${deactivatedEnd} -> ${previousEnd}`,
+    status: previousStatus === "active",
+    what: `Deactivation reverted: end date ${deactivatedEnd} -> ${previousEnd}, status inactive -> ${previousStatus}`,
   };
 };
 
