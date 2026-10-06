@@ -9,6 +9,7 @@ subscription actions the legacy panel offered on **Customer details → Package/
 | ⇄ Move to other customer (`moveSubscription`)         | `POST /api/v1/admin/subscriptions/:id/move`            |
 | ⊘ Deactivate (`deactivateCourse`)                     | `POST /api/v1/admin/subscriptions/:id/deactivate`      |
 | Add Days (`Customers::update_subcription`)             | `POST /api/v1/admin/subscriptions/:id/add-days`        |
+| — (new: undo the last Deactivate)                      | `POST /api/v1/admin/subscriptions/:id/revert-deactivation` |
 | Remarks history column                                | `GET  /api/v1/admin/subscriptions/:id/history`         |
 
 `:id` = `ws_package_course_subscription.id` (the `id` / `_id` of a subscription row).
@@ -119,6 +120,43 @@ appears in purchase history, where it reads as expired.
 History entry: `Deactivated: end date 2026-12-31 23:59:59 -> 2026-01-01 10:00:00. Remark: Refund issued | by Jane Doe (#5)`
 
 A row is "deactivated" when `startAt === endAt`. Legacy showed this as a red **Deactivated** label.
+
+## POST `/admin/subscriptions/:id/revert-deactivation`
+
+Undoes the most recent Deactivate. The old end date is read back from the newest
+`Deactivated: end date X -> Y` entry in `remarks`, and `end_at := X`. One `UPDATE` on the
+same row; nothing else is touched.
+
+It is refused (nothing written) unless the row's current `end_at` still equals that
+entry's `Y` — i.e. nothing changed the end date after the deactivation (no Add Days,
+no PUT edit, not already reverted). Legacy free-text entries such as `deactivated: fraud`
+carry no old date and cannot be reverted.
+
+```json
+{}
+{ "remark": "Deactivated by mistake" }
+```
+
+| Field | Rule |
+|---|---|
+| `remark` | optional, max 500 chars |
+
+200 `message: "Deactivation reverted."`, `data` = the `GET /admin/subscriptions/:id` DTO.
+
+| Status | message |
+|---|---|
+| 404 | `Subscription not found.` |
+| 422 | `No deactivation with a recorded end date to revert.` |
+| 422 | `Subscription is not deactivated, or was changed after its last deactivation.` |
+
+History entry: `Deactivation reverted: end date 2026-01-01 10:00:00 -> 2026-12-31 23:59:59. Remark: Deactivated by mistake | by Jane Doe (#5)`
+
+Live course: `POST /admin/live-courses/subscriptions/:id/revert-deactivation`, same body,
+rules and messages; returns `data.subscription`. Permission: `live-courses.edit` or
+`customers.edit` (course/package: `subscriptions.edit` or `customers.edit`).
+
+The restored end date has second precision (the history stamp's precision); the
+legacy `end_at` column is `datetime`, so nothing finer is lost.
 
 ## POST `/admin/subscriptions/:id/add-days`
 

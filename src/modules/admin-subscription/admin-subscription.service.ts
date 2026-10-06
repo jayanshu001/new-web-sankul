@@ -17,6 +17,7 @@ import {
   parseRemarkHistory,
   planAddDays,
   planDeactivation,
+  planDeactivationRevert,
 } from "../../utils/subscriptionRemarkHistory";
 
 // Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
@@ -636,6 +637,31 @@ export const deactivateSubscription = async (
   await repo.patchSub(id, {
     endAt: deactivation.endAt,
     remarks: await withHistory(existing.remarks, deactivation.what, input, now),
+    actingAdminId: input.actingAdminId ?? null,
+    now,
+  });
+
+  return { ok: true, customerId: existing.customerId ?? null, data: await getCourseSubscriptionById(id) };
+};
+
+export type RevertDeactivationResult =
+  | { ok: false; reason: "not_found" | "no_record" | "not_deactivated" }
+  | { ok: true; customerId: number | null; data: any };
+
+export const revertSubscriptionDeactivation = async (
+  id: number,
+  input: HistoryInput
+): Promise<RevertDeactivationResult> => {
+  const existing = await repo.findCourseSubById(id);
+  if (!existing || (!existing.courseId && !existing.packageId)) return { ok: false, reason: "not_found" };
+
+  const revert = planDeactivationRevert(existing);
+  if (!revert.ok) return revert;
+
+  const now = new Date();
+  await repo.patchSub(id, {
+    endAt: revert.endAt,
+    remarks: await withHistory(existing.remarks, revert.what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,
   });

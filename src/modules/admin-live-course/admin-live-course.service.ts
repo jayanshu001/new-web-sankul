@@ -36,7 +36,7 @@ import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
-import { appendAdminRemark, movedRemarkText, planAddDays, planDeactivation } from "../../utils/subscriptionRemarkHistory";
+import { appendAdminRemark, movedRemarkText, planAddDays, planDeactivation, planDeactivationRevert } from "../../utils/subscriptionRemarkHistory";
 
 
 export const parseLiveId = (id: string): number | null => {
@@ -1130,6 +1130,29 @@ export const deactivateLiveSubscription = async (
   const updated = await repo.updateSubscription(id, {
     endAt: deactivation.endAt,
     ...(await historyPatch(existing.remarks, deactivation.what, input, now)),
+  });
+
+  return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };
+};
+
+export type RevertLiveDeactivationResult =
+  | { ok: false; reason: "not_found" | "no_record" | "not_deactivated" }
+  | { ok: true; customerId: number; data: any };
+
+export const revertLiveSubscriptionDeactivation = async (
+  id: number,
+  input: HistoryInput
+): Promise<RevertLiveDeactivationResult> => {
+  const existing = await repo.findSubscriptionById(id);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const revert = planDeactivationRevert(existing);
+  if (!revert.ok) return revert;
+
+  const now = new Date();
+  const updated = await repo.updateSubscription(id, {
+    endAt: revert.endAt,
+    ...(await historyPatch(existing.remarks, revert.what, input, now)),
   });
 
   return { ok: true, customerId: existing.customerId, data: await hydrateOne(updated) };

@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-10-05 — Admin: revert the last subscription deactivation
+
+> **DDL:** none. **Data:** none. **Response:** existing endpoints unchanged; two new routes.
+
+- New `POST /admin/subscriptions/:id/revert-deactivation` and
+  `POST /admin/live-courses/subscriptions/:id/revert-deactivation` `{ remark? }`.
+- One `UPDATE` of the row: `end_at` := the "before" date parsed from the newest
+  `Deactivated: end date X -> Y` entry in `remarks` (`utils/subscriptionRemarkHistory.planDeactivationRevert`,
+  IST stamp → `+05:30`), plus a `Deactivation reverted: …` history entry, `updated_by`, `updated_at`.
+- Guard: refused unless the current `end_at` still formats to that entry's `Y`, so a revert can
+  never undo a later Add Days / edit, and cannot run twice.
+- Admin panel: a deactivated row's Actions cell shows a Revert button
+  (`SubscriptionActionModal` action `revert`, remark optional).
+- Spec: `docs/SUBSCRIPTION_COURSE_CHANGE_ADMIN.md` § revert-deactivation.
+
+---
+
 ## 2026-10-05 — Admin "Add Days" extends the subscription row in place (all products)
 
 > **DDL:** none. **Data:** none. **Response:** existing endpoints unchanged; four new routes.

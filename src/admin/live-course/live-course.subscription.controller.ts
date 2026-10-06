@@ -4,6 +4,7 @@ import { success, failure, failureFrom, getErrorMessage, actionFailure, type Act
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
+import { REVERT_DEACTIVATION_ERRORS } from "../subscription/subscription.controller";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { PaymentMethod } from "../../shared/enums";
 import { assertReportStatus } from "../../utils/reportFilters";
@@ -322,5 +323,23 @@ export const addLiveCourseSubscriptionDays = async (req: Request, res: Response)
   } catch (err) {
     logActionFailure(req, "addLiveCourseSubscriptionDays", err);
     return failure(res, "Failed to add days.", 500);
+  }
+};
+
+export const revertLiveCourseSubscriptionDeactivation = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { remark?: string };
+    const result = await liveSql.revertLiveSubscriptionDeactivation(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = { not_found: SUBSCRIPTION_NOT_FOUND, ...REVERT_DEACTIVATION_ERRORS };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    await flushUserRouteCache(result.customerId);
+    return success(res, { subscription: result.data }, "Deactivation reverted.");
+  } catch (err) {
+    logActionFailure(req, "revertLiveCourseSubscriptionDeactivation", err);
+    return failure(res, "Failed to revert deactivation.", 500);
   }
 };

@@ -62,10 +62,11 @@ import {
   moveLiveCourseSubscription,
   deactivateLiveCourseSubscription,
   addLiveCourseSubscriptionDays,
+  revertLiveCourseSubscriptionDeactivation,
 } from "./live-course.subscription.controller";
 import { validate } from "../../middlewares/validate";
 import { changeLiveCourseSchema } from "./live-course.validation";
-import { addDaysSchema, deactivateSubscriptionSchema, moveSubscriptionSchema, subscriptionRowParamsSchema } from "../subscription/subscription.validation";
+import { addDaysSchema, deactivateSubscriptionSchema, moveSubscriptionSchema, revertDeactivationSchema, subscriptionRowParamsSchema } from "../subscription/subscription.validation";
 
 const router = Router();
 
@@ -108,6 +109,11 @@ router.post(
   "/subscriptions/:subscriptionId/add-days",
   validate({ params: subscriptionRowParamsSchema, body: addDaysSchema }),
   addLiveCourseSubscriptionDays
+);
+router.post(
+  "/subscriptions/:subscriptionId/revert-deactivation",
+  validate({ params: subscriptionRowParamsSchema, body: revertDeactivationSchema }),
+  revertLiveCourseSubscriptionDeactivation
 );
 
 // --- Live course CRUD -------------------------------------------------------

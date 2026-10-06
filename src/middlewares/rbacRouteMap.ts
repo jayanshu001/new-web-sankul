@@ -384,6 +384,7 @@ R("POST", "/subscriptions/:id/change-product", "subscriptions.edit", "customers.
 R("POST", "/subscriptions/:id/move", "subscriptions.edit", "customers.edit");
 R("POST", "/subscriptions/:id/deactivate", "subscriptions.edit", "customers.edit");
 R("POST", "/subscriptions/:id/add-days", "subscriptions.edit", "customers.edit");
+R("POST", "/subscriptions/:id/revert-deactivation", "subscriptions.edit", "customers.edit");
 crud("/subscriptions", "subscriptions");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
@@ -513,6 +514,7 @@ R("POST", "/live-courses/subscriptions/:id/change-course", "live-courses.edit", 
 R("POST", "/live-courses/subscriptions/:id/move", "live-courses.edit", "customers.edit");
 R("POST", "/live-courses/subscriptions/:id/deactivate", "live-courses.edit", "customers.edit");
 R("POST", "/live-courses/subscriptions/:id/add-days", "live-courses.edit", "customers.edit");
+R("POST", "/live-courses/subscriptions/:id/revert-deactivation", "live-courses.edit", "customers.edit");
 R("DELETE", "/live-courses/subscriptions/:id", "live-courses.delete");
 R("GET", "/live-courses/:id/sessions", ...view("live-courses"));
 R("GET", "/live-courses/:id/plans", ...view("live-courses"));

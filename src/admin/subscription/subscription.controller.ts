@@ -453,6 +453,28 @@ export const deactivateSubscription = async (req: Request, res: Response) => {
   }
 };
 
+export const REVERT_DEACTIVATION_ERRORS: Record<"no_record" | "not_deactivated", ActionError> = {
+  no_record: [422, "No deactivation with a recorded end date to revert."],
+  not_deactivated: [422, "Subscription is not deactivated, or was changed after its last deactivation."],
+};
+
+export const revertSubscriptionDeactivation = async (req: Request, res: Response) => {
+  try {
+    const input = req.body as { remark?: string };
+    const result = await subSql.revertSubscriptionDeactivation(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
+
+    if (!result.ok) {
+      const errors: Record<typeof result.reason, ActionError> = { not_found: SUBSCRIPTION_NOT_FOUND, ...REVERT_DEACTIVATION_ERRORS };
+      return actionFailure(res, errors[result.reason]);
+    }
+
+    if (result.customerId) await flushUserRouteCache(result.customerId);
+    return success(res, result.data, "Deactivation reverted.");
+  } catch (error) {
+    return failure(res, (error as Error).message, 500);
+  }
+};
+
 export const addSubscriptionDays = async (req: Request, res: Response) => {
   try {
     const input = req.body as { days: number; remark?: string };

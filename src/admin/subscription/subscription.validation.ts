@@ -161,7 +161,13 @@ export const deactivateSubscriptionSchema = z.object({
   remark: historyRemarkSchema,
 });
 
+const optionalHistoryRemarkSchema = z.string().trim().max(500).optional();
+
 export const addDaysSchema = z.object({
   days: z.coerce.number().int().positive("Days must be a positive whole number."),
-  remark: z.string().trim().max(500).optional(),
+  remark: optionalHistoryRemarkSchema,
+});
+
+export const revertDeactivationSchema = z.object({
+  remark: optionalHistoryRemarkSchema,
 });

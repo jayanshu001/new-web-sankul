@@ -119,6 +119,29 @@ export const planDeactivation = (
   return { endAt, what: `Deactivated: end date ${fmtExportDate(current.endAt) || "none"} -> ${fmtExportDate(endAt)}` };
 };
 
+const DEACTIVATED_RE = /^Deactivated: end date (none|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) -> (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
+
+const parseIstStamp = (stamp: string): Date => new Date(`${stamp.replace(" ", "T")}+05:30`);
+
+export const planDeactivationRevert = (
+  current: { endAt: Date | null; remarks: string | null }
+): { ok: false; reason: "no_record" | "not_deactivated" } | { ok: true; endAt: Date; what: string } => {
+  const lastDeactivation = parseRaw(current.remarks)
+    .sort(newestFirst)
+    .map((e) => e.text.match(DEACTIVATED_RE))
+    .find((m): m is RegExpMatchArray => m !== null);
+  if (!lastDeactivation || lastDeactivation[1] === "none") return { ok: false, reason: "no_record" };
+
+  const [, previousEnd, deactivatedEnd] = lastDeactivation;
+  if (fmtExportDate(current.endAt) !== deactivatedEnd) return { ok: false, reason: "not_deactivated" };
+
+  return {
+    ok: true,
+    endAt: parseIstStamp(previousEnd),
+    what: `Deactivation reverted: end date ${deactivatedEnd} -> ${previousEnd}`,
+  };
+};
+
 export const planAddDays = (
   current: { endAt: Date | null },
   days: number,
