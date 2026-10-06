@@ -3,7 +3,7 @@ import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
-import { getDashboard, getDashboardTrending } from "./dashboard.controller";
+import { getDashboard, getDashboardRecent, getDashboardTrending } from "./dashboard.controller";
 
 const router = Router();
 
@@ -21,5 +21,7 @@ router.get("/", cacheRoute({ ttl: CACHE_TTL.ADMIN_DASHBOARD, entity: CacheEntity
 // Top sellers over the last 7/30 days. Fetched lazily by the dashboard's per-card
 // tabs, kept out of the main payload so it never slows the first paint.
 router.get("/trending", cacheRoute({ ttl: CACHE_TTL.ADMIN_DASHBOARD, entity: CacheEntity.AdminDashboard, scope: CacheScope.Shared }), getDashboardTrending);
+// Next pages of the Activity cards' "Recent" tab (infinite scroll); page one ships in "/".
+router.get("/recent", cacheRoute({ ttl: CACHE_TTL.ADMIN_DASHBOARD, entity: CacheEntity.AdminDashboard, scope: CacheScope.Shared }), getDashboardRecent);
 
 export default router;

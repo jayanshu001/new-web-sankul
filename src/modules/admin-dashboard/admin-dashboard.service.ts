@@ -138,6 +138,79 @@ const summaryCounters = async () => {
   };
 };
 
+// ── recent purchases (Activity cards' "Recent" tab), offset-paginated ─────────
+// The dashboard payload carries the first page; GET /admin/dashboard/recent serves
+// the rest as the card scrolls. Every list orders by (created_at, id) DESC so offset
+// pages never repeat or skip a row when two share a timestamp.
+export type ActivityType = "package" | "course" | "book" | "ebook" | "testSeries" | "liveCourse";
+
+const customerRef = { select: { id: true, fullName: true, phoneNumber: true } } as const;
+const productRef = { select: { id: true, name: true, image: true } } as const;
+
+const refMaps = async (rows: { customerId?: number | null }[], ids: number[], load: (ids: number[]) => Promise<any[]>) => {
+  const custIds = [...new Set(rows.map((r) => r.customerId).filter((x): x is number => x != null))];
+  const [custRows, refRows] = await Promise.all([
+    custIds.length ? prisma.customer.findMany({ where: { id: { in: custIds } }, ...customerRef }) : Promise.resolve([]),
+    ids.length ? load(ids) : Promise.resolve([]),
+  ]);
+  return { custMap: new Map(custRows.map((c) => [c.id, c])), refMap: new Map(refRows.map((r: any) => [r.id, r])) };
+};
+
+export const fetchRecent = async (type: ActivityType, skip: number, take: number): Promise<any[]> => {
+  const order = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  switch (type) {
+    // Old-dashboard rule: only subscriptions whose order is complete.
+    case "package":
+      return (await prisma.packageCourseSubscription.findMany({ where: { courseId: null, packageId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { package: productRef, customer: customerRef }, orderBy: order, skip, take }))
+        .map(dashTransformer.toPackageSubDto);
+    case "course":
+      return (await prisma.packageCourseSubscription.findMany({ where: { courseId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { course: productRef, customer: customerRef }, orderBy: order, skip, take }))
+        .map(dashTransformer.toCourseSubDto);
+    case "ebook":
+      return (await prisma.eBookSubscription.findMany({ include: { eBook: productRef, customer: customerRef }, orderBy: order, skip, take }))
+        .map(dashTransformer.toEbookSubDto);
+    case "book": {
+      // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
+      const orders = await prisma.bookOrder.findMany({ where: { status: "verified" }, select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: order, skip, take });
+      // Line items: child rows preferred, else the order_items JSON; then batch-load books.
+      const childRows = orders.length
+        ? await prisma.bookOrderItem.findMany({ where: { order_id: { in: orders.map((o) => o.receiptId) } }, include: { Book: { select: { name: true } } } })
+        : [];
+      const childByReceipt = new Map<string, any[]>();
+      for (const it of childRows) childByReceipt.set(it.order_id, [...(childByReceipt.get(it.order_id) ?? []), it]);
+      const itemsByOrder = new Map(orders.map((o) => {
+        const child = childByReceipt.get(o.receiptId);
+        return [o.id, child?.length ? dashTransformer.itemsFromChildRows(child) : dashTransformer.itemsFromJson(o.orderItems)] as const;
+      }));
+      const bookIds = [...new Set([...itemsByOrder.values()].flat().map((i) => i.bookId).filter((id): id is number => id != null))];
+      const bookRows = bookIds.length ? await prisma.book.findMany({ where: { id: { in: bookIds } }, ...productRef }) : [];
+      const bookMap = new Map(bookRows.map((b) => [b.id, b]));
+      return orders.map((o) => dashTransformer.toBookOrderDto(o, itemsByOrder.get(o.id) ?? [], bookMap));
+    }
+    case "testSeries": {
+      // No Prisma relation to ws_test_series_order, so the completed-order filter is a raw id page.
+      const ids = (await prisma.$queryRawUnsafe<{ id: number }[]>(
+        `SELECT s.id FROM ws_test_series_subscription s JOIN ws_test_series_order o ON o.id = s.order_id
+         WHERE o.status = 'complete' ORDER BY o.created_at DESC, s.id DESC LIMIT ? OFFSET ?`,
+        take, skip
+      )).map((r) => Number(r.id));
+      if (!ids.length) return [];
+      const rank = new Map(ids.map((id, i) => [id, i]));
+      const subs = (await prisma.testSeriesSubscription.findMany({ where: { id: { in: ids } } })).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
+      const { custMap, refMap } = await refMaps(subs, [...new Set(subs.map((r) => r.testSeriesId))],
+        (ids) => prisma.testSeries.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, thumbnail: true } }));
+      return subs.map((r) => dashTransformer.toTestSeriesSubDto(r, custMap, refMap));
+    }
+    case "liveCourse": {
+      // "Recent purchases" is an ORDER concern — a renewal shows up as its own recent sale.
+      const orders = await prisma.liveCourseOrder.findMany({ where: { status: "complete" }, orderBy: order, skip, take });
+      const { custMap, refMap } = await refMaps(orders, [...new Set(orders.map((r) => r.liveCourseId))],
+        (ids) => prisma.liveCourse.findMany({ where: { id: { in: ids } }, ...productRef }));
+      return orders.map((r) => dashTransformer.toLiveCourseSubDto(r, custMap, refMap));
+    }
+  }
+};
+
 export const fetchDashboardData = async (opts: {
   orderWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
   totalWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
@@ -169,65 +242,12 @@ export const fetchDashboardData = async (opts: {
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
     paidSubSeriesFor("ws_test_series_subscription", "ws_test_series_order", "o.discount_price", tot, unit),
     paidSubSeriesFor("ws_live_course_subscription", "ws_live_course_order", "o.discount_price", tot, unit),
-    prisma.packageCourseSubscription.findMany({ where: { courseId: null, packageId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.packageCourseSubscription.findMany({ where: { courseId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
-    // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
-    prisma.bookOrder.findMany({ where: { status: "verified" }, select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.eBookSubscription.findMany({ include: { eBook: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
-    // TestSeries/LiveCourse subscription models carry only scalar FKs (no Prisma
-    // relations) — refs are batch-loaded below.
-    // No Prisma relation to ws_test_series_order, so the completed-order filter is a raw id lookup.
-    (async () => {
-      const ids = (await prisma.$queryRawUnsafe<{ id: number }[]>(
-        `SELECT s.id FROM ws_test_series_subscription s JOIN ws_test_series_order o ON o.id = s.order_id
-         WHERE o.status = 'complete' ORDER BY o.created_at DESC LIMIT ${limit}`
-      )).map((r) => Number(r.id));
-      return ids.length ? prisma.testSeriesSubscription.findMany({ where: { id: { in: ids } }, orderBy: { createdAt: "desc" } }) : [];
-    })(),
-    // "Recent purchases" is an ORDER concern — reading the order table also makes a
-    // renewal show up as its own recent sale (2026-08-25 split).
-    prisma.liveCourseOrder.findMany({ where: { status: "complete" }, orderBy: { createdAt: "desc" }, take: limit }),
+    fetchRecent("package", 0, limit), fetchRecent("course", 0, limit), fetchRecent("book", 0, limit),
+    fetchRecent("ebook", 0, limit), fetchRecent("testSeries", 0, limit), fetchRecent("liveCourse", 0, limit),
     summaryCounters(),
   ]);
 
   const series = [...pkgSeries, ...courseSeries, ...ebookSeries, ...bookSeries, ...tsSeries, ...lcSeries];
-
-  // ── test-series + live-course recents: batch-load customer + catalog refs ──────
-  const custIds = [...new Set([...recentTestSeriesSubs, ...recentLiveCourseSubs].map((s) => s.customerId).filter((x): x is number => x != null))];
-  const custRows = custIds.length ? await prisma.customer.findMany({ where: { id: { in: custIds } }, select: { id: true, fullName: true, phoneNumber: true } }) : [];
-  const custMap = new Map(custRows.map((c) => [c.id, c]));
-  const tsIds = [...new Set(recentTestSeriesSubs.map((s) => s.testSeriesId).filter((x): x is number => x != null))];
-  const tsRows = tsIds.length ? await prisma.testSeries.findMany({ where: { id: { in: tsIds } }, select: { id: true, title: true, thumbnail: true } }) : [];
-  const tsMap = new Map(tsRows.map((t) => [t.id, t]));
-  const lcIds = [...new Set(recentLiveCourseSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null))];
-  const lcRows = lcIds.length ? await prisma.liveCourse.findMany({ where: { id: { in: lcIds } }, select: { id: true, name: true, image: true } }) : [];
-  const lcMap = new Map(lcRows.map((l) => [l.id, l]));
-
-  // ── recent book orders: resolve line items (child rows preferred, else JSON)
-  //    then batch-load referenced books to populate name/image on items[].bookId.
-  const childRows = await prisma.bookOrderItem.findMany({
-    where: { order_id: { in: recentBookOrders.map((o) => o.receiptId) } },
-    include: { Book: { select: { name: true } } },
-  });
-  const childByReceipt = new Map<string, any[]>();
-  for (const it of childRows) {
-    const arr = childByReceipt.get(it.order_id) ?? [];
-    arr.push(it);
-    childByReceipt.set(it.order_id, arr);
-  }
-  const bookItemsByOrder = new Map<number, ReturnType<typeof dashTransformer.itemsFromJson>>();
-  for (const o of recentBookOrders) {
-    const child = childByReceipt.get(o.receiptId);
-    bookItemsByOrder.set(
-      o.id,
-      child?.length ? dashTransformer.itemsFromChildRows(child) : dashTransformer.itemsFromJson(o.orderItems)
-    );
-  }
-  const bookIds = [...new Set([...bookItemsByOrder.values()].flat().map((i) => i.bookId).filter((id): id is number => id != null))];
-  const bookRows = bookIds.length
-    ? await prisma.book.findMany({ where: { id: { in: bookIds } }, select: { id: true, name: true, image: true } })
-    : [];
-  const bookMap = new Map(bookRows.map((b) => [b.id, b]));
 
   return {
     revenue: {
@@ -245,14 +265,7 @@ export const fetchDashboardData = async (opts: {
       earnings: series.reduce((n, r) => n + r.earnings, 0),
     },
     series,
-    recentPackageSubs: recentPackageSubs.map(dashTransformer.toPackageSubDto),
-    recentCourseSubs: recentCourseSubs.map(dashTransformer.toCourseSubDto),
-    recentBookOrders: recentBookOrders.map((o) =>
-      dashTransformer.toBookOrderDto(o, bookItemsByOrder.get(o.id) ?? [], bookMap)
-    ),
-    recentEbookSubs: recentEbookSubs.map(dashTransformer.toEbookSubDto),
-    recentTestSeriesSubs: recentTestSeriesSubs.map((s) => dashTransformer.toTestSeriesSubDto(s, custMap, tsMap)),
-    recentLiveCourseSubs: recentLiveCourseSubs.map((s) => dashTransformer.toLiveCourseSubDto(s, custMap, lcMap)),
+    recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
     summary: {
       customers: { total: counters.totalCustomers, active: counters.activeCustomers },
       catalog: { courses: counters.totalCourses, packages: counters.totalPackages, ebooks: counters.totalEbooks, books: counters.totalBooks, testSeries: counters.totalTestSeries, liveCourses: counters.totalLiveCourses },
@@ -368,26 +381,38 @@ const withRefs = (rows: RankRow[], refs: { id: number; name: string | null; imag
     });
 };
 
-export const fetchTrending = async (since: Date) => {
-  const [pkg, course, ebook, book, testSeries, liveCourse] = await Promise.all([
-    rankSubs(since, "package"), rankSubs(since, "course"), rankEbooks(since), rankBooks(since), rankTestSeries(since), rankLiveCourses(since),
-  ]);
+const rankers: Record<ActivityType, (since: Date) => Promise<RankRow[]>> = {
+  package: (since) => rankSubs(since, "package"),
+  course: (since) => rankSubs(since, "course"),
+  ebook: rankEbooks,
+  book: rankBooks,
+  testSeries: rankTestSeries,
+  liveCourse: rankLiveCourses,
+};
+
+const loadRefs = (type: ActivityType, ids: number[]): Promise<{ id: number; name: string | null; image: string | null }[]> => {
+  const where = { id: { in: ids } };
   const ref = { id: true, name: true, image: true } as const;
-  const [pkgRefs, courseRefs, ebookRefs, bookRefs, tsRefs, lcRefs] = await prisma.$transaction([
-    prisma.package.findMany({ where: { id: { in: idsOf(pkg) } }, select: ref }),
-    prisma.course.findMany({ where: { id: { in: idsOf(course) } }, select: ref }),
-    prisma.eBook.findMany({ where: { id: { in: idsOf(ebook) } }, select: ref }),
-    prisma.book.findMany({ where: { id: { in: idsOf(book) } }, select: ref }),
-    // ws_test_series uses title/thumbnail → mapped to name/image below.
-    prisma.testSeries.findMany({ where: { id: { in: idsOf(testSeries) } }, select: { id: true, title: true, thumbnail: true } }),
-    prisma.liveCourse.findMany({ where: { id: { in: idsOf(liveCourse) } }, select: ref }),
-  ]);
-  return {
-    package: withRefs(pkg, pkgRefs),
-    course: withRefs(course, courseRefs),
-    ebook: withRefs(ebook, ebookRefs),
-    book: withRefs(book, bookRefs),
-    testSeries: withRefs(testSeries, tsRefs.map((t) => ({ id: t.id, name: t.title, image: t.thumbnail ?? null }))),
-    liveCourse: withRefs(liveCourse, lcRefs),
-  };
+  switch (type) {
+    case "package": return prisma.package.findMany({ where, select: ref });
+    case "course": return prisma.course.findMany({ where, select: ref });
+    case "ebook": return prisma.eBook.findMany({ where, select: ref });
+    case "book": return prisma.book.findMany({ where, select: ref });
+    case "liveCourse": return prisma.liveCourse.findMany({ where, select: ref });
+    // ws_test_series uses title/thumbnail → mapped to name/image.
+    case "testSeries":
+      return prisma.testSeries.findMany({ where, select: { id: true, title: true, thumbnail: true } })
+        .then((rows) => rows.map((t) => ({ id: t.id, name: t.title, image: t.thumbnail ?? null })));
+  }
+};
+
+// One product type, one page of its ranking. The ranking is a GROUP BY over the
+// window (one row per product sold), so it is computed whole and sliced; names and
+// images are loaded for the returned page only.
+export const fetchTrending = async (since: Date, type: ActivityType, skip: number, take: number) => {
+  const ranked = (await rankers[type](since)).filter((r) => r.id != null);
+  const page = ranked.slice(skip, skip + take);
+  const ids = idsOf(page);
+  const refs = ids.length ? await loadRefs(type, ids) : [];
+  return { items: withRefs(page, refs), total: ranked.length, hasMore: skip + take < ranked.length };
 };

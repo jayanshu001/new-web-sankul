@@ -261,7 +261,23 @@ export const getDashboard = async (req: Request, res: Response) => {
 // GET /api/v1/admin/dashboard/trending?days=7|30
 // Top sellers per product type over a rolling window ending now. Anything other
 // than 30 falls back to 7 so the shared cache only ever holds two entries.
+const ACTIVITY_TYPES: adminDashSql.ActivityType[] = ["package", "course", "book", "ebook", "testSeries", "liveCourse"];
+const MAX_ACTIVITY_PAGE = 50;
+
+// type + offset/limit for the Activity cards' paginated tabs; null on an unknown type.
+function activityPage(req: Request) {
+  const type = req.query.type as adminDashSql.ActivityType;
+  if (!ACTIVITY_TYPES.includes(type)) return null;
+  const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
+  const limit = Math.min(Math.max(1, parseInt(String(req.query.limit ?? "10"), 10) || 10), MAX_ACTIVITY_PAGE);
+  return { type, offset, limit };
+}
+
+// GET /api/v1/admin/dashboard/trending?days=7|30&type=&offset=&limit=
 export const getDashboardTrending = async (req: Request, res: Response) => {
+  const pageReq = activityPage(req);
+  if (!pageReq) return res.status(400).json({ success: false, message: `type must be one of: ${ACTIVITY_TYPES.join(", ")}` });
+  const { type, offset, limit } = pageReq;
   try {
     const days = req.query.days === "30" ? 30 : 7;
     const windowEnd = new Date();
@@ -270,8 +286,24 @@ export const getDashboardTrending = async (req: Request, res: Response) => {
     // window started mid-day and never lined up with any report filter.
     const todayIst = new Date(windowEnd.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
     const windowStart = new Date(istStartOfDay(todayIst)!.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
-    const trending = await adminDashSql.fetchTrending(windowStart);
-    return res.status(200).json({ success: true, data: { days, windowStart, windowEnd, ...trending } });
+    const page = await adminDashSql.fetchTrending(windowStart, type, offset, limit);
+    return res.status(200).json({ success: true, data: { days, type, windowStart, windowEnd, offset, limit, ...page } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/admin/dashboard/recent?type=&offset=&limit=
+// Next pages of an Activity card's "Recent" tab (the dashboard payload has page one).
+export const getDashboardRecent = async (req: Request, res: Response) => {
+  const page = activityPage(req);
+  if (!page) return res.status(400).json({ success: false, message: `type must be one of: ${ACTIVITY_TYPES.join(", ")}` });
+  try {
+    const items = await adminDashSql.fetchRecent(page.type, page.offset, page.limit + 1);
+    return res.status(200).json({
+      success: true,
+      data: { type: page.type, offset: page.offset, limit: page.limit, items: items.slice(0, page.limit), hasMore: items.length > page.limit },
+    });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
