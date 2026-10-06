@@ -39,30 +39,23 @@ const bookRevenue = async (w: Win) => {
   const agg = await prisma.bookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "verified" }, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
-// Test-series subscription rows are created ONLY on verify (pending state lives on
-// ws_test_series_order), so every row is a paid purchase — no status filter, sum
-// `amount` (was `price` until the 2026-08-31 package-shape rename).
-const testSeriesRevenue = async (w: Win) => {
-  const agg = await prisma.testSeriesSubscription.aggregate({ where: { createdAt: { gte: w.start, lte: w.end } }, _sum: { amount: true }, _count: { _all: true } });
-  return { revenue: num(agg._sum.amount), count: agg._count._all };
+// RAW SQL — column names are strings, so `yarn typecheck` cannot catch a rename.
+// ws_test_series_order / ws_live_course_order have the ws_package_course_order shape,
+// so they take the package/course rule: a subscription counts only when its ORDER is
+// complete, dated by the order's created_at, ₹ = the order's charged `discount_price`.
+const paidSubRevenue = async (w: Win, subTable: string, orderTable: string) => {
+  const [r] = await prisma.$queryRawUnsafe<{ orders: bigint; revenue: any }[]>(
+    `SELECT COUNT(*) AS orders, COALESCE(SUM(o.discount_price),0) AS revenue
+     FROM ${subTable} s JOIN ${orderTable} o ON o.id = s.order_id
+     WHERE o.status = 'complete' AND o.created_at >= ? AND o.created_at <= ?`,
+    w.start, w.end
+  );
+  return { revenue: num(r?.revenue), count: Number(r?.orders ?? 0) };
 };
-// Revenue comes from the ORDER table (2026-08-25): live course used to be
-// single-table, so this had to sum the subscription and exclude pending/folded rows
-// via payment_status. Each purchase is now its own completed order, which also means
-// a renewal is finally counted as its own sale instead of vanishing into a folded row.
-//
-// Same numbers as the Live Course Report summary (admin-live-course repo.aggSubs):
-// count = subscriptions, revenue = their orders — so a deleted subscription leaves both.
-const liveCourseRevenue = async (w: Win) => {
-  const subWhere = { createdAt: { gte: w.start, lte: w.end } };
-  const [count, agg] = await Promise.all([
-    prisma.liveCourseSubscription.count({ where: subWhere }),
-    prisma.liveCourseOrder.aggregate({ where: { subscriptions: { some: subWhere } }, _sum: { amount: true } }),
-  ]);
-  // `amount` = ws_live_course_order.discount_price (the charged amount), renamed
-  // from paid_amount when the table took the package shape (2026-08-27).
-  return { revenue: num(agg._sum.amount), count };
-};
+const testSeriesRevenue = (w: Win) => paidSubRevenue(w, "ws_test_series_subscription", "ws_test_series_order");
+// Live course: each purchase (renewals included) is its own order since 2026-08-25.
+// `discount_price` is the charged amount (was paid_amount until 2026-08-27).
+const liveCourseRevenue = (w: Win) => paidSubRevenue(w, "ws_live_course_subscription", "ws_live_course_order");
 
 // ── time-series buckets (HOUR / DAYOFMONTH / MONTH, IST) ──────────────────────
 /**
@@ -88,28 +81,14 @@ const seriesFor = async (table: string, revenueCol: string, w: Win, unit: Bucket
   return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
 };
 
-// Package/course chart rows under the same rule as subRevenue: completed order,
-// bucketed by the order's created_at, amount from the subscription (= card ₹).
-const pcSeriesFor = async (w: Win, unit: BucketUnit, scopeWhere: string) => {
+// Chart rows for subscription + order products under the card rule: completed order,
+// bucketed by the order's created_at. `revenueExpr` matches the card's ₹ column.
+const paidSubSeriesFor = async (subTable: string, orderTable: string, revenueExpr: string, w: Win, unit: BucketUnit, scopeWhere = "") => {
   const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
   const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
-    `SELECT ${fn}(o.created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(s.amount),0) AS earnings
-     FROM ws_package_course_subscription s JOIN ws_package_course_order o ON o.id = s.order_id
+    `SELECT ${fn}(o.created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(${revenueExpr}),0) AS earnings
+     FROM ${subTable} s JOIN ${orderTable} o ON o.id = s.order_id
      WHERE o.status = 'complete' AND o.created_at >= ? AND o.created_at <= ? ${scopeWhere}
-     GROUP BY slot`,
-    w.start, w.end
-  );
-  return rows.map((r) => ({ slot: Number(r.slot), orders: Number(r.orders), earnings: num(r.earnings) }));
-};
-
-// Subscription-counted products (live course): bucket the subscription rows,
-// revenue from each one's order — the chart's view of liveCourseRevenue.
-const subSeriesFor = async (subTable: string, orderTable: string, revenueCol: string, w: Win, unit: BucketUnit) => {
-  const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
-  const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
-    `SELECT ${fn}(s.created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(o.${revenueCol}),0) AS earnings
-     FROM ${subTable} s LEFT JOIN ${orderTable} o ON o.id = s.order_id
-     WHERE s.created_at >= ? AND s.created_at <= ?
      GROUP BY slot`,
     w.start, w.end
   );
@@ -184,20 +163,12 @@ export const fetchDashboardData = async (opts: {
     // then summed it — so the Total Order Reports card was paying for the range twice.
     // `totals` is now folded from the series rows (identical numbers, half the scans,
     // five fewer connections held for the length of a year-range scan).
-    pcSeriesFor(tot, unit, "AND s.course_id IS NULL AND s.package_id > 0"),
-    pcSeriesFor(tot, unit, "AND s.course_id > 0"),
+    paidSubSeriesFor("ws_package_course_subscription", "ws_package_course_order", "s.amount", tot, unit, "AND s.course_id IS NULL AND s.package_id > 0"),
+    paidSubSeriesFor("ws_package_course_subscription", "ws_package_course_order", "s.amount", tot, unit, "AND s.course_id > 0"),
     seriesFor("ws_ebook_order", "order_price", tot, unit, "AND status = 'complete'"),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
-    // Raw column name: `price` → `amount` (2026-08-31). Prisma does not validate
-    // strings passed to $queryRawUnsafe, so a rename here only fails at runtime.
-    seriesFor("ws_test_series_subscription", "amount", tot, unit),
-    // Order table + its "complete" vocabulary (was ws_live_course_subscription /
-    // payment_status='verified' before the 2026-08-25 split).
-    // RAW SQL — the column name is a string, so `yarn typecheck` cannot catch a rename.
-    // `paid_amount` became `discount_price` when the table took the
-    // ws_package_course_order shape (2026-08-27). Keep this in step with the Prisma
-    // field `amount` used by liveCourseRevenue above.
-    subSeriesFor("ws_live_course_subscription", "ws_live_course_order", "discount_price", tot, unit),
+    paidSubSeriesFor("ws_test_series_subscription", "ws_test_series_order", "o.discount_price", tot, unit),
+    paidSubSeriesFor("ws_live_course_subscription", "ws_live_course_order", "o.discount_price", tot, unit),
     prisma.packageCourseSubscription.findMany({ where: { courseId: null, packageId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { package: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     prisma.packageCourseSubscription.findMany({ where: { courseId: { gt: 0 }, packageCourseOrder: { status: "complete" } }, include: { course: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
@@ -205,7 +176,14 @@ export const fetchDashboardData = async (opts: {
     prisma.eBookSubscription.findMany({ include: { eBook: { select: { id: true, name: true, image: true } }, customer: { select: { id: true, fullName: true, phoneNumber: true } } }, orderBy: { createdAt: "desc" }, take: limit }),
     // TestSeries/LiveCourse subscription models carry only scalar FKs (no Prisma
     // relations) — refs are batch-loaded below.
-    prisma.testSeriesSubscription.findMany({ orderBy: { createdAt: "desc" }, take: limit }),
+    // No Prisma relation to ws_test_series_order, so the completed-order filter is a raw id lookup.
+    (async () => {
+      const ids = (await prisma.$queryRawUnsafe<{ id: number }[]>(
+        `SELECT s.id FROM ws_test_series_subscription s JOIN ws_test_series_order o ON o.id = s.order_id
+         WHERE o.status = 'complete' ORDER BY o.created_at DESC LIMIT ${limit}`
+      )).map((r) => Number(r.id));
+      return ids.length ? prisma.testSeriesSubscription.findMany({ where: { id: { in: ids } }, orderBy: { createdAt: "desc" } }) : [];
+    })(),
     // "Recent purchases" is an ORDER concern — reading the order table also makes a
     // renewal show up as its own recent sale (2026-08-25 split).
     prisma.liveCourseOrder.findMany({ where: { status: "complete" }, orderBy: { createdAt: "desc" }, take: limit }),
@@ -314,32 +292,20 @@ const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankR
   return rows.map((r: any) => ({ id: r.packageId ?? r.courseId ?? null, orders: r._count._all, revenue: num(r._sum.amount) }));
 };
 
-const rankTestSeries = async (since: Date): Promise<RankRow[]> => {
-  const rows = await prisma.testSeriesSubscription.groupBy({
-    by: ["testSeriesId"],
-    where: { createdAt: { gte: since } },
-    _count: { _all: true }, _sum: { amount: true },
-    orderBy: [{ _count: { testSeriesId: "desc" } }, { _sum: { amount: "desc" } }],
-    take: TRENDING_LIMIT,
-  });
-  return rows.map((r) => ({ id: r.testSeriesId, orders: r._count._all, revenue: num(r._sum.amount) }));
-};
-
 // RAW SQL — column names are strings, so `yarn typecheck` cannot catch a rename.
-// Live course ranks SUBSCRIPTIONS (what its report lists), revenue from each one's
-// order — same definition as liveCourseRevenue.
-const rankSubsWithOrders = async (since: Date, subTable: string, productCol: string, orderTable: string, revenueCol: string): Promise<RankRow[]> => {
+// Test series + live course: same rule as their cards (paidSubRevenue).
+const rankPaidSubs = async (since: Date, subTable: string, orderTable: string, productCol: string): Promise<RankRow[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
-    `SELECT s.${productCol} AS id, COUNT(*) AS orders, COALESCE(SUM(o.${revenueCol}),0) AS revenue
-     FROM ${subTable} s LEFT JOIN ${orderTable} o ON o.id = s.order_id
-     WHERE s.created_at >= ? AND s.${productCol} IS NOT NULL
+    `SELECT s.${productCol} AS id, COUNT(*) AS orders, COALESCE(SUM(o.discount_price),0) AS revenue
+     FROM ${subTable} s JOIN ${orderTable} o ON o.id = s.order_id
+     WHERE o.status = 'complete' AND o.created_at >= ? AND s.${productCol} IS NOT NULL
      GROUP BY s.${productCol} ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
     since
   );
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
 };
-const rankLiveCourses = (since: Date) =>
-  rankSubsWithOrders(since, "ws_live_course_subscription", "live_course_id", "ws_live_course_order", "discount_price");
+const rankTestSeries = (since: Date) => rankPaidSubs(since, "ws_test_series_subscription", "ws_test_series_order", "test_series_id");
+const rankLiveCourses = (since: Date) => rankPaidSubs(since, "ws_live_course_subscription", "ws_live_course_order", "live_course_id");
 // Completed ebook orders (card rule); the ebook id comes from the order's subscription
 // row — the plan link is 0 on admin grants, so it cannot identify the ebook.
 const rankEbooks = async (since: Date): Promise<RankRow[]> => {
