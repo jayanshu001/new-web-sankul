@@ -172,6 +172,14 @@ export const adminLiveCourseRepository = {
     (await prisma.customer.findMany({ where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
   findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
 
+  // Move: the paying order follows its subscription to the new customer (one order = one
+  // subscription). An order another subscription still hangs off (legacy data) stays put.
+  orderOwnedOnlyBy: async (orderId: number, subscriptionId: number) =>
+    (await prisma.liveCourseSubscription.count({ where: { orderId, id: { not: subscriptionId } } })) === 0,
+  setOrderCustomer: (orderId: number, customerId: number) =>
+    prisma.liveCourseOrder.update({ where: { id: orderId }, data: { customerId } }),
+  transaction: <P extends Prisma.PrismaPromise<unknown>[]>(ops: [...P]) => prisma.$transaction(ops),
+
   /**
    * The customer who owns this subscription. Read BEFORE an admin revoke so the
    * caller can flush that customer's per-user route cache — on delete the row is
@@ -202,6 +210,12 @@ export const adminLiveCourseRepository = {
    * subscription row only exists for a paid order, and the backfill deactivated the
    * legacy rows that were never verified — `status` is the entitlement gate now.
    */
+  // Still-running rows of one live course — a transfer onto it queues after them.
+  activeSubsForTarget: (customerId: number, liveCourseId: number, now: Date) =>
+    prisma.liveCourseSubscription.findMany({
+      where: { customerId, liveCourseId, status: true, endAt: { gt: now } },
+      select: { id: true, startAt: true, endAt: true },
+    }),
   findActiveSubscription: (customerId: number, liveCourseId: number, now: Date) =>
     prisma.liveCourseSubscription.findFirst({
       where: { customerId, liveCourseId, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] },

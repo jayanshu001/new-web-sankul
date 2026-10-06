@@ -16,8 +16,10 @@ import {
   movedRemarkText,
   parseRemarkHistory,
   planAddDays,
+  planDateShift,
   planDeactivation,
   planDeactivationRevert,
+  type DateShift,
 } from "../../utils/subscriptionRemarkHistory";
 
 // Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
@@ -528,6 +530,10 @@ export const updateCourseSubscription = async (
 
 type HistoryInput = { remark?: string | null; actingAdminId?: number | null };
 
+// A transfer that overlaps an active subscription of the same product is held until the
+// admin confirms the queued dates (`confirmDates`), then applied with them.
+type TransferInput = HistoryInput & { confirmDates?: boolean };
+
 type Product = { courseId: number | null; packageId: number | null };
 
 const activeLabel = (status: boolean | null | undefined): string => (status ? "active" : "inactive");
@@ -554,11 +560,12 @@ const productLabel = async ({ courseId, packageId }: Product): Promise<string> =
 
 export type ChangeProductResult =
   | { ok: false; reason: "not_found" | "target_not_found" | "same_target" }
+  | { ok: false; reason: "needs_confirmation"; dateShift: DateShift }
   | { ok: true; customerId: number | null; data: any };
 
 export const changeSubscriptionProduct = async (
   id: number,
-  input: HistoryInput & { courseId?: number; packageId?: number }
+  input: TransferInput & { courseId?: number; packageId?: number }
 ): Promise<ChangeProductResult> => {
   const existing = await repo.findCourseSubById(id);
   if (!existing) return { ok: false, reason: "not_found" };
@@ -572,12 +579,19 @@ export const changeSubscriptionProduct = async (
   if (current.courseId === courseId && current.packageId === packageId) return { ok: false, reason: "same_target" };
 
   const [fromLabel, toLabel] = await Promise.all([productLabel(current), productLabel(target)]);
-  const what = `Course/package changed: ${fromLabel} -> ${toLabel}`;
+  const changed = `Course/package changed: ${fromLabel} -> ${toLabel}`;
 
   const now = new Date();
+  const dateShift = existing.customerId
+    ? planDateShift(existing, await repo.activeSubsForTarget(existing.customerId, target, now), now)
+    : null;
+  if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const what = dateShift ? `${changed}. ${dateShift.what}` : changed;
+
   await repo.patchSub(id, {
     courseId,
     packageId,
+    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
     remarks: await withHistory(existing.remarks, what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,
@@ -588,11 +602,12 @@ export const changeSubscriptionProduct = async (
 
 export type MoveSubscriptionResult =
   | { ok: false; reason: "not_found" | "customer_not_found" | "same_customer" }
+  | { ok: false; reason: "needs_confirmation"; dateShift: DateShift }
   | { ok: true; fromCustomerId: number | null; toCustomerId: number; data: any };
 
 export const moveSubscription = async (
   id: number,
-  input: HistoryInput & { customerId: number }
+  input: TransferInput & { customerId: number }
 ): Promise<MoveSubscriptionResult> => {
   const existing = await repo.findCourseSubById(id);
   if (!existing) return { ok: false, reason: "not_found" };
@@ -603,18 +618,26 @@ export const moveSubscription = async (
 
   const fromCustomerId = existing.customerId ?? null;
   const [source] = fromCustomerId ? await repo.customersByIds([fromCustomerId]) : [];
-  const what = movedRemarkText(
+  const moved = movedRemarkText(
     { id: fromCustomerId, phone: source?.phoneNumber },
     { id: target.id, phone: target.phoneNumber }
   );
 
   const now = new Date();
-  await repo.patchSub(id, {
+  const dateShift = planDateShift(existing, await repo.activeSubsForTarget(target.id, productOf(existing), now), now);
+  if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const orderId = existing.orderId && (await repo.orderOwnedOnlyBy(existing.orderId, id)) ? existing.orderId : null;
+  const what = [moved, orderId && `Order #${orderId} moved with it`, dateShift?.what].filter(Boolean).join(". ");
+
+  const subUpdate = repo.patchSub(id, {
     customerId: target.id,
+    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
     remarks: await withHistory(existing.remarks, what, input, now),
     actingAdminId: input.actingAdminId ?? null,
     now,
   });
+  if (orderId) await repo.transaction([subUpdate, repo.setOrderCustomer(orderId, target.id)]);
+  else await subUpdate;
 
   return { ok: true, fromCustomerId, toCustomerId: target.id, data: await getCourseSubscriptionById(id) };
 };

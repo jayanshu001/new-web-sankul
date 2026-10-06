@@ -6,12 +6,13 @@
  * and never for a zero-length window (Deactivate sets end_at := start_at).
  */
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
+import { isDeactivatedWindow } from "../../utils/subscriptionRemarkHistory";
 
 type Lookup<T> = Map<number, T>;
 
 const dec = (v: unknown): number | null => (v == null ? null : Number(v));
 const isActiveOf = (s: { status: boolean | null; startAt: Date | null; endAt: Date | null }, now: Date) =>
-  !!(s.status && s.endAt && s.endAt > now && s.endAt.getTime() !== s.startAt?.getTime());
+  !!(s.status && s.endAt && s.endAt > now && !isDeactivatedWindow(s));
 
 const ref = (
   id: number | null | undefined,

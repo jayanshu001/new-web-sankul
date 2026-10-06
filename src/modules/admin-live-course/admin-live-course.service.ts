@@ -36,7 +36,7 @@ import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
 import { fmtExportDate } from "../../utils/csvExport";
-import { appendAdminRemark, movedRemarkText, planAddDays, planDeactivation, planDeactivationRevert } from "../../utils/subscriptionRemarkHistory";
+import { appendAdminRemark, movedRemarkText, planAddDays, planDateShift, planDeactivation, planDeactivationRevert, type DateShift } from "../../utils/subscriptionRemarkHistory";
 
 
 export const parseLiveId = (id: string): number | null => {
@@ -1056,11 +1056,12 @@ const hydrateOne = async (row: Parameters<typeof hydrateSubs>[0][number]) => (aw
 
 export type ChangeLiveCourseResult =
   | { ok: false; reason: "not_found" | "target_not_found" | "same_target" }
+  | { ok: false; reason: "needs_confirmation"; dateShift: DateShift }
   | { ok: true; customerId: number; data: any };
 
 export const changeSubscriptionLiveCourse = async (
   id: number,
-  input: HistoryInput & { liveCourseId: number }
+  input: HistoryInput & { liveCourseId: number; confirmDates?: boolean }
 ): Promise<ChangeLiveCourseResult> => {
   const existing = await repo.findSubscriptionById(id);
   if (!existing) return { ok: false, reason: "not_found" };
@@ -1071,11 +1072,18 @@ export const changeSubscriptionLiveCourse = async (
     liveCourseLabel(existing.liveCourseId),
     liveCourseLabel(input.liveCourseId),
   ]);
-  const what = `Live course changed: ${fromLabel} -> ${toLabel}`;
+  const changed = `Live course changed: ${fromLabel} -> ${toLabel}`;
 
+  // Overlaps an active subscription to the target live course → hold for confirmation,
+  // then queue this row's remaining time after it.
   const now = new Date();
+  const dateShift = planDateShift(existing, await repo.activeSubsForTarget(existing.customerId, input.liveCourseId, now), now);
+  if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const what = dateShift ? `${changed}. ${dateShift.what}` : changed;
+
   const updated = await repo.updateSubscription(id, {
     liveCourseId: input.liveCourseId,
+    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
     ...(await historyPatch(existing.remarks, what, input, now)),
   });
 
@@ -1084,11 +1092,12 @@ export const changeSubscriptionLiveCourse = async (
 
 export type MoveLiveSubscriptionResult =
   | { ok: false; reason: "not_found" | "customer_not_found" | "same_customer" }
+  | { ok: false; reason: "needs_confirmation"; dateShift: DateShift }
   | { ok: true; fromCustomerId: number; toCustomerId: number; data: any };
 
 export const moveLiveSubscription = async (
   id: number,
-  input: HistoryInput & { customerId: number }
+  input: HistoryInput & { customerId: number; confirmDates?: boolean }
 ): Promise<MoveLiveSubscriptionResult> => {
   const existing = await repo.findSubscriptionById(id);
   if (!existing) return { ok: false, reason: "not_found" };
@@ -1098,16 +1107,23 @@ export const moveLiveSubscription = async (
   if (existing.customerId === target.id) return { ok: false, reason: "same_customer" };
 
   const [source] = await repo.customersByIds([existing.customerId]);
-  const what = movedRemarkText(
+  const moved = movedRemarkText(
     { id: existing.customerId, phone: source?.phoneNumber },
     { id: target.id, phone: target.phoneNumber }
   );
 
   const now = new Date();
-  const updated = await repo.updateSubscription(id, {
+  const dateShift = planDateShift(existing, await repo.activeSubsForTarget(target.id, existing.liveCourseId, now), now);
+  if (dateShift && !input.confirmDates) return { ok: false, reason: "needs_confirmation", dateShift };
+  const orderId = existing.orderId && (await repo.orderOwnedOnlyBy(existing.orderId, id)) ? existing.orderId : null;
+  const what = [moved, orderId && `Order #${orderId} moved with it`, dateShift?.what].filter(Boolean).join(". ");
+
+  const subUpdate = repo.updateSubscription(id, {
     customerId: target.id,
+    ...(dateShift ? { startAt: dateShift.startAt, endAt: dateShift.endAt } : {}),
     ...(await historyPatch(existing.remarks, what, input, now)),
   });
+  const [updated] = orderId ? await repo.transaction([subUpdate, repo.setOrderCustomer(orderId, target.id)]) : [await subUpdate];
 
   return { ok: true, fromCustomerId: existing.customerId, toCustomerId: target.id, data: await hydrateOne(updated) };
 };

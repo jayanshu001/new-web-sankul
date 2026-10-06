@@ -4,7 +4,7 @@ import { success, failure, failureFrom, getErrorMessage, actionFailure, type Act
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
-import { REVERT_DEACTIVATION_ERRORS } from "../subscription/subscription.controller";
+import { REVERT_DEACTIVATION_ERRORS, dateShiftConfirmation } from "../subscription/subscription.controller";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { PaymentMethod } from "../../shared/enums";
 import { assertReportStatus } from "../../utils/reportFilters";
@@ -247,9 +247,10 @@ const logActionFailure = (req: Request, action: string, err: unknown) =>
 
 export const changeLiveCourseOfSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { liveCourseId: number; remark?: string };
+    const input = req.body as { liveCourseId: number; remark?: string; confirmDates?: boolean };
     const result = await liveSql.changeSubscriptionLiveCourse(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
+    if (!result.ok && result.reason === "needs_confirmation") return dateShiftConfirmation(res, result.dateShift);
     if (!result.ok) {
       const errors: Record<typeof result.reason, ActionError> = {
         not_found: SUBSCRIPTION_NOT_FOUND,
@@ -269,9 +270,10 @@ export const changeLiveCourseOfSubscription = async (req: Request, res: Response
 
 export const moveLiveCourseSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { customerId: number; remark?: string };
+    const input = req.body as { customerId: number; remark?: string; confirmDates?: boolean };
     const result = await liveSql.moveLiveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
+    if (!result.ok && result.reason === "needs_confirmation") return dateShiftConfirmation(res, result.dateShift);
     if (!result.ok) {
       const errors: Record<typeof result.reason, ActionError> = {
         not_found: SUBSCRIPTION_NOT_FOUND,

@@ -440,16 +440,19 @@ and returns the entitlement the first caller produced.
   `course_id`, and `package_id` (only when passed). New `findLiveCustomer`
   (`is_account_deleted = 0`).
 - **Write scope per action (2026-10-05):** change-product writes only `course_id` /
-  `package_id` (`pcb_id` is never touched); move writes only `customer_id`; deactivate
+  `package_id` (`pcb_id` is never touched); move writes `customer_id` on the subscription and,
+  in the same transaction, on its `ws_package_course_order` (skipped when another
+  subscription shares that order); deactivate
   writes only `end_at := start_at` (now if no start). Each also writes `remarks`,
   `updated_by`, `updated_at`.
 - **Live course (`ws_live_course_subscription`, same rules):** `changeSubscriptionLiveCourse`
-  writes only `live_course_id` (`plan_id` untouched), `moveLiveSubscription` only
-  `customer_id`, `deactivateLiveSubscription` only `end_at`, each plus `remarks`,
+  writes only `live_course_id` (`plan_id` untouched), `moveLiveSubscription`
+  `customer_id` (plus `ws_live_course_order.customer_id`, same rule), `deactivateLiveSubscription` only `end_at`, each plus `remarks`,
   `updated_by`, `updated_at`. Reads `ws_live_course`, `ws_customer`, `ws_users`.
-- **`admin-customer-details.repository.ts` `latestPackageSubIds`:** one `groupBy package_id,
-  MAX(id)` on `ws_package_course_subscription` for the customer's package ids, feeding
-  `isLatest` on `GET /admin/customers/:id/package-subscriptions`.
+- **`admin-customer-details.repository.ts` `courseSubWindows` / `packageSubWindows` /
+  `liveCourseSubWindows`:** one `SELECT id, <product>_id, start_at, end_at` per tab for the
+  customer's rows of the page's products, feeding `canDeactivate` / `canRevert` on
+  `GET /admin/customers/:id/{course,package,live-course}-subscriptions`.
 - **`admin-subscription.service.ts`:** new `changeSubscriptionProduct`, `moveSubscription`,
   `deactivateSubscription` (`end_at := start_at`), and `getSubscriptionHistory`.
 - **Behaviour change — `updateCourseSubscription` (PUT `/admin/subscriptions/:id`):**

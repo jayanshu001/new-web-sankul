@@ -65,15 +65,16 @@ export const adminCustomerDetailsRepository = {
     prisma.packageCourseSubscription.count({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) } }),
   pagePackageSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
     prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
-  latestPackageSubIds: async (customerId: number, packageIds: number[]): Promise<Set<number>> => {
-    if (!packageIds.length) return new Set();
-    const groups = await prisma.packageCourseSubscription.groupBy({
-      by: ["packageId"],
-      where: { customerId, courseId: null, packageId: { in: packageIds } },
-      _max: { id: true },
-    });
-    return new Set(groups.map((g) => g._max.id).filter((id): id is number => id != null));
-  },
+  // Every row (id + window only) of the given products for this customer — the
+  // Deactivate/Revert turn is decided across all of them, not just the current page.
+  courseSubWindows: (customerId: number, courseIds: number[]) =>
+    courseIds.length
+      ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds } }, select: { id: true, courseId: true, startAt: true, endAt: true } })
+      : Promise.resolve([]),
+  packageSubWindows: (customerId: number, packageIds: number[]) =>
+    packageIds.length
+      ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: null, packageId: { in: packageIds } }, select: { id: true, packageId: true, startAt: true, endAt: true } })
+      : Promise.resolve([]),
 
   countLiveCourseSubs: (customerId: number, status?: boolean) =>
     prisma.liveCourseSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),
@@ -81,6 +82,11 @@ export const adminCustomerDetailsRepository = {
   // join this list would report paidAmount/discountAmount as null.
   pageLiveCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
     prisma.liveCourseSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take, include: { order: true } }),
+
+  liveCourseSubWindows: (customerId: number, liveCourseIds: number[]) =>
+    liveCourseIds.length
+      ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveCourseIds } }, select: { id: true, liveCourseId: true, startAt: true, endAt: true } })
+      : Promise.resolve([]),
 
   countTestSeriesSubs: (customerId: number, status?: boolean) =>
     prisma.testSeriesSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),

@@ -56,6 +56,7 @@ Plan (`pcb_id`), dates, amount, order, payment and material are not touched.
 |---|---|
 | `courseId` / `packageId` | exactly one, positive integer |
 | `remark` | optional, max 500 chars — the default history line is always written |
+| `confirmDates` | optional boolean — accept the queued dates from a 409 (see "Overlap" below) |
 
 200 `message: "Subscription course/package changed."`
 
@@ -73,7 +74,10 @@ Pickers: reuse `GET /admin/courses` and `GET /admin/packages`. A `planId` key is
 ## POST `/admin/subscriptions/:id/move`
 
 Moves the subscription to another customer, for example when a student changes mobile
-number. Only `customer_id` changes. The target must be a live account
+number. `customer_id` changes on the subscription **and on the order that paid for it**
+(`ws_package_course_order.customer_id`), in one transaction, so the purchase follows the
+student. An order another subscription still references (legacy data) is left alone. The
+order's `shipping` snapshot is not touched. The target must be a live account
 (`is_account_deleted = 0`). Both customers' cached catalog reads are flushed.
 
 ```json
@@ -84,6 +88,7 @@ number. Only `customer_id` changes. The target must be a live account
 |---|---|
 | `customerId` | required, positive integer — the **new** owner |
 | `remark` | optional, ≤ 500 chars (legacy had none) |
+| `confirmDates` | optional boolean — accept the queued dates from a 409 (see "Overlap" below) |
 
 200 `message: "Subscription moved."`. `data.customerId` is now the new owner.
 
@@ -98,6 +103,33 @@ page never follows it).
 
 History entry written (legacy wording, plus both ids):
 `Mobile number changed - subscription moved from 98xxxxxx01 (customer #100) to 97xxxxxx02 (customer #48213). Remark: … | by Jane Doe (#5)`
+
+## Overlap with an active subscription (change-product / move, and the live-course twins)
+
+When the transfer would land on a product the customer **already holds actively**
+(change-product / change-course: this customer, target product; move: target customer,
+same product), the row is queued after it instead of overlapping:
+
+- remaining time = `end_at − max(now, start_at)`
+- new `start_at` = the latest active row's `end_at`; new `end_at` = new start + remaining time
+- deactivated (`start_at = end_at`) and expired rows don't count; a row that already starts
+  after the active one ends is left alone
+
+Without `confirmDates: true` nothing is written. The server answers **409** with the
+proposed dates for the admin to confirm:
+
+```json
+{ "success": false, "code": 409,
+  "message": "Customer already has this product active. Confirm to queue this subscription after it.",
+  "data": { "dateShift": { "activeSubscriptionId": "123", "activeEndAt": "2026-12-10T…",
+    "startAt": "2026-12-10T…", "endAt": "2027-03-06T…", "days": 86 } } }
+```
+
+Re-send the same body with `"confirmDates": true` to apply it. The history entry gets
+the date change appended:
+`Course/package changed: … -> …. Dates moved after active subscription #123: 2026-01-01 00:00:00 - 2026-12-31 00:00:00 -> 2026-12-10 00:00:00 - 2027-03-06 00:00:00 | by Jane Doe (#5)`
+
+---
 
 ## POST `/admin/subscriptions/:id/deactivate`
 
@@ -238,16 +270,16 @@ live subscription id. They return `data.subscription` (the
 
 | Route | Body | 200 message |
 |---|---|---|
-| `POST /admin/live-courses/subscriptions/:id/change-course` | `{ liveCourseId, remark? }` | `Subscription live course changed.` |
-| `POST /admin/live-courses/subscriptions/:id/move` | `{ customerId, remark? }` | `Subscription moved.` |
+| `POST /admin/live-courses/subscriptions/:id/change-course` | `{ liveCourseId, remark?, confirmDates? }` | `Subscription live course changed.` |
+| `POST /admin/live-courses/subscriptions/:id/move` | `{ customerId, remark?, confirmDates? }` | `Subscription moved.` |
 | `POST /admin/live-courses/subscriptions/:id/deactivate` | `{ remark? }` | `Subscription deactivated.` |
 
 - **change-course** switches only to another live course (not to a course/package —
   separate tables, separate orders). Only `live_course_id` changes and a history entry
   is added. `plan_id`, order, amount, dates and `pc_material_id` are untouched.
   404 `Live course not found.`; 422 `Subscription is already on this live course.` (`messages.liveCourseId`).
-- **move** / **deactivate**: identical to the course/package versions (only `customer_id`
-  changes; `end_at := start_at`, `status` untouched).
+- **move** / **deactivate**: identical to the course/package versions (`customer_id` on the
+  subscription and on its `ws_live_course_order`; `end_at := start_at`, `status` untouched).
 
 History entry: `Live course changed: Live course "A" (#3) -> Live course "B" (#7). Remark: … | by Jane Doe (#5)`
 
@@ -271,10 +303,12 @@ There is no `/history` route for live subscriptions; the history string is the D
   customer, and Deactivate. The **Live Courses** tab has the same column (gated on
   `live-courses.edit` or `customers.edit`), where Change switches to another live course. All three open `SubscriptionActionModal`; after any action the panel stays on the
   customer and reloads the tables, as legacy does. Legacy gating: every button is disabled
-  unless the row is active (`endAt` in the future and `startAt !== endAt`), and on the
-  Packages tab Deactivate appears only on the customer's latest row for that package
-  (`isLatest` on `GET /admin/customers/:id/package-subscriptions`). Rows where
-  `startAt === endAt` show a red **Deactivated** badge.
+  unless the row is active (`endAt` in the future and `startAt !== endAt`); Add Days is
+  disabled on a deactivated row. Deactivation runs in sequence per product: Deactivate
+  appears only on the newest row that isn't deactivated (`canDeactivate`), and Revert only
+  on the deactivated row directly above it, or the oldest row once all are deactivated
+  (`canRevert`) — both flags on the customer's course / package / live-course subscription
+  lists. Rows where `startAt === endAt` show a red **Deactivated** badge.
 - **Subscription details page (course/package):** a **History** card from `/history`. It falls
   back to the raw Remarks card if that call fails.
 

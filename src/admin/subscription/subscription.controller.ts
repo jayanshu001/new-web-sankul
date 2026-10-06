@@ -20,6 +20,7 @@ import type { AddressCreateInput, AddressUpdateInput } from "../../modules/custo
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
+import type { DateShift } from "../../utils/subscriptionRemarkHistory";
 import { success, failure, actionFailure, type ActionError } from "../../utils/httpResponse";
 
 // Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
@@ -389,11 +390,25 @@ const subscriptionIdOf = (req: Request): number => (req.params as unknown as { i
 
 const SUBSCRIPTION_NOT_FOUND: ActionError = [404, "Subscription not found."];
 
+// 409 while a transfer overlaps an active subscription of the same product: nothing is
+// written; the admin re-sends with `confirmDates: true` to apply the queued dates.
+export const dateShiftConfirmation = (res: Response, shift: DateShift): Response =>
+  failure(res, "Customer already has this product active. Confirm to queue this subscription after it.", 409, {}, {
+    dateShift: {
+      activeSubscriptionId: String(shift.activeSubscriptionId),
+      activeEndAt: shift.activeEndAt,
+      startAt: shift.startAt,
+      endAt: shift.endAt,
+      days: shift.days,
+    },
+  });
+
 export const changeSubscriptionProduct = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { courseId?: number; packageId?: number; remark?: string };
+    const input = req.body as { courseId?: number; packageId?: number; remark?: string; confirmDates?: boolean };
     const result = await subSql.changeSubscriptionProduct(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
+    if (!result.ok && result.reason === "needs_confirmation") return dateShiftConfirmation(res, result.dateShift);
     if (!result.ok) {
       const targetField = input.courseId ? "courseId" : "packageId";
       const errors: Record<typeof result.reason, ActionError> = {
@@ -413,9 +428,10 @@ export const changeSubscriptionProduct = async (req: Request, res: Response) => 
 
 export const moveSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { customerId: number; remark?: string };
+    const input = req.body as { customerId: number; remark?: string; confirmDates?: boolean };
     const result = await subSql.moveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
+    if (!result.ok && result.reason === "needs_confirmation") return dateShiftConfirmation(res, result.dateShift);
     if (!result.ok) {
       const errors: Record<typeof result.reason, ActionError> = {
         not_found: SUBSCRIPTION_NOT_FOUND,

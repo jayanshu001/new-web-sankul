@@ -69,6 +69,14 @@ export const adminSubscriptionRepository = {
     prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } }),
   findCourseSubById: (id: number) => prisma.packageCourseSubscription.findUnique({ where: { id } }),
 
+  // Move: the paying order follows its subscription to the new customer (one order = one
+  // subscription). An order another subscription still hangs off (legacy data) stays put.
+  orderOwnedOnlyBy: async (orderId: number, subscriptionId: number) =>
+    (await prisma.packageCourseSubscription.count({ where: { orderId, id: { not: subscriptionId } } })) === 0,
+  setOrderCustomer: (orderId: number, customerId: number) =>
+    prisma.packageCourseOrder.update({ where: { id: orderId }, data: { userId: customerId } }),
+  transaction: <P extends Prisma.PrismaPromise<unknown>[]>(ops: [...P]) => prisma.$transaction(ops),
+
   /**
    * The customer who owns this subscription. Read BEFORE an admin revoke so the
    * caller can flush that customer's per-user route cache — on delete the row is
@@ -85,6 +93,17 @@ export const adminSubscriptionRepository = {
       select: { id: true, courseId: true, packageId: true, duration: true, price: true, withMaterial: true, materialPrice: true, status: true },
     }),
   // Latest active subscription for a customer's course/package target (upsert-extend).
+  // The customer's still-running rows of one product — a transfer onto it queues after them.
+  activeSubsForTarget: (customerId: number, target: { courseId: number | null; packageId: number | null }, now: Date) =>
+    prisma.packageCourseSubscription.findMany({
+      where: {
+        customerId,
+        status: true,
+        endAt: { gt: now },
+        ...(target.courseId ? { courseId: target.courseId } : { courseId: null, packageId: target.packageId }),
+      },
+      select: { id: true, startAt: true, endAt: true },
+    }),
   findActiveSubForTarget: (opts: { customerId: number; courseId: number | null; packageId: number | null }) => {
     const where: Prisma.PackageCourseSubscriptionWhereInput = { customerId: opts.customerId, status: true };
     if (opts.courseId) where.courseId = opts.courseId;

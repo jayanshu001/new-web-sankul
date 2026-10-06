@@ -8,6 +8,7 @@ import {
   toPhysicalBookDto,
   toAddressDto,
 } from "./admin-customer-details.transformer";
+import { isDeactivatedWindow } from "../../utils/subscriptionRemarkHistory";
 import { enrichOrders } from "../admin-book/admin-book.service";
 
 const uniqIds = (xs: (number | null | undefined)[]): number[] =>
@@ -116,6 +117,33 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
 
 type ListArgs = { skip: number; take: number; status?: boolean };
 
+type SubWindow = { id: number; productId: number | null; startAt: Date | null; endAt: Date | null };
+
+/**
+ * Deactivation walks a product's rows newest → oldest, and Revert undoes them in
+ * reverse. So per product, Deactivate belongs to the newest row that isn't
+ * deactivated, and Revert to the deactivated row directly above it (the oldest row
+ * once every row is deactivated). Rows are ordered by start date (then id) — a
+ * transfer can queue an older row after a newer one, so id alone isn't the sequence.
+ */
+const deactivationTurns = (windows: SubWindow[]) => {
+  const byProduct = new Map<number, SubWindow[]>();
+  for (const w of windows) {
+    if (w.productId == null) continue;
+    byProduct.set(w.productId, [...(byProduct.get(w.productId) ?? []), w]);
+  }
+  const canDeactivate = new Set<number>();
+  const canRevert = new Set<number>();
+  for (const rows of byProduct.values()) {
+    rows.sort((a, b) => (b.startAt?.getTime() ?? 0) - (a.startAt?.getTime() ?? 0) || b.id - a.id);
+    const next = rows.findIndex((r) => !isDeactivatedWindow(r));
+    if (next >= 0) canDeactivate.add(rows[next].id);
+    const lastDeactivated = next === -1 ? rows[rows.length - 1] : rows[next - 1];
+    if (lastDeactivated) canRevert.add(lastDeactivated.id);
+  }
+  return (id: number) => ({ canDeactivate: canDeactivate.has(id), canRevert: canRevert.has(id) });
+};
+
 export const listCustomerCourseSubscriptions = async (
   customerId: number, { skip, take, status }: ListArgs, now: Date
 ) => {
@@ -123,13 +151,16 @@ export const listCustomerCourseSubscriptions = async (
     repo.pageCourseSubs(customerId, skip, take, status),
     repo.countCourseSubs(customerId, status),
   ]);
-  const [courseArr, planArr] = await Promise.all([
-    repo.coursesByIds(uniqIds(rows.map((s) => s.courseId))),
+  const courseIds = uniqIds(rows.map((s) => s.courseId));
+  const [courseArr, planArr, windows] = await Promise.all([
+    repo.coursesByIds(courseIds),
     repo.plansByIds(uniqIds(rows.map((s) => s.planId))),
+    repo.courseSubWindows(customerId, courseIds),
   ]);
   const courses = mapById(courseArr);
   const plans = mapById(planArr);
-  return { data: rows.map((s) => toCourseDto(s, courses, plans, now)), total };
+  const turnOf = deactivationTurns(windows.map((w) => ({ ...w, productId: w.courseId })));
+  return { data: rows.map((s) => ({ ...toCourseDto(s, courses, plans, now), ...turnOf(s.id) })), total };
 };
 
 export const listCustomerPackageSubscriptions = async (
@@ -140,14 +171,15 @@ export const listCustomerPackageSubscriptions = async (
     repo.countPackageSubs(customerId, status),
   ]);
   const packageIds = uniqIds(rows.map((s) => s.packageId));
-  const [packageArr, planArr, latestIds] = await Promise.all([
+  const [packageArr, planArr, windows] = await Promise.all([
     repo.packagesByIds(packageIds),
     repo.plansByIds(uniqIds(rows.map((s) => s.planId))),
-    repo.latestPackageSubIds(customerId, packageIds),
+    repo.packageSubWindows(customerId, packageIds),
   ]);
   const packages = mapById(packageArr);
   const plans = mapById(planArr);
-  const data = rows.map((s) => ({ ...toPackageDto(s, packages, plans, now), isLatest: latestIds.has(s.id) }));
+  const turnOf = deactivationTurns(windows.map((w) => ({ ...w, productId: w.packageId })));
+  const data = rows.map((s) => ({ ...toPackageDto(s, packages, plans, now), ...turnOf(s.id) }));
   return { data, total };
 };
 
@@ -158,13 +190,16 @@ export const listCustomerLiveCourseSubscriptions = async (
     repo.pageLiveCourseSubs(customerId, skip, take, status),
     repo.countLiveCourseSubs(customerId, status),
   ]);
-  const [liveArr, livePlanArr] = await Promise.all([
-    repo.liveCoursesByIds(uniqIds(rows.map((s) => s.liveCourseId))),
+  const liveCourseIds = uniqIds(rows.map((s) => s.liveCourseId));
+  const [liveArr, livePlanArr, windows] = await Promise.all([
+    repo.liveCoursesByIds(liveCourseIds),
     repo.liveCoursePlansByIds(uniqIds(rows.map((s) => s.planId))),
+    repo.liveCourseSubWindows(customerId, liveCourseIds),
   ]);
   const liveCourses = mapById(liveArr);
   const livePlans = mapById(livePlanArr);
-  return { data: rows.map((s) => toLiveCourseDto(s, liveCourses, livePlans, now)), total };
+  const turnOf = deactivationTurns(windows.map((w) => ({ ...w, productId: w.liveCourseId })));
+  return { data: rows.map((s) => ({ ...toLiveCourseDto(s, liveCourses, livePlans, now), ...turnOf(s.id) })), total };
 };
 
 export const listCustomerTestSeriesSubscriptions = async (

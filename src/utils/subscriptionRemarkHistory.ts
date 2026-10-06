@@ -110,6 +110,52 @@ export const movedRemarkText = (
   `Mobile number changed - subscription moved from ${from.phone || "N/A"} (customer #${from.id ?? "none"})` +
   ` to ${to.phone || "N/A"} (customer #${to.id})`;
 
+// Deactivate sets end_at := start_at, so a zero-length window is a deactivated row.
+export const isDeactivatedWindow = (s: { startAt: Date | null; endAt: Date | null }): boolean =>
+  !!(s.startAt && s.endAt && s.startAt.getTime() === s.endAt.getTime());
+
+export interface DateShift {
+  activeSubscriptionId: number;
+  activeEndAt: Date;
+  startAt: Date;
+  endAt: Date;
+  days: number;
+  what: string;
+}
+
+/**
+ * Transferring a subscription (change product / move customer) onto a product the
+ * customer already holds actively would overlap the two. Instead, the transferred row's
+ * remaining time (end − max(now, start)) is queued to start when the latest active one
+ * ends. Null when no active subscription overlaps it.
+ */
+export const planDateShift = (
+  current: { startAt: Date | null; endAt: Date | null },
+  actives: { id: number; startAt: Date | null; endAt: Date | null }[],
+  now: Date
+): DateShift | null => {
+  const active = actives
+    .filter((a): a is { id: number; startAt: Date | null; endAt: Date } => !!a.endAt && a.endAt > now && !isDeactivatedWindow(a))
+    .sort((a, b) => b.endAt.getTime() - a.endAt.getTime())[0];
+  if (!active || !current.endAt) return null;
+  if (current.startAt && current.startAt >= active.endAt) return null;
+
+  const from = current.startAt && current.startAt > now ? current.startAt : now;
+  const remainingMs = Math.max(0, current.endAt.getTime() - from.getTime());
+  const startAt = new Date(active.endAt.getTime());
+  const endAt = new Date(startAt.getTime() + remainingMs);
+  return {
+    activeSubscriptionId: active.id,
+    activeEndAt: active.endAt,
+    startAt,
+    endAt,
+    days: Math.round(remainingMs / 86_400_000),
+    what:
+      `Dates moved after active subscription #${active.id}: ` +
+      `${fmtExportDate(current.startAt) || "none"} - ${fmtExportDate(current.endAt)} -> ${fmtExportDate(startAt)} - ${fmtExportDate(endAt)}`,
+  };
+};
+
 export const planDeactivation = (
   current: { startAt: Date | null; endAt: Date | null },
   now: Date

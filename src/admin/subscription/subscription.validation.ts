@@ -148,6 +148,7 @@ export const changeSubscriptionProductSchema = z
     courseId: positiveIdSchema.optional(),
     packageId: positiveIdSchema.optional(),
     remark: historyRemarkSchema,
+    confirmDates: z.boolean().optional(),
   })
   .refine((d) => !!d.courseId !== !!d.packageId, {
     message: "Provide exactly one of courseId or packageId.",
@@ -157,6 +158,7 @@ export const changeSubscriptionProductSchema = z
 export const moveSubscriptionSchema = z.object({
   customerId: positiveIdSchema,
   remark: z.string().trim().max(500).optional(),
+  confirmDates: z.boolean().optional(),
 });
 
 export const deactivateSubscriptionSchema = z.object({

@@ -87,4 +87,5 @@ export const reorderLiveCoursesSchema = z.object({
 export const changeLiveCourseSchema = z.object({
   liveCourseId: positiveIdSchema,
   remark: historyRemarkSchema,
+  confirmDates: z.boolean().optional(),
 });
