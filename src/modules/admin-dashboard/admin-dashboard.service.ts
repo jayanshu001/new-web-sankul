@@ -6,7 +6,7 @@
  *
  * Field drift: Mongo PackageCourseSubscription.paidAmount → SQL `amount`;
  * targetPackageId → packageId. EBookOrder revenue = order_price, status enum
- * "complete". BookOrder revenue = order_price (amount), status "verified",
+ * "complete". BookOrder revenue = order_price (amount), status verified,
  * items in order_items JSON. Customer is single `fullName` + `phoneNumber`.
  * Time-series buckets via raw SQL HOUR()/DAYOFMONTH() in IST (CONVERT_TZ).
  */
@@ -30,8 +30,9 @@ const ebookRevenue = async (w: Win) => {
   const agg = await prisma.eBookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "complete" as any }, _sum: { orderPrice: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.orderPrice), count: agg._count._all };
 };
+
 const bookRevenue = async (w: Win) => {
-  const agg = await prisma.bookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: "verified" }, _sum: { amount: true }, _count: { _all: true } });
+  const agg = await prisma.bookOrder.aggregate({ where: { createdAt: { gte: w.start, lte: w.end }, status: { in: PAID_BOOK_STATUSES } }, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
 // Test-series subscription rows are created ONLY on verify (pending state lives on

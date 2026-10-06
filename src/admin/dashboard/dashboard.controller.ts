@@ -56,27 +56,55 @@ function resolveCustom(from: string | undefined, to: string | undefined):
   return { ok: true, window: { start, end, prevStart, prevEnd } };
 }
 
+// Same wall-clock moment `months` months away, clamped to that month's last day
+// (31 Mar → 28/29 Feb), so "this month so far" maps onto "last month to the same date".
+function shiftMonths(d: Date, months: number) {
+  const r = new Date(d);
+  const day = r.getDate();
+  r.setDate(1);
+  r.setMonth(r.getMonth() + months);
+  r.setDate(Math.min(day, new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate()));
+  return r;
+}
+
+function shiftDays(d: Date, days: number) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + days);
+  return r;
+}
+
+// The comparison window is the SAME point in the previous period (today so far vs
+// yesterday up to this time, this month so far vs last month up to this date), so a
+// period that is still running isn't compared against a whole one.
 function resolveRange(preset: RangePreset | undefined, now = new Date()) {
   const start = new Date(now);
   const end = new Date(now);
   start.setHours(0, 0, 0, 0);
   end.setHours(23, 59, 59, 999);
+  let prevStart: Date;
+  let prevEnd: Date;
 
   switch (preset) {
     case "yesterday": {
       start.setDate(start.getDate() - 1);
       end.setDate(end.getDate() - 1);
+      prevStart = shiftDays(start, -1);
+      prevEnd = shiftDays(end, -1);
       break;
     }
     case "week": {
       const day = start.getDay();
       start.setDate(start.getDate() - day);
       end.setTime(now.getTime());
+      prevStart = shiftDays(start, -7);
+      prevEnd = shiftDays(now, -7);
       break;
     }
     case "month": {
       start.setDate(1);
       end.setTime(now.getTime());
+      prevStart = shiftMonths(start, -1);
+      prevEnd = shiftMonths(now, -1);
       break;
     }
     case "prevMonth": {
@@ -84,29 +112,30 @@ function resolveRange(preset: RangePreset | undefined, now = new Date()) {
       start.setMonth(start.getMonth() - 1);
       end.setDate(0);
       end.setHours(23, 59, 59, 999);
+      prevStart = shiftMonths(start, -1);
+      prevEnd = new Date(start.getTime() - 1);
       break;
     }
     case "year": {
       start.setMonth(0, 1);
       end.setTime(now.getTime());
+      prevStart = shiftMonths(start, -12);
+      prevEnd = shiftMonths(now, -12);
       break;
     }
     case "today":
     default:
+      prevStart = shiftDays(start, -1);
+      prevEnd = shiftDays(now, -1);
       break;
   }
-
-  const prevStart = new Date(start);
-  const prevEnd = new Date(end);
-  const span = end.getTime() - start.getTime();
-  prevStart.setTime(start.getTime() - span - 1);
-  prevEnd.setTime(start.getTime() - 1);
 
   return { start, end, prevStart, prevEnd };
 }
 
+// null when the previous period had no revenue — a % change from ₹0 is meaningless.
 function deltaPct(current: number, previous: number) {
-  if (!previous) return current > 0 ? 100 : 0;
+  if (!previous) return current > 0 ? null : 0;
   return Math.round(((current - previous) / previous) * 100);
 }
 
@@ -206,12 +235,13 @@ export const getDashboard = async (req: Request, res: Response) => {
           orderReports: {
             range: orderRange || (orderFromDate || orderToDate || fromDate || toDate ? "custom" : "today"),
             windowStart: orderWindow.start, windowEnd: orderWindow.end,
-            package: { amount: d.revenue.pkg.revenue, deltaPct: deltaPct(d.revenue.pkg.revenue, d.revenue.pkgPrev) },
-            course: { amount: d.revenue.course.revenue, deltaPct: deltaPct(d.revenue.course.revenue, d.revenue.coursePrev) },
-            ebook: { amount: d.revenue.ebook.revenue, deltaPct: deltaPct(d.revenue.ebook.revenue, d.revenue.ebookPrev) },
-            book: { amount: d.revenue.book.revenue, deltaPct: deltaPct(d.revenue.book.revenue, d.revenue.bookPrev) },
-            testSeries: { amount: d.revenue.testSeries.revenue, deltaPct: deltaPct(d.revenue.testSeries.revenue, d.revenue.testSeriesPrev) },
-            liveCourse: { amount: d.revenue.liveCourse.revenue, deltaPct: deltaPct(d.revenue.liveCourse.revenue, d.revenue.liveCoursePrev) },
+            prevWindowStart: orderWindow.prevStart, prevWindowEnd: orderWindow.prevEnd,
+            package: { amount: d.revenue.pkg.revenue, count: d.revenue.pkg.count, prevAmount: d.revenue.pkgPrev, deltaPct: deltaPct(d.revenue.pkg.revenue, d.revenue.pkgPrev) },
+            course: { amount: d.revenue.course.revenue, count: d.revenue.course.count, prevAmount: d.revenue.coursePrev, deltaPct: deltaPct(d.revenue.course.revenue, d.revenue.coursePrev) },
+            ebook: { amount: d.revenue.ebook.revenue, count: d.revenue.ebook.count, prevAmount: d.revenue.ebookPrev, deltaPct: deltaPct(d.revenue.ebook.revenue, d.revenue.ebookPrev) },
+            book: { amount: d.revenue.book.revenue, count: d.revenue.book.count, prevAmount: d.revenue.bookPrev, deltaPct: deltaPct(d.revenue.book.revenue, d.revenue.bookPrev) },
+            testSeries: { amount: d.revenue.testSeries.revenue, count: d.revenue.testSeries.count, prevAmount: d.revenue.testSeriesPrev, deltaPct: deltaPct(d.revenue.testSeries.revenue, d.revenue.testSeriesPrev) },
+            liveCourse: { amount: d.revenue.liveCourse.revenue, count: d.revenue.liveCourse.count, prevAmount: d.revenue.liveCoursePrev, deltaPct: deltaPct(d.revenue.liveCourse.revenue, d.revenue.liveCoursePrev) },
           },
           totalOrderReports: { range: totalRange || "today", windowStart: totalWindow.start, windowEnd: totalWindow.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
           recentPackageSubscriptions: d.recentPackageSubs,
