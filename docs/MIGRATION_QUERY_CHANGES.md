@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-10-06 — Admin dashboard: one date filter for every card
+
+> **DDL:** none. **Request:** `range` (`today|yesterday|week|month|prevMonth|year|custom`) +
+> `fromDate`/`toDate` replace `orderRange`/`totalRange` and the trending `days=7|30`.
+> Legacy `orderRange`/`orderFromDate`/`orderToDate`, then `totalRange`/`totalFromDate`/`totalToDate`
+> are still read as fallbacks. **Response:** same keys; trending `days` → `range`; `/recent`
+> gains `range`/`windowStart`/`windowEnd`.
+
+- `GET /admin/dashboard`: `orderReports` and `totalOrderReports` share one window (previously
+  two independent ranges). The six `recent*` lists are now limited to that window: the
+  package/course/test-series/live-course lists are filtered on the completed order's
+  `created_at`, books on `ws_book_order.created_at`, and ebooks on `ws_ebook_subscription.created_at`.
+- `GET /admin/dashboard/recent`: same window filter as above for the next pages.
+- `GET /admin/dashboard/trending`: rankings use `created_at >= start AND <= end` for the
+  selected window instead of `>= today − (7|30 − 1)` (all six rankers, Prisma + raw SQL).
+  Custom-range validation (both dates, from ≤ to, ≤ 2 years) applies to all three endpoints.
+
 ## 2026-10-06 — Dashboard trending lists every product sold (top-5 cap removed)
 
 > **DDL:** none. **Response:** unchanged keys; each `trending.*` array can now hold more than 5 rows.

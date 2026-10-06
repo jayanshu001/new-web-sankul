@@ -167,60 +167,36 @@ function bucketStage(start: Date, end: Date) {
   };
 }
 
-// GET /api/v1/admin/dashboard
+type DashboardWindow = { start: Date; end: Date; prevStart: Date; prevEnd: Date };
+
+function resolveDashboardWindow(q: Record<string, string | undefined>, now = new Date()):
+  | { ok: true; range: string; window: DashboardWindow }
+  | { ok: false; message: string } {
+  const range = q.range || q.orderRange || q.totalRange;
+  const from = q.fromDate || q.orderFromDate || q.totalFromDate;
+  const to = q.toDate || q.orderToDate || q.totalToDate;
+  if (range === "custom" || (!range && (from || to))) {
+    const custom = resolveCustom(from, to);
+    return custom.ok ? { ok: true, range: "custom", window: custom.window } : custom;
+  }
+  return { ok: true, range: range || "today", window: resolveRange(range as RangePreset | undefined, now) };
+}
+
+// GET /api/v1/admin/dashboard?range=&fromDate=&toDate=
+// One date filter drives the order cards, the chart and the recent lists.
 export const getDashboard = async (req: Request, res: Response) => {
   try {
-    const {
-      orderRange,
-      totalRange,
-      fromDate,
-      toDate,
-      orderFromDate,
-      orderToDate,
-      totalFromDate,
-      totalToDate,
-      recentLimit,
-    } = req.query as Record<string, string>;
-
-    const limit = Math.min(parseInt(recentLimit || "7", 10) || 7, 25);
-    const now = new Date();
-
-    let orderWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
-    if (orderRange === "custom") {
-      const oFrom = orderFromDate || fromDate;
-      const oTo = orderToDate || toDate;
-      const r = resolveCustom(oFrom, oTo);
-      if (!r.ok) {
-        return res.status(400).json({ success: false, message: `orderReports: ${r.message}` });
-      }
-      orderWindow = r.window;
-    } else if (!orderRange && (orderFromDate || orderToDate || fromDate || toDate)) {
-      // Legacy: bare fromDate/toDate without an explicit range — treat as custom for Order Reports.
-      const r = resolveCustom(orderFromDate || fromDate, orderToDate || toDate);
-      if (!r.ok) {
-        return res.status(400).json({ success: false, message: `orderReports: ${r.message}` });
-      }
-      orderWindow = r.window;
-    } else {
-      orderWindow = resolveRange((orderRange as RangePreset) || "today", now);
+    const query = req.query as Record<string, string>;
+    const limit = Math.min(parseInt(query.recentLimit || "7", 10) || 7, 25);
+    const resolved = resolveDashboardWindow(query);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
     }
+    const { range, window } = resolved;
 
-    let totalWindow: { start: Date; end: Date; prevStart: Date; prevEnd: Date };
-    if (totalRange === "custom") {
-      const tFrom = totalFromDate || fromDate;
-      const tTo = totalToDate || toDate;
-      const r = resolveCustom(tFrom, tTo);
-      if (!r.ok) {
-        return res.status(400).json({ success: false, message: `totalOrderReports: ${r.message}` });
-      }
-      totalWindow = r.window;
-    } else {
-      totalWindow = resolveRange((totalRange as RangePreset) || "today", now);
-    }
+    const bucket = bucketStage(window.start, window.end);
 
-    const bucket = bucketStage(totalWindow.start, totalWindow.end);
-
-    const d = await adminDashSql.fetchDashboardData({ orderWindow, totalWindow, unit: bucket.unit, limit });
+    const d = await adminDashSql.fetchDashboardData({ window, unit: bucket.unit, limit });
       // Time-series: merge per-bucket across product types, then lay out on slots.
       const seriesMap = new Map<number, { orders: number; earnings: number }>();
       for (const row of d.series) {
@@ -233,9 +209,9 @@ export const getDashboard = async (req: Request, res: Response) => {
         success: true,
         data: {
           orderReports: {
-            range: orderRange || (orderFromDate || orderToDate || fromDate || toDate ? "custom" : "today"),
-            windowStart: orderWindow.start, windowEnd: orderWindow.end,
-            prevWindowStart: orderWindow.prevStart, prevWindowEnd: orderWindow.prevEnd,
+            range,
+            windowStart: window.start, windowEnd: window.end,
+            prevWindowStart: window.prevStart, prevWindowEnd: window.prevEnd,
             package: { amount: d.revenue.pkg.revenue, count: d.revenue.pkg.count, prevAmount: d.revenue.pkgPrev, deltaPct: deltaPct(d.revenue.pkg.revenue, d.revenue.pkgPrev) },
             course: { amount: d.revenue.course.revenue, count: d.revenue.course.count, prevAmount: d.revenue.coursePrev, deltaPct: deltaPct(d.revenue.course.revenue, d.revenue.coursePrev) },
             ebook: { amount: d.revenue.ebook.revenue, count: d.revenue.ebook.count, prevAmount: d.revenue.ebookPrev, deltaPct: deltaPct(d.revenue.ebook.revenue, d.revenue.ebookPrev) },
@@ -243,7 +219,7 @@ export const getDashboard = async (req: Request, res: Response) => {
             testSeries: { amount: d.revenue.testSeries.revenue, count: d.revenue.testSeries.count, prevAmount: d.revenue.testSeriesPrev, deltaPct: deltaPct(d.revenue.testSeries.revenue, d.revenue.testSeriesPrev) },
             liveCourse: { amount: d.revenue.liveCourse.revenue, count: d.revenue.liveCourse.count, prevAmount: d.revenue.liveCoursePrev, deltaPct: deltaPct(d.revenue.liveCourse.revenue, d.revenue.liveCoursePrev) },
           },
-          totalOrderReports: { range: totalRange || "today", windowStart: totalWindow.start, windowEnd: totalWindow.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
+          totalOrderReports: { range, windowStart: window.start, windowEnd: window.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
           recentPackageSubscriptions: d.recentPackageSubs,
           recentCourseSubscriptions: d.recentCourseSubs,
           recentBookOrders: d.recentBookOrders,
@@ -258,9 +234,6 @@ export const getDashboard = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/dashboard/trending?days=7|30
-// Top sellers per product type over a rolling window ending now. Anything other
-// than 30 falls back to 7 so the shared cache only ever holds two entries.
 const ACTIVITY_TYPES: adminDashSql.ActivityType[] = ["package", "course", "book", "ebook", "testSeries", "liveCourse"];
 const MAX_ACTIVITY_PAGE = 50;
 
@@ -273,36 +246,40 @@ function activityPage(req: Request) {
   return { type, offset, limit };
 }
 
-// GET /api/v1/admin/dashboard/trending?days=7|30&type=&offset=&limit=
+// GET /api/v1/admin/dashboard/trending?type=&offset=&limit=&range=&fromDate=&toDate=
+// Top sellers per product type inside the dashboard's date filter.
 export const getDashboardTrending = async (req: Request, res: Response) => {
   const pageReq = activityPage(req);
   if (!pageReq) return res.status(400).json({ success: false, message: `type must be one of: ${ACTIVITY_TYPES.join(", ")}` });
+  const resolved = resolveDashboardWindow(req.query as Record<string, string>);
+  if (!resolved.ok) return res.status(400).json({ success: false, message: resolved.message });
   const { type, offset, limit } = pageReq;
+  const { range, window } = resolved;
   try {
-    const days = req.query.days === "30" ? 30 : 7;
-    const windowEnd = new Date();
-    // "Last 7 days" = today + the 6 days before, from IST midnight — whole days, the
-    // same bounds a report filtered from (today − 6) to today uses. A rolling 7×24h
-    // window started mid-day and never lined up with any report filter.
-    const todayIst = new Date(windowEnd.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
-    const windowStart = new Date(istStartOfDay(todayIst)!.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
-    const page = await adminDashSql.fetchTrending(windowStart, type, offset, limit);
-    return res.status(200).json({ success: true, data: { days, type, windowStart, windowEnd, offset, limit, ...page } });
+    const page = await adminDashSql.fetchTrending(window, type, offset, limit);
+    return res.status(200).json({ success: true, data: { range, type, windowStart: window.start, windowEnd: window.end, offset, limit, ...page } });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
-// GET /api/v1/admin/dashboard/recent?type=&offset=&limit=
-// Next pages of an Activity card's "Recent" tab (the dashboard payload has page one).
+// GET /api/v1/admin/dashboard/recent?type=&offset=&limit=&range=&fromDate=&toDate=
+// Next pages of an Activity card's recent list (the dashboard payload has page one).
 export const getDashboardRecent = async (req: Request, res: Response) => {
   const page = activityPage(req);
   if (!page) return res.status(400).json({ success: false, message: `type must be one of: ${ACTIVITY_TYPES.join(", ")}` });
+  const resolved = resolveDashboardWindow(req.query as Record<string, string>);
+  if (!resolved.ok) return res.status(400).json({ success: false, message: resolved.message });
+  const { range, window } = resolved;
   try {
-    const items = await adminDashSql.fetchRecent(page.type, page.offset, page.limit + 1);
+    const items = await adminDashSql.fetchRecent(page.type, window, page.offset, page.limit + 1);
     return res.status(200).json({
       success: true,
-      data: { type: page.type, offset: page.offset, limit: page.limit, items: items.slice(0, page.limit), hasMore: items.length > page.limit },
+      data: {
+        range, windowStart: window.start, windowEnd: window.end,
+        type: page.type, offset: page.offset, limit: page.limit,
+        items: items.slice(0, page.limit), hasMore: items.length > page.limit,
+      },
     });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
