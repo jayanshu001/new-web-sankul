@@ -21,8 +21,9 @@ const num = (v: any) => (v == null ? 0 : Number(v));
 // ── revenue + count for a window ───────────────────────────────────────────────
 const subRevenue = async (w: Win, courseScope: "course" | "package" | "all") => {
   const where: any = { createdAt: { gte: w.start, lte: w.end } };
-  if (courseScope === "course") where.courseId = { not: null };
-  else if (courseScope === "package") where.courseId = null;
+  // Same split as the Subscription Report's type filter (admin-subscription buildCourseSubBaseWhere).
+  if (courseScope === "course") where.courseId = { gt: 0 };
+  else if (courseScope === "package") { where.courseId = null; where.packageId = { gt: 0 }; }
   const agg = await prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } });
   return { revenue: num(agg._sum.amount), count: agg._count._all };
 };
@@ -173,8 +174,8 @@ export const fetchDashboardData = async (opts: {
     // then summed it — so the Total Order Reports card was paying for the range twice.
     // `totals` is now folded from the series rows (identical numbers, half the scans,
     // five fewer connections held for the length of a year-range scan).
-    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NULL"),
-    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NOT NULL"),
+    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id IS NULL AND package_id > 0"),
+    seriesFor("ws_package_course_subscription", "amount", tot, unit, "AND course_id > 0"),
     subSeriesFor("ws_ebook_subscription", "ws_ebook_order", "order_price", tot, unit),
     seriesFor("ws_book_order", "order_price", tot, unit, "AND status = 'verified'"),
     // Raw column name: `price` → `amount` (2026-08-31). Prisma does not validate
@@ -276,8 +277,9 @@ export const fetchDashboardData = async (opts: {
 // ── trending: top sellers per product type over a rolling window ───────────────
 /**
  * GET /admin/dashboard/trending. Ranks each paid category by number of sales since
- * `since` (ties → revenue), top TRENDING_LIMIT. Same tables + paid filters as the
- * revenue cards above, so a product's revenue here sums into its category card.
+ * `since` (ties → revenue), top TRENDING_LIMIT. Each ranking counts exactly what that
+ * product's report lists when filtered to the product + the same dates (Subscription /
+ * Test Series / Live Course report, Ebook Subscriptions, Book Orders).
  * Grouped rows are id-only; names/images are batch-loaded afterwards.
  */
 const TRENDING_LIMIT = 5;
@@ -287,14 +289,14 @@ const rankSubs = async (since: Date, scope: "course" | "package"): Promise<RankR
   const rows = scope === "package"
     ? await prisma.packageCourseSubscription.groupBy({
         by: ["packageId"],
-        where: { createdAt: { gte: since }, courseId: null, packageId: { not: null } },
+        where: { createdAt: { gte: since }, courseId: null, packageId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { packageId: "desc" } }, { _sum: { amount: "desc" } }],
         take: TRENDING_LIMIT,
       })
     : await prisma.packageCourseSubscription.groupBy({
         by: ["courseId"],
-        where: { createdAt: { gte: since }, courseId: { not: null } },
+        where: { createdAt: { gte: since }, courseId: { gt: 0 } },
         _count: { _all: true }, _sum: { amount: true },
         orderBy: [{ _count: { courseId: "desc" } }, { _sum: { amount: "desc" } }],
         take: TRENDING_LIMIT,
@@ -313,40 +315,54 @@ const rankTestSeries = async (since: Date): Promise<RankRow[]> => {
   return rows.map((r) => ({ id: r.testSeriesId, orders: r._count._all, revenue: num(r._sum.amount) }));
 };
 
-const rankLiveCourses = async (since: Date): Promise<RankRow[]> => {
-  const rows = await prisma.liveCourseOrder.groupBy({
-    by: ["liveCourseId"],
-    where: { createdAt: { gte: since }, status: "complete" },
-    _count: { _all: true }, _sum: { amount: true },
-    orderBy: [{ _count: { liveCourseId: "desc" } }, { _sum: { amount: "desc" } }],
-    take: TRENDING_LIMIT,
-  });
-  return rows.map((r) => ({ id: r.liveCourseId, orders: r._count._all, revenue: num(r._sum.amount) }));
-};
-
 // RAW SQL — column names are strings, so `yarn typecheck` cannot catch a rename.
-// Ebook orders carry the ebook only via their plan (ws_package_course_ebook_price).
-const rankEbooks = async (since: Date): Promise<RankRow[]> => {
+// Live course + ebook rank SUBSCRIPTIONS (what their reports list), revenue from each
+// one's order — same definition as liveCourseRevenue/ebookRevenue. Ranking ebook
+// orders via their plan dropped admin grants, which are written with plan_id = 0.
+const rankSubsWithOrders = async (since: Date, subTable: string, productCol: string, orderTable: string, revenueCol: string): Promise<RankRow[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number; orders: bigint; revenue: any }[]>(
-    `SELECT p.ebook_id AS id, COUNT(*) AS orders, COALESCE(SUM(o.order_price),0) AS revenue
-     FROM ws_ebook_order o JOIN ws_package_course_ebook_price p ON p.id = o.plan_id
-     WHERE o.created_at >= ? AND o.status = 'complete' AND p.ebook_id IS NOT NULL
-     GROUP BY p.ebook_id ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
+    `SELECT s.${productCol} AS id, COUNT(*) AS orders, COALESCE(SUM(o.${revenueCol}),0) AS revenue
+     FROM ${subTable} s LEFT JOIN ${orderTable} o ON o.id = s.order_id
+     WHERE s.created_at >= ? AND s.${productCol} IS NOT NULL
+     GROUP BY s.${productCol} ORDER BY orders DESC, revenue DESC LIMIT ${TRENDING_LIMIT}`,
     since
   );
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
 };
+const rankLiveCourses = (since: Date) =>
+  rankSubsWithOrders(since, "ws_live_course_subscription", "live_course_id", "ws_live_course_order", "discount_price");
+const rankEbooks = (since: Date) =>
+  rankSubsWithOrders(since, "ws_ebook_subscription", "ebook_id", "ws_ebook_order", "order_price");
 
+// A book "sells" in an order when the Book Orders report's book filter would list that
+// order: the book is in ws_book_order_item OR in the order's order_items JSON
+// (admin-book findOrderKeysByBookId reads both). Revenue is item price × qty, from the
+// item table when it has the line, else from the JSON.
 const rankBooks = async (since: Date): Promise<RankRow[]> => {
   const orders = await prisma.bookOrder.findMany({
     where: { createdAt: { gte: since }, status: "verified" },
-    select: { orderItems: true },
+    select: { receiptId: true, orderItems: true },
   });
+  const tableItems = orders.length
+    ? await prisma.bookOrderItem.findMany({
+        where: { order_id: { in: orders.map((o) => o.receiptId) }, bookId: { not: null } },
+        select: { order_id: true, bookId: true, qty: true, price: true },
+      })
+    : [];
+  const tableByOrder = new Map<string, { bookId: number; qty: number; price: number }[]>();
+  for (const it of tableItems) {
+    const list = tableByOrder.get(it.order_id) ?? [];
+    list.push({ bookId: it.bookId as number, qty: it.qty, price: it.price });
+    tableByOrder.set(it.order_id, list);
+  }
   const byBook = new Map<number, RankRow>();
   for (const order of orders) {
+    const fromTable = tableByOrder.get(order.receiptId) ?? [];
+    const tableBooks = new Set(fromTable.map((i) => i.bookId));
+    const fromJson = dashTransformer.itemsFromJson(order.orderItems)
+      .filter((i): i is typeof i & { bookId: number } => i.bookId != null && !tableBooks.has(i.bookId));
     const booksInOrder = new Set<number>();
-    for (const item of dashTransformer.itemsFromJson(order.orderItems)) {
-      if (item.bookId == null) continue;
+    for (const item of [...fromTable, ...fromJson]) {
       const row = byBook.get(item.bookId) ?? { id: item.bookId, orders: 0, revenue: 0 };
       if (!booksInOrder.has(item.bookId)) row.orders++;
       row.revenue += item.price * item.qty;

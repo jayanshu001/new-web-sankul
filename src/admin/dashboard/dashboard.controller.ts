@@ -264,7 +264,11 @@ export const getDashboardTrending = async (req: Request, res: Response) => {
   try {
     const days = req.query.days === "30" ? 30 : 7;
     const windowEnd = new Date();
-    const windowStart = new Date(windowEnd.getTime() - days * 24 * 60 * 60 * 1000);
+    // "Last 7 days" = today + the 6 days before, from IST midnight — whole days, the
+    // same bounds a report filtered from (today − 6) to today uses. A rolling 7×24h
+    // window started mid-day and never lined up with any report filter.
+    const todayIst = new Date(windowEnd.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const windowStart = new Date(istStartOfDay(todayIst)!.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
     const trending = await adminDashSql.fetchTrending(windowStart);
     return res.status(200).json({ success: true, data: { days, windowStart, windowEnd, ...trending } });
   } catch (e: any) {
