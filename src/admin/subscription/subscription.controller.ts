@@ -391,7 +391,7 @@ const SUBSCRIPTION_NOT_FOUND: ActionError = [404, "Subscription not found."];
 
 export const changeSubscriptionProduct = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { courseId?: number; packageId?: number; remark: string };
+    const input = req.body as { courseId?: number; packageId?: number; remark?: string };
     const result = await subSql.changeSubscriptionProduct(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
     if (!result.ok) {
@@ -435,7 +435,7 @@ export const moveSubscription = async (req: Request, res: Response) => {
 
 export const deactivateSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { remark: string };
+    const input = req.body as { remark?: string };
     const result = await subSql.deactivateSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
     if (!result.ok) {

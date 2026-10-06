@@ -32,7 +32,7 @@ return **422**, with `messages` as a flat `field → message` map.
 
 ```json
 { "success": false, "code": 422, "data": {}, "message": "Validation failed.",
-  "messages": { "remark": "Remark is required." } }
+  "messages": { "courseId": "Provide exactly one of courseId or packageId." } }
 ```
 
 The three writes return `data` = the same DTO as `GET /admin/subscriptions/:id`
@@ -55,7 +55,7 @@ Plan (`pcb_id`), dates, amount, order, payment and material are not touched.
 | Field | Rule |
 |---|---|
 | `courseId` / `packageId` | exactly one, positive integer |
-| `remark` | required, 1–500 chars |
+| `remark` | optional, max 500 chars — the default history line is always written |
 
 200 `message: "Subscription course/package changed."`
 
@@ -109,13 +109,14 @@ appears in purchase history, where it reads as expired.
 { "remark": "Refund issued" }
 ```
 
+`remark` is optional (max 500 chars); the history entry below is always written.
+
 200 `message: "Subscription deactivated."`
 
 | Status | message |
 |---|---|
 | 404 | `Subscription not found.` |
 | 422 | `Subscription is already deactivated.` |
-| 422 | `Validation failed.` — `messages.remark: "Remark is required."` |
 
 History entry: `Deactivated: end date 2026-12-31 23:59:59 -> 2026-01-01 10:00:00. Remark: Refund issued | by Jane Doe (#5)`
 
@@ -237,9 +238,9 @@ live subscription id. They return `data.subscription` (the
 
 | Route | Body | 200 message |
 |---|---|---|
-| `POST /admin/live-courses/subscriptions/:id/change-course` | `{ liveCourseId, remark }` | `Subscription live course changed.` |
+| `POST /admin/live-courses/subscriptions/:id/change-course` | `{ liveCourseId, remark? }` | `Subscription live course changed.` |
 | `POST /admin/live-courses/subscriptions/:id/move` | `{ customerId, remark? }` | `Subscription moved.` |
-| `POST /admin/live-courses/subscriptions/:id/deactivate` | `{ remark }` | `Subscription deactivated.` |
+| `POST /admin/live-courses/subscriptions/:id/deactivate` | `{ remark? }` | `Subscription deactivated.` |
 
 - **change-course** switches only to another live course (not to a course/package —
   separate tables, separate orders). Only `live_course_id` changes and a history entry

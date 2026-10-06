@@ -247,7 +247,7 @@ const logActionFailure = (req: Request, action: string, err: unknown) =>
 
 export const changeLiveCourseOfSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { liveCourseId: number; remark: string };
+    const input = req.body as { liveCourseId: number; remark?: string };
     const result = await liveSql.changeSubscriptionLiveCourse(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
     if (!result.ok) {
@@ -292,7 +292,7 @@ export const moveLiveCourseSubscription = async (req: Request, res: Response) =>
 
 export const deactivateLiveCourseSubscription = async (req: Request, res: Response) => {
   try {
-    const input = req.body as { remark: string };
+    const input = req.body as { remark?: string };
     const result = await liveSql.deactivateLiveSubscription(subscriptionIdOf(req), { ...input, actingAdminId: actingAdminOf(req) });
 
     if (!result.ok) {

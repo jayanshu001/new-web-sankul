@@ -135,7 +135,9 @@ export const adminUpdateAddressSchema = z.object({
 
 export const positiveIdSchema = z.coerce.number().int().positive("Invalid id.");
 
-export const historyRemarkSchema = z.string().trim().min(1, "Remark is required.").max(500);
+// Optional on every history action — each one already writes its own audit line
+// ("Deactivated: end date … -> …"); the admin note is only appended when given.
+export const historyRemarkSchema = z.string().trim().max(500).optional();
 
 export const subscriptionIdParamsSchema = z.object({ id: positiveIdSchema });
 
@@ -161,13 +163,11 @@ export const deactivateSubscriptionSchema = z.object({
   remark: historyRemarkSchema,
 });
 
-const optionalHistoryRemarkSchema = z.string().trim().max(500).optional();
-
 export const addDaysSchema = z.object({
   days: z.coerce.number().int().positive("Days must be a positive whole number."),
-  remark: optionalHistoryRemarkSchema,
+  remark: historyRemarkSchema,
 });
 
 export const revertDeactivationSchema = z.object({
-  remark: optionalHistoryRemarkSchema,
+  remark: historyRemarkSchema,
 });
