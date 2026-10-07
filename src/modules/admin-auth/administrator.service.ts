@@ -1,3 +1,4 @@
+// Administrators: admin user CRUD, status and role assignment logic.
 import { adminAuthRepository } from "./admin-auth.repository";
 import {
   toAdminListDto,
@@ -6,13 +7,9 @@ import {
 import { invalidateAdminPermissions } from "./admin-permission-resolver";
 
 /**
- * SQL (ws_users) administrator CRUD service. Used by the administrator
- * controller when `admin-auth` is a MySQL module. Roles/permissions are
- * resolved from the spatie pivots; the legacy `role` enum has no SQL column,
- * so a spatie role id (numeric) is the only persistable role on this branch.
- *
- * `MODEL_TYPE` is the Laravel morph class stored in ws_model_has_roles. The
- * existing rows use this exact string.
+ * Administrator CRUD over ws_users. Roles/permissions come from the spatie pivots;
+ * a spatie role id is the only persistable role. ADMIN_MODEL_TYPE is the Laravel
+ * morph class stored in ws_model_has_roles and must match existing rows exactly.
  */
 export const ADMIN_MODEL_TYPE = "App\\Models\\User";
 
@@ -25,7 +22,6 @@ export const parseAdminBigId = (id: string): bigint | null => {
   }
 };
 
-/** Resolve roles + direct permissions and build the list/detail DTO. */
 const buildListDto = async (
   row: NonNullable<Awaited<ReturnType<typeof adminAuthRepository.findById>>>
 ): Promise<AdminListDto> => {
@@ -43,12 +39,10 @@ export const listAdministrators = async (opts: {
   page: number;
   limit: number;
 }): Promise<{ items: AdminListDto[]; total: number }> => {
-  // Role filter: resolve admin ids carrying that spatie role first.
   let ids: bigint[] | undefined;
   if (opts.roleId) {
     const roleBig = parseAdminBigId(opts.roleId);
     ids = roleBig ? await adminAuthRepository.adminIdsWithRole(roleBig) : [];
-    // No admin has this role → short-circuit to an empty page.
     if (!ids.length) return { items: [], total: 0 };
   }
 
@@ -131,8 +125,8 @@ export const updateAdministrator = async (
 
   if (data.roleId !== undefined) {
     await adminAuthRepository.setAdminRole(id, data.roleId, ADMIN_MODEL_TYPE);
-    // Role reassignment changes this admin's effective permissions — drop the
-    // cached set so the next request (and /auth/me) reflects it immediately.
+    // Role change alters effective permissions; drop the cached set so the next
+    // request (and /auth/me) reflects it immediately.
     await invalidateAdminPermissions(id);
   }
 
@@ -140,10 +134,8 @@ export const updateAdministrator = async (
 };
 
 /**
- * Hard delete the administrator. `ws_users` has no soft-delete column, so to
- * remove it from the list (Mongo parity, where delete sets `deleted: true`) the
- * row is physically deleted along with its tokens + spatie role/permission
- * pivots.
+ * Hard delete: ws_users has no soft-delete column, so the row is removed along with
+ * its tokens and spatie role/permission pivots.
  */
 export const deleteAdministrator = async (id: bigint): Promise<void> => {
   await adminAuthRepository.deleteAdmin(id, ADMIN_MODEL_TYPE);

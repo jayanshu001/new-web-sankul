@@ -1,3 +1,4 @@
+// Admin books: HTTP handlers for book CRUD, orders report/exports and store settings.
 import { Request, Response } from "express";
 import {
   createBookSchema,
@@ -11,8 +12,6 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as adminBook from "../../modules/admin-book/admin-book.service";
-
-// ─── Books CRUD ───────────────────────────────────────────────────────────────
 
 export const getBooks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -95,11 +94,9 @@ const mergeUploadedFiles = (req: Request) => {
   }
 };
 
-// Multipart form-data flattens `field[0]=a&field[1]=b` (and the bare
-// `field[]=a&field[]=b` form) into literal keys; reassemble them into a real
-// array before validation. (The Zod schema also accepts a JSON-stringified
-// array or a single string, so this only needs to handle the bracketed-key
-// form.) Applies to every array-of-id field the frontend may send.
+// Multipart form-data flattens `field[0]=a` / `field[]=a` into literal keys;
+// reassemble them into a real array before validation (the Zod schema already
+// accepts a JSON-stringified array or a single string).
 const ARRAY_BODY_FIELDS = ["packageIds", "examCountdownCategoryIds", "examCountdownIds"] as const;
 
 const coerceArrayFields = (req: Request) => {
@@ -125,10 +122,8 @@ export const createBook = async (req: Request, res: Response) => {
     mergeUploadedFiles(req);
     coerceArrayFields(req);
     const data = createBookSchema.parse(req.body);
-    // Legacy single field is now a derived mirror of examCountdownCategoryIds[0]
-    // (admin no longer sends a meaningful single value). Kept in sync so the one
-    // remaining reader stays correct until the field is dropped. See
-    // docs/MIGRATION_QUERY_CHANGES.md.
+    // The legacy single field is a derived mirror of examCountdownCategoryIds[0],
+    // kept in sync for its one remaining reader until the field is dropped.
     (data as any).examCountdownCategoryId = data.examCountdownCategoryIds?.[0] ?? null;
     if (data.discountedPrice > data.listPrice) {
       logger.warn("createBook discount exceeds list", { traceId });
@@ -137,13 +132,8 @@ export const createBook = async (req: Request, res: Response) => {
         message: "Discounted price cannot exceed list price.",
       });
     }
-    // C6: examCountdownIds/examCountdownCategoryIds NOW persist to ws_book JSON
-    // columns (parseIdArray-normalised in the service). demoFileName now persists
-    // too (ws_book.demo_file_name); isTrending persists to ws_book.is_trending.
-    // termsAndConditions NOW persists (ws_book.terms_and_conditions, 2026-08-18)
-    // and is returned by GET /client/books/:id under the same key as the ebook.
-    // Still dropped on SQL: packageIds/bookFileName/bookUrl — books have no
-    // full-book PDF and those fields have no SQL columns.
+    // packageIds/bookFileName/bookUrl are dropped: books have no full-book PDF and
+    // those fields have no ws_book columns.
     const created = await adminBook.createBook(data as any);
     logger.info("createBook success (mysql)", { traceId, bookId: created._id });
     return res.status(201).json({ success: true, data: created });
@@ -165,10 +155,8 @@ export const updateBook = async (req: Request, res: Response) => {
     mergeUploadedFiles(req);
     coerceArrayFields(req);
     const data = updateBookSchema.parse(req.body);
-    // Keep the legacy single field in sync with examCountdownCategoryIds[0], but
-    // ONLY when the array is present in this payload — otherwise an update that
-    // doesn't touch countdowns would wipe the single field. See
-    // docs/MIGRATION_QUERY_CHANGES.md.
+    // Sync the legacy single field ONLY when the array is in this payload,
+    // otherwise an update that doesn't touch countdowns would wipe it.
     if (data.examCountdownCategoryIds !== undefined) {
       (data as any).examCountdownCategoryId = data.examCountdownCategoryIds[0] ?? null;
     } else {
@@ -233,8 +221,6 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
   }
 };
 
-// ws_book.is_trending exists (Prisma `Book.isTrending`), so this mirrors
-// toggleBookStatus.
 export const toggleBookTrending = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -269,17 +255,13 @@ export const reorderBooks = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Orders ───────────────────────────────────────────────────────────────────
-
-// Shared filter mapping for the orders report list + its CSV/Excel exports, so all
-// three honor the identical param contract (minus page/limit on the exports).
+// Shared filter mapping for the orders report list and its CSV/Excel exports.
 export const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
   customerId: q.customerId,
   bookId: q.bookId,
   state: q.state,
-  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
-  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
-  // fromDate/toDate kept as legacy aliases.
+  // Date range bounds `createdAt` at IST day edges; dateFrom/dateTo and
+  // fromDate/toDate are legacy aliases of createdFrom/createdTo.
   fromDate: q.createdFrom ?? q.dateFrom ?? q.fromDate,
   toDate: q.createdTo ?? q.dateTo ?? q.toDate,
   search: q.search,
@@ -313,7 +295,7 @@ export const getOrders = async (req: Request, res: Response) => {
   }
 };
 
-// GET /admin/books/orders/export/csv — entire filtered set, one row per book line.
+// Exports the entire filtered set, one row per book line.
 export const exportOrdersCsv = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportOrdersCsv invoked", { traceId, path: req.originalUrl });
@@ -331,7 +313,7 @@ export const exportOrdersCsv = async (req: Request, res: Response) => {
   }
 };
 
-// GET /admin/books/orders/export/excel — entire filtered set, one row per book line.
+// Exports the entire filtered set, one row per book line.
 export const exportOrdersExcel = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportOrdersExcel invoked", { traceId, path: req.originalUrl });
@@ -367,16 +349,11 @@ export const getOrderById = async (req: Request, res: Response) => {
   }
 };
 
-// ⚠ NOT REPRESENTABLE ON SQL (no SQL twin): updateOrderStatus /
-// setOrderTracking / addOrderTrackingEvent used to write the embedded
-// `tracking.history[]` array + paidAt/shippedAt/deliveredAt/cancelledAt
-// timestamps in Mongo. SQL `ws_book_tracking` is a single flat row per AWB
-// (status varchar(10), no history/location/note/courier columns) and
-// ws_book_order has only created/updated/order_date — the full
-// SHIPPED→DELIVERED→CANCELLED lifecycle + event history is not representable.
-// (book-order's verify path already writes the one "verified" tracking row.)
-// These handlers validate their input and return 501 until the SQL schema
-// grows the required columns. See NEEDS-MANUAL-PORT.
+// Not representable on the current schema: ws_book_tracking is a single flat row
+// per AWB (no history/location/note/courier columns) and ws_book_order has no
+// paid/shipped/delivered/cancelled timestamps. These handlers validate input and
+// return 501 until those columns exist. The verify path already writes the one
+// "verified" tracking row.
 export const updateOrderStatus = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -434,8 +411,7 @@ export const addOrderTrackingEvent = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
-
+// Book store settings: free-shipping threshold, support phone, T&C and GST rate.
 export const getSettings = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getSettings invoked", { traceId, path: _req.originalUrl });

@@ -1,3 +1,4 @@
+// Referral: rewards wallet, referral codes, withdrawals and admin referral reports.
 import { referralRepository as repo } from "./referral.repository";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
@@ -20,7 +21,7 @@ const splitName = (full: string | null | undefined) => {
   };
 };
 
-// Program → Mongo-shaped DTO (the client reads referralDiscount/referralReward).
+// The client reads referralDiscount/referralReward.
 const toProgramDto = (p: RefferalProgram) => ({
   _id: String(p.id),
   name: p.name,
@@ -49,10 +50,8 @@ const toTransactionDto = (t: RefferalTransaction) => ({
   updatedAt: t.updatedAt ?? null,
 });
 
-// ─── Referral credit on purchase (SQL mirror of credit-referrer.ts) ──────────
-// Idempotent on (orderId, referrerId). Mirrors the Mongo creditReferrer: reward
-// = program.refferalReward % of paidAmount, skipped when self-referral / no
-// program / zero reward. SQL ids are ints.
+// Reward = program.refferalReward % of paidAmount; skipped on self-referral, no
+// program or zero reward.
 export const creditReferrerMysql = async (opts: {
   referrerId: number; buyerId: number; orderId: number; paidAmount: number;
   source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
@@ -67,19 +66,14 @@ export const creditReferrerMysql = async (opts: {
   const coin = Math.round((opts.paidAmount * pct) / 100);
   if (coin <= 0) return;
 
-  // Fast-path idempotency (the atomic write re-checks under the tx). Keyed on
-  // (source, orderId, referrer) — order ids collide across the per-type order
-  // tables, so `source` is required to tell a course order from an ebook order.
+  // Fast-path idempotency (the atomic write re-checks inside the tx). `source` is
+  // required because order ids collide across the per-type order tables.
   if (await repo.findCreditByOrder(opts.source, opts.orderId, opts.referrerId)) return;
 
-  // Legacy wording, restored verbatim (websankul-api-staging
-  // routes/v1/websankul/controller.js:937) — lowercase "you" and all. This text
-  // is CUSTOMER-VISIBLE on /client/referral/transactions/:id, and naming the
-  // person you referred is how someone reconciles "why did I get 50 coins?".
-  // The migration had replaced it with "Referral reward (5%) — course purchase",
-  // which drops the only identifying detail. That stays as the fallback for the
-  // rare row where the buyer's name is unavailable, so we never emit a dangling
-  // "...referral to ". Repo slices to 150 for the column.
+  // Legacy wording, verbatim (lowercase "you" included). It is customer-visible on
+  // /client/referral/transactions/:id, and the buyer's name is how a referrer
+  // reconciles the reward. The generic text is only a fallback when the name is
+  // unavailable. Repo slices to 150 for the column.
   const buyer = await repo.findRewardCustomer(opts.buyerId);
   const buyerName = buyer?.fullName?.trim();
 
@@ -94,18 +88,14 @@ export const creditReferrerMysql = async (opts: {
   });
 };
 
-// ─── Wallet ("coin") redemption in payment ───────────────────────────────────
-// The wallet balance IS ws_customer.reward_points (the referral wallet). At
-// create-order the customer may redeem `coin` (integer rupees) to reduce the
-// charged amount; the coins are debited at verify. See docs/FE_WALLET_IN_PAYMENT.md.
+// The wallet balance is ws_customer.reward_points. `coin` (integer rupees) is applied
+// at create-order and debited at verify. See docs/FE_WALLET_IN_PAYMENT.md.
 
 export type WalletUsage = { error?: string; coin: number };
 
 /**
- * Validate a requested wallet `coin` against the customer's balance and the
- * 50%-of-plan-price cap. Returns the usable coin (0 when none/invalid) or an
- * error message matching the FE contract. `planPrice` is the pre-promo/pre-GST
- * plan price (the cap base). A missing/zero coin is a valid no-op.
+ * Validates `coin` against the balance and the 50%-of-plan-price cap (`planPrice` is
+ * pre-promo/pre-GST). Error strings are the FE contract; a missing/zero coin is a no-op.
  */
 export const resolveWalletUsage = async (
   customerId: number,
@@ -123,11 +113,7 @@ export const resolveWalletUsage = async (
   return { coin: c };
 };
 
-/**
- * Debit redeemed wallet coins for a verified order. Idempotent on
- * (source, orderId, customer) + deducts only what's available. Safe to call on
- * every verify/webhook run.
- */
+/** Idempotent and deducts only what's available, so safe on every verify/webhook run. */
 export const debitWalletForOrderMysql = async (opts: {
   customerId: number;
   source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
@@ -144,7 +130,6 @@ export const debitWalletForOrderMysql = async (opts: {
   });
 };
 
-// ─── Rewards overview ────────────────────────────────────────────────────────
 export const getRewardsOverview = async (customerId: number) => {
   const customer = await repo.findRewardCustomer(customerId);
   if (!customer) return null;
@@ -174,7 +159,6 @@ export const getReferralStatus = async () => {
   };
 };
 
-// ─── Transactions ────────────────────────────────────────────────────────────
 export const listTransactions = async (
   customerId: number,
   opts: { type?: string; search?: string; page: number; limit: number }
@@ -194,7 +178,7 @@ export const getTransaction = async (id: number, customerId: number) => {
   return t ? toTransactionDto(t) : null;
 };
 
-// ─── Generate referral code ──────────────────────────────────────────────────
+// One-time: refused if the customer already has a code or the code is taken.
 export const generateReferralCode = async (
   customerId: number,
   code: string
@@ -219,7 +203,7 @@ export const generateReferralCode = async (
   };
 };
 
-// ─── Withdrawal (DB side; payouts are manual — admin settles from the queue) ──
+// Payouts are manual: admin settles from the queue.
 export const getRewardPoints = async (customerId: number): Promise<number | null> => {
   const c = await repo.findRewardCustomer(customerId);
   return c ? c.rewardPoints ?? 0 : null;
@@ -266,7 +250,6 @@ export const refundWithdrawal = async (input: {
   return toTransactionDto(t);
 };
 
-// ─── Webhook (payout status flip by provider ref) ────────────────────────────
 export const findTransactionByReferenceNumber = async (referenceNumber: string) => {
   const t = await repo.findTransactionByReferenceNumber(referenceNumber);
   return t ? toTransactionDto(t) : null;
@@ -279,9 +262,8 @@ export const markPayoutStatus = (
 ) => repo.setStatusByReferenceNumber(referenceNumber, status, reason);
 
 /**
- * Webhook handler: flip a PENDING withdrawal by referenceNumber. On success → mark
- * successful. On failure → refund the customer's points (if DEBIT) + mark failed.
- * Idempotent: returns a status so the controller can ack appropriately.
+ * Flip a pending withdrawal by referenceNumber: success → successful; failure →
+ * refund points (DEBIT only) + mark failed. Returns a status for the controller's ack.
  */
 export const applyPayoutWebhook = async (
   referenceNumber: string,
@@ -296,7 +278,6 @@ export const applyPayoutWebhook = async (
     await repo.setStatusByReferenceNumber(referenceNumber, "successful");
     return "ok";
   }
-  // failed/reversed/rejected → refund (DEBIT only) + mark failed, atomic.
   await repo.failWithdrawal({
     id: t.id,
     customerId: t.customerId,
@@ -305,10 +286,6 @@ export const applyPayoutWebhook = async (
   });
   return "ok";
 };
-
-// ════════════════════════════════════════════════════════════════════════════
-// ADMIN referral (branched from src/admin/referral/referral.service.ts)
-// ════════════════════════════════════════════════════════════════════════════
 
 export const parseId = (id: string): number | null => {
   const n = Number(id);
@@ -322,7 +299,6 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// ─── Programs ────────────────────────────────────────────────────────────────
 export const adminListPrograms = async (
   opts: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number } = {}
 ): Promise<{ data: any[]; total: number }> => {
@@ -349,7 +325,7 @@ export const adminGetProgram = async (id: number) => {
 export const adminProgramNameExists = (name: string, exceptId?: number) =>
   repo.programNameExists(name, exceptId).then(Boolean);
 
-// Map the validated admin body (Mongo-style: referralDiscount/referralReward) → SQL cols.
+// Admin body uses referralDiscount/referralReward; SQL columns are misspelled.
 const toProgramWrite = (v: any) => ({
   ...(v.name !== undefined ? { name: v.name } : {}),
   ...(v.title !== undefined ? { title: v.title } : {}),
@@ -374,7 +350,6 @@ export const adminUpdateProgram = async (id: number, v: any) => {
 
 export const adminDeleteProgram = (id: number) => repo.deleteProgram(id);
 
-// ─── Transactions ────────────────────────────────────────────────────────────
 const toAdminTxnDto = (t: any) => ({
   ...toTransactionDto(t),
   customerId: t.customer
@@ -382,8 +357,7 @@ const toAdminTxnDto = (t: any) => ({
     : String(t.customerId),
 });
 
-// Whitelist shared by EVERY admin status filter — the transactions list, the
-// withdrawal report and the CSV — so they can never drift apart.
+// Shared by every admin status filter (list, withdrawal report, CSV) so they can't drift.
 const WITHDRAWAL_STATUSES = ["pending", "successful", "failed", "rejected"];
 
 export const adminListTransactions = async (q: {
@@ -404,6 +378,7 @@ export const adminListTransactions = async (q: {
 
 export const adminGetTransactionRaw = (id: number) => repo.findTransactionById(id);
 
+// Set a withdrawal's status (debit rows only); referenceNumber is the payout UTR.
 export const adminUpdateWithdrawalStatus = async (
   id: number,
   status: string,
@@ -414,28 +389,26 @@ export const adminUpdateWithdrawalStatus = async (
   const t = await repo.findTransactionById(id);
   if (!t) return { ok: false as const, reason: "not_found" as const };
   if (t.type !== "debit") return { ok: false as const, reason: "not_debit" as const };
-  // Payouts are manual: `referenceNumber` is the UTR/bank reference the admin types
-  // in when marking the transfer as paid. Trimmed-empty means "not provided" so
-  // a blank field never wipes a reference already recorded.
+  // `referenceNumber` is the UTR the admin enters when marking paid. Trimmed-empty
+  // means "not provided", so a blank field never wipes a recorded reference.
   const ref = referenceNumber?.trim() || undefined;
   const updated = await repo.updateTransactionStatus(id, s, ref);
   return { ok: true as const, data: toTransactionDto(updated) };
 };
 
+// Reject a pending withdrawal and refund its coins.
 export const adminRejectWithdrawal = async (id: number, reason?: string) => {
   const t = await repo.findTransactionById(id);
   if (!t) return { ok: false as const, reason: "not_found" as const };
   if (t.type !== "debit") return { ok: false as const, reason: "not_debit" as const };
-  // Still pending-only, so a double-click can't re-refund an already-rejected row.
+  // Pending-only, so a double-click can't re-refund an already-rejected row.
   if (t.status !== "pending") return { ok: false as const, reason: "not_pending" as const };
   await repo.rejectWithdrawal({ id, customerId: t.customerId, amount: t.coin, reason: reason?.trim() || undefined });
   return { ok: true as const };
 };
 
-// ─── Reports + CSV ─────────────────────────────────────────────────────────
-// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
-// 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's calendar pick includes the
-// full IST day (a naive UTC/local parse dropped the last 5.5h). Bounds created_at.
+// Bare "YYYY-MM-DD" → inclusive IST day edges (00:00:00.000 / 23:59:59.999 at +05:30)
+// so a calendar pick covers the full IST day. Bounds created_at.
 const parseIstDayBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
@@ -453,8 +426,7 @@ const parseReportWindow = (fromDate?: string, toDate?: string) => ({
   to: parseIstDayBound(toDate, true),
 });
 
-// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss` — unified with the other
-// report exports (was raw UTC ISO).
+// IST (+5:30, no DST) `YYYY-MM-DD HH:mm:ss`, same as the other report exports.
 const IST_OFFSET_MS = 330 * 60_000;
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 const fmtExportDate = (d: Date | string | null | undefined): string => {
@@ -498,18 +470,17 @@ export const adminWithdrawalsReport = async (q: {
 export const adminWithdrawalsCsv = async (q: { status?: string; fromDate?: string; toDate?: string; search?: string }): Promise<string> => {
   const status = WITHDRAWAL_STATUSES.includes(q.status ?? "") ? q.status : undefined;
   const { from, to } = parseReportWindow(q.fromDate, q.toDate);
-  // `search` must reach SQL here too, or the export silently returns rows the
-  // filtered table on screen does not show.
+  // `search` must reach SQL here too, or the export returns rows the on-screen table hides.
   const rows = await repo.withdrawalRows({ status, from, to, search: q.search });
   const header = ["Bank Account Holder Name", "Bank Account Number", "IFSC Code", "Amount", "Status", "Date"];
-  // Low-volume report → a single batch is fine (withdrawalRows is already uncapped).
+  // Low-volume report, so a single batch is fine.
   async function* rowBatches() {
     yield rows.map((r) => [r.accountHolderName ?? "", r.accountNumber ?? "", r.ifscCode ?? "", num(r.coin), r.status ?? "", fmtExportDate(r.date)]);
   }
   return buildCsvFromRowBatches(header, rowBatches());
 };
 
-// ─── Manual reward adjustment ────────────────────────────────────────────────
+// Manual reward-point credit/debit; a debit cannot exceed the balance.
 export const adminAdjustRewards = async (
   customerId: number,
   input: { amount: number; type: "credit" | "debit"; description?: string }
@@ -524,7 +495,7 @@ export const adminAdjustRewards = async (
   return { ok: true as const, data: toTransactionDto(txn) };
 };
 
-// ─── Referrers rollup ────────────────────────────────────────────────────────
+// Referrers with their reward and withdrawal stats.
 export const adminListReferrers = async (q: {
   search?: string; sort?: string; hasWithdrawn?: string; minEarned?: string; page: number; limit: number;
 }) => {
@@ -558,7 +529,6 @@ export const adminListReferrers = async (q: {
       },
     };
   });
-  // total = count of matching referrers (without pagination); approximate via a count query
   return { data };
 };
 

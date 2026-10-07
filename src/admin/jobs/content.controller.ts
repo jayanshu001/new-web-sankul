@@ -1,3 +1,4 @@
+// Admin jobs portal: HTTP handlers for content CRUD, status, reorder and editor uploads.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";

@@ -1,35 +1,16 @@
+// Plan duration: subscription endAt and days-left math.
 import { istDayIndex } from "./istJson";
-// src/utils/planDuration.ts
-//
-// Plan `duration` on PackageCourseEbookPrice / live-course price rows is
-// stored in MONTHS. We must use `Date#setMonth` (not naive day arithmetic) so
-// calendar-month length is honoured — a 6-month plan that starts Jan 31
-// should end Jul 31, not Jul 30 / Aug 1.
-//
-// This helper centralizes that contract so every callsite (subscription
-// creation, webhook activation, manual admin grants) produces identical
-// `endAt` values.
 
 export interface ComputeEndAtInput {
   startAt: Date;
   durationMonths: number;
-  /**
-   * When true, treat `durationMonths` as days instead (e.g. trial grants
-   * expressed as "10 days"). Uses setDate so day-precision is preserved.
-   */
+  /** Treat `durationMonths` as days (setDate). Plan price-row `duration` is in days. */
   asDays?: boolean;
 }
 
 /**
- * Compute the `endAt` date for a plan grant.
- *
- * @example
- *   computeEndAt({ startAt: new Date("2026-01-31"), durationMonths: 6 })
- *   // -> 2026-07-31
- *
- * @example
- *   computeEndAt({ startAt: now, durationMonths: 10, asDays: true })
- *   // -> now + 10 days
+ * `endAt` for a plan grant. Month mode uses setMonth so calendar-month length
+ * is honoured; pass `asDays: true` for plan `duration` values, which are days.
  */
 export const computeEndAt = ({
   startAt,
@@ -47,36 +28,12 @@ export const computeEndAt = ({
 };
 
 /**
- * Compute the new `endAt` when EXTENDING an existing subscription, rather than
- * granting a fresh one. The new window stacks onto whatever time is left:
+ * Stacks a new window onto `currentEndAt` if still active, else onto `now`.
  *
- *   - If the current sub is still active (currentEndAt in the future), the new
- *     duration is added on top of currentEndAt — the customer keeps the days
- *     they already paid for and the extension lands after them.
- *   - If it has already lapsed (or has no endAt), the window starts from `now`.
- *
- * @deprecated UNUSED as of 2026-08-25 — kept only as documentation of the retired
- * FOLD model, in which an extension bumped the existing row's `end_at` in place.
- * Every product now writes ONE ROW PER ORDER: a renewal INSERTS its own subscription
- * row starting where the previous one ends and leaves the previous row untouched, so
- * each purchase keeps its own price, plan and dispatch record. Live course was the
- * last holdout and was converted once it got an order table
- * (2026-08-25_create_ws_live_course_order.sql).
- *
- * Do not reach for this in new code. Compute the start date first
- * (`existing.endAt > now ? existing.endAt : now`), then call computeEndAt, so the row
- * records the window it actually covers.
- *
- * Its original docstring claimed folding is what prevents duplicate "My Subscription"
- * cards. That was never true — duplicates are prevented at the READ layer, where
- * every consumer dedupes per target and keeps the furthest endAt
- * (client-my-subscriptions.service, profile-dashboard.sql, client-dashboard.service,
- * client-purchase-history.service).
- *
- * @example
- *   // active sub ending Sep 11, extend by a 3-month plan on Aug 1
- *   extendEndAt({ currentEndAt: 2026-09-11, durationMonths: 3, now: 2026-08-01 })
- *   // -> 2026-12-11  (stacks onto Sep 11, not onto Aug 1)
+ * @deprecated Unused: every product writes one subscription row per order, so a
+ * renewal inserts a new row starting at `existing.endAt > now ? existing.endAt : now`
+ * and calls computeEndAt. Duplicate "My Subscription" cards are deduped at the
+ * read layer (furthest endAt per target), not by folding rows.
  */
 export const extendEndAt = ({
   currentEndAt,
@@ -97,16 +54,11 @@ export const extendEndAt = ({
 };
 
 /**
- * Days remaining on a subscription, for frontend "Extend Validity" UX.
+ * Days remaining on a subscription, in IST calendar days (not 24h chunks) so
+ * every response computed on the same IST day agrees, including 24h-cached
+ * routes filled minutes apart (route caches are also capped at IST midnight).
  *
- * IST CALENDAR days, not 24h chunks: `istDate(endAt) - istDate(now)`, so every
- * response computed on the same IST day agrees — the old `ceil((endAt-now)/1d)`
- * stepped at endAt's clock time, and two 24h-cached routes (list vs detail)
- * filled a few minutes apart disagreed by 1 all day. Route caches are also
- * capped at IST midnight (cacheRoute) so a cached value never outlives its day.
- *
- * Active rows are never 0: expires-today → 1. Expired → 0. `null` endAt
- * (lifetime grants) → `null` so the UI can hide the counter.
+ * Active: at least 1 (expires today → 1). Expired: 0. `null` endAt (lifetime) → `null`.
  */
 export const computeDaysLeft = (
   endAt: Date | null | undefined,

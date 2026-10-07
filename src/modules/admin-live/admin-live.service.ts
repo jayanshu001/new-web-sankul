@@ -1,29 +1,20 @@
 /**
- * Admin LIVE-class DB persistence — MySQL (Prisma) branch.
+ * Admin live sessions: session, attendance and recording-promotion persistence.
+ * StreamOS calls and Socket.io emits stay in the
+ * controllers; this module owns the database work.
  *
- * SQL mirror of the Mongo reads/writes in src/admin/live/{live.controller,
- * recording.promote,live.guards}.ts. Those files branch on isAdminLiveMysql()
- * and delegate the DATABASE work here. StreamOS calls + Socket.io emits stay in
- * the controllers and run in BOTH branches (they're not Mongo).
+ * Tables: ws_live_session, ws_live_session_course (session↔course join),
+ * ws_live_session_attendance, ws_live_course, ws_video_category, ws_video.
  *
- * Tables: ws_live_session (LiveSession), ws_live_session_course
- * (LiveSessionCourse join — replaces Mongo's embedded liveCourseIds[]),
- * ws_live_session_attendance (LiveSessionAttendance), ws_live_course
- * (LiveCourse), ws_video_category (VideoCategory), ws_video (Video).
- *
- * RECORDING → VIDEO PROMOTION (C7) — now fully on SQL:
- *  - ws_video now has `live_session_id` and ws_video_category has `subject_key`,
- *    so promotion + the promotedVideos back-link query are implemented here
- *    (resolveOrCreateSubjectFolderSql / promoteRecordingToFolderSql /
- *    maybeAutoPromoteRecordingSql / resolvePromotedVideosSql).
+ * Recording → video promotion:
+ *  - ws_video.live_session_id is the back-link; ws_video_category.subject_key dedupes
+ *    subject folders.
  *  - A live course "owns" folders by reachability from its root folder
- *    (ws_live_course.video_category_id) via the ws_video_category_relation DAG —
- *    ws_video_category has no live_course_id column. Subject folders are deduped
- *    by `subject_key` among the course's reachable folders and, on create, are
- *    parented to the course root (folder.parent = root + a relation edge).
- *  - If a live course has NO root folder set, there is nowhere to anchor the
- *    subject folder, so that course is skipped (best-effort, mirrors Mongo's
- *    silent per-course failure). See report.
+ *    (ws_live_course.video_category_id) via the ws_video_category_relation DAG.
+ *    Subject folders are deduped by `subject_key` among the reachable folders and, on
+ *    create, are parented to the course root (folder.parent = root + a relation edge).
+ *  - A live course with no root folder has nowhere to anchor a subject folder, so it
+ *    is skipped (best-effort).
  */
 import { prisma } from "../../config/prisma";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
@@ -35,7 +26,7 @@ import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { LiveSession as SqlLiveSession } from "@prisma/client";
 
 
-/** Parse a numeric SQL id from a string, else null (rejects 24-hex ObjectIds). */
+/** Parse a positive int id from a string, else null. */
 export const parseAlId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -46,7 +37,6 @@ const idStr = (v: number | null | undefined): string | null =>
 
 const jArr = (v: any): any[] => (Array.isArray(v) ? v : []);
 
-// ── public view (matches Mongo publicView shape exactly) ─────────────────────
 /** A session's chosen recording folder for one linked live course. */
 export interface CourseFolderLink {
   liveCourseId: number;
@@ -59,8 +49,8 @@ export interface PublicSessionView {
   liveCourseIds: string[];
   liveCourseId: string | null;
   liveCourses?: any[];
-  // Per-course recording-folder selection: [{ liveCourseId, folderId }]. Replaces
-  // the old `subject`-derived folder. folderId is null when none was chosen.
+  // Per-course recording-folder selection: [{ liveCourseId, folderId }]; folderId is
+  // null when none was chosen.
   liveCourseFolders: { liveCourseId: string; folderId: string | null }[];
   subject: string;
   endAt: Date | null;
@@ -78,10 +68,9 @@ export interface PublicSessionView {
   rtmpUrl: string | null;
   hlsUrl: string | null;
   hlsUrls: any;
-  // `recordings` is the PRIMARY playback array = plain MP4 (un-DRM'd). The DRM-HLS
-  // m3u8 ladder lives in `hlsRecordings`. `mp4Recordings`/`mp4Url` are kept as
-  // explicit aliases. Lectures with no MP4 have empty `recordings` — fall back to
-  // `hlsRecordings` (which always carries the full quality ladder).
+  // `recordings` is the primary playback array = plain MP4 (un-DRM'd), falling back to
+  // the HLS ladder when no MP4 exists (see primaryRecordingsOf). The DRM-HLS m3u8 ladder
+  // lives in `hlsRecordings`; `mp4Recordings`/`mp4Url` are explicit MP4 aliases.
   recordings: any[];        // mp4 (primary)
   hlsRecordings: any[];     // m3u8 (DRM-HLS ladder)
   mp4Recordings: any[];     // alias of `recordings`
@@ -99,17 +88,14 @@ const pickBestMp4 = (recs: any[]): string | null => {
 };
 
 // The DRM-HLS recordings stored on the row (the `recordings` JSON column). Internal
-// callers use this to test "does this session have recordings yet?" — kept separate
-// from the API view, where `recordings` now means MP4.
+// callers use this to test "does this session have recordings yet?" — distinct from
+// the API view, where `recordings` means MP4.
 export const hlsRecordingsOf = (row: SqlLiveSession): any[] => jArr(row.recordings);
 
 /**
- * The array published as `recordings` in the public view.
- *
- * MP4 stays primary wherever it exists, so every legacy row is unchanged. Only
- * when there is no MP4 at all — which is every StreamOS v1 session — does this
- * fall through to the HLS ladder, so a v1 recording still surfaces instead of
- * publishing an empty array.
+ * The array published as `recordings` in the public view. MP4 stays primary wherever
+ * it exists; only when there is none (every StreamOS v1 session) does this fall
+ * through to the HLS ladder, so a v1 recording still surfaces instead of an empty array.
  */
 export const primaryRecordingsOf = (row: SqlLiveSession): any[] => {
   const mp4 = jArr(row.mp4Recordings);
@@ -117,9 +103,8 @@ export const primaryRecordingsOf = (row: SqlLiveSession): any[] => {
 };
 
 /**
- * Build the Mongo-shaped publicView from a SQL row + its linked course ids.
- * `liveCourses` mirrors Mongo's populated-doc array (id/name/image/thumbnail);
- * pass undefined to omit it (list/non-populated callers).
+ * Build the public view from a row + its linked course ids. `liveCourses` is the
+ * populated array (id/name/image/thumbnail); pass undefined to omit it.
  */
 export const toPublicView = (
   row: SqlLiveSession,
@@ -151,13 +136,8 @@ export const toPublicView = (
     rtmpUrl: row.rtmpUrl ?? null,
     hlsUrl: row.hlsUrl ?? null,
     hlsUrls: row.hlsUrls ?? null,
-    // PRIMARY array = MP4; the DRM-HLS ladder moves to `hlsRecordings`.
-    //
-    // StreamOS v1 produces NO MP4 ladder (one download_url at one quality), so
-    // mp4Recordings is empty for v1 sessions. Falling back to the HLS ladder
-    // keeps the contract clients actually depend on — "recordings is non-empty
-    // once a recording exists" — instead of silently returning []. Legacy rows
-    // always have MP4, so their output is byte-identical to before.
+    // Clients depend on "recordings is non-empty once a recording exists", so v1
+    // sessions (no MP4 ladder) fall back to HLS — see primaryRecordingsOf.
     recordings: primaryRecordingsOf(row),
     hlsRecordings: jArr(row.recordings),
     mp4Recordings: jArr(row.mp4Recordings),
@@ -166,8 +146,6 @@ export const toPublicView = (
     updatedAt: row.updatedAt ?? null,
   };
 };
-
-// ── course-link helpers (ws_live_session_course join) ────────────────────────
 
 /** Linked liveCourse ids for a session, in stable insertion order. */
 export const getLinkedCourseIds = async (liveSessionId: number): Promise<number[]> => {
@@ -188,7 +166,6 @@ export const getLinkedCourses = async (liveSessionId: number): Promise<any[]> =>
     select: { id: true, name: true, image: true },
   });
   const byId = new Map(courses.map((c) => [c.id, c]));
-  // Preserve link order; expose Mongo-ish doc shape.
   return ids
     .map((id) => byId.get(id))
     .filter((c): c is NonNullable<typeof c> => Boolean(c))
@@ -229,10 +206,10 @@ export const setLinkedCourseFolders = async (
 };
 
 /**
- * Validate `liveCourseFolders` payload — `[{ liveCourseId, folderId }]`. Each id
- * must be a valid int, each liveCourseId must be within `allowedCourseIds` (the
- * session's course set), and each folderId must actually belong to that course
- * (ws_video_category.live_course_id match). Returns parsed links or an error.
+ * Validate `liveCourseFolders` — `[{ liveCourseId, folderId }]`. Each id must be a valid
+ * int, each liveCourseId must be in `allowedCourseIds` (the session's course set), and
+ * each folderId must belong to that course (ws_video_category.live_course_id match).
+ * Returns parsed links or an error.
  */
 export const validateLiveCourseFolders = async (
   rawPairs: unknown,
@@ -294,9 +271,7 @@ export const validateLiveCourseIds = async (
   return { ids };
 };
 
-// ── session lookups ──────────────────────────────────────────────────────────
-
-/** Find a session by numeric SQL id OR by Streamos streamId string. */
+/** Find a session by numeric id OR by StreamOS streamId string. */
 export const findSessionByAnyId = async (id: string): Promise<SqlLiveSession | null> => {
   const numeric = parseAlId(id);
   if (numeric != null) {
@@ -314,9 +289,8 @@ export const findById = (id: number): Promise<SqlLiveSession | null> =>
   prisma.liveSession.findUnique({ where: { id } });
 
 /**
- * Find a session strictly by Streamos streamId (camera-ingest broadcast lookup).
- * Returns only the fields the camera bridge needs. Mirrors the Mongo
- * LiveSession.findOne({ streamId }).select("streamId rtmpUrl status").
+ * Find a session strictly by StreamOS streamId (camera-ingest broadcast lookup),
+ * returning only the fields the camera bridge needs.
  */
 export const findSessionByStreamId = (
   streamId: string
@@ -332,8 +306,6 @@ export const findSessionByStreamId = (
     where: { streamId },
     select: { streamId: true, rtmpUrl: true, status: true, pushExpiresAt: true },
   });
-
-// ── session writes ───────────────────────────────────────────────────────────
 
 export interface CreateSessionInput {
   title: string;
@@ -356,7 +328,7 @@ export const createSession = async (
   const row = await prisma.liveSession.create({
     data: {
       title: input.title,
-      // `subject`/`educator_id` columns retained but no longer written.
+      // `subject`/`educator_id` columns are no longer written.
       endAt: input.endAt,
       scheduledAt: input.scheduledAt ?? null,
       status: input.status,
@@ -418,15 +390,10 @@ export const updateByStreamId = async (
   });
 };
 
-// ── StreamOS v1 webhook support ──────────────────────────────────────────────
-
 /**
- * Find a session by its v1 channel key.
- *
- * This is the DOCUMENTED correlation path: the v1 Video payload carries a
- * `stream` object described as "Set when the asset is a live stream recording,
- * so you can tie it back to the broadcast", and its field is `stream_key` —
- * NOT the `public_id` we store as `streamId`. Hence the separate lookup.
+ * Find a session by its v1 channel key — the documented correlation path: the v1
+ * Video payload's `stream` object ties a recording back to its broadcast via
+ * `stream_key`, not the `public_id` stored as `streamId`.
  */
 export const findSessionByStreamKey = (
   streamKey: string
@@ -440,15 +407,11 @@ export const findSessionByRecordedAssetId = (
   prisma.liveSession.findFirst({ where: { recordedAssetId: assetId } });
 
 /**
- * Claim a webhook delivery exactly once.
- *
- * StreamOS v1 retries a failed delivery up to 6 times with the SAME
- * X-Streamos-Delivery id, and recording handling creates Video rows — so a
- * replay would duplicate course content. Returns true only for the FIRST caller;
- * every retry gets false and should ack 200 without re-processing.
- *
- * The unique index on delivery_id is what makes this atomic: two concurrent
- * deliveries race on the INSERT and exactly one wins.
+ * Claim a webhook delivery exactly once. StreamOS v1 retries a failed delivery up to
+ * 6 times with the same X-Streamos-Delivery id, and recording handling creates Video
+ * rows, so a replay would duplicate course content. Returns true only for the first
+ * caller; retries get false and should ack 200 without re-processing. The unique
+ * index on delivery_id makes this atomic (concurrent INSERTs race, one wins).
  */
 export const claimWebhookDelivery = async (
   deliveryId: string,
@@ -466,7 +429,6 @@ export const claimWebhookDelivery = async (
   }
 };
 
-// ── "session went live" buyer push (POST /:id/start side effect) ─────────────
 /**
  * Notify every active buyer of a started session's live courses that the class
  * is live now. Idempotent per stream run and non-blocking (the caller fires it
@@ -492,11 +454,10 @@ export const notifyBuyersOnStart = async (params: {
   const liveCourseIds = await getLinkedCourseIds(params.sessionId);
   if (liveCourseIds.length === 0) return { notified: false, notifiedCount: 0 };
 
-  // Atomic claim: only the first start of THIS stream run proceeds. Match rows
-  // never notified (NULL) OR notified for a DIFFERENT stream — but NOT rows
-  // already stamped with this streamId (that's the retry / restart-same-stream
-  // no-op). NB: Prisma `{ not: x }` excludes NULL in MySQL, so the explicit
-  // `notifiedStreamId: null` branch is required for the first-ever start.
+  // Atomic claim: only the first start of this stream run proceeds. Match rows never
+  // notified (NULL) or notified for a different stream, but not rows already stamped
+  // with this streamId (retry / restart-same-stream no-op). Prisma `{ not: x }`
+  // excludes NULL in MySQL, so the explicit `notifiedStreamId: null` branch is required.
   const claim = await prisma.liveSession.updateMany({
     where: {
       id: params.sessionId,
@@ -560,8 +521,6 @@ export const deleteSession = async (id: number): Promise<void> => {
   ]);
 };
 
-// ── list ─────────────────────────────────────────────────────────────────────
-
 export interface ListInput {
   status?: string;
   upcoming?: boolean;
@@ -571,6 +530,7 @@ export interface ListInput {
   take: number;
 }
 
+// Paged session list; `upcoming` splits SCHEDULED into future vs ready-to-start.
 export const listSessions = async (
   input: ListInput
 ): Promise<{ rows: SqlLiveSession[]; total: number }> => {
@@ -601,10 +561,9 @@ export const listSessions = async (
     const sessionIds = Array.from(new Set(links.map((l) => l.liveSessionId)));
     where.id = { in: sessionIds.length > 0 ? sessionIds : [-1] };
   }
-  // Free-text search (contains, case-insensitive via the column collation —
-  // MySQL utf8mb4_*_ci; Prisma's `mode:"insensitive"` is Postgres-only). Matches
-  // the visible list columns: session title + streamId. AND-combines with every
-  // filter above (its own OR-group, so it composes with the upcoming=false OR).
+  // Contains match, case-insensitive via the utf8mb4_*_ci column collation (Prisma's
+  // `mode:"insensitive"` is Postgres-only). Its own OR-group, so it composes with the
+  // upcoming=false OR.
   const search = buildPrismaPrefixSearch(input.search, ["title", "streamId"]);
   if (search) and.push(search);
   if (and.length > 0) where.AND = and;
@@ -620,13 +579,9 @@ export const listSessions = async (
   return { rows, total };
 };
 
-// ── attendance ───────────────────────────────────────────────────────────────
-
 /**
- * Attendance rows for a stream, newest first, shaped to match the Mongo
- * `.populate("customerId", "firstName middleName lastName phoneNumber")` lean
- * output. NOTE: SQL ws_customer has fullName + phone (no split name columns), so
- * firstName carries the full name and middle/last are null — see report.
+ * Attendance rows for a stream, newest first. ws_customer has fullName + phone (no
+ * split name columns), so firstName carries the full name and middle/last are null.
  */
 export const getAttendance = async (
   streamId: string
@@ -714,8 +669,7 @@ export const getViewerStatsCounts = async (
 
 /**
  * Close any still-open attendance rows for a stream at `endedAt`, computing
- * durationSec from joinedAt. Mirrors the Mongo aggregation-pipeline updateMany.
- * Returns the number of rows modified.
+ * durationSec from joinedAt. Returns the number of rows modified.
  */
 export const closeOpenAttendance = async (streamId: string, endedAt: Date): Promise<number> => {
   const open = await prisma.liveSessionAttendance.findMany({
@@ -739,10 +693,9 @@ export const closeOpenAttendance = async (streamId: string, endedAt: Date): Prom
 };
 
 /**
- * Open a per-socket attendance row for a live-chat stint (the socket
- * openAttendance path). Resolves the owning liveSession by streamId (best-effort
- * — liveSessionId is nullable) and inserts a ws_live_session_attendance row.
- * Returns the new row id as a string (the socket stashes it to close later).
+ * Open a per-socket attendance row for a live-chat stint. Resolves the owning session
+ * by streamId (best-effort — liveSessionId is nullable). Returns the new row id as a
+ * string (the socket stashes it to close later).
  */
 export const openAttendanceSql = async (input: {
   streamId: string;
@@ -770,8 +723,7 @@ export const openAttendanceSql = async (input: {
 
 /**
  * Close a single open attendance row by id, computing durationSec from joinedAt.
- * Idempotent: a no-op if the row is missing or already has leftAt. Mirrors the
- * socket closeAttendance path.
+ * Idempotent: no-op if the row is missing or already has leftAt.
  */
 export const closeAttendanceSql = async (attendanceId: number, endedAt: Date): Promise<void> => {
   const rec = await prisma.liveSessionAttendance.findUnique({
@@ -788,12 +740,7 @@ export const closeAttendanceSql = async (attendanceId: number, endedAt: Date): P
   });
 };
 
-// ── live.guards.ts: resolveLiveClassId ───────────────────────────────────────
-
-/**
- * streamId only while the underlying session is CREATED; null otherwise.
- * Mirrors src/admin/live/live.guards.ts on the SQL backend.
- */
+/** streamId only while the underlying session is CREATED; null otherwise. */
 export const resolveLiveClassIdSql = async (liveClassId: string): Promise<string | null> => {
   const streamId = liveClassId.trim();
   if (!streamId) return null;
@@ -805,10 +752,6 @@ export const resolveLiveClassIdSql = async (liveClassId: string): Promise<string
   return streamId;
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// Recording → Video promotion (C7) — SQL port of recording.promote.ts
-// ════════════════════════════════════════════════════════════════════════════
-
 const QUALITY_PREFERENCE = ["1080p", "720p", "480p", "360p", "240p", "144p"];
 
 /** Strip Streamos' stray trailing-quote artifacts from a recording path. */
@@ -818,10 +761,9 @@ const stripTrailingQuote = (s: string): string => s.replace(/(?:"|%22|%2522)+$/i
 export const pickRecordingSql = (recordings: any[]): any | null => {
   if (!recordings || recordings.length === 0) return null;
 
-  // "auto" is the ADAPTIVE MASTER playlist, which StreamOS v1 emits alongside the
-  // per-quality renditions. It must win over any fixed rendition: promoting the
-  // 480p entry would pin every viewer to 480p forever, when the master lets the
-  // player pick. Legacy never produces an "auto" entry, so this is a no-op there.
+  // "auto" is the adaptive master playlist StreamOS v1 emits alongside the renditions.
+  // It must win: promoting the 480p entry would pin every viewer to 480p forever.
+  // Legacy never produces "auto", so this is a no-op there.
   const master = recordings.find((r) => String(r?.quality ?? "").toLowerCase() === "auto");
   if (master?.path) return master;
 
@@ -832,7 +774,7 @@ export const pickRecordingSql = (recordings: any[]): any | null => {
   return recordings[0] ?? null;
 };
 
-/** Resolve a recording by quality → index → best quality. Mirrors resolveRecording. */
+/** Resolve a recording by quality → index → best quality. */
 export const resolveRecordingSql = (
   recordings: any[],
   opts: { recordingIndex?: number; quality?: string }
@@ -867,12 +809,10 @@ const liveRootFolderId = async (liveCourseId: number): Promise<number | null> =>
 };
 
 /**
- * Find — or create — the subject folder (ws_video_category) recordings of a
- * given subject under a live course should land in. Dedupe is by `subjectKey`
- * among the folders reachable from the course root (the DAG). On create, the new
- * folder is parented to the course root (folder.parent = root + a relation edge)
- * so it joins the course's reachable set. Returns null when the subject is blank
- * OR the course has no root folder to anchor under.
+ * Find or create the subject folder (ws_video_category) for a subject's recordings
+ * under a live course. Deduped by `subjectKey` among folders reachable from the course
+ * root; a new folder is parented to the root (folder.parent = root + a relation edge).
+ * Returns null when the subject is blank or the course has no root folder.
  */
 export const resolveOrCreateSubjectFolderSql = async (params: {
   liveCourseId: number;
@@ -882,9 +822,8 @@ export const resolveOrCreateSubjectFolderSql = async (params: {
   if (!subjectKey) return null;
 
   const root = await liveRootFolderId(params.liveCourseId);
-  if (!root) return null; // nowhere to anchor — skip (best-effort, see report)
+  if (!root) return null;
 
-  // Look for an existing reachable folder with this subjectKey.
   const reachable = await descendantsOf([root]);
   if (reachable.length) {
     const existing = await prisma.videoCategory.findFirst({
@@ -938,7 +877,7 @@ const promotedVideoSelect = {
   liveSessionId: true,
 } as const;
 
-/** Shape a promoted Video row to the Mongo-ish lean shape the controller emits. */
+/** Shape a promoted Video row for the controller response. */
 const promotedVideoDto = (v: any) => ({
   _id: String(v.id),
   title: v.title,
@@ -952,9 +891,8 @@ const promotedVideoDto = (v: any) => ({
 });
 
 /**
- * Promote a single recording into a folder as a Video. Idempotent PER FOLDER:
- * dedupe key is (videoCategoryId, aws_id=path). The created row carries
- * liveSessionId for the back-link. Mirrors promoteRecordingToFolder.
+ * Promote a single recording into a folder as a Video. Idempotent per folder (dedupe
+ * key is (videoCategoryId, aws_id=path)); the row carries liveSessionId for the back-link.
  */
 export const promoteRecordingToFolderSql = async (params: {
   liveSessionId: number;
@@ -998,11 +936,9 @@ export const promoteRecordingToFolderSql = async (params: {
 };
 
 /**
- * promoteSessionRecording's SQL core: validate the session has recordings, pick
- * one, validate the target folder exists, then promote. The folder may belong to
- * a live OR recorded course (recordings can be filed anywhere) — we only require
- * it to exist, matching the Mongo handler. Returns discriminated results so the
- * controller can map them to the same status codes.
+ * Validate the session has recordings, pick one, validate the target folder exists,
+ * then promote. The folder may belong to a live or recorded course — it only has to
+ * exist. Returns discriminated results the controller maps to status codes.
  */
 export const promoteSessionRecordingSql = async (params: {
   sessionId: number;

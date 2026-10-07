@@ -1,20 +1,9 @@
+// Client folders: per-customer video/material save folders and their items.
 import { prisma } from "../../config/prisma";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
-/**
- * Saved-folders (video/material) write+read path on SQL (Wave 7 — net-new
- * ws_folder / ws_folder_item). customer is the SQL int at runtime (customer-auth);
- * folder ids are this module's own ints; refId is a content id (video→ws_video,
- * material→ws_material) which is a SQL int at runtime when catalog-* is on.
- *
- * VERIFIED end-to-end vs live DB: folder CRUD + dup-reject + addItem/dedup +
- * detail with content hydration (a real ws_video refId hydrated to its title) +
- * countSavedItems + removeFolder. The runtime refId is a genuine SQL int (the
- * content row arrives from a catalog-* SQL read), so the refId→ws_video/ws_material
- * join resolves correctly — the earlier "staging Mongo content ≠ SQL" worry only
- * affected the BACKFILL (which stored refId 0), not the live path.
- */
+/** refId is a content id: video → ws_video, material → ws_material. */
 
 export const parseFolderId = (id: string): number | null => {
   const n = Number(id);
@@ -28,7 +17,7 @@ export const ensureDefaultFolders = async (customerId: number): Promise<void> =>
   for (const type of ["video", "material"] as const) {
     const existing = await prisma.folder.findFirst({ where: { customerId, type, isDefaultFolder: true }, select: { id: true } });
     if (!existing) {
-      // tolerate the unique (customer,type,name) index on a race
+      // Tolerate the unique (customer,type,name) index on a race.
       try { await prisma.folder.create({ data: { customerId, type, name: DEFAULT_NAME[type], isDefaultFolder: true, createdAt: new Date(), updatedAt: new Date() } }); }
       catch { /* already created concurrently */ }
     }
@@ -41,7 +30,6 @@ const folderDto = (f: any, itemCount?: number) => ({
   ...(itemCount !== undefined ? { itemCount } : {}),
 });
 
-// content hydration: refId → ws_video / ws_material row (Mongo-shaped)
 const hydrateRefs = async (kind: string, refIds: number[], customerId: number | null = null): Promise<Map<number, any>> => {
   if (!refIds.length) return new Map();
   if (kind === "video") {
@@ -49,9 +37,8 @@ const hydrateRefs = async (kind: string, refIds: number[], customerId: number | 
     return new Map(rows.map((v) => [v.id, { _id: String(v.id), title: v.title, topic: v.topic, slug: v.slug, platform: v.platform, status: v.status }]));
   }
   const rows = await prisma.material.findMany({ where: { id: { in: refIds } } });
-  // Encrypted media contract — saved materials expose a mediaToken (resolved at
-  // /client/media/resolve), never the raw file/direct_link. Paid materials are
-  // ownership-gated exactly like the material list endpoints.
+  // Saved materials expose a mediaToken (resolved at /client/media/resolve), never the raw
+  // file/direct_link. Paid materials are ownership-gated like the material list endpoints.
   const ownedIds = await getPurchasedMaterialIds(
     customerId,
     rows.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId as number, isPaid: !!m.isPaid })),
@@ -69,7 +56,6 @@ const hydrateRefs = async (kind: string, refIds: number[], customerId: number | 
   }));
 };
 
-// ── folder CRUD ───────────────────────────────────────────────────────────────
 export const listFolders = async (customerId: number, type: string, search: string | undefined, skip: number, take: number) => {
   await ensureDefaultFolders(customerId);
   const where: any = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
@@ -119,6 +105,7 @@ export const updateFolder = async (customerId: number, type: string, folderId: n
   }
 };
 
+// Empties the folder; a default folder itself is kept, only its items go.
 export const removeFolder = async (customerId: number, type: string, folderId: number): Promise<{ ok: false } | { ok: true; wasDefault: boolean }> => {
   const existing = await prisma.folder.findFirst({ where: { id: folderId, customerId, type }, select: { id: true, isDefaultFolder: true } });
   if (!existing) return { ok: false };
@@ -129,7 +116,7 @@ export const removeFolder = async (customerId: number, type: string, folderId: n
   return { ok: true, wasDefault: existing.isDefaultFolder };
 };
 
-// ── items ───────────────────────────────────────────────────────────────────
+// Save content into a folder (deduped; a repeat add returns the existing item).
 export const addItem = async (customerId: number, type: string, folderId: number, refId: number): Promise<"folder_not_found" | "ref_not_found" | { deduped: boolean; data: any }> => {
   const kind = kindOf(type);
   const folder = await prisma.folder.findFirst({ where: { id: folderId, customerId, type }, select: { id: true } });
@@ -159,6 +146,7 @@ export const removeItem = async (customerId: number, type: string, folderId: num
   return r.count > 0;
 };
 
+// Paged folders with their items inlined; items whose content is gone are dropped.
 export const allItems = async (customerId: number, type: string, search?: string, skip = 0, take = 20) => {
   await ensureDefaultFolders(customerId);
   const where: any = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
@@ -172,7 +160,7 @@ export const allItems = async (customerId: number, type: string, search?: string
   const byFolder = new Map<number, any[]>();
   for (const it of items) {
     const ref = refMap.get(it.refId);
-    if (!ref) continue; // only count items whose content still exists (matches Mongo)
+    if (!ref) continue; // only items whose content still exists
     const row = { _id: String(it.id), kind: it.kind, refId: String(it.refId), addedAt: it.addedAt, ref };
     (byFolder.get(it.folderId) ?? byFolder.set(it.folderId, []).get(it.folderId)!).push(row);
   }

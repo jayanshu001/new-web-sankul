@@ -1,3 +1,4 @@
+// Client exam countdown: HTTP handlers for countdown categories and lists.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -11,7 +12,6 @@ function todayUTC(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-// GET /client/exam-countdowns/categories
 export const listCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCategories invoked", { traceId, path: req.originalUrl });
@@ -29,7 +29,6 @@ export const listCategories = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/exam-countdowns?categoryId=&search=&page=1&limit=20&includePast=false
 export const listCountdowns = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCountdowns invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -65,7 +64,6 @@ export const listCountdowns = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/exam-countdowns/upcoming?limit=5
 export const upcomingCountdowns = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("upcomingCountdowns invoked", { traceId, path: req.originalUrl, userId: req.user?.id });

@@ -1,3 +1,4 @@
+// Receipts and solution PDFs: loads order/exam data, renders EJS, prints via Puppeteer.
 import path from "path";
 import ejs from "ejs";
 import puppeteer, { type Browser } from "puppeteer";
@@ -6,12 +7,6 @@ import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
 import { normalizeTiming } from "../../modules/client-exam/client-exam.service";
 import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
-
-// Receipt/PDF DB reads. Each generator selects its SQL loader.
-//   course-receipt → PackageCourseSubscription (+ order hop) — see buildCourseReceiptHtml
-//   book-receipt   → BookOrder + BookOrderItem (joined by order_id → book names)
-//   ebook-receipt  → EBookOrder → plan_id → PackageCourseEbookPrice.ebookId → EBook
-//   exam-solution  → ExamResult + ExamResultDetail (+ cross-customer best-score rank)
 
 // Resolve the EJS template from the repo root so it works under both
 // tsx (src/) and compiled dist/ runs.
@@ -73,18 +68,7 @@ function formatDate(d?: Date): string {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-// ---------------------------------------------------------------------------
-// Pooled headless Chromium (P2.1)
-//
-// Previously renderPdfFromHtml() launched a fresh Chromium (puppeteer.launch)
-// and closed it on EVERY call — expensive (~hundreds of ms + memory churn) and
-// wasteful under load. We now keep ONE shared browser alive and open a fresh
-// page per render. This is a purely internal performance change: same launch
-// args, same page.pdf options, byte-identical output, and renderPdfFromHtml's
-// signature/return value are unchanged.
-// ---------------------------------------------------------------------------
-
-// Same launch args as before — kept verbatim so the rendered PDF is identical.
+// One shared headless Chromium; each render opens and closes its own page.
 const BROWSER_LAUNCH_OPTIONS = {
   headless: true as const,
   args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -92,19 +76,15 @@ const BROWSER_LAUNCH_OPTIONS = {
 
 let browserPromise: Promise<Browser> | null = null;
 
-// Lazy singleton: launch once, cache the instance. If Chromium dies/disconnects
-// we clear the cache so the next render relaunches a healthy browser.
+// Lazy singleton; cleared on disconnect so the next render relaunches.
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     browserPromise = puppeteer.launch(BROWSER_LAUNCH_OPTIONS).then((browser) => {
       browser.on("disconnected", () => {
-        // Only clear if this is still the cached browser (avoid clobbering a
-        // relaunch that may have already replaced it).
         browserPromise = null;
       });
       return browser;
     });
-    // If the launch itself rejects, don't cache the rejected promise.
     browserPromise.catch(() => {
       browserPromise = null;
     });
@@ -112,8 +92,7 @@ async function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
-// Optional graceful-shutdown hook: closes the shared browser if callers wire it
-// in. Safe to leave uncalled — a detached Chromium is acceptable (out of scope).
+// Optional shutdown hook; safe to leave uncalled.
 export async function closePdfBrowser(): Promise<void> {
   const pending = browserPromise;
   browserPromise = null;
@@ -122,13 +101,11 @@ export async function closePdfBrowser(): Promise<void> {
     const browser = await pending;
     await browser.close();
   } catch {
-    // ignore — nothing to clean up if it never came up
+    // never came up — nothing to close
   }
 }
 
-// Simple in-process semaphore bounding how many pages render concurrently, so a
-// burst of receipt requests can't spawn unbounded pages on the shared browser.
-// Slots are always released in a finally, so it cannot deadlock.
+// Bounds concurrent pages on the shared browser; slots are released in a finally.
 const MAX_CONCURRENT_PAGES = 3;
 let activePages = 0;
 const waiters: Array<() => void> = [];
@@ -152,6 +129,7 @@ function releasePageSlot(): void {
   if (next) next();
 }
 
+// Renders on the shared browser, at most MAX_CONCURRENT_PAGES at a time.
 export async function renderPdfFromHtml(html: string): Promise<Buffer> {
   await acquirePageSlot();
   try {
@@ -159,17 +137,10 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
     const page = await browser.newPage();
     try {
       await page.setContent(html, { waitUntil: "load" });
-      // Block until every @font-face used on the page has actually loaded.
-      // `display=block` in the template hides text until the font is ready, and
-      // `document.fonts.ready` resolves only once those fonts have loaded — so the
-      // PDF is never rasterised with a fallback font that lacks Indic (Gujarati/
-      // Hindi) glyphs. Cap the wait so a slow/blocked font CDN can't hang the PDF.
-      //
-      // ⚠ This callback is serialized (`.toString()`) and run inside Chromium, so it
-      // must NOT be `async`: with tsconfig target < ES2017 (es2016 here) tsc downlevels
-      // async/await into the `__awaiter` helper, which does NOT exist in the browser
-      // context → "__awaiter is not defined" at PDF time. Return the Promise directly
-      // (page.evaluate awaits a returned thenable) so no helper is injected.
+      // Wait for web fonts so the PDF never rasterises with a fallback font lacking
+      // Gujarati/Hindi glyphs; capped at 5s so a slow font CDN can't hang the render.
+      // The callback runs inside Chromium and must NOT be `async`: tsc (target es2016)
+      // downlevels it to `__awaiter`, which is undefined in the browser context.
       await page.evaluate(() =>
         Promise.race([
           (document as any).fonts.ready,
@@ -183,7 +154,7 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
       });
       return Buffer.from(pdf);
     } finally {
-      // Close only the page — NEVER the shared browser.
+      // Close only the page, never the shared browser.
       await page.close();
     }
   } finally {
@@ -196,8 +167,6 @@ const DEFAULT_NOTES = [
   { list: "For any queries, contact " + COMPANY_EMAIL + "." },
 ];
 
-// Uniform line item + header shape the EJS receipt template needs; the SQL
-// loaders produce this and the generator only renders it.
 interface ReceiptItem {
   name: string;
   validity: string;
@@ -225,9 +194,8 @@ async function loadBookReceiptFromMysql(
   const custId = Number(customerId);
   if (!Number.isInteger(ordId) || ordId <= 0) throw new Error("Invalid order id.");
 
-  // ws_book_order: receiptId (order_id), amount (order_price), gatewayPaymentId.
-  // Line items live in a separate ws_book_order_item table keyed by the string
-  // order_id (= BookOrder.receiptId, NOT a FK to id), joined to ws_book for names.
+  // ws_book_order_item is keyed by the string order_id (= BookOrder.receiptId),
+  // not a FK to BookOrder.id.
   const order = await prisma.bookOrder.findFirst({
     where: { id: ordId, userId: custId },
     select: {
@@ -242,9 +210,8 @@ async function loadBookReceiptFromMysql(
     },
   });
   if (!order) throw new Error("Order not found.");
-  // Offline / free book orders (cash, bank, QR, Backend, free) never carry a
-  // gatewayPaymentId — they are settled manually. Gate on the order status
-  // instead, matching the paid states the purchase-history listing exposes.
+  // Offline/free orders have no gatewayPaymentId, so gate on the paid statuses
+  // the purchase-history listing exposes.
   if (!["verified", "shipped", "delivered"].includes(order.status)) {
     throw new Error("Order has not been paid yet.");
   }
@@ -271,9 +238,7 @@ async function loadBookReceiptFromMysql(
 
   const amount = Number(order.amount);
 
-  // ws_book_order carries ONLY gateway_transaction_id — its transaction_id column
-  // was dropped (see BookOrder in schema.prisma), so a bank-paid book order has no
-  // reference to print. Left as "-" rather than inventing one.
+  // ws_book_order has no bank transaction id, so a bank-paid order prints "-".
   const bookMethod = formatPaymentMethod(String(order.paymentMethod || "Online"));
   const bookRef = resolvePaymentReference(bookMethod, order.gatewayPaymentId, null);
 
@@ -325,8 +290,7 @@ async function loadEbookReceiptFromMysql(
   const custId = Number(customerId);
   if (!Number.isInteger(ordId) || ordId <= 0) throw new Error("Invalid order id.");
 
-  // ws_ebook_order has NO ebook_id → hop plan_id → ws_package_course_ebook_price
-  // (ebookId + duration) → ws_ebook for the name (same path as getEbookReceiptMysql).
+  // ws_ebook_order has no ebook_id: hop plan_id → ws_package_course_ebook_price → ws_ebook.
   const order = await prisma.eBookOrder.findFirst({
     where: { id: ordId, userId: custId },
     select: {
@@ -342,8 +306,7 @@ async function loadEbookReceiptFromMysql(
     },
   });
   if (!order) throw new Error("Order not found.");
-  // Offline / free ebook orders have no gatewayPaymentId; a settled order is
-  // marked `complete`. Gate on status so manual/free purchases can download.
+  // Gate on status, not gatewayPaymentId, so manual/free purchases can download.
   if (order.status !== "complete") throw new Error("Order has not been paid yet.");
   if (!order.Customer) throw new Error("Customer not found.");
 
@@ -392,15 +355,8 @@ export async function generateEbookReceipt(orderId: string, customerId: string):
   return renderPdfFromHtml(html);
 }
 
-// Course/package order receipt — same EJS template + Puppeteer pipeline as the
-// ebook/book receipts so all three invoices look identical. A "course order" is
-// a PackageCourseSubscription, which is either a course (courseId) or a package
-// (targetPackageId); the plan lives in `packageId` → PackageCourseEbookPrice.
-// Plan `duration` is in DAYS for course/package plans (same as ebook plans).
-// Builds the receipt HTML (fetch order → assemble data → render EJS) without
-// rasterising it. Split out so callers can run renderPdfFromHtml themselves.
-// Uniform shape the EJS template needs, independent of backend. Mongo and SQL
-// loaders both produce this; `buildCourseReceiptHtml` only renders it.
+// Shared receipt shape for course/package, live-course and test-series invoices.
+// `duration` is in DAYS.
 interface CourseReceiptData {
   paymentMethod: string;
   razorpayPaymentId: string;
@@ -417,11 +373,8 @@ interface CourseReceiptData {
   amount: number;
 }
 
-// Resolves the receipt when the url id is a ws_package_course_order.id. The
-// purchase-history list (`GET /client/purchase-history/subscriptions`) emits the
-// ORDER id as each course/package row's `_id`, and the app reuses that id on this
-// route — see the fallback in loadCourseReceiptFromMysql. Reading the order
-// directly also covers orders that never produced a subscription row.
+// Resolves by ws_package_course_order.id: the purchase-history list emits the ORDER
+// id as each course/package row's `_id`. Also covers orders with no subscription row.
 async function loadCourseReceiptFromOrderMysql(
   ordId: number,
   custId: number,
@@ -444,8 +397,6 @@ async function loadCourseReceiptFromOrderMysql(
   if (!ord) return null;
   if (ord.status !== "complete") throw new Error("Order has not been paid yet.");
 
-  // The order carries only the plan id; the plan points at the course or package
-  // it sells, which is where the printable product name lives.
   const plan = ord.planId
     ? await prisma.packageCourseEbookPrice.findFirst({
         where: { id: ord.planId },
@@ -489,17 +440,13 @@ async function loadCourseReceiptFromOrderMysql(
   };
 }
 
-// Resolves the receipt from ws_package_course_subscription.id. This is what the
-// list's legacy "pcs_" rows carry (subs with no order row at all), and it is also
-// the first hop of loadCourseReceiptFromMysql. Returns null when the id matches no
-// subscription owned by this customer, so callers can decide whether to fall back.
+// Resolves by ws_package_course_subscription.id (legacy "pcs_" rows). Returns null
+// when no subscription owned by this customer matches, so callers can fall back.
 async function loadCourseReceiptFromSubMysql(
   subId: number,
   custId: number,
 ): Promise<CourseReceiptData | null> {
-  // The subscription holds the product (course/package) + plan; payment fields live
-  // on the parent PackageCourseOrder (paymentMethod / razorpay ids). SQL Customer has
-  // a single `fullName`, not the Mongo first/middle/last split.
+  // Payment fields live on the parent PackageCourseOrder, not the subscription.
   const sub = await prisma.packageCourseSubscription.findFirst({
     where: { id: subId, customerId: custId },
     select: {
@@ -525,18 +472,14 @@ async function loadCourseReceiptFromSubMysql(
   if (!sub) return null;
 
   const ord = sub.packageCourseOrder;
-  // Legacy / offline / manually-granted subs carry NO order row at all (order_id
-  // NULL) — the purchase-history list surfaces them as "pcs_" rows with a receipt
-  // link, so they must render from the subscription alone (no razorpay ids). An
-  // order that exists but isn't settled is a genuinely unpaid purchase and stays
-  // blocked; a settled one is marked `complete`.
+  // Legacy/manually-granted subs have no order row and render from the subscription
+  // alone; an existing order that isn't `complete` is unpaid and stays blocked.
   if (ord && ord.status !== "complete") throw new Error("Order has not been paid yet.");
 
   const plan = sub.packageCourseEbookPrice;
   const productName =
     sub.course?.name || sub.package?.name || plan?.name || "Course";
 
-  // Prefer the subscription's recorded amount; fall back to the order's discount_price.
   const rawAmount =
     sub.amount != null ? Number(sub.amount) : ord?.amount != null ? Number(ord.amount) : 0;
   const amount = Number.isFinite(rawAmount) ? rawAmount : 0;
@@ -560,9 +503,7 @@ async function loadCourseReceiptFromSubMysql(
   };
 }
 
-// Unprefixed ids. ws_package_course_subscription.id and ws_package_course_order.id
-// are separate, numerically-overlapping PK spaces, and the purchase-history list
-// hands the app the ORDER id as each course/package row's `_id` — so try the
+// Unprefixed ids: subscription and order ids are overlapping PK spaces, so try the
 // subscription first (back-compat, wins on a tie) and the order second.
 async function loadCourseReceiptFromMysql(
   orderId: string,
@@ -581,9 +522,6 @@ async function loadCourseReceiptFromMysql(
   throw new Error("Order not found.");
 }
 
-// Shared EJS render for a loaded receipt — course / live-course / test-series
-// all produce the same CourseReceiptData shape and use the identical invoice
-// template, so the item/totals assembly lives here once.
 function renderReceiptHtml(loaded: CourseReceiptData): Promise<string> {
   const validity =
     loaded.duration && loaded.duration > 0
@@ -637,7 +575,6 @@ export async function buildCourseReceiptHtmlBySub(subId: string, customerId: str
   return renderReceiptHtml(loaded);
 }
 
-// ── live-course invoice (ws_live_course_subscription — single table) ────────────
 async function loadLiveCourseReceiptFromMysql(
   orderId: string,
   customerId: string,
@@ -650,19 +587,15 @@ async function loadLiveCourseReceiptFromMysql(
     where: { id: subId, customerId: custId },
     select: {
       createdAt: true, withMaterial: true, liveCourseId: true, planId: true,
-      // `amount` is the subscription's mirror of the order's charged amount. It is
-      // selected ONLY so a legacy row whose order the backfill never reached still
-      // prints a total — when `order` exists the spread below shadows it with
-      // ws_live_course_order.discount_price, which is the authoritative figure.
+      // Fallback total for a legacy row with no order; when `order` exists the spread
+      // below shadows it with the authoritative ws_live_course_order amount.
       amount: true,
-      // Every payment field the receipt renders moved to ws_live_course_order on
-      // 2026-08-25 and was dropped from the subscription.
+      // All payment fields live on ws_live_course_order.
       order: true,
     },
   });
   if (!row) throw new Error("Order not found.");
-  // Order fields shadow the subscription's — the receipt is built almost entirely
-  // from payment, and only createdAt/withMaterial/liveCourseId/planId come from here.
+  // Order fields shadow the subscription's.
   const sub: any = { ...row, ...(row.order ?? {}) };
   if (row.order?.status !== "complete" && !sub.razorpayPaymentId) {
     throw new Error("Order has not been paid yet.");
@@ -674,23 +607,11 @@ async function loadLiveCourseReceiptFromMysql(
     prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
   ]);
 
-  // The amount actually charged: ws_live_course_order.discount_price, which the spread
-  // above surfaces as `sub.amount` (falling back to the subscription's own mirrored
-  // `amount` for an order-less legacy row). Same field the package/course invoice
-  // renders (`ord.amount` in loadCourseReceiptFromOrderMysql) and the same one the
-  // purchase-history list and JSON receipt emit.
-  //
-  // ⚠ This USED to read `sub.paidAmount ?? sub.originalAmount`, and both were dead:
-  // `original_amount` was dropped from ws_live_course_subscription on 2026-08-25 and
-  // `paid_amount` is on the subscription but was never in the select above — neither
-  // name exists on ws_live_course_order, so the spread could not supply them either.
-  // Every live-course invoice therefore printed ₹0.00 / "Zero Rupees Only".
+  // Charged amount (order discount_price via the spread), the same figure the
+  // package/course invoice, purchase-history list and JSON receipt use.
   const rawAmount = sub.amount != null ? Number(sub.amount) : 0;
 
-  // Was hardcoded to "Online", so a bank/cash-settled live course printed the
-  // wrong method AND an empty id. ws_live_course_subscription carries both its own
-  // payment_method and bank_transaction_id — use them, keeping "Online" only as the
-  // fallback for rows that predate the column being populated.
+  // "Online" only as a fallback for rows predating payment_method.
   const liveMethod = formatPaymentMethod(String(sub.paymentMethod || "Online"));
   const liveRef = resolvePaymentReference(liveMethod, sub.razorpayPaymentId, sub.bankTransactionId);
 
@@ -699,9 +620,7 @@ async function loadLiveCourseReceiptFromMysql(
     razorpayPaymentId: liveRef.paymentId,
     paymentIdLabel: liveRef.paymentIdLabel,
     receipt: sub.razorpayOrderId || String(subId),
-    // `sub.createdAt` is the ORDER's created_at (shadowed by the spread), which is the
-    // payment instant — the same source the package/course invoice prints. There is no
-    // `paid_at` to prefer any more: it was dropped from both tables on 2026-08-27.
+    // The order's created_at (via the spread) is the payment instant.
     createdDate: formatDate(sub.createdAt ?? undefined),
     userName: (customer?.fullName || "").trim() || "-",
     userPhone: customer?.phoneNumber || "-",
@@ -717,9 +636,7 @@ export async function buildLiveCourseReceiptHtml(orderId: string, customerId: st
   return renderReceiptHtml(await loadLiveCourseReceiptFromMysql(orderId, customerId));
 }
 
-// ── test-series invoice (ws_test_series_subscription — single table) ────────────
-// Razorpay ids + method come from the parent ws_test_series_order (via order_id);
-// the subscription row carries only price/plan. Duration is DAYS (duration_days).
+// Payment ids/method come from the parent ws_test_series_order; duration is DAYS.
 async function loadTestSeriesReceiptFromSubMysql(
   subId: number,
   custId: number,
@@ -758,8 +675,7 @@ async function loadTestSeriesReceiptFromSubMysql(
   };
 }
 
-// "ts_" ids are test-series ORDER ids (client-purchase-history.service.ts:183), a
-// different PK space from ws_test_series_subscription — resolve the order directly.
+// "ts_" ids are test-series ORDER ids, a different PK space from the subscription.
 async function loadTestSeriesReceiptFromOrderMysql(
   ordId: number,
   custId: number,
@@ -780,10 +696,7 @@ async function loadTestSeriesReceiptFromOrderMysql(
     },
   });
   if (!ord) return null;
-  // Settled state is "complete" — written by test-series-order.service.ts:95 on
-  // verify, and the same value the purchase-history list filters on
-  // (client-purchase-history.repository.ts:104). Free/manual orders settle with no
-  // razorpay payment id, so gate on status alone.
+  // Free/manual orders settle with no razorpay payment id, so gate on status alone.
   if (ord.status !== "complete") throw new Error("Order has not been paid yet.");
 
   const [ts, plan, customer] = await Promise.all([
@@ -855,7 +768,6 @@ function formatDateTime(d?: Date | null): string {
   return `${dd}-${mm}-${yyyy} ${hh}:${mi}`;
 }
 
-// Uniform shape the solution EJS template needs, independent of backend.
 interface ExamSolutionData {
   examTitle: string;
   attemptNumber: number;
@@ -895,8 +807,8 @@ async function loadExamSolutionFromMysql(
   if (attemptId != null && (!Number.isInteger(attId) || (attId as number) <= 0))
     throw new Error("Invalid attempt id.");
 
-  // ws_exam_result: no submittedAt/attemptNumber columns — order by id (latest row)
-  // and surface created_at as the submission time. attemptNumber collapses to 1.
+  // ws_exam_result has no submittedAt/attemptNumber: latest row by id, created_at as
+  // the submission time, attemptNumber fixed at 1.
   const target = attId
     ? await prisma.examResult.findFirst({
         where: { id: attId, customerId: custId, examId: exId, status: true },

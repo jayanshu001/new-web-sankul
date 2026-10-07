@@ -1,3 +1,4 @@
+// Educator auth: Prisma queries for educator login, tokens and the admin educator master.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
@@ -9,14 +10,12 @@ const ADMIN_SORT_COLUMN: Record<string, keyof Prisma.CourseEducatorOrderByWithRe
   email: "email",
 };
 
-/** Shared WHERE builder for the admin educator list + count. */
 const buildAdminWhere = (opts: {
   search?: string;
   status?: boolean;
 }): Prisma.CourseEducatorWhereInput => {
-  // Soft-deleted educators are never listed (Mongo parity). The row is retained
-  // so course/live-course/package/session `educator_id` references still resolve
-  // the educator name; `deleted=1` just hides it from the admin list.
+  // Soft-deleted rows are retained so `educator_id` references still resolve the
+  // name; `deleted=1` only hides them from the admin list.
   const where: Prisma.CourseEducatorWhereInput = { deleted: false };
   const search = buildPrismaPrefixSearch(opts.search, ["name", "email"]);
   if (search) where.AND = search.AND;
@@ -24,22 +23,16 @@ const buildAdminWhere = (opts: {
   return where;
 };
 
-/**
- * Prisma persistence for the educator-auth MySQL branch.
- * Educator entity: `ws_course_educator`; tokens: `ws_educator_access_tokens`.
- */
 export const educatorAuthRepository = {
-  /** Active educator by email (login lookup). */
   findActiveByEmail: (email: string) =>
     prisma.courseEducator.findFirst({
       where: { email: email.toLowerCase().trim(), status: true },
     }),
 
-  /** Active educator by id (refresh). */
   findActiveById: (id: number) =>
     prisma.courseEducator.findFirst({ where: { id, status: true } }),
 
-  /** Educator by id regardless of status (profile / change-password). */
+  /** Regardless of status (profile / change-password). */
   findById: (id: number) =>
     prisma.courseEducator.findUnique({ where: { id } }),
 
@@ -63,7 +56,6 @@ export const educatorAuthRepository = {
       },
     }),
 
-  // ─── Tokens (ws_educator_access_tokens) ──────────────────────────────────
   createToken: (input: {
     educatorId: number;
     token: string;
@@ -99,7 +91,6 @@ export const educatorAuthRepository = {
       data: { active: false, deleted: true },
     }),
 
-  // ─── Admin master CRUD (ws_course_educator) ──────────────────────────────
   listAdmin: (opts: {
     search?: string;
     status?: boolean;
@@ -110,9 +101,8 @@ export const educatorAuthRepository = {
   }) =>
     prisma.courseEducator.findMany({
       where: buildAdminWhere(opts),
-      // Secondary sort by id: many legacy rows share NULL created_at/updated_at,
-      // so without a tie-breaker their order is arbitrary and pagination can
-      // drift (a row appearing on two pages). id is unique → stable order.
+      // id tie-breaker: many legacy rows have NULL timestamps, which would make
+      // pagination unstable.
       orderBy: [
         { [ADMIN_SORT_COLUMN[opts.sortBy] ?? "createdAt"]: opts.sortDir },
         { id: opts.sortDir },
@@ -124,8 +114,7 @@ export const educatorAuthRepository = {
   countAdmin: (opts: { search?: string; status?: boolean }) =>
     prisma.courseEducator.count({ where: buildAdminWhere(opts) }),
 
-  // Exclude soft-deleted rows so a deleted educator's email frees up for reuse
-  // (matches the Mongo partial unique index behavior).
+  // Exclude soft-deleted rows so a deleted educator's email can be reused.
   emailInUse: (email: string, exceptId?: number) =>
     prisma.courseEducator.findFirst({
       where: {
@@ -183,10 +172,8 @@ export const educatorAuthRepository = {
     }),
 
   /**
-   * Soft delete: set deleted=1 + status=false and revoke tokens, retaining the
-   * row so course/live-course/package/session educator references still resolve
-   * the name (hard delete would violate the ws_course.educator_id FK). The list
-   * filters deleted=0, so the educator disappears from the admin list.
+   * Soft delete + token revoke. The row is retained so educator references still
+   * resolve the name; a hard delete would violate the ws_course.educator_id FK.
    */
   disableAdmin: async (id: number) => {
     await prisma.educatorAccessToken.updateMany({

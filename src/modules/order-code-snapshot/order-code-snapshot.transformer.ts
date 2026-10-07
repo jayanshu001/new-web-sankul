@@ -1,3 +1,4 @@
+// Order code snapshot: rows to the frozen legacy snapshot JSON shape.
 import type {
   PromocodeSnapshot,
   ReferralSnapshot,
@@ -7,30 +8,20 @@ import type {
 } from "./order-code-snapshot.types";
 
 /**
- * Prisma rows → the legacy purchase-time snapshot objects.
- *
- * A snapshot is frozen JSON: it must stay readable years after the promocode,
- * plan or promoter it describes has been edited or deleted, so every value is
- * flattened to a primitive here and nothing is left as a live reference.
+ * Snapshots are frozen JSON that must stay readable after the source rows are
+ * edited or deleted, so every value is flattened to a primitive here.
  */
 
 /**
- * A Date as it would appear had the row been returned by the API directly.
- * `toISOString()` is exactly what `res.json()` does to a Prisma Date, so a
- * snapshotted timestamp reads identically to a live one. (The IST read
- * middleware has already normalised the Date; JSON columns are not re-shifted,
- * which is what keeps the frozen value stable.)
+ * Same as `res.json()` on a Prisma Date, so a snapshotted timestamp reads like a
+ * live one. JSON columns are not re-shifted by the IST middleware, which keeps it stable.
  */
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 
-/**
- * A Decimal as the legacy ORM serialized it: the stored digits as a string
- * ("50", not 50 and not "50.00"). promoter-data casts this back with
- * `CAST(... AS DECIMAL(10,2))`, so the string form is the interoperable one.
- */
+/** The stored digits as a string ("50", not 50 or "50.00"); promoter-data casts it back to DECIMAL. */
 const dec = (v: unknown): string => (v == null ? "0" : String(v));
 
-/** Nullable int FK → 0. V1 wrote 0 for "not this entity", never null. */
+/** Nullable int FK → 0; the legacy shape writes 0 for "not this entity", never null. */
 const zero = (n: number | null | undefined): number => n ?? 0;
 
 export const toSnapshotPlan = (
@@ -69,14 +60,9 @@ export const toSnapshotPlan = (
     : null;
 
 /**
- * A LIVE-COURSE plan (ws_live_course_plan) in the SAME SnapshotPlan shape, so a
- * consumer reading `$.promotedPackageCourseEbook[0].planId.price` does not need to
- * know which plan table the purchase came from.
- *
- * ebookId / courseId / packageId are 0 — the legacy "not this entity" sentinel — and
- * the real parent rides in `liveCourseId`, a key that exists ONLY on this variant.
- * ⚠ `duration` here is MONTHS, not days (LIVE_COURSE_DESIGN §3); the value is copied
- * verbatim, exactly as the live row carries it.
+ * ws_live_course_plan in the same SnapshotPlan shape, so readers of
+ * `$.promotedPackageCourseEbook[0].planId.price` need not know the source table.
+ * Parent rides in `liveCourseId`; `duration` is MONTHS here (LIVE_COURSE_DESIGN §3).
  */
 export const toLiveSnapshotPlan = (
   p: {
@@ -113,16 +99,9 @@ export const toLiveSnapshotPlan = (
     : null;
 
 /**
- * A TEST-SERIES plan (ws_test_series_price) in the SAME SnapshotPlan shape, for the
- * same reason as the live-course variant: a consumer reading
- * `$.promotedPackageCourseEbook[0].planId.price` must not need to know which of the
- * three plan tables the purchase came from.
- *
- * ebookId / courseId / packageId are 0 — the legacy "not this entity" sentinel — and
- * the real parent rides in `testSeriesId`, a key that exists ONLY on this variant.
- * `withMaterial` / `materialPrice` are false / 0 because ws_test_series_price has no
- * such columns: a test series is digital and never ships a material kit.
- * `duration` is DAYS here (duration_days), as on a price plan.
+ * ws_test_series_price in the same SnapshotPlan shape. Parent rides in `testSeriesId`;
+ * `withMaterial`/`materialPrice` are false/0 (no such columns, nothing ships);
+ * `duration` is DAYS (duration_days).
  */
 export const toTestSeriesSnapshotPlan = (
   p: {
@@ -141,9 +120,7 @@ export const toTestSeriesSnapshotPlan = (
     ? {
         id: p.id,
         name: p.name,
-        // ws_test_series_price.price is decimal(10,2) — Prisma hands back a Decimal
-        // object, which would serialise into the frozen JSON as {s,e,d} internals.
-        // Every other SnapshotPlan carries a plain number, so coerce here.
+        // decimal(10,2): a Prisma Decimal would serialise as {s,e,d} internals in the frozen JSON.
         price: Number(p.price ?? 0),
         status: p.status,
         ebookId: 0,
@@ -187,10 +164,8 @@ const toSnapshotPromoter = (
     : null;
 
 /**
- * `plan` is passed in already resolved rather than read off the link's relation: a
- * live-course link's `pcb_price_id` FK resolves against the WRONG table (see
- * order-code-snapshot.repository.findPlanLink), so only the caller knows which plan
- * table the id belongs to.
+ * `plan` is passed in resolved: a non-price link's `pcb_price_id` FK resolves against
+ * the wrong table (see repository.findPlanLink), so only the caller knows the plan table.
  */
 const toSnapshotPlanLink = (
   l: {
@@ -215,13 +190,9 @@ const toSnapshotPlanLink = (
 });
 
 /**
- * Promocode row (+ promoter) and the ONE link for the purchased plan → the
- * `promocode` column snapshot.
- *
- * `link` is null for a legacy global-discount promocode with no per-plan rows;
- * `promotedPackageCourseEbook` is then an empty array and promoter-data's
- * `[0].promoterPercentage` resolves to NULL → 0 commission, which is the correct
- * answer for a code that carries no promoter percentage.
+ * `link` is null for a global-discount promocode; `promotedPackageCourseEbook` is then
+ * empty and promoter-data's `[0].promoterPercentage` resolves to NULL → 0 commission,
+ * which is correct for a code with no promoter percentage.
  */
 export const toPromocodeSnapshot = (
   promo: {
@@ -256,10 +227,6 @@ export const toPromocodeSnapshot = (
   promotedPackageCourseEbook: link ? [toSnapshotPlanLink(link, linkPlan)] : [],
 });
 
-/**
- * Referral program row + purchased plan + referring customer → the
- * `refferalcode` column snapshot.
- */
 export const toReferralSnapshot = (
   program: {
     id: number;

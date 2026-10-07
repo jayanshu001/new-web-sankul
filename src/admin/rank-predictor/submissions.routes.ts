@@ -1,3 +1,4 @@
+// Admin rank predictor: submission review routes.
 import { Router } from "express";
 import {
   correctAnswers,

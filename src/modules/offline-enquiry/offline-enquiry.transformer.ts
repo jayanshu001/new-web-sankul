@@ -1,11 +1,8 @@
+// Offline enquiries: row to DTO mapping (response shape is frozen).
 import type { OfflineEnquiry } from "@prisma/client";
 import type { BatchEnquiryDto, EnquiryDto } from "./offline-enquiry.types";
 
-/**
- * SQL ws_offline_enquiry row → the Mongo-shaped enquiry doc (the response
- * returns the created enquiry). `mobile` BigInt → string; `customer_id` 0
- * sentinel → null (anonymous).
- */
+/** `mobile` BigInt → string; `customer_id` 0 sentinel → null (anonymous). */
 export const toEnquiryDto = (row: OfflineEnquiry): EnquiryDto => ({
   _id: String(row.id),
   customerId: row.userId && row.userId > 0 ? row.userId : null,
@@ -17,11 +14,7 @@ export const toEnquiryDto = (row: OfflineEnquiry): EnquiryDto => ({
   createdAt: row.createdAt ?? null,
 });
 
-/**
- * SQL ws_offline_enquiry row → the Mongo-shaped batch-enquiry doc. Same as
- * toEnquiryDto but surfaces `otherQualification` and the Mongo `updatedAt`
- * (always null — no updated_at column on ws_offline_enquiry).
- */
+/** `updatedAt` is always null: ws_offline_enquiry has no updated_at column. */
 export const toBatchEnquiryDto = (row: OfflineEnquiry): BatchEnquiryDto => ({
   _id: String(row.id),
   customerId: row.userId && row.userId > 0 ? row.userId : null,

@@ -1,3 +1,4 @@
+// Client live reminders: per-session reminder routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {

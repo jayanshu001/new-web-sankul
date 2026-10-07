@@ -1,3 +1,4 @@
+// Admin activity tracking: activity log and summary routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { listActivity, activitySummary } from "./tracking.controller";

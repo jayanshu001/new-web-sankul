@@ -1,12 +1,9 @@
+// Promoter auth: promoter DTO mapping and password verification.
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import type { Promoter } from "@prisma/client";
 
-/**
- * Promoter profile DTO — same shape the Mongo `buildProfile` returns so the API
- * contract is unchanged. `id` is the stringified SQL int (Mongo returned the
- * ObjectId). `password` is NEVER surfaced.
- */
+/** `id` is the stringified SQL int; `password` is never surfaced. */
 export interface PromoterDto {
   id: string;
   fullName: string;
@@ -26,10 +23,8 @@ export const toPromoterAuthDto = (row: Promoter): PromoterDto => ({
 });
 
 /**
- * Verify a plaintext password against the stored hash. ws_promoter currently
- * holds bcrypt only (1/114 rows has a password), but legacy Laravel rows could
- * be MD5 — so mirror the educator helper: bcrypt first, then 32-char-hex MD5.
- * Empty/NULL password → never matches (promoter has no login).
+ * Bcrypt first, then legacy 32-char-hex MD5 (same as the educator helper).
+ * An empty/NULL password never matches.
  */
 export const verifyPromoterPassword = async (
   plain: string,

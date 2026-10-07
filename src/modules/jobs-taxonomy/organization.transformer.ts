@@ -1,3 +1,4 @@
+// Jobs organizations: row to DTO mapping (response shape is frozen).
 import type { JobOrganization } from "@prisma/client";
 import type { OrganizationDto } from "./organization.types";
 

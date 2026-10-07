@@ -1,3 +1,4 @@
+// Customer lookups: row to DTO mapping (response shape is frozen).
 import type {
   CustomerState,
   CustomerDistict,

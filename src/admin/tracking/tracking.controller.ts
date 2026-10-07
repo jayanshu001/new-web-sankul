@@ -1,10 +1,10 @@
+// Admin activity tracking: HTTP handlers for the customer activity log and summary.
 import { Request, Response } from "express";
 import {
   parseTrackingId,
   listActivity as sqlListActivity, activitySummary as sqlActivitySummary,
 } from "../../modules/tracking/tracking.service";
 
-// GET /api/v1/admin/tracking
 export const listActivity = async (req: Request, res: Response) => {
   try {
     const {
@@ -39,7 +39,7 @@ export const listActivity = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/tracking/summary
+// Event counts over an optional date range.
 export const activitySummary = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;

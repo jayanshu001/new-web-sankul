@@ -1,18 +1,4 @@
-/**
- * Book · Order (WRITE — Phase 3b) service — dual-path (MySQL ↔ Mongo).
- *
- * Module key: `book-order`. Cart-checkout write path (5 tables). See
- * book-order.types.ts + docs/migration/BOOK_ORDER_SCOPE.md.
- *
- * Exposes:
- *  - isBookOrderMysql() / parseBookOrderId()
- *  - buildBookOrderFromCartMysql()  — read cart, validate, compute totals, write
- *                                     the pending order + item rows (create-order)
- *  - findBookOrderForVerify()       — DUAL-READ owner lookup (rollback net)
- *  - verifyBookOrderMysql()         — txn: tracking AWB + order→verified + cart off
- *
- * Flag OFF until go-live sign-off.
- */
+// Book orders: cart preview, checkout, payment verify, webhook fulfilment and tracking.
 import { prisma } from "../../config/prisma";
 import { bookOrderRepository as repo } from "./book-order.repository";
 import {
@@ -29,19 +15,14 @@ import type {
   MyOrderDto,
 } from "./book-order.types";
 
-
-
 export const parseBookOrderId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
 /**
- * The book free-shipping threshold. Sourced from the book settings row
- * (ws_book_setting, settingKey='default') — the same value the admin edits via
- * PUT /admin/books/settings (`freeShippingMinOrderAmount`). Previously this read
- * ws_termsandcondition.freeShippingMinimumOrderAmount, so the admin setting never
- * reached checkout (split-brain); consolidated 2026-07-14 onto book settings.
+ * Read from ws_book_setting (settingKey='default'), the value the admin edits via
+ * PUT /admin/books/settings.
  */
 export const getFreeShippingMin = async (): Promise<number> => {
   const row = await prisma.bookSetting.findFirst({
@@ -65,11 +46,10 @@ export interface BookOrderPreview {
 }
 
 /**
- * create-order phase 1: read the active cart, validate shipping + availability,
- * compute totals (free-shipping threshold) and the priced item snapshot. NO
- * write — the controller creates the Razorpay order from `amount`, then calls
- * `writeBookOrderMysql` with the razorpay id. Splitting avoids holding a write
- * open across the external Razorpay call (mirrors the Mongo controller order).
+ * create-order phase 1: validate the cart and compute totals and the priced item
+ * snapshot, without writing. The controller creates the Razorpay order from
+ * `amount` and then calls `writeBookOrderMysql`, so no write is held open across
+ * the external call.
  */
 export const previewBookOrderFromCartMysql = async (
   customerId: number
@@ -130,10 +110,6 @@ export const previewBookOrderFromCartMysql = async (
   };
 };
 
-/**
- * create-order phase 2: write the pending order + its item rows (ONE txn) from a
- * computed preview + the Razorpay order id/payload.
- */
 export const writeBookOrderMysql = async (input: {
   customerId: number;
   orderKey: string;
@@ -157,13 +133,7 @@ export const writeBookOrderMysql = async (input: {
   return { orderId: order.id, orderKey: input.orderKey };
 };
 
-// ── cart/purchase state (catalog-book listing/detail composition) ───────────
-
-/**
- * The customer's active-cart state for the book listing: `cartId` (the VARCHAR
- * business key, Mongo `_id`-shape) + a bookId(string)→qty map. Null cart → both
- * empty. Mirrors the Mongo listBooks cart read.
- */
+/** `cartId` is the cart's VARCHAR business key. */
 export const getActiveCartState = async (
   customerId: number
 ): Promise<{ cartId: string | null; qtyByBookId: Map<string, number> }> => {
@@ -176,18 +146,12 @@ export const getActiveCartState = async (
   return { cartId: cart.cart_id, qtyByBookId };
 };
 
-/**
- * The set of book ids (as strings) the customer has purchased (fulfilled order
- * statuses). For the listing's `isPurchased` + the detail check.
- */
 export const getPurchasedBookIdSet = async (
   customerId: number
 ): Promise<Set<string>> => {
   const ids = await repo.findPurchasedBookIds(customerId);
   return new Set(ids.map(String));
 };
-
-// ── verify: dual-read owner lookup ──────────────────────────────────────────
 
 export const findBookOrderForVerify = async (
   razorpayOrderId: string,
@@ -197,13 +161,9 @@ export const findBookOrderForVerify = async (
   return order ? toBookOrderRow(order) : null;
 };
 
-// ── verify: transactional fulfillment ───────────────────────────────────────
-
 /**
- * Fulfill a verified book payment. Idempotent: an already-verified order returns
- * its DTO without re-running side effects (no second AWB, no re-deactivation).
- * Otherwise ONE transaction: allocate the AWB (insert tracking row) + flip
- * order→verified + tracking_id + deactivate the cart.
+ * Idempotent: an already-verified order returns its DTO without re-running side
+ * effects (no second AWB, no second cart deactivation).
  */
 export const verifyBookOrderMysql = async (
   order: BookOrderRow,
@@ -224,8 +184,7 @@ export const verifyBookOrderMysql = async (
   });
   const items = await repo.findOrderItems(order.orderKey);
   if (!result) {
-    // Claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
-    // first. Return the order it verified; no second AWB, no second shipment.
+    // A concurrent /verify or webhook fulfilled this order first; return that result.
     const raw = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerId);
     if (!raw) throw new Error("book-order: order is not pending and cannot be re-read");
     return toBookOrderDto(raw, items);
@@ -233,12 +192,7 @@ export const verifyBookOrderMysql = async (
   return toBookOrderDto(result.order, items);
 };
 
-/**
- * Webhook fulfillment (paymentWebhook) — keyed by razorpayOrderId ALONE (no
- * customer in the razorpay payload). Reuses verifyBookOrderMysql, which allocates
- * the AWB tracking row IN-TRANSACTION on the SQL side (no Mongo Counter needed).
- * Idempotent; null on miss → caller falls through to Mongo.
- */
+/** Webhook fulfillment, keyed by razorpayOrderId alone (the payload carries no customer). Null on miss. */
 export const fulfillBookWebhookMysql = async (
   razorpayOrderId: string,
   razorpayPaymentId: string
@@ -248,13 +202,9 @@ export const fulfillBookWebhookMysql = async (
   return verifyBookOrderMysql(toBookOrderRow(order), razorpayPaymentId);
 };
 
-// ── Shipment tracking (SQL) ──────────────────────────────────────────────────
-// SQL counterpart of the Mongo getMyOrderTracking. Drift vs Mongo: ws_book_order
-// has no shipped_at/delivered_at and no origin (book-settings) on SQL, and
-// ws_book_tracking carries a single status row (no courier/location/history
-// array). So those fields default to null/[]; the core (awb, to-address,
-// consignee, status, bookedAt) populate. Returns null if the order isn't the
-// customer's.
+// ws_book_order has no shipped_at/delivered_at and ws_book_tracking holds a single
+// status row (no courier/location/history), so those fields are null/[].
+// Null when the order isn't the customer's.
 export const getOrderTrackingMysql = async (orderId: number, customerId: number) => {
   const order = await prisma.bookOrder.findFirst({
     where: { id: orderId, userId: customerId },
@@ -279,19 +229,10 @@ export const getOrderTrackingMysql = async (orderId: number, customerId: number)
     orderStatus: order.status,
     shippedAt: null,
     deliveredAt: null,
-    // Single tracking row → one history entry (keeps the UI timeline non-empty).
     history: trackStatus ? [{ status: trackStatus, location: null, note: null, at: trackAt }] : [],
   };
 };
 
-// ── customer-facing order views (listMyOrders / getMyOrderById) ──────────────
-
-/**
- * SQL counterpart of the Mongo `listMyOrders`. A page of the customer's own
- * orders (newest first, optional status filter) as Mongo-shaped DTOs (each with
- * its `trackingUrl`), plus the total for the pagination envelope. Line items are
- * fetched for the whole page in one query and grouped by order key.
- */
 export const listMyOrdersMysql = async (
   customerId: number,
   opts: { status?: string; page: number; limit: number }
@@ -314,11 +255,6 @@ export const listMyOrdersMysql = async (
   return { data, total };
 };
 
-/**
- * SQL counterpart of the Mongo `getMyOrderById`. One owned order as a Mongo-shaped
- * DTO with the shipping address + line-item books populated and `trackingUrl`
- * decorated. Null when the order isn't the customer's (→ 404).
- */
 export const getMyOrderByIdMysql = async (
   orderId: number,
   customerId: number
@@ -329,7 +265,7 @@ export const getMyOrderByIdMysql = async (
   return toMyOrderDetailDto(order, items);
 };
 
-/** Live-tracking lookup: order status + AWB (BigInt→number). Null if not owned. */
+// Status and AWB only; null when the order isn't the customer's.
 export const getOrderTrackingLiveMysql = async (orderId: number, customerId: number) => {
   const order = await prisma.bookOrder.findFirst({
     where: { id: orderId, userId: customerId },

@@ -1,18 +1,15 @@
-// Shared helpers for the year → month → week drill-down used by the daily
-// quizzes and free-tests endpoints. Semantics match client/quizzes/daily:
-// Week 1 = days 1–7, Week 2 = 8–14, Week 3 = 15–21, Week 4 = 22–28,
-// Week 5 = 29–end-of-month.
+// Date buckets: year → month → week drill-down for daily quizzes and free tests:
+// weeks 1-4 are days 1-7, 8-14, 15-21, 22-28; week 5 is 29 to month end.
 
 export const MONTH_LABELS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
 
-// Map a day-of-month (1–31) to its week bucket (1–5).
 export const weekOfMonth = (day: number): number =>
   day <= 28 ? Math.ceil(day / 7) : 5;
 
-// Inclusive [start, end] date range for a given week of a month.
+// Inclusive range.
 export const weekRange = (
   year: number,
   month: number,

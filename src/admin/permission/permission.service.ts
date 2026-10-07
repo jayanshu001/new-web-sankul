@@ -1,15 +1,7 @@
-// src/admin/permission/permission.service.ts
-//
-// Permission catalog domain logic. Reads/writes go through the admin-rbac
-// SQL module (ws_permissions); category is derived from the permission name.
-
+// Admin permissions: guard-scoped permission logic over the RBAC module.
 import { sortFieldMap } from "./permission.validation";
 import { HttpError } from "../../middlewares/errorHandler";
 import * as rbac from "../../modules/admin-rbac/admin-rbac.service";
-
-// ──────────────────────────────────────────────────────────────────────────────
-// List + detail + tree
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListPermissionsInput {
   guard?: string;
@@ -24,9 +16,7 @@ export interface ListPermissionsInput {
 export const listPermissions = async (input: ListPermissionsInput) => {
   const { guard, search, category_id, page, per_page } = input;
 
-  // ws_permissions; category is the FK (category_id filter) — the derived-from-name
-  // `category` field on each row is separate. The controller builds the pagination
-  // envelope from { items, total }.
+  // category_id filters on the FK; the `category` field on each row is derived from the name.
   const { items, total } = await rbac.listPermissions({ guard, search, category_id, page, per_page });
   return { items, total };
 };
@@ -45,9 +35,6 @@ export const getPermissionsTree = async () => {
   return rbac.getPermissionsTree();
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Mutations
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface CreatePermissionInput {
   name: string;
@@ -58,7 +45,6 @@ export interface CreatePermissionInput {
 export const createPermission = async (input: CreatePermissionInput) => {
   const { name, guard } = input;
 
-  // No category table; category derived from name.
   if (await rbac.permissionNameExists(name, guard)) {
     throw new HttpError(409, `Permission '${name}' already exists for guard '${guard}'`);
   }
@@ -81,10 +67,11 @@ export const updatePermission = async (id: string, input: UpdatePermissionInput)
   if ((nextName !== existing.name || nextGuard !== existing.guard_name) && (await rbac.permissionNameExists(nextName, nextGuard))) {
     throw new HttpError(409, `Permission '${nextName}' already exists for guard '${nextGuard}'`);
   }
-  // category_id ignored on SQL (no category table; derived from name).
+  // category_id is ignored: category is derived from the name.
   return rbac.updatePermission(numId, { name: nextName, guard: nextGuard });
 };
 
+// Refuses (409) while any role still holds the permission.
 export const deletePermission = async (id: string, guard?: string) => {
   const numId = rbac.parseRbacId(id);
   if (!numId) throw new HttpError(400, "Invalid permission id");
@@ -98,9 +85,6 @@ export const deletePermission = async (id: string, guard?: string) => {
   return;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Roles for permission
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getRolesForPermission = async (id: string, guard?: string) => {
   const numId = rbac.parseRbacId(id);

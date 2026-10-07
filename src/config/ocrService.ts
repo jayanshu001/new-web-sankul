@@ -1,3 +1,4 @@
+// OCR service config: rank-predictor extraction endpoint, token and thresholds.
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_LOW_CONFIDENCE_THRESHOLD_PCT = 5;
 

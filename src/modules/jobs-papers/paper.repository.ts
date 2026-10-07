@@ -1,3 +1,4 @@
+// Jobs previous papers: Prisma queries (legacy Laravel storage shape).
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { PaperListQuery, PaperWriteInput } from "./paper.types";

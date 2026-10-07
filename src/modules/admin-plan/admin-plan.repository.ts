@@ -1,13 +1,12 @@
+// Admin plans: Prisma queries for course/package/ebook price plans.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-plan MySQL branch (ws_package_course_ebook_price).
- * One plan is owned by exactly ONE of course/package/ebook. ⚠ Unused owner ids
- * are stored as EITHER NULL or 0 (legacy mix) — treat NULL-or-0 as "not owned".
- * On write we set the chosen owner and 0 the other two (matches the dump's
- * dominant convention + keeps the single-default match simple).
+ * ws_package_course_ebook_price. A plan is owned by exactly one of course/package/ebook.
+ * Unused owner ids are stored as EITHER NULL or 0 (legacy mix), so treat NULL-or-0 as
+ * "not owned". Writes set the chosen owner and 0 the other two.
  */
 const OWNED = (v: number | null | undefined) => v != null && v > 0;
 
@@ -33,14 +32,11 @@ export const adminPlanRepository = {
   findBare: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
 
   promotedCount: (planId: number) => prisma.promotedPackageCourseEbook.count({ where: { planId } }),
-  // Subscriptions reference the PLAN via `planId` (ws_package_course_subscription.pcb_id).
-  // This used to filter on `packageId`, which compared a plan id against a package id and
-  // so reported 0 for plans that really did have subscribers.
+  // Subscriptions reference the plan via `planId` (ws_package_course_subscription.pcb_id),
+  // not `packageId`.
   subscriberCount: (planId: number) => prisma.packageCourseSubscription.count({ where: { planId } }),
-  // NOTE: an `activeSubscriberCount` helper (status:true AND endAt >= now) lived here
-  // and scoped the plan-edit guard. Removed 2026-08-21 — commercial terms are frozen
-  // for ALL saved plans, sold or not, so "active" no longer means anything here. Do
-  // not reintroduce it as a delete/edit guard; use utils/planUsage.
+  // Commercial terms are frozen for ALL saved plans, sold or not, so there is no
+  // "active subscribers" edit/delete guard — use utils/planUsage.
   create: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) =>
     prisma.packageCourseEbookPrice.create({ data }),
   update: (id: number, data: Prisma.PackageCourseEbookPriceUncheckedUpdateInput) =>
@@ -65,9 +61,8 @@ export const adminPlanRepository = {
 };
 
 /**
- * Sort: query-driven when `sortBy` is one of the whitelisted columns (newest-id
- * tiebreaker for determinism); otherwise the legacy default
- * (default-plan first, then duration asc, then newest).
+ * Query-driven sort when `sortBy` is whitelisted (newest-id tiebreaker); otherwise
+ * newest first.
  */
 function buildOrderBy(opts: { sortBy?: string; sortDir?: "asc" | "desc" }): Prisma.PackageCourseEbookPriceOrderByWithRelationInput[] {
   const dir: "asc" | "desc" = opts.sortDir === "asc" ? "asc" : "desc";
@@ -77,7 +72,7 @@ function buildOrderBy(opts: { sortBy?: string; sortDir?: "asc" | "desc" }): Pris
     case "price": return [{ price: dir }, { id: "desc" }];
     case "createdAt": return [{ created_at: dir }, { id: "desc" }];
     case "updatedAt": return [{ updated_at: dir }, { id: "desc" }];
-    // Default: recently-added on top (newest id first).
+
     default: return [{ created_at: "desc" }, { id: "desc" }];
   }
 }

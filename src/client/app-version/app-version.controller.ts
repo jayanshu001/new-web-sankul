@@ -1,3 +1,4 @@
+// Client app version: HTTP handler comparing installed vs store version.
 import { Request, Response } from "express";
 import { ZodError } from "zod";
 import { checkAppVersion } from "../../modules/app-version/app-version.service";
@@ -5,13 +6,8 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { checkAppVersionQuerySchema } from "./app-version.validation";
 
-// GET /api/v1/client/app-version/check?platform=ios|android&currentVersion=120&currentVersionName=1.2.0
-// Returns whether the calling app is up to date, and — via `isForceUpdate` —
-// whether it must update before continuing.
-//
-// NOTE: query is parsed HERE, not via the `validate({ query })` middleware.
-// Express 5 makes `req.query` a getter-only property, so the middleware's
-// `req.query = parsed` reassignment throws. Parsing locally sidesteps that.
+// Query is parsed here rather than via `validate({ query })`: Express 5 makes
+// `req.query` getter-only, so the middleware's reassignment throws.
 export const checkAppVersionHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
 

@@ -1,8 +1,5 @@
-// src/admin/live-course/live-course.controller.ts
-//
-// Thin controllers: coerce multipart → validate (Zod) → delegate to service.
-// Validation 422 keeps the legacy `{ errors: string[] }` shape because the
-// admin React dashboard already binds to it.
+// Admin live courses: HTTP handlers for course CRUD, reorder and schedule folders/entries.
+// Validation 422 keeps the `{ errors: string[] }` shape the admin dashboard binds to.
 
 import { Request, Response } from "express";
 import { z } from "zod";
@@ -16,9 +13,8 @@ import {
 } from "./live-course.validation";
 import * as liveCourseService from "./live-course.service";
 
-// In multipart submissions (when an image file is uploaded), array fields
-// arrive as JSON-stringified strings. Parse them back to arrays so Zod's
-// `.strict()` schema accepts them. Leaves real arrays untouched.
+// Multipart submissions send array fields as JSON strings; parse them back so
+// the `.strict()` schema accepts them.
 const parseJsonArray = (v: unknown): unknown => {
   if (typeof v !== "string") return v;
   const s = v.trim();
@@ -48,10 +44,7 @@ const zodIssueResponse = (res: Response, err: z.ZodError) => {
   return failure(res, "Validation failed.", 422, { errors: messages });
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// CRUD
-// ──────────────────────────────────────────────────────────────────────────────
-
+// Create a live course (also creates its default folder).
 export const createLiveCourse = asyncHandler(async (req: Request, res: Response) => {
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
@@ -68,10 +61,7 @@ export const createLiveCourse = asyncHandler(async (req: Request, res: Response)
   return success(res, data, "Live course created with default folder.", 201);
 });
 
-// POST /api/v1/admin/live-courses/reorder
-// Body: { orders: [{ id: "12", ordered: 0 }, ...] }
-// Bulk drag-and-drop persist, mirroring POST /admin/cms/banners/reorder:
-// returns the number of rows written, 400 when no id in the batch parses.
+// Mirrors POST /admin/cms/banners/reorder: returns rows written, 400 when no id parses.
 export const reorderLiveCourses = asyncHandler(async (req: Request, res: Response) => {
   let validated: { orders: { id: string; ordered: number }[] };
   try {
@@ -127,10 +117,6 @@ export const toggleLiveCoursePopular = asyncHandler(async (req: Request, res: Re
   return success(res, data, "Popular flag toggled.");
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Sessions + timetable files
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const listSessionsForLiveCourse = asyncHandler(
   async (req: Request, res: Response) => {
     const data = await liveCourseService.listSessionsForLiveCourse(
@@ -140,10 +126,6 @@ export const listSessionsForLiveCourse = asyncHandler(
     return success(res, data, "Sessions fetched.");
   }
 );
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Schedule folders + entries
-// ──────────────────────────────────────────────────────────────────────────────
 
 const folderCreateSchema = z
   .object({
@@ -191,6 +173,7 @@ const entryReorderSchema = z
   .object({ entryIds: z.array(z.string().min(1)).min(1) })
   .strict();
 
+// Parse a body or write the 422 response; callers return early on `ok: false`.
 const parseWith = <T extends z.ZodTypeAny>(schema: T, body: unknown, res: Response):
   | { ok: true; value: z.infer<T> }
   | { ok: false } => {
@@ -299,9 +282,7 @@ export const reorderScheduleEntries = asyncHandler(async (req: Request, res: Res
   return success(res, data, "Schedule entries reordered.");
 });
 
-// Deprecated: old flat schedule-entries PATCH. Frontend has migrated to the
-// folder-grouped endpoints above. Return 410 Gone so legacy callers get a
-// clear signal rather than silent success.
+// Returns 410 so legacy callers get a clear signal rather than silent success.
 export const updateScheduleEntriesDeprecated = asyncHandler(async (_req: Request, res: Response) => {
   return failure(
     res,

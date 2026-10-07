@@ -1,3 +1,4 @@
+// Client referral: Zod request schemas and the referral-code blacklist.
 import { z } from "zod";
 
 const REFERRAL_CODE_REGEX = /^[A-Z0-9]{8,10}$/;

@@ -1,28 +1,16 @@
 /**
- * PromoCode (appliesTo) — SQL. Backed by ws_promocode / Prisma model `Promocode`
- * (appliesToType + appliesToIds JSON int[], discountType/discountValue). As of
- * 2026-07-08 this is the SAME table the promoter promocode flow uses — the former
- * standalone ws_promo_code / `PromoCodeRule` model was merged in and dropped.
- *
- * Scope: the appliesTo-driven admin CRUD (list/get/create/update/delete/toggle/
- * bulk) + the client apply-promo coverage/discount check + the per-plan
- * promoter/customer % "plan links" (PromotedPackageCourseEbook /
- * ws_promoted_package_course_ebook), keyed by this table's id.
- *
- * All ids are SQL ints at runtime; DTOs restringify (`_id = String(id)`) to the
- * Mongo doc shape so the admin/client response contracts are unchanged. Note the
- * Mongo doc casing: `promo_start_at` / `promo_expire_at`.
+ * Promocodes on ws_promocode (Prisma `Promocode`): appliesTo-driven admin CRUD, the
+ * client apply-promo coverage/discount check, and the per-plan promoter/customer %
+ * plan links (ws_promoted_package_course_ebook). DTOs stringify ids (`_id`) and keep
+ * the snake_case `promo_start_at` / `promo_expire_at` keys.
  */
 import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import logger from "../../utils/logger";
 
-// 2026-07-08: the discount-rule promocode was merged into ws_promocode (Prisma
-// model `Promocode`); the former ws_promo_code / `PromoCodeRule` model is gone.
-// Row timestamp/window fields are snake-cased on `Promocode`
-// (promo_start_at / promo_expire_at / created_at / updated_at); the
-// discount/appliesTo columns keep their camelCase Prisma names via @map.
+// Timestamp/window fields are snake_case on `Promocode`; discount/appliesTo
+// columns keep camelCase Prisma names via @map.
 
 export const parsePcId = (id: string): number | null => {
   const n = Number(id);
@@ -32,15 +20,13 @@ export const parsePcId = (id: string): number | null => {
 export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 
-// A normalized appliesTo group: one entity type + its int ids.
 export type AppliesGroup = { type: AppliesToType; ids: number[] };
 
 /**
- * Read a promo row's appliesTo as normalized groups, handling BOTH shapes:
- *  - legacy single-type: appliesToType="package", appliesToIds=[1,2,3]
- *  - multi-type:         appliesToType="mixed",   appliesToIds=[{type,ids},…]
- * Single source of truth used by promoCovers / detail / validPlans so a
- * mixed-type promocode behaves identically to a single-type one everywhere.
+ * Normalised appliesTo groups from either stored shape:
+ *  - single-type: appliesToType="package", appliesToIds=[1,2,3]
+ *  - multi-type:  appliesToType="mixed",   appliesToIds=[{type,ids},…]
+ * Single source of truth so a mixed-type promocode behaves like a single-type one.
  */
 export const appliesToGroups = (r: { appliesToType: string | null; appliesToIds: any }): AppliesGroup[] => {
   if (r.appliesToType === "mixed") {
@@ -61,11 +47,7 @@ export const appliesToGroups = (r: { appliesToType: string | null; appliesToIds:
   return [];
 };
 
-/**
- * Convert groups → the stored columns. A SINGLE group is stored in the legacy
- * shape (appliesToType + flat int[]) so existing readers/rows stay compatible;
- * MULTIPLE groups use appliesToType="mixed" + appliesToIds=[{type,ids},…].
- */
+/** A single group is stored in the single-type shape so existing rows stay compatible. */
 const toAppliesToStorage = (groups: AppliesGroup[]): { appliesToType: string; appliesToIds: any } => {
   if (groups.length === 1) {
     return { appliesToType: groups[0].type, appliesToIds: parseIdArray(groups[0].ids) };
@@ -73,13 +55,13 @@ const toAppliesToStorage = (groups: AppliesGroup[]): { appliesToType: string; ap
   return { appliesToType: "mixed", appliesToIds: groups.map((g) => ({ type: g.type, ids: parseIdArray(g.ids) })) };
 };
 
-/** Validate every group's ids exist; throws {__badRequest} on mismatch. */
+/** Throws {__badRequest} on mismatch. */
 export const assertAppliesToGroupsExistSql = async (groups: AppliesGroup[]): Promise<void> => {
   if (!groups.length) throw badRequest("Select at least one item");
   for (const g of groups) await assertAppliesToExistsSql(g.type, g.ids);
 };
 
-/** Raw appliesTo groups for a promo id (effective value when updating plans). */
+/** Effective value when updating plans. */
 export const getAppliesToGroupsById = async (id: number): Promise<AppliesGroup[]> => {
   const row = await prisma.promocode.findUnique({
     where: { id },
@@ -88,7 +70,6 @@ export const getAppliesToGroupsById = async (id: number): Promise<AppliesGroup[]
   return row ? appliesToGroups(row) : [];
 };
 
-/** Coerce a stored JSON column (int[] | string[] | null) to a clean int[]. */
 export const parseIdArray = (json: any): number[] => {
   const a = Array.isArray(json) ? json : [];
   const out: number[] = [];
@@ -102,9 +83,7 @@ export const parseIdArray = (json: any): number[] => {
 const badRequest = (message: string) =>
   Object.assign(new Error(message), { __badRequest: true });
 
-// ── appliesTo resolution across the 5 SQL entity tables ──────────────────────
-// Preserve the Mongo populate shape `{ _id, name, image }`. testSeries maps
-// title→name + thumbnail→image; ebook maps thumbnail→image.
+// `{ _id, name, image }` refs; testSeries maps title→name, ebook/testSeries map thumbnail→image.
 
 type PopulatedRef = { _id: string; name: string | null; image: string | null };
 
@@ -156,7 +135,7 @@ const resolveAppliesToRefs = async (
       break;
     }
   }
-  // Preserve the requested id order (mirror Mongo populate over an id array).
+  // Preserve the requested id order.
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids
     .map((id) => byId.get(id))
@@ -164,7 +143,7 @@ const resolveAppliesToRefs = async (
     .map((r) => ({ _id: String(r.id), name: r.name, image: r.image }));
 };
 
-/** Count-match the ids against the right entity table; throw {__badRequest} on mismatch. */
+/** Throws {__badRequest} when any id is missing. */
 export const assertAppliesToExistsSql = async (
   type: AppliesToType,
   ids: number[]
@@ -193,7 +172,6 @@ export const assertAppliesToExistsSql = async (
     throw badRequest(`One or more ${type} ids do not exist`);
 };
 
-// ── DTOs (Mongo doc shape) ───────────────────────────────────────────────────
 const baseDto = (r: any) => ({
   _id: String(r.id),
   type: r.type,
@@ -210,7 +188,7 @@ const baseDto = (r: any) => ({
   updatedAt: r.updated_at ?? null,
 });
 
-/** List DTO — appliesTo summarised to `{ type, count }` (type="mixed" for multi). */
+/** appliesTo summarised to `{ type, count }` (type="mixed" for multi). */
 const listDto = (r: any) => {
   const groups = appliesToGroups(r);
   const count = groups.reduce((n, g) => n + g.ids.length, 0);
@@ -222,10 +200,8 @@ const listDto = (r: any) => {
 };
 
 /**
- * Detail DTO — appliesTo as an ARRAY of populated groups:
- *   [{ type, ids: [{_id,name,image}] }, …]
- * (one element for single-type, N for multi-type). The FE rebuilds the per-type
- * selection from this; the per-plan grid is rebuilt from loadPlanLinksSql.
+ * appliesTo as an array of populated groups `[{ type, ids: [{_id,name,image}] }, …]`.
+ * The per-plan grid is rebuilt separately from loadPlanLinksSql.
  */
 const detailDto = async (r: any) => {
   const dto: any = baseDto(r);
@@ -240,7 +216,6 @@ const detailDto = async (r: any) => {
   return dto;
 };
 
-// ── Admin CRUD ───────────────────────────────────────────────────────────────
 export const listPromocodes = async (opts: {
   search: string | null;
   status: boolean | null;
@@ -284,16 +259,9 @@ export const listPromocodes = async (opts: {
   };
 };
 
-/**
- * Promo codes whose appliesTo targets a given package — the SQL equivalent of
- * the Mongo `PromoCode.find({ "appliesTo.type": "package", "appliesTo.ids": id })`.
- * appliesToIds is a JSON int[]; filter in-memory after narrowing to package-type
- * rows so the match is exact regardless of JSON storage quirks. Sorted newest
- * first to mirror the Mongo `.sort({ createdAt: -1 })`.
- */
+/** Newest first. The JSON id match is resolved in memory after narrowing by type. */
 export const listPromocodesForPackage = async (packageId: number) => {
-  // Include both single-type "package" rows and multi-type "mixed" rows; the
-  // package match is resolved via appliesToGroups so mixed codes are not missed.
+  // "mixed" rows are included and matched via appliesToGroups.
   const rows = await prisma.promocode.findMany({
     where: { appliesToType: { in: ["package", "mixed"] } },
     orderBy: { created_at: "desc" },
@@ -304,13 +272,10 @@ export const listPromocodesForPackage = async (packageId: number) => {
 };
 
 /**
- * Paginated promocodes scoped to a single entity (package/course/ebook/liveCourse/
- * testSeries). The scope match lives in `appliesToIds` JSON (int[] or mixed
- * [{type,ids}]), which SQL cannot LIMIT/OFFSET on directly, so we narrow to
- * `[type,"mixed"]` rows (+ optional code search) in SQL, resolve the exact match
- * in-memory via appliesToGroups, then slice the page. `total` reflects the matched
- * set (not the pre-filter fetch), so pagination stays correct. Used by the admin
- * package/course/ebook promocode tabs. Newest-first, mirroring the other lists.
+ * Paginated promocodes scoped to one entity (admin package/course/ebook tabs). SQL
+ * can't paginate on the `appliesToIds` JSON match, so rows are narrowed to
+ * `[type,"mixed"]` (+ code search) in SQL, matched in memory, then sliced; `total`
+ * is the matched count. Newest first.
  */
 export const listPromocodesForScope = async (
   type: AppliesToType,
@@ -329,7 +294,7 @@ export const listPromocodesForScope = async (
   return { data, pagination: buildPagination(matched.length, q.page, q.limit) };
 };
 
-/** getById — populates appliesTo; the OUT-OF-SCOPE plan links return []. */
+/** Plan links are not returned here (`plans: []`). */
 export const getPromocodeById = async (id: number) => {
   const row = await prisma.promocode.findUnique({ where: { id } });
   if (!row) return { notFound: true as const };
@@ -434,6 +399,7 @@ export const deletePromocode = async (id: number) => {
   return { ok: true as const };
 };
 
+// Flip the status, or set it when nextStatus is given.
 export const toggleStatus = async (id: number, nextStatus: boolean | null) => {
   const existing = await prisma.promocode.findUnique({ where: { id }, select: { status: true } });
   if (!existing) return { notFound: true as const };
@@ -458,13 +424,7 @@ export const bulkDelete = async (ids: number[]) => {
   return { ok: true as const };
 };
 
-// ── Client public list ───────────────────────────────────────────────────────
-/**
- * Client-facing public promocode list — mirrors the Mongo client list:
- * `status:true, type:"public"` within the active window, sorted by
- * promo_expire_at asc, projected to the same fields the Mongo `.select(...)`
- * exposes. Returns `{ data, pagination }` byte-identical to the Mongo path.
- */
+/** Client public list: `status:true, type:"public"` within the active window, by promo_expire_at asc. */
 const toPublicPromoDto = (
   r: any,
   /** Effective discount resolved from plan links; falls back to the row's own columns. */
@@ -481,25 +441,18 @@ const toPublicPromoDto = (
 });
 
 /**
- * Resolve each code's EFFECTIVE discount, mirroring the authoritative rule used
- * by applyPromocode: per-plan link rows (ws_promoted_package_course_ebook
- * .customer_percentage) are the real discount source, and the top-level
- * `ws_promocode.discount_value` column is only a legacy fallback for codes that
- * have no link rows at all. Reading the column alone reports 0 for every
- * link-driven code — which is what this list used to do.
+ * Each code's effective discount, using the same rule as applyPromocode: per-plan
+ * link rows (customer_percentage) are the real source; the `discount_value` column
+ * is only a fallback for codes with no link rows at all.
  *
- * When the caller filtered to one entity (`appliesTo`), only THAT entity's own
- * plans may contribute, so a code covering many packages can't advertise a
- * different package's percentage here. Plan ids are per-table, so links are
- * matched on `planKind` as well as `planId`.
+ * With an `appliesTo` filter only that entity's own plans contribute, so a code
+ * can't advertise another entity's percentage. Plan ids are per-table, so links are
+ * matched on `planKind` as well as `planId`. Differing percentages report the
+ * highest ("up to X% off"); checkout still prices per plan.
  *
- * Where an entity's plans carry different percentages the highest is reported
- * ("up to X% off") — the listing is a teaser; checkout still prices per plan.
- *
- * A link that matches at 0% is left unset so the DTO falls back to the row's
- * own discountType/discountValue — the same fallback resolvePromoForPlanSql
- * applies at checkout. Linked-but-no-match stays 0: checkout rejects every plan
- * of that entity, so there is nothing to advertise.
+ * A link matching at 0% is left unset so the DTO falls back to the row's own
+ * columns (as resolvePromoForPlanSql does at checkout). Linked-but-no-match stays 0:
+ * checkout rejects every plan of that entity.
  */
 export const resolveEffectiveDiscounts = async (
   rows: any[],
@@ -514,7 +467,6 @@ export const resolveEffectiveDiscounts = async (
   });
   if (!links.length) return out; // all legacy codes → callers keep the column value
 
-  // Entity-scoped: restrict contributing links to this entity's active plans.
   let scopedPlanIds: Set<number> | null = null;
   let scopedKind: PlanKind | null = null;
   if (appliesTo) {
@@ -528,8 +480,7 @@ export const resolveEffectiveDiscounts = async (
   for (const l of links) {
     const pid = l.promocodeId == null ? null : Number(l.promocodeId);
     if (pid == null || l.planId == null) continue;
-    // A code with ANY link row is link-driven — the legacy column no longer
-    // applies to it, even if none of its links match this entity.
+    // Any link row makes the code link-driven, even if none match this entity.
     linked.add(pid);
     if (scopedPlanIds && !(l.planKind === scopedKind && scopedPlanIds.has(l.planId))) continue;
     const pct = Number(l.customerPercentage ?? 0);
@@ -560,15 +511,9 @@ export const listPublicPromocodes = async (opts: {
     promo_expire_at: { gt: now },
   };
 
-  // Entity-scoped: narrow to the module type at the DB, then keep only codes
-  // whose JSON appliesToIds array contains this id. Public codes per type are a
-  // small set, so the in-memory id filter keeps pagination totals exact without
-  // a JSON query. Mirrors `listPromocodesForPackage`.
+  // Public codes per type are a small set, so the in-memory coverage filter keeps
+  // totals exact without a JSON query. "mixed" rows are included and matched via appliesToGroups.
   if (opts.appliesTo) {
-    // Include single-type rows of this type AND multi-type ("mixed") rows; the
-    // coverage match is resolved via appliesToGroups so mixed codes that cover
-    // this entity are not missed (they were before — type "mixed" + the
-    // [{type,ids}] JSON failed both the type filter and parseIdArray).
     const rows = await prisma.promocode.findMany({
       where: { ...baseWhere, appliesToType: { in: [opts.appliesTo.type, "mixed"] } },
       orderBy: { promo_expire_at: "asc" },
@@ -607,10 +552,7 @@ export const listPublicPromocodes = async (opts: {
   };
 };
 
-/**
- * Normalize an FE `type` param (kebab aliases allowed) to the canonical
- * appliesTo type, or null if unrecognized. Shared by the client listing.
- */
+/** FE `type` param (kebab aliases allowed) → canonical appliesTo type, or null. */
 export const normalizeAppliesToType = (raw: string): AppliesToType | null => {
   const k = raw.trim().toLowerCase();
   const map: Record<string, AppliesToType> = {
@@ -626,8 +568,7 @@ export const normalizeAppliesToType = (raw: string): AppliesToType | null => {
   return map[k] ?? null;
 };
 
-// ── Client apply ─────────────────────────────────────────────────────────────
-/** Find an active (status + window) promocode by (upper-cased) code. */
+/** Active = status + window; code is upper-cased. */
 export const findActiveByCode = async (code: string) => {
   const now = new Date();
   return prisma.promocode.findFirst({
@@ -640,17 +581,16 @@ export const findActiveByCode = async (code: string) => {
   });
 };
 
-// Referral codes (ws_customer.referral_code) double as a global discount code so
-// the app can use ONE apply/checkout flow for both. When a code isn't a
-// promocode, callers fall back to this: it resolves the code to its owning
-// customer + the active "student" referral program's refferalDiscount (%).
-// Referral codes cover ALL five commerce entities: package/course/ebook (served by
-// /promocodes/apply) plus testSeries + liveCourse (each served by its own plan-based
-// preview endpoint). Referral discounts are always a global percentage.
+// Referral codes (ws_customer.referral_code) double as a global percentage code so
+// the app uses one apply/checkout flow; callers fall back to this when a code isn't
+// a promocode. Discount = the active "student" program's refferalDiscount.
+// package/course/ebook are served by /promocodes/apply; testSeries and liveCourse
+// by their own plan-based preview endpoints.
 export const REFERRAL_COVERED_TYPES: readonly AppliesToType[] = ["package", "course", "ebook", "testSeries", "liveCourse"];
 export const referralCovers = (type: AppliesToType): boolean =>
   REFERRAL_COVERED_TYPES.includes(type);
 
+// Referral code to referrer + student-program discount; null if unknown or 0%.
 export const resolveReferralCode = async (
   rawCode: string
 ): Promise<{ referrerId: number; discountType: "percentage"; discountValue: number } | null> => {
@@ -670,20 +610,13 @@ export const resolveReferralCode = async (
   return { referrerId: owner.id, discountType: "percentage", discountValue };
 };
 
-/** SQL coverage check: appliesToType===type && appliesToIds.includes(id). */
 export const promoCovers = (
   promo: { appliesToType: string | null; appliesToIds: any },
   context: { type: AppliesToType; id: number }
 ): boolean =>
-  // Covered if ANY appliesTo group matches the context type + id. Handles both
-  // single-type and multi-type ("mixed") promocodes via appliesToGroups.
   appliesToGroups(promo).some((g) => g.type === context.type && g.ids.includes(context.id));
 
-/**
- * Detect what a SQL int id ACTUALLY is (package / course / ebook), mirroring the
- * Mongo `detectEntity`. liveCourse/testSeries use their own plan-based endpoints
- * and are out of scope here. Returns the detected type + id, or null.
- */
+/** package / course / ebook only; liveCourse/testSeries use their own plan-based endpoints. */
 export const detectEntitySql = async (
   id: number
 ): Promise<{ type: "package" | "course" | "ebook"; id: number } | null> => {
@@ -698,11 +631,7 @@ export const detectEntitySql = async (
   return null;
 };
 
-/**
- * Load the active pricing plans for a detected entity. Unlike Mongo (where ebook
- * plans live in a separate EbookPrice collection), SQL stores all three types'
- * plans in `ws_package_course_ebook_price` keyed by packageId/courseId/ebookId.
- */
+/** All three types' plans live in `ws_package_course_ebook_price`. */
 export const loadPricingPlansSql = async (entity: {
   type: "package" | "course" | "ebook";
   id: number;
@@ -714,20 +643,12 @@ export const loadPricingPlansSql = async (entity: {
   return prisma.packageCourseEbookPrice.findMany({ where, orderBy: { duration: "asc" } });
 };
 
-// ── Plan links (ws_promoted_package_course_ebook) — C5 SQL port ───────────────
-// Mirrors the Mongo loadPlansForEntities / syncPlanLinks / loadPlanLinks /
-// getPromocodePlans in src/admin/promocode/promocode.controller.ts.
-//
-// `planKind` distinguishes which plan table a `planId` points at:
-//   - "price"    → ws_package_course_ebook_price (package/course/ebook plans)
-//   - "livePlan" → ws_live_course_plan (live-course plans)
-// testSeries plans also live in ws_test_series_price (their own table); the
-// promoted link column has no FK to it, so those ids are stored under a distinct
-// "testSeriesPrice" kind so loadPlanLinksSql can resolve them back. NOTE the
-// promoted table's `promocodeId` FK is declared against the legacy Promocode
-// model, but at the DB level it's a plain `promocode_id` int — we store the
-// migrated PromoCodeRule id there directly via the scalar field.
-
+// Plan links (ws_promoted_package_course_ebook). `planKind` says which table
+// `planId` (`pcb_price_id`) points at:
+//   - "price"           → ws_package_course_ebook_price (package/course/ebook)
+//   - "livePlan"        → ws_live_course_plan
+//   - "testSeriesPrice" → ws_test_series_price
+// The column has no FK to the latter two, so the kind is required to resolve them.
 export type PlanKind = "price" | "livePlan" | "testSeriesPrice";
 
 const PLAN_KIND_BY_TYPE: Record<AppliesToType, PlanKind> = {
@@ -739,17 +660,15 @@ const PLAN_KIND_BY_TYPE: Record<AppliesToType, PlanKind> = {
 };
 
 /**
- * `type` on ws_promoted_package_course_ebook — WHAT the link is for. Distinct from
- * `planKind`, which only says WHICH TABLE `pcb_price_id` points at:
+ * `type` on ws_promoted_package_course_ebook: what the link is for. `planKind` only
+ * says which table `pcb_price_id` points at, so it can't tell a course link from an
+ * ebook link:
  *
- *   planKind "price"           → type "package" | "course" | "ebook"  (one table, 3 products)
+ *   planKind "price"           → type "package" | "course" | "ebook"
  *   planKind "livePlan"        → type "live_course"
  *   planKind "testSeriesPrice" → type "test_series"
  *
- * So `planKind` cannot answer "is this a course or an ebook link?" — that is why
- * this column exists. The legacy Mongo-era values were single letters ('P'/'C'/'B')
- * and NULL for everything the migration added; these full words replace them (see
- * docs/migration/schema-changes/2026-08-21_promoted_plan_link_type.sql).
+ * See docs/migration/schema-changes/2026-08-21_promoted_plan_link_type.sql.
  */
 export const PLAN_LINK_TYPES = [
   "package",
@@ -768,7 +687,6 @@ const PLAN_LINK_TYPE_BY_APPLIES_TO: Record<AppliesToType, PlanLinkType> = {
   testSeries: "test_series",
 };
 
-/** appliesTo type (camelCase, API-facing) → the stored `type` value. */
 export const planLinkTypeFor = (type: AppliesToType): PlanLinkType =>
   PLAN_LINK_TYPE_BY_APPLIES_TO[type];
 
@@ -779,7 +697,6 @@ export interface ResolvedPlanSql {
   price: number;
   withMaterial: boolean;
   kind: PlanKind;
-  /** Product type stored on the link row's `type` column. */
   type: PlanLinkType;
 }
 
@@ -788,15 +705,13 @@ export interface PlanLinkInputSql {
   promoterPercentage: number;
   customerPercentage: number;
   /**
-   * Half of the link's identity. A bare `planId` is not globally unique:
-   * live-course plan ids and test-series price ids live in their own tables and
-   * overlap the ws_package_course_ebook_price id space, so (planId, planKind) is
-   * the key everywhere below — resolve, upsert AND replace-delete.
+   * Plan ids overlap across the three plan tables, so (planId, planKind) is the key
+   * everywhere: resolve, upsert and replace-delete.
    */
   planKind: PlanKind;
 }
 
-/** Load all active plans for the given entities of `type`, normalised. */
+// Active plans of the given products, tagged with plan kind and link type.
 export const loadPlansForEntitiesSql = async (
   type: AppliesToType,
   entityIds: number[]
@@ -835,8 +750,6 @@ export const loadPlansForEntitiesSql = async (
     }));
   }
 
-  // package / course / ebook → ws_package_course_ebook_price keyed by the
-  // matching entity column.
   const where: any = { status: true };
   if (type === "package") where.packageId = { in: entityIds };
   else if (type === "course") where.courseId = { in: entityIds };
@@ -866,23 +779,20 @@ export const loadPlansForEntitiesSql = async (
     price: r.price,
     withMaterial: !!r.withMaterial,
     kind: "price" as const,
-    // package | course | ebook — all three share ws_package_course_ebook_price,
-    // so the caller's appliesTo type is the only thing that tells them apart.
+    // All three share one table; the caller's appliesTo type is what tells them apart.
     type: planLinkTypeFor(type),
   }));
 };
 
 /**
- * planId → every plan that id could refer to. Normally one entry; more than one
- * when a promocode's appliesTo spans plan tables whose id spaces overlap
- * (ws_live_course_plan 1-4 and ws_package_course_ebook_price 1-4 both exist).
+ * planId → every plan that id could refer to; more than one when appliesTo spans
+ * plan tables whose id spaces overlap.
  */
 export type ValidPlanMap = Map<number, ResolvedPlanSql[]>;
 
 /**
- * Pick the plan a `plans[]` entry refers to: exact (planId, planKind) match or
- * 400. No first-match fallback — with a live plan and a test-series plan sharing
- * an id it stored the second under the first's row and lost a link silently.
+ * Exact (planId, planKind) match or 400. No first-match fallback: with two plan
+ * kinds sharing an id it would store one under the other's row and lose a link.
  */
 const pickPlanCandidate = (
   candidates: ResolvedPlanSql[],
@@ -897,10 +807,8 @@ const pickPlanCandidate = (
 };
 
 /**
- * Replace-semantics plan-link sync: upsert each kept link (carrying its planKind
- * + percentages) and delete the links no longer present. Only links whose planId
- * resolves to one of `validPlans` are kept (orphans silently dropped — mirrors
- * Mongo). `validPlans` maps numeric planId → ResolvedPlanSql.
+ * Replace semantics: upsert each kept link and delete the rest. Links whose planId
+ * isn't in `validPlans` are silently dropped.
  */
 export const syncPlanLinksSql = async (
   promocodeId: number,
@@ -911,14 +819,11 @@ export const syncPlanLinksSql = async (
     .map((p) => ({ ...p, pid: Number(p.planId) }))
     .filter((p) => Number.isInteger(p.pid) && validPlans.has(p.pid));
 
-  // (planId, planKind) pairs actually written — the replace-delete keeps exactly these.
   const keptKeys: { planId: number; planKind: PlanKind }[] = [];
   for (const p of kept) {
     const { kind, type } = pickPlanCandidate(validPlans.get(p.pid)!, p.planKind, p.pid);
     keptKeys.push({ planId: p.pid, planKind: kind });
-    // planKind is part of the identity: (promocodeId, planId) alone can match a
-    // live-course link when a price link was meant, and the update would then
-    // rewrite the wrong row's percentages.
+    // planKind is part of the identity, or the update could rewrite another kind's row.
     const existing = await prisma.promotedPackageCourseEbook.findFirst({
       where: { promocodeId, planId: p.pid, planKind: kind },
       select: { id: true },
@@ -953,11 +858,7 @@ export const syncPlanLinksSql = async (
   await deleteLinksExcept(promocodeId, keptKeys);
 };
 
-/**
- * Delete every link of the promocode whose (planId, planKind) is not in `keep`.
- * Keyed on the pair, not planId alone: removing test-series plan 1 while keeping
- * live plan 1 must drop exactly the test-series row.
- */
+/** Keyed on (planId, planKind): removing test-series plan 1 must keep live plan 1. */
 const deleteLinksExcept = (
   promocodeId: number,
   keep: { planId: number; planKind: PlanKind }[]
@@ -966,10 +867,7 @@ const deleteLinksExcept = (
     where: { promocodeId, ...(keep.length ? { NOT: keep } : {}) },
   });
 
-/**
- * Drop every link not resolvable from `validPlans` (used when appliesTo changes
- * but `plans` is omitted, so stale percentages don't linger).
- */
+/** Used when appliesTo changes but `plans` is omitted, so stale percentages don't linger. */
 export const prunePlanLinksSql = async (
   promocodeId: number,
   validPlans: ValidPlanMap
@@ -978,7 +876,7 @@ export const prunePlanLinksSql = async (
   await deleteLinksExcept(promocodeId, keep);
 };
 
-/** Delete all plan links for a promocode (delete/bulk-delete cleanup). */
+/** Delete/bulk-delete cleanup. */
 export const deletePlanLinksSql = async (promocodeIds: number[]): Promise<void> => {
   if (!promocodeIds.length) return;
   await prisma.promotedPackageCourseEbook.deleteMany({
@@ -987,10 +885,8 @@ export const deletePlanLinksSql = async (promocodeIds: number[]): Promise<void> 
 };
 
 /**
- * Edit-screen `plans[]`: each link with its `planId` populated to the Mongo
- * shape (duration/price/withMaterial + parent entity { _id, name }), matching
- * the FE `toPlanLink` parser. Resolves price / live / testSeries plans + their
- * parent entity names in batched passes.
+ * Edit-screen `plans[]`: each link with `planId` populated (duration/price/withMaterial
+ * + parent entity `{ _id, name }`), matching the FE `toPlanLink` parser.
  */
 export const loadPlanLinksSql = async (promocodeId: number): Promise<any[]> => {
   const links = await prisma.promotedPackageCourseEbook.findMany({
@@ -1133,12 +1029,9 @@ export const loadPlanLinksSql = async (promocodeId: number): Promise<any[]> => {
 };
 
 /**
- * Checkout per-plan discount lookup (TASK 2 checkout): map of planId →
- * customerPercentage for a promocode's link rows. Presence of a key means the
- * code is valid for that plan; the value is its discount %. Empty map ⇒ a
- * legacy code with no per-plan links (caller falls back to the global discount).
- * Scoped to price-kind links (package/course/ebook); live/testSeries use their
- * own plan-based apply endpoints.
+ * planId → customerPercentage for price-kind links (package/course/ebook). A key's
+ * presence means the code is valid for that plan; an empty map means a code with no
+ * per-plan links (caller falls back to the global discount).
  */
 export const loadPlanDiscountsSql = async (
   promocodeId: number
@@ -1156,12 +1049,7 @@ export const loadPlanDiscountsSql = async (
   return map;
 };
 
-/**
- * Per-plan customerPercentage for TEST-SERIES price links (planKind
- * "testSeriesPrice"). Mirror of loadPlanDiscountsSql, but scoped to test-series
- * plans (which loadPlanDiscountsSql intentionally skips). Returns
- * Map<testSeriesPriceId, percentage>.
- */
+/** Same as loadPlanDiscountsSql, for "testSeriesPrice" links. */
 export const loadTestSeriesPlanDiscountsSql = async (
   promocodeId: number
 ): Promise<Map<number, number>> => {
@@ -1178,11 +1066,7 @@ export const loadTestSeriesPlanDiscountsSql = async (
   return map;
 };
 
-/**
- * Per-plan customerPercentage for LIVE-COURSE plan links (planKind "livePlan").
- * Mirror of loadTestSeriesPlanDiscountsSql for the live-course endpoint.
- * Returns Map<liveCoursePlanId, percentage>.
- */
+/** Same as loadPlanDiscountsSql, for "livePlan" links. */
 export const loadLivePlanDiscountsSql = async (
   promocodeId: number
 ): Promise<Map<number, number>> => {
@@ -1199,20 +1083,6 @@ export const loadLivePlanDiscountsSql = async (
   return map;
 };
 
-/**
- * All-SQL promo resolution for the payment/checkout flow — the SQL counterpart
- * of `client/live-course/promo.resolveLivePromo` (which is Mongo-only and breaks
- * when Mongo isn't connected). Validates the code, enforces entity-level + per-
- * plan scope, and computes the discount for ONE plan:
- *   - code must be active and cover `entity` (appliesTo)
- *   - if the code has ANY link rows it is "per-plan scoped": valid ONLY for a
- *     plan that has a (promocodeId, planId) row — an unlinked plan is rejected
- *   - discount = that plan's `customerPercentage` (%), else (legacy codes with
- *     zero link rows) the top-level `discountType`/`discountValue`
- * Referral codes are intentionally NOT handled (SQL referral is out of scope —
- * mirrors the apply controller's SQL branch). Result shape mirrors the fields
- * the payment controllers read off `resolveLivePromo`'s result.
- */
 export interface PromoResolveResultSql {
   promo: { _id: string; promocode: string };
   discountType: "flat" | "percentage";
@@ -1222,12 +1092,18 @@ export interface PromoResolveResultSql {
   finalAmount: number;
   promoterPercentage: number;
   promoterCommission: number;
-  // Set ONLY when the code resolved as a referral code (not a promocode): the
-  // owning customer's id, so create-order can stamp referrer_id on the order row
-  // and verify can credit the referrer's wallet. Undefined for promocodes.
+  /** Set only for a referral code: the owning customer, stamped as referrer_id and credited at verify. */
   referrerId?: number;
 }
 
+/**
+ * Promo resolution for one plan at checkout:
+ *   - the code must be active and cover `entity` (appliesTo);
+ *   - a code with any link rows is per-plan scoped: an unlinked plan is rejected;
+ *   - discount = that plan's `customerPercentage` when > 0, else the code's own
+ *     `discountType`/`discountValue`.
+ * A code that isn't a promocode is tried as a referral code.
+ */
 export const resolvePromoForPlanSql = async (
   rawCode: string,
   baseAmount: number,
@@ -1242,25 +1118,15 @@ export const resolvePromoForPlanSql = async (
 
   const promo = await findActiveByCode(code);
   if (!promo) {
-    // Not a promocode — try it as a referral code (single apply flow for both).
     return resolveReferralForPlanSql(code, baseAmount, entity, buyerId);
   }
   if (!promoCovers(promo, entity)) return { error: "This promo code is not valid for this item." };
 
-  // Per-plan scope: a code with link rows is valid only for linked plans.
-  //
-  // ⚠ `planKind` is REQUIRED in the link filter, not decorative — the same rule
-  // order-code-snapshot.repository.findPlanLink documents. ws_live_course_plan,
-  // ws_test_series_price and ws_package_course_ebook_price have OVERLAPPING id
-  // spaces (live plans 1-4, test-series 1 and price plans 1-4 all exist), and
-  // `pcb_price_id` stores a bare id for every kind. Matching on (promocodeId,
-  // planId) alone therefore lets a live-course link answer for an ebook plan of
-  // the same id — paying out that other link's promoterPercentage and applying
-  // its customerPercentage. Promocode JAL already links live plans 1-4 and ebook
-  // plans under one code, so this is reachable, not theoretical.
-  //
-  // The count stays kind-agnostic on purpose: it answers "is this code per-plan
-  // scoped at all?", which is a property of the code, not of one plan table.
+  // `planKind` is required in the link filter (see order-code-snapshot.repository.findPlanLink):
+  // the plan tables have overlapping id spaces and `pcb_price_id` stores a bare id, so
+  // (promocodeId, planId) alone lets a live-course link answer for an ebook plan of the
+  // same id, applying its percentages. Real codes link both kinds under one code.
+  // The count stays kind-agnostic: "is this code per-plan scoped at all?" is a property of the code.
   const planKind = PLAN_KIND_BY_TYPE[entity.type];
   const [totalLinks, link] = await Promise.all([
     prisma.promotedPackageCourseEbook.count({ where: { promocodeId: promo.id } }),
@@ -1273,7 +1139,6 @@ export const resolvePromoForPlanSql = async (
     return { error: "This promo code is not valid for this plan." };
   }
 
-  // Resolve discount: per-plan % when a link row exists, else legacy global.
   let discountType: "flat" | "percentage";
   let discountValue: number;
   let promoterPercentage = 0;
@@ -1312,11 +1177,8 @@ export const resolvePromoForPlanSql = async (
 };
 
 /**
- * Referral-code branch of resolvePromoForPlanSql. A referral code has no
- * promocode row and no per-plan links: it's a flat global percentage on any
- * package/course/ebook. `promo._id` is returned EMPTY so the payment controllers
- * store no promocodeId (the discount is still applied to the charged amount).
- * A customer can't redeem their own referral code (self-referral is rejected).
+ * A referral code has no promocode row or plan links: a global percentage. `promo._id`
+ * is empty so the payment controllers store no promocodeId. Self-referral is rejected.
  */
 const resolveReferralForPlanSql = async (
   code: string,
@@ -1352,12 +1214,7 @@ const resolveReferralForPlanSql = async (
   };
 };
 
-/**
- * SQL delivery-address ownership check (replaces the Mongo `CustomerAddress`
- * lookup in the payment SQL branches — Mongo can't cast the int customerId).
- * Returns true iff address `addressId` belongs to customer `customerId` and is not
- * soft-deleted (`status: true`) — a removed address must not be usable at checkout.
- */
+/** Soft-deleted addresses (`status: false`) are not usable at checkout. */
 export const addressBelongsToCustomerSql = async (
   addressId: number,
   customerId: number
@@ -1369,7 +1226,6 @@ export const addressBelongsToCustomerSql = async (
   return !!row;
 };
 
-// ── getPromocodePlans picker (grouped by entity + exam-type via Goal) ─────────
 const ALL_APPLIES_TO_TYPES: AppliesToType[] = [
   "package",
   "course",
@@ -1379,15 +1235,11 @@ const ALL_APPLIES_TO_TYPES: AppliesToType[] = [
 ];
 
 /**
- * Picker payload: entities (with >= 1 plan) grouped under their exam type.
+ * Picker payload: entities with ≥ 1 plan. Only active entities are offered.
  *
- * NOTE on exam types: in Mongo, packages carry a `goalLabelId` resolved against
- * `Goal.labels` to surface an exam type. The SQL Package model has no
- * goal-label linkage (only `examId`→CustomerTargetGoal), so the exam-type
- * grouping can't be reproduced on SQL — every entity falls into the FE's
- * "Ungrouped" bucket (examType field omitted) and `examTypes` is empty. An
- * `examTypeId` filter, if supplied, matches nothing and returns [] — the
- * conservative degradation. See report.
+ * There is no package→goal-label linkage in SQL, so exam-type grouping isn't
+ * possible: `examTypes` is empty, every entity lands in the FE's "Ungrouped"
+ * bucket, and an `examTypeId` filter matches nothing.
  */
 export const getPromocodePlansSql = async (query: {
   type?: string;
@@ -1405,7 +1257,6 @@ export const getPromocodePlansSql = async (query: {
   const entities: any[] = [];
   const examTypes = new Map<string, string>();
 
-  // Only active entities are offered — inactive ones cannot be bought, so a code on them is dead.
   for (const t of requested) {
     let docs: { id: number; name: string | null; goalLabelId?: any }[] = [];
     if (t === "package") {
@@ -1455,8 +1306,6 @@ export const getPromocodePlansSql = async (query: {
       const entityPlans = plansByEntity.get(d.id);
       if (!entityPlans?.length) continue;
 
-      // SQL has no package→goal-label linkage, so no entity carries an exam
-      // type. An examTypeId filter therefore excludes everything.
       if (query.examTypeId) continue;
 
       const entity: any = {
@@ -1481,11 +1330,8 @@ export const getPromocodePlansSql = async (query: {
 };
 
 /**
- * Resolve validPlans across MULTIPLE appliesTo groups (multi-type promocodes) —
- * the union of every group's plans, keyed by planId. This is what lets
- * syncPlanLinksSql keep links spanning Test Series + Packages + Courses + … at
- * once: a plan is valid (kept) iff it belongs to ANY referenced entity, so the
- * replace-delete only drops links absent from the full multi-type plans[].
+ * Union of every group's plans (multi-type promocodes), so syncPlanLinksSql only
+ * drops links absent from the full multi-type plans[].
  */
 export const resolveValidPlansMultiSql = async (
   groups: AppliesGroup[]
@@ -1494,9 +1340,7 @@ export const resolveValidPlansMultiSql = async (
   for (const g of groups) {
     const resolved = await loadPlansForEntitiesSql(g.type, g.ids);
     for (const p of resolved) {
-      // Append, never overwrite: a live-course plan and a price plan can share an
-      // id, and `map.set(p.id, p)` silently dropped whichever group ran first —
-      // which then stored that link under the wrong planKind AND the wrong type.
+      // Append, never overwrite: plans of different kinds can share an id.
       const existing = map.get(p.id);
       if (existing) existing.push(p);
       else map.set(p.id, [p]);

@@ -1,3 +1,4 @@
+// Client course progress: lecture heartbeat and My Courses resume handlers.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -9,7 +10,6 @@ import {
   listMyCoursesForResume as sqlListMyCoursesForResume,
 } from "../../modules/client-lecture-progress/client-lecture-progress.service";
 
-// SQL id-space variant of the heartbeat body — ids are positive ints, not 24-hex.
 const intIdStr = z.string().regex(/^\d+$/, "Invalid id");
 const progressSchemaMysql = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24),
@@ -20,10 +20,8 @@ const progressSchemaMysql = z.object({
   }),
 });
 
-// POST /api/v1/client/courses/lectures/:videoId/progress
-// Heartbeat from the mobile player. The first call for a (customer, video)
-// pair upserts a new row — that's also what makes the course appear on the
-// My Courses screen for the first time. No separate "start course" call.
+// Mobile-player heartbeat. The first call for a (customer, video) upserts the row,
+// which is also what puts the course on My Courses — there is no "start course" call.
 export const reportLectureProgress = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -55,7 +53,7 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       return res.status(result.status).json({ success: false, message: result.message });
     }
     logger.info("reportLectureProgress (sql) success", { traceId, userId, videoId: vid, scope, positionSec, durationSec });
-    // Fire-and-forget heartbeat: the mobile player ignores the body. Ack only.
+    // The mobile player ignores the body.
     return res.status(200).json({ success: true, data: null });
   } catch (e: any) {
     if (e.issues) {
@@ -67,16 +65,10 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/courses/my
-// Drives the "My Courses / Subject" screen. Returns:
-//   - `courses`: the user's *started* courses (any LectureProgress row exists),
-//      each annotated with daysLeft, percentCompleted, and the most recently-
-//      watched lecture for the small per-card progress hint.
-//   - `resumeNext`: the single most recently-watched lecture across all the
-//      user's courses, expanded for the big "Resume Now" hero card.
-//
-// Untouched courses (subscribed but never opened) are intentionally excluded —
-// that matches the design (100 enrolled, only 3 shown).
+// `courses`: started courses only (any LectureProgress row), with daysLeft,
+// percentCompleted, and the last-watched lecture. `resumeNext`: the most recently
+// watched lecture across all courses for the "Resume Now" card. Subscribed but
+// never-opened courses are intentionally excluded.
 export const listMyCoursesForResume = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

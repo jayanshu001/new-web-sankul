@@ -1,8 +1,8 @@
+// Admin offline centers: Zod schemas for banner, city, center, batch and reorder payloads.
 import { z } from "zod";
 
 const objectIdSchema = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid id.");
 
-// ─── Banner ──
 export const bannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
   key: z.string().max(100).optional(),
@@ -11,7 +11,6 @@ export const bannerCreateSchema = z.object({
 });
 export const bannerUpdateSchema = bannerCreateSchema.partial();
 
-// ─── City ──
 export const cityCreateSchema = z.object({
   name: z.string().min(1).max(100),
   image: z.string().min(1).max(500),
@@ -21,7 +20,6 @@ export const cityCreateSchema = z.object({
 });
 export const cityUpdateSchema = cityCreateSchema.partial();
 
-// ─── Center ──
 export const centerCreateSchema = z.object({
   name: z.string().min(1).max(255),
   images: z.array(z.string()).default([]),
@@ -33,7 +31,6 @@ export const centerCreateSchema = z.object({
   status: z.boolean().optional(),
 });
 
-// ─── Batch ──
 export const batchCreateSchema = z.object({
   name: z.string().min(1).max(255),
   image: z.string().min(1).max(500),

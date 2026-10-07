@@ -1,19 +1,10 @@
-// Shared filter/normalization helpers for the admin "Reports" subscription
-// endpoints (Course / Package / Live Course / Test Series). Centralised so all
-// four apply an IDENTICAL date-range + status contract.
+// Admin reports: shared filters for the subscription Reports endpoints (Course / Package /
+// Live Course / Test Series), so all four apply the same date-range and status
+// contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md).
 //
-// Contract (see docs/REPORTS_SUBSCRIPTIONS_ADMIN.md):
-//   status  = "active" | "expired" | "inactive"  (computed from status bool + endAt)
-//     active   = status:true AND (endAt IS NULL OR endAt > now)
-//     expired  = status:true AND endAt <= now
-//     inactive = status:false
-//   paymentMethod = "online" | "backend"
-//
-// IMPORTANT — Prisma OR nesting: `statusWhere("active")` emits an `OR` (endAt
-// null-or-future). Search filters also emit an `OR` (id-set membership). Two
-// `OR` keys cannot coexist at the same `where` level, so callers MUST combine
-// independent fragments under `AND: [...]` (use `andWhere(...)`), never by
-// spreading them into one object.
+// `statusWhere("active")` and the search filters both emit an `OR`; two `OR` keys
+// cannot share one `where` level, so combine fragments with `andWhere(...)`, never
+// by spreading them into one object.
 
 import { HttpError } from "../middlewares/errorHandler";
 
@@ -35,14 +26,9 @@ export function dateWhere(dateFrom?: string, dateTo?: string): Record<string, an
 }
 
 /**
- * Validate a caller-supplied `status` at the request boundary.
- *
- * Absent/empty is legitimate — it means "no status filter", so it returns
- * undefined. Anything else that isn't a ReportStatus throws 422 rather than
- * being quietly dropped: this filter is CASE-SENSITIVE and lower-case only, so
- * a caller sending "ACTIVE" or "revoked" previously got an unfiltered list that
- * looked correct — an admin filters to Active, gets a plausible page of rows and
- * trusts it. Silent wrong results beat loud errors nowhere.
+ * Validate `status` at the request boundary. Absent/empty means no filter; any
+ * other non-ReportStatus value (the check is case-sensitive) throws 422 instead of
+ * silently returning an unfiltered list that looks correct.
  */
 export function assertReportStatus(status: string | undefined): ReportStatus | undefined {
   if (status === undefined || status === "") return undefined;
@@ -55,13 +41,10 @@ export function assertReportStatus(status: string | undefined): ReportStatus | u
 }
 
 /**
- * Prisma `where` fragment for a normalized status, over a row carrying a
- * `status` boolean column + an `endAt` DateTime. Absent status → `{}` (no
- * filtering); an unrecognised value THROWS — see assertReportStatus for why.
- * Callers should validate at the boundary so the 422 carries a useful message;
- * this throw is the backstop that keeps any future caller from reintroducing
- * the silent-unfiltered-result bug. NOTE: the "active" fragment contains an
- * `OR` — combine with other OR-bearing fragments via `andWhere`.
+ * Prisma `where` fragment for a status over `status` (bool) + `endAt`:
+ * active = status AND (endAt null OR future), expired = status AND endAt past,
+ * inactive = !status. Absent → `{}`; unknown values throw 422 as a backstop to
+ * assertReportStatus. "active" contains an `OR`; combine via `andWhere`.
  */
 export function statusWhere(status: string | undefined, now: Date = new Date()): Record<string, any> {
   switch (status) {
@@ -90,7 +73,6 @@ export function andWhere(...fragments: Array<Record<string, any> | undefined>): 
   return { AND: parts };
 }
 
-/** Row-level normalized status for the DTO. */
 export function normalizeStatus(
   row: { status: boolean | null | undefined; startAt?: Date | null; endAt: Date | null | undefined },
   now: Date = new Date()
@@ -102,15 +84,13 @@ export function normalizeStatus(
   return "active";
 }
 
-// ── shared row DTO ───────────────────────────────────────────────────────────
 export type ReportProductType = "course" | "package" | "liveCourse" | "testSeries";
 export interface ReportProduct { _id: string; type: ReportProductType; name: string | null; image: string | null; }
 export interface ReportPlan { _id: string; name: string | null; duration: number | null; price: number; }
 
 /**
- * Builds the canonical Reports row — identical shape across all four endpoints.
- * `cust` is the raw customer row (id/fullName/phoneNumber/emailAddress); product
- * and plan are pre-shaped by the caller (each table links products differently).
+ * Canonical Reports row, identical across all four endpoints. Product and plan are
+ * pre-shaped by the caller since each table links products differently.
  */
 export function reportRow(input: {
   cust: { id: number; fullName: string | null; phoneNumber: string | null; emailAddress?: string | null } | undefined | null;
@@ -137,11 +117,8 @@ export function reportRow(input: {
   };
 }
 
-// ── shared report CELL helpers ────────────────────────────────────────────────
-// Lifted out of admin-subscription.service on 2026-08-27 when the Live Course
-// report started emitting the same columns. Both reports feed ONE frontend
-// normalizer and ONE table component, so a divergence here shows up as a silently
-// blank column rather than an error — keep exactly one implementation.
+// Report cell helpers. Several reports feed one frontend table, so a divergent
+// copy shows up as a silently blank column; keep exactly one implementation.
 
 /** "" → null. The report renders `—` for null and a literal empty cell for "". */
 export const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
@@ -150,21 +127,14 @@ export const blankStrToNull = (v: string | null | undefined): string | null => (
 export const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
 
 /**
- * Single source of truth for "with material" on a subscription row. Two signals
- * exist and must never disagree: legacy Mongo-migrated rows carry a `pc_material_id`
- * FK, while SQL-created admin grants carry only a `material_amount` (the create path
- * deliberately writes material_amount and never pc_material_id — see
- * createCourseSubscription). Either signal means the buyer took the physical
- * material, so the "With Material" label can never contradict a nonzero
- * materialAmount. Used by the report label, the single-detail flag, AND the
- * hasMaterial report filter (repository) so all three agree.
+ * Single source of truth for "with material" on a subscription row. Legacy rows
+ * carry a `pc_material_id` FK; admin grants carry only `material_amount`
+ * (createCourseSubscription never writes pc_material_id). Either signal counts.
+ * Shared by the report label, the detail flag and the hasMaterial filter.
  */
 export const rowHasMaterial = (r: { pcMaterialId?: number | null; materialAmount?: any }): boolean =>
   (r.pcMaterialId != null && r.pcMaterialId > 0) || Number(r.materialAmount ?? 0) > 0;
 
-/**
- * bigint `tracking` (courier AWB, ~1.19e11) → number, matching the Subscriptions
- * management list (commerce-subscription transformer). Guard the >2^53 case → null.
- */
+/** bigint courier AWB → number (as the Subscriptions list emits it); null past 2^53. */
 export const trackingToNumber = (v: bigint | null | undefined): number | null =>
   v == null ? null : v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;

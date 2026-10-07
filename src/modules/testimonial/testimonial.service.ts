@@ -1,3 +1,4 @@
+// Testimonials: admin CRUD and client testimonial list.
 import { testimonialRepository } from "./testimonial.repository";
 import { toTestimonialDto } from "./testimonial.transformer";
 import type {
@@ -16,10 +17,7 @@ export const listTestimonials = async (): Promise<TestimonialDto[]> => {
   return rows.map(toTestimonialDto);
 };
 
-/**
- * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
- * when provided (absent → full filtered list). Always returns the total count.
- */
+/** Admin list; `skip`/`take` apply only when provided (absent → full filtered list). */
 export const listTestimonialsPaged = async (q: {
   search?: string;
   sortBy?: string;
@@ -35,10 +33,6 @@ export const listTestimonialsPaged = async (q: {
   return { items: rows.map(toTestimonialDto), total };
 };
 
-/**
- * Client list: rating desc ordering + `?search=` (name/title/description) +
- * pagination. Reuses the repository page/count helpers over the identical where.
- */
 export const listTestimonialsClientPaged = async (q: {
   search?: string;
   skip?: number;

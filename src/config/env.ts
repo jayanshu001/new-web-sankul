@@ -1,26 +1,11 @@
-// src/config/env.ts
-//
-// Fail-fast environment validation. Imported and invoked at the very top of
-// src/index.ts so the process exits with a clear error BEFORE any module
-// tries to use an undefined `process.env.JWT_ACCESS_SECRET` and silently
-// signs tokens with the literal string "undefined".
-//
-// Categories:
-//   - `required`: must be present in every environment. Boot fails if missing.
-//   - `requiredInProd`: must be present when NODE_ENV=production (CORS allowlist,
-//     webhook secret). Missing in dev is just a warn.
-//   - `optionalWithDefaults`: have safe defaults already in code; we just
-//     surface a warn when missing so misconfigurations don't go unnoticed.
-//
-// Note: this module deliberately uses `console.error` instead of the winston
-// logger because the logger itself is initialized lazily and we want the
-// check to run as early as possible.
+// Env validation: fail-fast check run at the very top of src/index.ts so the
+// process exits before anything signs tokens with an undefined secret.
+// Uses `console` rather than the winston logger so it can run before the
+// logger is initialized.
 
 const REQUIRED = [
   "JWT_ACCESS_SECRET",
   "JWT_REFRESH_SECRET",
-  // The app is MySQL-only (Prisma); DATABASE_URL is always required — validated
-  // below. MongoDB has been fully removed, so MONGODB_URI is no longer used.
   "DATABASE_URL",
 ] as const;
 
@@ -29,8 +14,7 @@ const REQUIRED_IN_PROD = [
   "RAZORPAY_WEBHOOK_SECRET",
   "REDIS_HOST",
   "REDIS_PORT",
-  // Note: METRICS_TOKEN is required if the /metrics endpoint is mounted; the
-  // mount itself is conditional, so we don't list it here.
+  // METRICS_TOKEN is not listed: the /metrics mount itself is conditional.
 ] as const;
 
 const SECRET_MIN_LENGTH = 32;
@@ -41,21 +25,16 @@ const PROD_FEATURE_VARS: { key: string; feature: string; profiles: ("api" | "wor
   { key: "FIREBASE_SERVICE_ACCOUNT", feature: "push notifications", profiles: ["worker"] },
   { key: "DO_ACCESS_KEY_ID", feature: "file uploads (DigitalOcean Spaces)", profiles: ["api", "worker"] },
   { key: "DO_SECRET_ACCESS_KEY", feature: "file uploads (DigitalOcean Spaces)", profiles: ["api", "worker"] },
-  // Drain-only: withdrawals are paid manually now, so this is needed solely to
-  // verify webhooks for payouts already in flight. Drop it (and the warning)
-  // when the payout route is deleted from app.ts.
+  // Drain-only: needed solely to verify webhooks for payouts already in flight.
+  // Drop it when the payout route is deleted from app.ts.
   { key: "RAZORPAY_PAYOUT_WEBHOOK_SECRET", feature: "referral payouts (drain-only)", profiles: ["api"] },
   { key: "METRICS_TOKEN", feature: "/metrics scrape auth", profiles: ["api"] },
   { key: "OCR_SERVICE_URL", feature: "exam rank predictor (sheet extraction)", profiles: ["api"] },
   { key: "OCR_INTERNAL_TOKEN", feature: "exam rank predictor (sheet extraction)", profiles: ["api"] },
-  // TeleCRM lead push (docs/old-telecrm-integration.md) — fires only from
-  // client-surface controllers (login/signup/catalog-view/payment), never
-  // from the worker, and GenerateCRMLead itself no-ops without these set.
+  // Fired only from client-surface controllers; GenerateCRMLead no-ops without these.
   { key: "TELE_CRM_BASE_URL", feature: "TeleCRM lead push", profiles: ["api"] },
   { key: "TELE_CRM_ACCESS_TOKEN", feature: "TeleCRM lead push", profiles: ["api"] },
-  // Best-effort cache-revalidation ping to the public websankul-jobs-api
-  // after jobs-content/taxonomy/papers/suggested-products writes — no-ops
-  // without these set, never blocks the admin response.
+  // Best-effort revalidation ping after jobs-content writes; no-ops without these.
   { key: "JOBS_API_BASE_URL", feature: "public jobs-api cache revalidation", profiles: ["api"] },
   { key: "JOBS_API_CACHE_AUTH_KEY", feature: "public jobs-api cache revalidation", profiles: ["api"] },
 ];
@@ -79,10 +58,8 @@ const warnMissingProdFeatures = (
       warnings.push(`${key} not set — ${feature} may fail at runtime.`);
     }
   }
-  // StreamOS: only the SELECTED provider's credentials matter. Warning about
-  // v1 keys on a legacy deployment (or vice versa) would be pure noise, so this
-  // is checked here rather than listed in PROD_FEATURE_VARS.
-  // Read directly off `env` — this module deliberately stays dependency-free.
+  // StreamOS: only the selected provider's credentials matter, so this is not in
+  // PROD_FEATURE_VARS. Read off `env` directly; this module stays dependency-free.
   if (profile !== "worker") {
     const usingV1 = env.STREAMOS_PROVIDER?.trim().toLowerCase() === "v1";
     if (usingV1) {
@@ -140,8 +117,7 @@ export const validateEnv = (): EnvValidationResult => {
     }
   }
 
-  // JWT secrets must be long enough to make brute force impractical. 32 bytes
-  // is the OWASP guideline minimum for HS256.
+  // 32 bytes is the OWASP minimum for HS256.
   for (const key of ["JWT_ACCESS_SECRET", "JWT_REFRESH_SECRET"] as const) {
     const v = env[key];
     if (v && v.length < SECRET_MIN_LENGTH) {
@@ -157,11 +133,7 @@ export const validateEnv = (): EnvValidationResult => {
   return { ok: missing.length === 0, missing, warnings };
 };
 
-/**
- * Validate and abort the process if required env vars are missing.
- * Logs warnings (non-fatal). Returns the validation result for callers
- * that want to act on it (e.g. tests).
- */
+/** Exits the process if required env vars are missing; warnings are logged only. */
 export const validateEnvOrExit = (): EnvValidationResult => {
   const result = validateEnv();
 

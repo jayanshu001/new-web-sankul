@@ -1,12 +1,7 @@
-// src/admin/live-course/live-course.service.ts
-//
-// Domain logic for admin live-course endpoints. Delegates to the MySQL/Prisma
-// module; HttpError gives the thin controllers predictable status codes.
-
+// Admin live courses: id parsing and result-code to HttpError mapping over the SQL module.
 import { HttpError } from "../../middlewares/errorHandler";
 import * as sql from "../../modules/admin-live-course/admin-live-course.service";
 
-// Ids are numeric on the SQL path.
 const assertLiveSqlId = (id: string, label: string): number => {
   const n = sql.parseLiveId(id);
   if (!n) throw new HttpError(422, `Invalid ${label} id.`);
@@ -34,15 +29,11 @@ export type ScheduleEntryInput = {
 
 export type ScheduleEntryPatch = Partial<ScheduleEntryInput>;
 
-// ──────────────────────────────────────────────────────────────────────────────
-// CRUD
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const createLiveCourse = async (validated: any, createdById?: string) => {
   return sql.createLiveCourse(validated, createdById);
 };
 
-/** Bulk drag-and-drop reorder — returns how many rows were written. */
+/** Returns how many rows were written. */
 export const reorderLiveCourses = async (orders: { id: string; ordered: number }[]) => {
   return sql.reorderLiveCourses(orders);
 };
@@ -70,6 +61,7 @@ export const updateLiveCourse = async (id: string, validated: any) => {
   return r;
 };
 
+// Refuses (409) while live sessions are attached to the course.
 export const deleteLiveCourse = async (id: string) => {
   const r = await sql.deleteLiveCourse(assertLiveSqlId(id, "live course"));
   if (r === "not_found") throw new HttpError(404, "Live course not found.");
@@ -83,10 +75,6 @@ export const toggleLiveCoursePopular = async (id: string) => {
   return r;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Sessions for a live course
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface ListSessionsQuery {
   status?: string;
   upcoming?: string;
@@ -99,10 +87,6 @@ export const listSessionsForLiveCourse = async (id: string, query: ListSessionsQ
   if (r === "not_found") throw new HttpError(404, "Live course not found.");
   return r;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Schedule (folder-grouped entries)
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listScheduleFolders = async (id: string) => {
   const r = await sql.listScheduleFolders(assertLiveSqlId(id, "live course"));
@@ -141,8 +125,6 @@ export const reorderScheduleFolders = async (id: string, folderIds: string[]) =>
   if (r === "mismatch") throw new HttpError(400, "folderIds must contain exactly the existing folder ids.");
   return r;
 };
-
-// Entries ─────────────────────────────────────────────────────────────────────
 
 export const listScheduleEntries = async (
   id: string, folderId: string, opts?: { skip?: number; take?: number }

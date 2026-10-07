@@ -1,3 +1,4 @@
+// Client materials: HTTP handlers for category contents, detail and downloads.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -5,16 +6,7 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { pick } from "../../utils/pick";
 import * as matSql from "../../modules/client-material/client-material.service";
 
-// ─── Endpoints ────────────────────────────────────────────────────────────────
-
-/**
- * GET /api/v1/client/materials/categories/:id/contents
- *
- * Drill-down for the material tree. Returns:
- *   - `subjects[]` — child categories (with count + isNewlyAdded decorations)
- *   - `materials[]` — leaf PDFs at this node
- *   - `breadcrumbs[]` — ancestor chain (root → current)
- */
+// Returns child `subjects[]`, leaf `materials[]`, and root→current `breadcrumbs[]`.
 export const getCategoryContents = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -39,10 +31,6 @@ export const getCategoryContents = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/client/materials/:id
- * Single material detail (useful for deep links).
- */
 export const getMaterialDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -59,8 +47,7 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
     if (scope === "multiple") return res.status(400).json({ success: false, message: "Pass only one of courseId, packageId, liveCourseId." });
     const data = await matSql.getMaterialDetail(mid, userNum, scope);
     if (!data) return res.status(404).json({ success: false, message: "Material not found." });
-    // This endpoint is the mediaToken-refresh path (410/401 re-fetch). RN reads
-    // only mediaToken (+ _id / isDirectLink). See docs/api-optimization Phase 3.
+    // RN reads only mediaToken (+ _id / isDirectLink) on this refresh path (410/401 re-fetch).
     return res.status(200).json({ success: true, data: pick(data as any, ["_id", "mediaToken", "isDirectLink"]) });
   } catch (error: any) {
     logger.error("getMaterialDetail failed", { traceId, materialId: id, error: getErrorMessage(error), stack: error.stack });
@@ -68,10 +55,7 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * POST /api/v1/client/materials/:id/track-download
- * Increments the download counter. Fire-and-forget from the client.
- */
+// Bump the material's global download counter (not per-user).
 export const trackDownload = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -89,10 +73,7 @@ export const trackDownload = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/client/materials/recent
- * Newly added materials (last N days, default 10) across all active categories.
- */
+// Newly added materials (last N days, default 10) across all active categories.
 export const getRecentMaterials = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("getRecentMaterials invoked", { traceId, path: req.originalUrl, userId: req.user?.id });

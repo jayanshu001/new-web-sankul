@@ -1,3 +1,4 @@
+// Inquiries: Zod schema for the public web enquiry form.
 import { z } from "zod";
 
 const COURSES = ["UPSC", "GPSC", "STI", "DYSO", "RFO", "PI", "PSI", "Constable", "CCE", "Talati", "Forest", "TET_TAT", "FHW_MPHW"] as const;

@@ -1,3 +1,4 @@
+// Admin notifications: push broadcast, schedule/cancel, log and image banner routes.
 import { Router } from "express";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import { CacheEntity } from "../../middlewares/flushGroups";
@@ -21,16 +22,14 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// Broadcast / log
 router.post("/broadcast", uploadTo(UPLOAD_FOLDERS.notifications), uploadS3.single("image"), broadcastNotification);
-// Searchable picker source for the deep-link target dropdown.
 router.get("/target-options", listTargetOptions);
 router.get("/", listNotifications);
 router.post("/bulk-delete", bulkDeleteNotifications);
 router.post("/:id/cancel", cancelScheduledNotification);
 router.delete("/:id", deleteNotification);
 
-// ImageNotification CRUD (in-app banners)
+// In-app image banners
 router.get("/images", listImageNotifications);
 router.post("/images", autoFlushGroup(CacheEntity.ImageNotification), uploadTo(UPLOAD_FOLDERS.notifications), uploadS3.single("image"), createImageNotification);
 router.put("/images/:id", autoFlushGroup(CacheEntity.ImageNotification), uploadTo(UPLOAD_FOLDERS.notifications), uploadS3.single("image"), updateImageNotification);

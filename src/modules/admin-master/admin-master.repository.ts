@@ -1,36 +1,26 @@
+// Admin masters: Prisma queries for PC materials, subject categories and video categories.
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
 import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
- * tables). Each is a thin CRUD on one table:
+ * Admin "master" lookup-table CRUD:
  *   - PackageCourseMaterial → ws_package_course_material (id, title only)
  *   - CourseSubjectCategory → ws_course_subject_category (title, slug, image, parent, order_by, status)
  *   - VideoCategory         → ws_video_category (title, slug, image, pdf, educator_id, parent, order_by, status)
- *
- * ⚠ ws_package_category does NOT exist in SQL → master/packageCategory stays Mongo.
  */
 /**
  * Everything attached to a video category — recorded course, live course, package —
- * as ONE parameterised UNION.
+ * as one parameterised UNION, modelled on `buildLinkedProductsQuery`
+ * (admin-material.repository). Paging a UNION in application code is wrong (each
+ * source would get its own offset), so LIMIT/OFFSET and the count run in SQL.
+ * `search` and `status` are applied per branch so each can use its own index instead
+ * of filtering a materialised temp table.
  *
- * Modelled on `buildLinkedProductsQuery` (admin-material.repository) rather than
- * three Prisma calls merged in JS: **paging a UNION in application code is wrong**,
- * because each source would get its own offset. The union is paged in SQL, so
- * `LIMIT/OFFSET` and the count both run over the merged set.
- *
- * `search` and `status` are applied PER BRANCH (not once over the union) so each
- * branch can use its own name/status index instead of filtering a materialised
- * temp table.
- *
- * ⚠ LIVE-COURSE LINK — TWO DIRECTIONS, NOT ONE. `ws_live_course.video_category_id`
- * is the forward pointer, but admin has never populated it (0 of 4 live courses on
- * staging have it set) — the link that actually exists is the REVERSE marker
- * `ws_video_category.live_course_id` (5 categories carry it). Matching only the
- * forward column is exactly why this tab showed "No courses found" for a category
- * that IS a live course's root folder. `> 0` guards the legacy 0 sentinel. Same
- * dual-source rule catalog-category-tree applies for the same reason.
+ * Live-course link has two directions: `ws_live_course.video_category_id` is the
+ * forward pointer but admin never populates it; the link that actually exists is the
+ * reverse marker `ws_video_category.live_course_id`. Both are matched (same rule as
+ * catalog-category-tree); `> 0` guards the legacy 0 sentinel.
  *
  * Column notes: ws_course.order_by is `ordered` in Prisma; ws_live_course's column
  * really is `ordered`; ws_package.status is `active` in Prisma, `status` in SQL.
@@ -87,8 +77,8 @@ function buildCategoryAttachmentsQuery(
 }
 
 export const adminMasterRepository = {
-  // ── PackageCourseMaterial (pc-material + master/material share this table) ──
-  // Optional search (title) + pagination. skip/take omitted → full list.
+  // ws_package_course_material is shared by pc-material and master/material.
+  // skip/take omitted → full list.
   pcmList: (opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.packageCourseMaterial.findMany({
       where: pcmWhere(opts),
@@ -104,8 +94,7 @@ export const adminMasterRepository = {
     prisma.packageCourseMaterial.update({ where: { id }, data: { title, updated_at: new Date() } }),
   pcmDelete: (id: number) => prisma.packageCourseMaterial.delete({ where: { id } }),
 
-  // ── CourseSubjectCategory ───────────────────────────────────────────────────
-  // Optional search (title) + sort + pagination. skip/take omitted → full list.
+  // skip/take omitted → full list.
   subjList: (opts?: { search?: string; status?: boolean; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) =>
     prisma.courseSubjectCategory.findMany({
       where: subjWhere(opts),
@@ -121,7 +110,6 @@ export const adminMasterRepository = {
     prisma.courseSubjectCategory.update({ where: { id }, data: { ...data, updatedAt: new Date() } }),
   subjDelete: (id: number) => prisma.courseSubjectCategory.delete({ where: { id } }),
 
-  // ── VideoCategory ────────────────────────────────────────────────────────────
   vcList: () => prisma.videoCategory.findMany({ orderBy: { order_by: "asc" } }),
   vcFind: (id: number) => prisma.videoCategory.findUnique({ where: { id } }),
   /** Highest order_by across all video categories, any level (null when none). */
@@ -138,16 +126,15 @@ export const adminMasterRepository = {
   vcDeleteRelations: (id: number) =>
     prisma.videoCategoryRelation.deleteMany({ where: { OR: [{ parent: id }, { child: id }] } }),
 
-  // ── full videoCategory controller support (admin/videoCategory) ─────────────
   vcListFiltered: (opts: { search?: string; status?: boolean; educatorId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
     const where: any = {};
-    // Unanchored `contains` (not buildPrismaPrefixSearch): ws_video_category / ws_video have
-    // no title index, so a prefix anchor only dropped mid-title matches (see pcmWhere below).
+    // Unanchored `contains` (not prefix search): no title index, so a prefix anchor only
+    // dropped mid-title matches (see pcmWhere below).
     const search = buildPrismaSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
-    // RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
+    // Recency is the contract (utils/listOrdering): "order" and the no-sort default
     // both mean newest-first; sortDir is ignored for them on purpose.
     const orderBy =
       opts.sortBy === "name" || opts.sortBy === "title"
@@ -176,7 +163,6 @@ export const adminMasterRepository = {
       orderBy: { order_by: "asc" },
     });
   },
-  // Every parent→child edge (whole DAG) for in-memory tree builds (vcList).
   vcAllEdges: () => loadAllEdges(),
   // Batched `child → primary parent` map from the relation DAG (deterministic single parent).
   vcPrimaryParents: (ids: number[]) => primaryParentsOf(ids),
@@ -208,16 +194,15 @@ export const adminMasterRepository = {
   // Existing ids among the given set — used to validate childCategoryIds before binding.
   vcExistingIds: (ids: number[]) =>
     prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),
-  // Re-parent the given categories (parent = 0 detaches to root). Writes BOTH the
-  // self-FK (ws_video_category.parent) AND the ws_video_category_relation pivot the
-  // client catalog reads — kept in sync so havingChildDirectory / drill-in / counts
-  // are correct. Edge ids are PRESERVED across a move (update-in-place) because
-  // package composition (ws_video_category_package_relation) references them; a
-  // delete+recreate would silently drop subjects from packages.
+  // Re-parent the given categories (parent = 0 detaches to root). Writes both the
+  // self-FK and the ws_video_category_relation pivot the client catalog reads. Edge ids
+  // are preserved across a move (update-in-place) because
+  // ws_video_category_package_relation references them; delete+recreate would silently
+  // drop subjects from packages.
   vcSetParent: (childIds: number[], parent: number) =>
     prisma.$transaction(async (tx) => {
-      // Snapshot each child's CURRENT parent + order BEFORE the self-FK flips, so we
-      // know which existing edge to move/remove.
+      // Snapshot each child's current parent + order before the self-FK flips, to know
+      // which existing edge to move/remove.
       const kids = await tx.videoCategory.findMany({
         where: { id: { in: childIds } },
         select: { id: true, parent: true, order_by: true },
@@ -226,7 +211,7 @@ export const adminMasterRepository = {
       for (const k of kids) {
         const oldParent = k.parent ?? 0;
         if (parent > 0) {
-          // Already linked to the new parent? nothing to do (idempotent).
+          // Already linked to the new parent → idempotent no-op.
           const existingNew = await tx.videoCategoryRelation.findFirst({ where: { parent, child: k.id }, select: { id: true } });
           if (existingNew) continue;
           // Move the child's existing single-parent edge in place (keep its id), else
@@ -259,10 +244,8 @@ export const adminMasterRepository = {
   listActiveEducators: () => prisma.courseEducator.findMany({ where: { status: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   listAllCategoriesBrief: () => prisma.videoCategory.findMany({ select: { id: true, title: true }, orderBy: { title: "asc" } }),
 
-  // relation lists
-  // Sub-categories = the children of this category in the ws_video_category_relation
-  // DAG, paginated. `order_by` alone is not unique, so `id` breaks ties — without a
-  // stable tiebreaker rows can repeat or vanish between pages.
+  // Sub-categories = children in the ws_video_category_relation DAG, paginated. `id`
+  // breaks `order_by` ties so rows can't repeat or vanish between pages.
   subCategoriesForCategory: async (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
     const childIds = await childIdsOf(categoryId);
     if (!childIds.length) return [];
@@ -339,23 +322,18 @@ export const adminMasterRepository = {
   // A category "has children" when it is the parent of ≥1 ws_video_category_relation edge.
   hasChildren: (categoryId: number) => prisma.videoCategoryRelation.findFirst({ where: { parent: categoryId }, select: { id: true } }),
 
-  // ── duplicate (clone a category + its sub-tree + videos) ────────────────────
-  // The Mongo source modelled a childCategoryIds[] DAG; SQL models a single-parent
-  // tree via the `parent` self-FK, so we clone along that tree. Runs in one
-  // transaction: collect source + descendants, create clones (create() one-by-one
-  // so new ids are returned — createMany does NOT), remap `parent`, then clone the
-  // videos whose category is in the cloned set (remapping vcategory_id). Returns
-  // null when the source id doesn't exist.
+  // Clone a category + its sub-tree + videos along the single-parent `parent` tree, in
+  // one transaction. Clones are created one-by-one so new ids are returned (createMany
+  // does not), then `parent` and the videos' vcategory_id are remapped. Returns null
+  // when the source id doesn't exist.
   vcDuplicate: (sourceId: number) =>
     prisma.$transaction(async (tx) => {
       const source = await tx.videoCategory.findUnique({ where: { id: sourceId } });
       if (!source) return null;
 
-      // BFS the parent-tree, collecting every node once (guards against cycles).
-      // Traversal reads the `parent` column (still written in sync by vcSetParent /
-      // vcCreate) rather than the relation edges: this is a WRITE path cloning a
-      // single-parent tree, and the in-sync column is equivalent while keeping the
-      // transactional clone logic (parent remap + edge creation below) unchanged.
+      // BFS the parent tree, visiting each node once (guards against cycles). Reads the
+      // `parent` column (kept in sync by vcSetParent / vcCreate) rather than the relation
+      // edges: this write path clones a single-parent tree and the column is equivalent.
       const nodesById = new Map<number, any>();
       nodesById.set(source.id, source);
       const queue: number[] = [source.id];
@@ -404,14 +382,13 @@ export const adminMasterRepository = {
         const newId = idMap.get(oldId)!;
         const newParent = node.parent != null ? idMap.get(node.parent) ?? 0 : 0;
         await tx.videoCategory.update({ where: { id: newId }, data: { parent: newParent, updated_at: new Date() } });
-        // Mirror the clone's parent link into the pivot the client reads (both are
-        // brand-new rows, so a plain insert can't affect any existing package link).
+        // Mirror the clone's parent link into the pivot the client reads (brand-new rows,
+        // so a plain insert can't affect any existing package link).
         if (newParent > 0) {
           await tx.videoCategoryRelation.create({ data: { parent: newParent, child: newId, order: node.order_by ?? 0 } });
         }
       }
 
-      // Clone videos across all mapped categories, remapping vcategory_id.
       const oldIds = Array.from(nodesById.keys());
       const videos = await tx.video.findMany({ where: { videoCategoryId: { in: oldIds } } });
       for (const v of videos) {
@@ -439,13 +416,11 @@ export const adminMasterRepository = {
     }),
 };
 
-// ── duplicate helpers (ported from the Mongo controller) ──────────────────────
 const slugify = (s: string) =>
   s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-// Next unclaimed "<title> (Copy)" / "<title> (Copy N)" title among unassigned
-// (no live course) categories — mirrors the Mongo `courseId:null,liveCourseId:null`
-// filter as closely as the SQL schema allows (no courseId column on the category).
+// Next unclaimed "<title> (Copy)" / "<title> (Copy N)" title among categories not
+// assigned to a live course.
 async function nextUnassignedTitle(tx: any, baseTitle: string): Promise<string> {
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const base = `${baseTitle} (Copy`;
@@ -476,11 +451,10 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
   return candidate;
 }
 
-// Unanchored `contains`, NOT buildPrismaPrefixSearch. The prefix variant exists to
-// buy a B-tree range scan on large indexed columns, and ws_package_course_material
-// has no index on `title` (nor enough rows to need one) — so anchoring bought
-// nothing here and only cost matches: `?search=8` compiled to `title LIKE '8%'`
-// and missed every "... 8 ..." title, which is what the admin picker types.
+// Unanchored `contains`, not buildPrismaPrefixSearch: the prefix variant buys a B-tree
+// range scan on large indexed columns, and ws_package_course_material has no `title`
+// index (nor the rows to need one). Anchoring only cost matches — `?search=8` became
+// `title LIKE '8%'` and missed every "... 8 ..." title the admin picker types.
 function pcmWhere(opts?: { search?: string }) {
   const where: any = {};
   const search = buildPrismaSearch(opts?.search, ["title"]);
@@ -488,9 +462,7 @@ function pcmWhere(opts?: { search?: string }) {
   return where;
 }
 
-// Unanchored `contains`, same reasoning as pcmWhere above: ws_course_subject_category
-// has no index on `title`, so the prefix anchor bought no plan improvement and only
-// dropped substring matches (`?search=8` → `title LIKE '8%'`).
+// Unanchored `contains`, same reasoning as pcmWhere: no `title` index here either.
 function subjWhere(opts?: { search?: string; status?: boolean }) {
   const where: any = {};
   const search = buildPrismaSearch(opts?.search, ["title"]);
@@ -499,8 +471,8 @@ function subjWhere(opts?: { search?: string; status?: boolean }) {
   return where;
 }
 
-// RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
-// both mean newest-first; `dir` is ignored for them on purpose.
+// Recency is the contract (utils/listOrdering): "order" and the no-sort default both
+// mean newest-first; `dir` is ignored for them on purpose.
 function subjOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): any[] {
   if (sortBy === "title") return [{ title: dir }, { id: "desc" }];
   if (sortBy === "createdAt") return [{ createdAt: dir }, { id: "desc" }];

@@ -1,3 +1,4 @@
+// Careers: Prisma queries for job openings and applications.
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";

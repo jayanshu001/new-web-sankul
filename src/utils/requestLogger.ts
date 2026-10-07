@@ -1,3 +1,4 @@
+// Request logger: start/complete/abort log lines with trace id and scrubbed input.
 import crypto from "crypto";
 import logger from "./logger";
 import { scrub } from "./scrub";
@@ -7,12 +8,9 @@ import type { RequestHandler } from 'express';
 const hasKeys = (o: unknown): boolean =>
   !!o && typeof o === "object" && Object.keys(o).length > 0;
 
-/** error for 5xx, warn for 4xx, info otherwise — so console color reflects
- * the actual outcome instead of every request logging as "info". */
 const levelForStatus = (status: number): "error" | "warn" | "info" =>
   status >= 500 ? "error" : status >= 400 ? "warn" : "info";
 
-// Extend Request to store tracing metadata in request lifecycle
 declare module "express-serve-static-core" {
   interface Request {
     traceId?: string;
@@ -37,9 +35,7 @@ const requestLogger: RequestHandler = (req, res, next) => {
     url: req.originalUrl,
     ip: req.ip,
     userAgent: req.headers["user-agent"],
-    // Scrubbed (see utils/scrub.ts) so a phone number in an OTP flow or a
-    // token passed as a query param never lands in logs. Omitted when empty
-    // so a plain GET with no filters doesn't add console noise.
+    // Scrubbed so a token in a query param never lands in logs.
     params: hasKeys(req.params) ? scrub(req.params) : undefined,
     query: hasKeys(req.query) ? scrub(req.query) : undefined,
   };
@@ -53,10 +49,7 @@ const requestLogger: RequestHandler = (req, res, next) => {
     completed = true;
     const durationMs = Number(process.hrtime.bigint() - startHighRes) / 1_000_000;
 
-    // Surface accumulated per-request telemetry from the AsyncLocalStorage
-    // context: dbMs (total Mongo time), cacheHit/cacheMiss counters. The
-    // logger format auto-merges userId/route/traceId so we don't repeat
-    // them here. See utils/requestContext.ts for what the context carries.
+    // userId/route/traceId are merged in by the logger format.
     const ctx = getContext();
     logger[levelForStatus(res.statusCode)]("API Request Completed", {
       ...requestMetadata,
@@ -66,14 +59,12 @@ const requestLogger: RequestHandler = (req, res, next) => {
       dbMs: ctx ? Number(ctx.dbMs.toFixed(2)) : undefined,
       cacheHit: ctx?.cacheHit,
       cacheMiss: ctx?.cacheMiss,
-      // Body is scrubbed before logging so passwords, OTPs, tokens, and
-      // bank/card identifiers never reach disk. See utils/scrub.ts.
       body: req.method !== "GET" && hasKeys(req.body) ? scrub(req.body) : undefined,
     });
   });
 
   res.on("close", () => {
-    if (completed) return; // skip normal completion path, only log true aborts
+    if (completed) return;
 
     const durationMs = Number(process.hrtime.bigint() - startHighRes) / 1_000_000;
     logger.warn("API Request Aborted", {

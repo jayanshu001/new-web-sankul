@@ -1,3 +1,4 @@
+// Redis: shared ioredis client and readiness check.
 import Redis from "ioredis";
 import logger from "../utils/logger";
 
@@ -11,7 +12,6 @@ export const redisClient = new Redis({
   port: REDIS_PORT,
   password: REDIS_PASSWORD,
   retryStrategy: (times) => {
-    // Reconnect after 2 seconds
     const delay = Math.min(times * 100, 2000);
     return delay;
   },

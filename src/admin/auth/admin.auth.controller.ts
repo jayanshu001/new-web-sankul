@@ -1,3 +1,4 @@
+// Admin auth: HTTP handlers for login, register, password, refresh, logout and profile.
 import { Request, Response } from "express";
 import {
   adminLogin,
@@ -12,10 +13,6 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../../utils/dbAvailability";
 import logger from "../../utils/logger";
 
-/**
- * POST /api/v1/admin/auth/login
- * Body: { email, password }
- */
 export const adminLoginHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("adminLoginHandler invoked", { traceId, path: req.originalUrl, ip: req.ip });
@@ -48,11 +45,6 @@ export const adminLoginHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/admin/auth/me
- * Protected: requires admin JWT. Returns the current admin's effective
- * permissions/roles/isSuperAdmin for session rehydration.
- */
 export const adminMeHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const adminId = req.user?.id;
@@ -78,11 +70,6 @@ export const adminMeHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * POST /api/v1/admin/auth/register
- * Body: { firstName, lastName?, email, password, role? }
- * NOTE: Protect this route — only callable by super_admin or via seeder
- */
 export const adminRegisterHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("adminRegisterHandler invoked", { traceId, path: req.originalUrl, ip: req.ip });
@@ -110,11 +97,6 @@ export const adminRegisterHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * POST /api/v1/admin/auth/change-password
- * Body: { currentPassword, newPassword }
- * Protected: requires admin JWT
- */
 export const adminChangePasswordHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const adminId = req.user?.id;
@@ -148,10 +130,6 @@ export const adminChangePasswordHandler = async (req: Request, res: Response) =>
   }
 };
 
-/**
- * POST /api/v1/admin/auth/refresh
- * Body: { refreshToken: string }
- */
 export const adminRefreshHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("adminRefreshHandler invoked", { traceId, path: req.originalUrl });
@@ -187,10 +165,6 @@ export const adminRefreshHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * DELETE /api/v1/admin/auth/logout
- * Protected: requires admin JWT
- */
 export const adminLogoutHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const adminId = req.user?.id;
@@ -217,11 +191,6 @@ export const adminLogoutHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * PUT /api/v1/admin/auth/profile
- * Body: multipart/form-data { firstName?, lastName?, image? (file) }
- * Protected: requires admin JWT
- */
 export const adminUpdateProfileHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const adminId = req.user?.id;
@@ -235,12 +204,9 @@ export const adminUpdateProfileHandler = async (req: Request, res: Response) => 
 
     const { firstName, lastName } = req.body;
 
-    // Image resolution, three cases (mirrors the goal / video-category handlers):
-    //   - file uploaded        → use its S3 URL (replace)
-    //   - empty `image` field  → "" sentinel → clear (stored as "" — the column
-    //                            is NOT NULL VarChar, so "" is the empty value)
-    //   - field absent         → undefined  → leave unchanged (partial update)
-    // `multer-s3` attaches the uploaded S3 URL exactly to `req.file.location`.
+    // Uploaded file → replace; empty `image` → clear ("" since the column is
+    // NOT NULL); absent → unchanged.
+
     const file = req.file as any;
     let image: string | undefined;
     if (file?.location) image = file.location;

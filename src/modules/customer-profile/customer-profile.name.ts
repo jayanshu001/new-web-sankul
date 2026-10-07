@@ -1,10 +1,8 @@
+// Customer profile: full-name split and join helpers.
+
 /**
- * full_name ↔ first/middle/last helpers for the MySQL profile branch.
- *
- * MySQL `ws_customer.full_name` is a single column, but the profile API contract
- * exposes firstName/middleName/lastName (Mongo shape). Decision: **split on read,
- * join on write** (heuristic — first token = first, last token = last, the rest =
- * middle). Single-token names → firstName only.
+ * `ws_customer.full_name` is one column but the API exposes first/middle/last:
+ * split on read (first token, last token, the rest is middle), join on write.
  */
 
 export interface NameParts {
@@ -26,11 +24,7 @@ export const splitFullName = (fullName: string | null | undefined): NameParts =>
   };
 };
 
-/**
- * Join provided parts into full_name, falling back to the existing parsed parts
- * for any field not supplied (so a partial update of just `lastName` keeps the
- * rest). Returns a single trimmed string.
- */
+/** Fields not supplied fall back to the existing parsed parts, so partial updates keep the rest. */
 export const joinFullName = (
   parts: Partial<NameParts>,
   existing: NameParts

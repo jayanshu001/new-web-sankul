@@ -1,7 +1,7 @@
+// Promoter dashboard: date-range and chart-bucket helpers for the overview.
 export type RangeKey = "today" | "week" | "month" | "year" | "all" | "custom";
 export const ALLOWED_RANGES: RangeKey[] = ["today", "week", "month", "year", "all", "custom"];
 
-// Parse a YYYY-MM-DD string into a Date, or null if absent/invalid.
 function parseYmd(raw: string | undefined): Date | null {
   if (!raw) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
@@ -10,6 +10,7 @@ function parseYmd(raw: string | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// Range preset (or custom YYYY-MM-DD bounds) to a { start, end } window; null start = unbounded.
 export function resolveRange(
   key: RangeKey | undefined,
   now: Date,
@@ -75,10 +76,3 @@ export function bucketFormatFor(
       return { fmt: "%Y-%m", unit: "month" as const };
   }
 }
-
-// NOTE: the Mongo `buildOverview` / `buildAllPromotersOverview` aggregates were
-// removed during the MySQL migration — they had NO live caller (the per-promoter
-// overview is served by the SQL twin `modules/promoter-data` →
-// `buildPromoterOverview`, used by promoter/dashboard/dashboard.controller.ts).
-// Only the pure range/bucket helpers above remain; they are consumed by
-// `modules/admin-promoter/admin-promoter.service.ts`.

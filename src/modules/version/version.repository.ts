@@ -1,3 +1,4 @@
+// App version: Prisma queries for the singleton settings row.
 import { prisma } from "../../config/prisma";
 import type { VersionUpsertInput } from "./version.types";
 

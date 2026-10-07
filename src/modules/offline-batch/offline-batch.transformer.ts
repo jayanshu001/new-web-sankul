@@ -1,3 +1,4 @@
+// Offline batches: row to DTO mapping (response shape is frozen).
 import type { OfflineBatch, OfflineCenter, OfflineCity } from "@prisma/client";
 import type {
   OfflineBatchDto,
@@ -5,14 +6,13 @@ import type {
   OfflineCityRefDto,
 } from "./offline-batch.types";
 
-/** SQL `image` JSON (array of URLs, or a bare string) → Mongo `images: string[]`. */
+/** SQL `image` JSON (array of URLs, or a bare string) → `images: string[]`. */
 const toImages = (image: unknown): string[] => {
   if (Array.isArray(image)) return image.filter((x): x is string => typeof x === "string");
   if (typeof image === "string" && image) return [image];
   return [];
 };
 
-/** `ws_offline_batch` row → DTO. `discription`→`description`; status synth true. */
 export const toOfflineBatchDto = (row: OfflineBatch): OfflineBatchDto => ({
   _id: String(row.id),
   name: row.name,
@@ -26,10 +26,6 @@ export const toOfflineBatchDto = (row: OfflineBatch): OfflineBatchDto => ({
   updatedAt: row.updatedAt ?? null,
 });
 
-/**
- * `ws_offline_center` row → DTO. `image` JSON → `images[]`; `phone` bigint →
- * string (Mongo stores phone as a string); status synthesized true.
- */
 export const toOfflineCenterDto = (row: OfflineCenter): OfflineCenterDto => ({
   _id: String(row.id),
   name: row.name,
@@ -44,6 +40,5 @@ export const toOfflineCenterDto = (row: OfflineCenter): OfflineCenterDto => ({
   updatedAt: row.updatedAt ?? null,
 });
 
-/** `ws_offline_city` row → lightweight `{_id, name}` ref. */
 export const toOfflineCityRef = (city: OfflineCity | null | undefined): OfflineCityRefDto | null =>
   city ? { _id: String(city.id), name: city.name } : null;

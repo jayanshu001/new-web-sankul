@@ -1,15 +1,8 @@
-// src/modules/admin-auth/admin-permission-resolver.ts
-//
-// Resolves an admin's EFFECTIVE permission-key set for per-request RBAC
-// enforcement (middlewares/requirePermission.ts). The admin JWT payload carries
-// only { id, email, role } — NOT the permission list — so authorization has to
-// re-resolve grants server-side. To keep that off the hot path we cache the
-// resolved key set in Redis for a short TTL; role/permission/admin edits bust
-// the entry so changes take effect within seconds (or immediately on bust).
-//
-// Effective = permissions granted via the admin's role(s)
-// (ws_role_has_permissions) UNIONED with any directly-assigned per-user perms
-// (ws_model_has_permissions) — the same union buildSqlAdminDto uses for login.
+// Admin RBAC: resolves an admin's effective permission keys for per-request RBAC
+// (middlewares/requirePermission.ts). The admin JWT carries only { id, email, role },
+// so grants are re-resolved server-side and cached in Redis for a short TTL; edits
+// bust the entry. Effective = role grants (ws_role_has_permissions) ∪ direct grants
+// (ws_model_has_permissions), the same union buildSqlAdminDto uses for login.
 
 import { redisClient } from "../../config/redis";
 import { adminAuthRepository } from "./admin-auth.repository";
@@ -17,7 +10,6 @@ import { adminAuthRepository } from "./admin-auth.repository";
 const PERM_CACHE_TTL_SECONDS = 60;
 const permCacheKey = (adminId: string) => `admin_perms:${adminId}`;
 
-/** Parse a JWT/route admin id ("52") to bigint; null if not a valid id. */
 const parseAdminId = (id: string): bigint | null => {
   try {
     const n = BigInt(id);
@@ -27,10 +19,6 @@ const parseAdminId = (id: string): bigint | null => {
   }
 };
 
-/**
- * Live DB read of an admin's effective permission keys (role grants + direct
- * grants), flattened + de-duplicated. Returns [] for an unknown/no-grant admin.
- */
 const readEffectivePermissionKeys = async (id: bigint): Promise<string[]> => {
   const roles = await adminAuthRepository.findRoles(id);
   const [rolePermissions, directPermissions] = await Promise.all([
@@ -43,10 +31,8 @@ const readEffectivePermissionKeys = async (id: bigint): Promise<string[]> => {
 };
 
 /**
- * Effective permission keys for an admin, cached in Redis for
- * PERM_CACHE_TTL_SECONDS. Fail-open on a cache read error (falls through to a
- * live DB read); a live DB error propagates to the caller (the middleware
- * decides how to react — in shadow mode it must never block).
+ * Fail-open on a cache read error (falls through to a live DB read); a DB error
+ * propagates so the middleware decides, and in shadow mode it must never block.
  */
 export const getEffectivePermissionKeys = async (
   adminId: string
@@ -56,7 +42,6 @@ export const getEffectivePermissionKeys = async (
     const cached = await redisClient.get(key);
     if (cached) return JSON.parse(cached) as string[];
   } catch {
-    // Redis miss/unreachable → fall through to a live read.
   }
 
   const id = parseAdminId(adminId);
@@ -65,30 +50,23 @@ export const getEffectivePermissionKeys = async (
   try {
     await redisClient.set(key, JSON.stringify(keys), "EX", PERM_CACHE_TTL_SECONDS);
   } catch {
-    // Best-effort cache; ignore write failures.
   }
   return keys;
 };
 
-/**
- * Drop an admin's cached permission set so a role/permission/grant change takes
- * effect immediately. Call after editing an admin's role assignment or direct
- * grants. Non-fatal on failure — the TTL expires the stale entry shortly anyway.
- */
+/** Call after editing an admin's role or direct grants. Non-fatal: the TTL expires stale entries. */
 export const invalidateAdminPermissions = async (
   adminId: string | number | bigint
 ): Promise<void> => {
   try {
     await redisClient.del(permCacheKey(String(adminId)));
   } catch {
-    // Non-fatal: TTL will expire the stale entry.
   }
 };
 
 /**
- * Drop EVERY admin's cached permission set. Call after editing a *role's*
- * permission set (which can affect many admins at once) — cheaper and simpler
- * than enumerating the role's members. Uses a SCAN to avoid blocking Redis.
+ * Call after editing a role's permission set (affects many admins); cheaper than
+ * enumerating members. Uses SCAN to avoid blocking Redis.
  */
 export const invalidateAllAdminPermissions = async (): Promise<void> => {
   try {
@@ -105,6 +83,5 @@ export const invalidateAllAdminPermissions = async (): Promise<void> => {
       if (batch.length) await redisClient.del(...batch);
     } while (cursor !== "0");
   } catch {
-    // Non-fatal: TTLs will expire stale entries within PERM_CACHE_TTL_SECONDS.
   }
 };

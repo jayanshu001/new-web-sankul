@@ -1,3 +1,4 @@
+// Jobs content: admin CRUD, status and reorder, with search-index and jobs-api cache sync.
 import { contentRepository } from "./content.repository";
 import { toContentDto } from "./content.transformer";
 import { slugify, uniqueSlug } from "../../utils/slug";
@@ -34,8 +35,7 @@ const safeRemoveFromSearchIndex = async (type: string, contentId: bigint) => {
   }
 };
 
-// Same best-effort contract as safeSyncSearchIndex above — a jobs-api outage
-// must never turn a successful admin write into a failure response.
+// Best-effort, like safeSyncSearchIndex: a jobs-api outage must never fail the write.
 const safeRevalidateJobsApiCache = async (type: string, slug: string) => {
   try {
     await revalidateJobsApiCache(jobsApiEntityForContentType(type), slug);
@@ -84,12 +84,9 @@ export const createContent = async (input: ContentWriteInput): Promise<JobConten
   return toContentDto(row as never);
 };
 
-// featuredImageUrl / seo.ogImageUrl only arrive in the write payload when the
-// admin uploaded a NEW file this save (see content.controller.ts's
-// applyContentUploads — it's only set on an actual upload). The `detail` JSON
-// is fully rebuilt on every save (see content.repository.ts), so a plain edit
-// that doesn't touch the image would otherwise drop the existing featured/OG
-// image. Carry the current value forward when the payload doesn't replace it.
+// featuredImageUrl / seo.ogImageUrl arrive only when a new file was uploaded this
+// save, but `detail` is fully rebuilt every save, so carry the current values
+// forward or a plain edit would drop the existing images.
 const preserveExistingImages = async (
   numId: bigint,
   input: ContentWriteInput
@@ -108,6 +105,7 @@ const preserveExistingImages = async (
   };
 };
 
+// Full-form save; keeps current images when none were uploaded. Null on unknown id.
 export const updateContent = async (id: string, input: ContentWriteInput): Promise<JobContentDto | null> => {
   const numId = parseContentId(id);
   if (numId === null) return null;
@@ -125,6 +123,7 @@ export const updateContent = async (id: string, input: ContentWriteInput): Promi
   return toContentDto(row);
 };
 
+// Publishing stamps publishedAt with now.
 export const setContentStatus = async (
   id: string,
   status: JobContentStatus

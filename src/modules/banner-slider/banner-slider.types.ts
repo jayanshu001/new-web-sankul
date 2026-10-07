@@ -1,30 +1,20 @@
 /**
- * Banner slider — stable API shape (Mongo-compatible for admin / client).
+ * Banner slider: DTO, input types and key mappings (frozen; live clients parse it).
  *
- * Contract bridges two schema differences between Mongo and legacy MySQL:
- *
- *  1. `key` casing:
- *       Mongo enum:  "Packages" | "Courses" | "Book" | "EBook"
- *       MySQL value: "package"  | "course"  | "book" | "ebook"
- *     The transformer maps MySQL → Mongo casing so the API JSON is unchanged.
- *
- *  2. `keyId` — the banner's deep-link target:
- *       Mongo `.populate("keyId")` embedded the referenced Package/Course/...
- *       doc. On MySQL it is served as the scalar `ws_banner_slider.key_id` int:
- *       `key`/`keyRef` already tell the client WHICH collection to open, so the
- *       id alone is enough to deep-link, and populating would cost a per-banner
- *       lookup across four tables on a hot cached route.
- *       Required whenever `key` is one of the four collection keys; always null
- *       for `Explore`, which is a standalone CTA with no target.
+ * - `key`: the API uses "Packages" | "Courses" | "Book" | "EBook" while the DB stores
+ *   "package" | "course" | "book" | "ebook"; the transformer maps between them.
+ * - `keyId`: the scalar `ws_banner_slider.key_id` deep-link target, not a populated
+ *   doc. `key`/`keyRef` already name the collection, and populating would cost a
+ *   lookup across four tables per banner on a hot cached route. Required for the
+ *   four collection keys; always null for `Explore` (a standalone CTA).
  */
 
 export const BANNER_KEYS = ["Packages", "Courses", "Book", "EBook", "Explore"] as const;
 export type BannerKey = (typeof BANNER_KEYS)[number];
 
 /**
- * Mongo `keyRef` (model name) derived from `key`.
- * `Explore` is a standalone CTA banner with no linked collection — it is
- * intentionally absent so keyRef/keyId stay unset for it (matches the Mongo model).
+ * `keyRef` (model name) derived from `key`. `Explore` is intentionally absent: it
+ * has no linked collection, so keyRef/keyId stay unset.
  */
 export const BANNER_KEY_TO_MODEL: Partial<Record<BannerKey, string>> = {
   Packages: "Package",
@@ -41,7 +31,7 @@ export const BANNER_KEY_TO_MODEL: Partial<Record<BannerKey, string>> = {
 export const bannerKeyNeedsTarget = (key: BannerKey): boolean =>
   BANNER_KEY_TO_MODEL[key] !== undefined;
 
-/** MySQL lowercase `ws_banner_slider.key` → Mongo-cased enum. */
+/** DB lowercase `ws_banner_slider.key` → API enum. */
 export const MYSQL_KEY_TO_BANNER_KEY: Record<string, BannerKey> = {
   package: "Packages",
   packages: "Packages",
@@ -52,7 +42,7 @@ export const MYSQL_KEY_TO_BANNER_KEY: Record<string, BannerKey> = {
   explore: "Explore",
 };
 
-/** Mongo-cased enum → MySQL lowercase column value (for writes). */
+/** API enum → DB column value (for writes). */
 export const BANNER_KEY_TO_MYSQL: Record<BannerKey, string> = {
   Packages: "package",
   Courses: "course",

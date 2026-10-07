@@ -1,3 +1,4 @@
+// Admin educators: HTTP handlers for educator CRUD, details and associated products.
 import { Request, Response } from "express";
 import { createEducatorSchema, updateEducatorSchema } from "./master.validation";
 import bcrypt from "bcryptjs";
@@ -40,7 +41,6 @@ export const getEducators = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const sortField = sortBy && EDUCATOR_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
     const statusFilter = parseEducatorStatus(status);
     const sortDirSql = sortOrder === "asc" ? "asc" : "desc";
     const [rows, total] = await Promise.all([
@@ -71,7 +71,6 @@ export const createEducator = async (req: Request, res: Response) => {
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createEducatorSchema.parse(req.body);
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
     if (await eduRepo.emailInUse(validatedData.email)) {
       return res.status(409).json({ success: false, message: "Educator with this email already exists." });
     }
@@ -102,7 +101,6 @@ export const updateEducator = async (req: Request, res: Response) => {
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateEducatorSchema.parse(req.body);
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
     const numId = parseEducatorIntId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     const existing = await eduRepo.findById(numId);
@@ -129,13 +127,10 @@ export const updateEducator = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Educator by id (lightweight — for server-searched pickers' edit label) ──
-
 export const getEducatorById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
     const numId = parseEducatorIntId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     const row = await eduRepo.findById(numId);
@@ -146,15 +141,12 @@ export const getEducatorById = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Educator Details (aggregate for admin detail page) ──────────────────────
-
 export const getEducatorDetails = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
-    // Profile + associations (courses/live-courses/packages/video-categories/
-    // sessions) all from SQL, matching the Mongo handler's DTO shape exactly.
+    // Profile + associations (courses/live-courses/packages/video-categories/sessions);
+    // DTO shape is frozen for existing clients.
     const numId = parseEducatorIntId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     const row = await eduRepo.findById(numId);
@@ -169,8 +161,6 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Educator per-association paginated lists (admin detail page) ─────────────
-
 const parseEducatorPaging = (req: Request) => {
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -183,6 +173,7 @@ const educatorPageMeta = (total: number, pageNum: number, limitNum: number) => (
 
 type EducatorListFn = (educatorId: number, args: { skip: number; take: number }) => Promise<{ data: unknown[]; total: number }>;
 
+// Builds a paged handler for one of an educator's associated product lists (404 if no educator).
 const educatorListHandler = (fn: EducatorListFn) => async (req: Request, res: Response) => {
   try {
     const numId = parseEducatorIntId(req.params.id as string);
@@ -208,12 +199,11 @@ export const deleteEducator = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
     const numId = parseEducatorIntId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     const existing = await eduRepo.findById(numId);
     if (!existing) return res.status(404).json({ success: false, message: "Educator not found" });
-    // No `deleted` column in SQL → disable + revoke tokens, retain the row.
+    // No `deleted` column: disable + revoke tokens, retain the row.
     await eduRepo.disableAdmin(numId);
     return res.status(200).json({ success: true, message: "Educator deleted successfully" });
   } catch (error: any) {

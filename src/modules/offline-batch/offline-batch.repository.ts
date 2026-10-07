@@ -1,12 +1,7 @@
+// Offline batches: Prisma queries for centers, batches and the banner slider.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
-/**
- * Prisma persistence for the offline · batch/center READ branch (flag OFF).
- * Neither `ws_offline_center` nor `ws_offline_batch` has a `status` column, so
- * there is NO status filter — all rows are active (the DTO synthesizes true).
- */
-// Shared WHERE builders for the admin center/batch list + count.
 const centerListWhere = (opts?: { cityId?: number; search?: string }) => ({
   ...(opts?.cityId != null ? { cityId: opts.cityId } : {}),
   ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
@@ -19,7 +14,6 @@ const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAft
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
 });
 
-// Client browse WHERE (center OR city→centerIds set), name search, upcoming.
 const clientBatchWhere = (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) => ({
   deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
@@ -29,13 +23,10 @@ const clientBatchWhere = (opts?: { centerId?: number; centerIds?: number[]; sear
 });
 
 export const offlineBatchRepository = {
-  // ── centers ────────────────────────────────────────────────────────────────
-  /** Single center by id, with its city. */
   findCenterById: (id: number) =>
     prisma.offlineCenter.findUnique({ where: { id }, include: { city: true } }),
 
-  /** Centers, optional city filter + name search, with city. Newest first.
-   *  Paginated when skip/take are provided (admin list). */
+  /** Newest first; paginated when skip/take are provided (admin list). */
   listCenters: (opts?: { cityId?: number; search?: string; skip?: number; take?: number }) =>
     prisma.offlineCenter.findMany({
       where: centerListWhere(opts),
@@ -45,11 +36,9 @@ export const offlineBatchRepository = {
       take: opts?.take,
     }),
 
-  /** Total centers matching the same city/search filters (pagination count). */
   countCentersList: (opts?: { cityId?: number; search?: string }) =>
     prisma.offlineCenter.count({ where: centerListWhere(opts) }),
 
-  /** Centers for a set of cities (dashboard nesting). */
   listCentersByCities: (cityIds: number[]) =>
     cityIds.length
       ? prisma.offlineCenter.findMany({
@@ -58,16 +47,13 @@ export const offlineBatchRepository = {
         })
       : Promise.resolve([]),
 
-  // ── batches ──────────────────────────────────────────────────────────────
-  /** Single batch by id, with center → city. */
   findBatchById: (id: number) =>
     prisma.offlineBatch.findFirst({
       where: { id, deletedAt: null }, // exclude soft-deleted batches
       include: { center: { include: { city: true } } },
     }),
 
-  /** Batches with optional center/name/upcoming filters, with center → city.
-   *  Paginated when skip/take are provided (client browse list). */
+  /** Paginated when skip/take are provided (client browse list). */
   listBatches: (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date; skip?: number; take?: number }) =>
     prisma.offlineBatch.findMany({
       where: clientBatchWhere(opts),
@@ -77,12 +63,10 @@ export const offlineBatchRepository = {
       take: opts?.take,
     }),
 
-  /** Total batches matching the client browse filters (pagination count). */
   countBatches: (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) =>
     prisma.offlineBatch.count({ where: clientBatchWhere(opts) }),
 
-  /** Admin batches: optional center/name/upcoming filters, with center → city,
-   *  newest created first, paginated when skip/take are provided. */
+  /** Newest created first; paginated when skip/take are provided. */
   listBatchesAdmin: (opts?: { centerId?: number; search?: string; upcomingAfter?: Date; skip?: number; take?: number }) =>
     prisma.offlineBatch.findMany({
       where: batchListWhere(opts),
@@ -92,11 +76,9 @@ export const offlineBatchRepository = {
       take: opts?.take,
     }),
 
-  /** Total batches matching the same admin filters (pagination count). */
   countBatchesList: (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) =>
     prisma.offlineBatch.count({ where: batchListWhere(opts) }),
 
-  /** Batches for a set of centers (dashboard / center-detail nesting). */
   listBatchesByCenters: (centerIds: number[]) =>
     centerIds.length
       ? prisma.offlineBatch.findMany({
@@ -105,7 +87,6 @@ export const offlineBatchRepository = {
         })
       : Promise.resolve([]),
 
-  /** Active batches starting after `now`, soonest first (dashboard upcoming). */
   listUpcoming: (now: Date, take: number) =>
     prisma.offlineBatch.findMany({
       where: { startAt: { gt: now }, deletedAt: null },
@@ -114,7 +95,6 @@ export const offlineBatchRepository = {
       take,
     }),
 
-  // ── admin writes (Wave 8) ──────────────────────────────────────────────────
   cityExists: (id: number) =>
     prisma.offlineCity.findUnique({ where: { id }, select: { id: true } }),
 
@@ -158,14 +138,11 @@ export const offlineBatchRepository = {
       include: { center: { include: { city: true } } },
     }),
 
-  // Soft delete: flag the batch instead of removing the row, so its enquiries
-  // (required FK → batch) stay valid and keep showing in /batch-enquiries.
+  // Soft delete: enquiries hold a required FK to the batch and must keep showing in /batch-enquiries.
   deleteBatch: (id: number) =>
     prisma.offlineBatch.update({ where: { id }, data: { deletedAt: new Date() } }),
 
-  // ── offline banner (OfflineBannerSlider) ────────────────────────────────────
-  // Admin-only list (GET /admin/offline/banners) → recency is the contract; see
-  // utils/listOrdering. `orderBy` is still written by create/reorder.
+  // Admin-only list: recency is the contract (see utils/listOrdering); `orderBy` is still written by create/reorder.
   listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
   findBannerById: (id: number) => prisma.offlineBannerSlider.findUnique({ where: { id }, select: { id: true } }),
   createBanner: (data: { image: string; key: string | null; keyId: number | null; orderBy: number }) => {

@@ -1,3 +1,4 @@
+// Admin promocodes: HTTP handlers for promocode CRUD and plan links.
 import { Request, Response } from "express";
 import {
   createPromocodeSchema,
@@ -59,7 +60,6 @@ export const getPromocodeById = async (req: Request, res: Response) => {
     const r = await pcSql.getPromocodeById(nid);
     if ((r as any).notFound)
       return res.status(404).json({ success: false, message: "Promocode not found." });
-    // C5: real plan-link `plans[]` for the edit screen.
     const plans = await pcSql.loadPlanLinksSql(nid);
     return res
       .status(200)
@@ -69,13 +69,13 @@ export const getPromocodeById = async (req: Request, res: Response) => {
   }
 };
 
+// Create the code with its appliesTo groups, then link per-plan percentages.
 export const createPromocode = async (req: Request, res: Response) => {
   try {
     const data = createPromocodeSchema.parse(req.body);
     const code = data.promocode.toUpperCase();
 
-    // appliesTo is normalized to [{type, ids:string[]}] by the schema (single
-    // object OR array). Convert to numeric groups (multi-type aware).
+    // appliesTo is already normalized to [{type, ids:string[]}] by the schema.
     const groups = data.appliesTo.map((g) => ({ type: g.type as pcSql.AppliesToType, ids: g.ids.map((x) => Number(x)) }));
     if (groups.some((g) => g.ids.some((n) => !Number.isInteger(n) || n <= 0)))
       return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
@@ -97,7 +97,6 @@ export const createPromocode = async (req: Request, res: Response) => {
       });
       if ((r as any).conflict)
         return res.status(409).json({ success: false, message: "Promocode already exists." });
-      // Plan-link % sync across ALL referenced types (multi-type aware).
       if (data.plans.length) {
         const nid = pcSql.parsePcId(String((r as any).data._id));
         if (nid != null) {
@@ -159,9 +158,8 @@ export const updatePromocode = async (req: Request, res: Response) => {
         return res.status(404).json({ success: false, message: "Promocode not found." });
       if ((r as any).conflict)
         return res.status(409).json({ success: false, message: "Promocode already exists." });
-      // Plan-link % replace-semantics across ALL referenced types. Effective
-      // groups = the just-saved appliesTo (if part of this update), else the
-      // existing row's groups.
+      // Plan links use replace-semantics. Effective groups = the just-saved
+      // appliesTo if part of this update, else the existing row's groups.
       if (data.plans !== undefined) {
         const effGroups = appliesTo ?? (await pcSql.getAppliesToGroupsById(nid));
         const validPlans = await pcSql.resolveValidPlansMultiSql(effGroups);
@@ -252,6 +250,7 @@ export const bulkDelete = async (req: Request, res: Response) => {
   }
 };
 
+// Plans a promocode can be linked to, filtered by product type / exam type.
 export const getPromocodePlans = async (req: Request, res: Response) => {
   try {
     const { type, examTypeId, search } = req.query as Record<string, string>;

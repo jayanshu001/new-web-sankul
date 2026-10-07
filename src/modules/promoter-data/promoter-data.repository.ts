@@ -1,22 +1,14 @@
+// Promoter data: raw SQL analytics attributed via the order promocode snapshot.
 import { prisma } from "../../config/prisma";
 
 /**
- * Promoter analytics on SQL — the "what did this promoter earn / drive" reads
- * (customers, subscriptions, dashboard). Used by the promoter dashboard/customers/
- * subscription controllers when `isMysqlModule("promoter-data")`.
+ * Promoter analytics. A subscription is attributed to a promoter by joining
+ * order→subscription (order.id = subscription.order_id) and filtering on the order's
+ * `promocode` JSON snapshot (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`).
+ * Commission = amount * pct/100.
  *
- * ⚠ ATTRIBUTION MODEL (differs from Mongo — see MONGO_ONLY_MIGRATION_PLAN.md):
- * SQL has NO promoter_id / promoter_percentage / paid_amount columns on the
- * subscription tables. Instead, `ws_package_course_order.promocode` (and
- * `ws_ebook_order.promocode`) is a JSON SNAPSHOT of the whole promocode at
- * purchase, embedding `promoterId`, `promocode`, and
- * `promotedPackageCourseEbook[0].promoterPercentage`. We attribute a subscription
- * to a promoter by joining order→subscription (order.id = subscription.order_id)
- * and filtering on the JSON promoterId. Commission = amount * pct/100.
- *
- * All queries are raw SQL because Prisma can't express JSON_EXTRACT path filters
- * or DATE_FORMAT time-bucket grouping. `promoterId` is always passed as a bound
- * parameter (no string interpolation of user input).
+ * Raw SQL because Prisma can't express JSON_EXTRACT path filters or DATE_FORMAT
+ * bucketing. `promoterId` is always a bound parameter.
  */
 
 const num = (v: unknown): number => {
@@ -26,8 +18,6 @@ const num = (v: unknown): number => {
 };
 
 export const promoterDataRepository = {
-  // ─── Course/package subscriptions attributed to a promoter ───────────────
-  /** Paginated course subs for a promoter, with the embedded promo % + names. */
   listCourseSubs: (promoterId: number, opts: { from?: Date; to?: Date; skip: number; take: number }) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT s.id, s.customer_id AS customerId, s.amount, s.status, s.created_at AS createdAt,
@@ -61,7 +51,6 @@ export const promoterDataRepository = {
     return num(rows[0]?.n);
   },
 
-  // ─── Ebook subscriptions attributed to a promoter ────────────────────────
   listEbookSubs: (promoterId: number, opts: { from?: Date; to?: Date; skip: number; take: number }) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT s.id, s.customer_id AS customerId, s.price AS amount, s.status, s.created_at AS createdAt,
@@ -95,7 +84,6 @@ export const promoterDataRepository = {
     return num(rows[0]?.n);
   },
 
-  // ─── Dashboard summary (course side: count, revenue, commission, customers) ─
   courseTotals: async (promoterId: number, opts?: { from?: Date; to?: Date; activeOnly?: boolean; now?: Date }) => {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT COUNT(*) AS subscriptions,
@@ -132,7 +120,6 @@ export const promoterDataRepository = {
     return { subscriptions: num(rows[0]?.subscriptions), earnings: num(rows[0]?.earnings) };
   },
 
-  // ─── Time-series buckets for the overview chart ──────────────────────────
   /** `fmt` is a MySQL DATE_FORMAT string (e.g. '%Y-%m-%d'). */
   courseSeries: (promoterId: number, fmt: string, opts: { from?: Date; to?: Date }) =>
     prisma.$queryRawUnsafe<any[]>(
@@ -148,7 +135,6 @@ export const promoterDataRepository = {
       ...[fmt, promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : [])]
     ),
 
-  // ─── Subscription report: by course + by month (with commission) ─────────
   reportByCourse: (promoterId: number) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT s.course_id AS courseId, cr.name AS courseName,
@@ -177,8 +163,6 @@ export const promoterDataRepository = {
       promoterId
     ),
 
-  // ─── Promocode usage (count + revenue) by code string, for this promoter ──
-  /** Usage per promocode string across course + ebook orders' JSON snapshot. */
   promocodeUsage: async (promoterId: number) => {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT code, COUNT(*) AS count, COALESCE(SUM(amount),0) AS revenue FROM (
@@ -199,7 +183,6 @@ export const promoterDataRepository = {
     return map;
   },
 
-  // ─── Distinct customers attributed to a promoter (for the customers list) ─
   listCustomerIds: async (promoterId: number) => {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT DISTINCT s.customer_id AS id FROM ws_package_course_subscription s

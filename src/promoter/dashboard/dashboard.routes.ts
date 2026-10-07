@@ -1,3 +1,4 @@
+// Promoter dashboard: summary and overview routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { getDashboard, getDashboardOverview } from "./dashboard.controller";

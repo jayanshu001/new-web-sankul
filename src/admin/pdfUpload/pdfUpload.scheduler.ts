@@ -1,3 +1,4 @@
+// Ebook PDF upload: BullMQ worker that streams staged PDFs to Spaces and attaches them.
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import fs from "fs/promises";
@@ -28,11 +29,8 @@ import {
   PdfJobUpdate,
 } from "../../socket/pdf-progress.socket";
 
-// BullMQ queue that uploads admin-supplied PDFs to DigitalOcean Spaces and
-// attaches each to its ebook's `bookUrl` — strictly one PDF at a time so none
-// is skipped and the admin sees a clean queued → in_progress → completed march
-// through the batch. Modeled on admin/notification/scheduler.ts (dedicated
-// Redis connections, boot rehydrate, graceful shutdown).
+// Uploads admin PDFs to Spaces and attaches each to its ebook, strictly one at a
+// time so none is skipped and progress reads queued → in_progress → completed.
 
 const QUEUE_NAME = "pdf-upload";
 
@@ -41,8 +39,8 @@ const REDIS_PORT = Number(process.env.REDIS_PORT) || 6380;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 
 interface PdfUploadJobData {
-  // PdfUploadJob._id — also used as the BullMQ jobId so enqueue is idempotent
-  // and a reconnecting admin can correlate socket events to DB rows.
+  // Job row id; also the basis of the BullMQ jobId, so enqueue is idempotent and
+  // a reconnecting admin can correlate socket events to rows.
   jobRecordId: string;
 }
 
@@ -64,10 +62,8 @@ function buildConnection(): RedisType {
   });
 }
 
-// Ensure a producer queue exists so jobs can be enqueued from HTTP handlers.
-// In split PM2 deployments the API runs with WORKER_ENABLED=false, yet POST
-// /admin/pdf-upload still calls enqueuePdfUploadJob. Idempotent — the worker's
-// initPdfUploadScheduler reuses whatever this created.
+// In split PM2 deployments the API runs with WORKER_ENABLED=false but still
+// enqueues, so the producer is created lazily and reused by the worker.
 function ensureProducer(): Queue<PdfUploadJobData> {
   if (!queue) {
     connection = connection ?? buildConnection();
@@ -80,8 +76,7 @@ export function getPdfUploadQueue(): Queue<PdfUploadJobData> {
   return ensureProducer();
 }
 
-// The health endpoint reads these without throwing — a null queue/worker just
-// means the scheduler hasn't booted yet, which the report surfaces as such.
+// For the health endpoint: null means the scheduler hasn't booted yet.
 export function getPdfUploadQueueOrNull(): Queue<PdfUploadJobData> | null {
   return queue;
 }
@@ -91,9 +86,8 @@ export function getPdfUploadWorkerOrNull(): Worker<PdfUploadJobData> | null {
 }
 
 /**
- * Enqueue one PDF job. jobId = the PdfUploadJob._id so a duplicate enqueue
- * (e.g. boot rehydrate after the controller already added it) is a no-op.
- * Jobs run FIFO at concurrency 1, so the batch processes in insertion order.
+ * Deterministic jobId makes a duplicate enqueue (e.g. boot rehydrate) a no-op.
+ * Concurrency 1 + FIFO keeps the batch in insertion order.
  */
 export async function enqueuePdfUploadJob(jobRecordId: string): Promise<void> {
   const q = ensureProducer();
@@ -101,9 +95,7 @@ export async function enqueuePdfUploadJob(jobRecordId: string): Promise<void> {
     "upload",
     { jobRecordId },
     {
-      // BullMQ rejects a purely-numeric custom jobId ("Custom Id cannot be
-      // integers"). SQL pdf-upload row ids are plain ints, so prefix to keep the
-      // jobId non-numeric (and colon-free). Still deterministic → idempotent.
+      // BullMQ rejects integer custom ids, so prefix the int row id (colon-free).
       // The worker resolves the row from job.data.jobRecordId, not job.id.
       jobId: `pdf-${jobRecordId}`,
       attempts: 3,
@@ -114,7 +106,6 @@ export async function enqueuePdfUploadJob(jobRecordId: string): Promise<void> {
   );
 }
 
-// Build the socket payload from a job row.
 function toUpdate(row: any): PdfJobUpdate {
   return {
     batchId: row.batchId,
@@ -129,8 +120,6 @@ function toUpdate(row: any): PdfJobUpdate {
   };
 }
 
-// After a job reaches a terminal state, check whether its batch is fully done
-// and, if so, emit the batch summary.
 async function maybeEmitBatchDone(batchId: string): Promise<void> {
   const { total, completed, failed } = await batchCountsSql(batchId);
   if (completed + failed >= total) {
@@ -138,29 +127,21 @@ async function maybeEmitBatchDone(batchId: string): Promise<void> {
   }
 }
 
-/**
- * The per-PDF work: mark in_progress → stream the staged temp file to Spaces →
- * write the public URL onto the ebook's bookUrl → mark completed. Progress is
- * pushed to BullMQ AND mirrored to the DB + admin socket at each step.
- */
 async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   const { jobRecordId } = job.data;
-  // SQL: a plain row object (Mongo-shaped via toJobRow).
   const row: any = await getJobByIdSql(jobRecordId);
   if (!row) {
     logger.warn("PDF upload: job row missing, dropping", { jobRecordId });
-    return; // nothing to do — row was deleted
+    return;
   }
-  if (row.status === "completed") return; // idempotent re-run guard
+  if (row.status === "completed") return;
 
   const target: "bookUrl" | "demoUrl" =
     row.targetField === "demoUrl" ? "demoUrl" : "bookUrl";
 
-  // Mirror each transition to: the job row, BullMQ, the admin socket, AND the
-  // ebook document (so the list/detail reflect status across sessions + refresh).
-  // Job "in_progress" maps to the ebook's canonical "processing" value; "queued"
-  // and "completed" map 1:1. `set` carries the resolved url/filename on the
-  // completed write so the doc never shows completed without its bookUrl/demoUrl.
+  // Mirrors each transition to the job row, BullMQ, the socket and the ebook row.
+  // Job "in_progress" maps to the ebook's "processing"; `set` carries url/filename
+  // on the completed write so the ebook never reads completed without its url.
   const setProgress = async (
     progress: number,
     status = row.status,
@@ -168,8 +149,7 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   ) => {
     row.status = status;
     row.progress = progress;
-    // Persist all currently-set lifecycle fields in one update; row was already
-    // mutated (startedAt/fileUrl/finishedAt) by the caller before setProgress.
+    // The caller sets startedAt/fileUrl/finishedAt on row before calling.
     await updateJobSql(jobRecordId, {
       status,
       progress,
@@ -187,8 +167,7 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
       set,
     });
     await persistEbook.catch((err) =>
-      // Persisting status must not fail the upload — the socket already carried
-      // the live value; the DB mirror is best-effort.
+      // Best-effort: must not fail the upload.
       logger.warn("PDF upload: failed to persist ebook status", {
         jobRecordId,
         ebookId: String(row.ebookId),
@@ -201,14 +180,9 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   row.startedAt = new Date();
   await setProgress(5, "in_progress");
 
-  // Stream the staged file up to Spaces. We don't hold it in memory — large
-  // book PDFs would blow the heap.
-  // Sanitize the name for the object key — same rule as utils/presignUpload.ts's
-  // sanitizeName. Non-ASCII names (Gujarati/Hindi) would otherwise produce a
-  // non-ASCII key, and the public URL below is built by string concatenation, so
-  // it would need percent-encoding to be usable. The PRETTY original name is
-  // still preserved verbatim in demo_file_name / book_file_name for display —
-  // only the storage key is ASCII-folded.
+  // Streamed, never buffered (heap). Key is ASCII-folded like presignUpload's
+  // sanitizeName because the public URL is built by concatenation; the original
+  // name is kept in book_file_name / demo_file_name for display.
   const safeName = path
     .basename(row.fileName)
     .replace(/[^\w.\-]+/g, "_")
@@ -230,27 +204,16 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
 
   const fileUrl = publicUrlFor(key);
 
-  // Attach to the ebook on the requested field (bookUrl or demoUrl) plus its
-  // matching *FileName field. Read the OLD url first so we can delete the
-  // replaced file from Spaces afterwards (an update overwrites the slot, and
-  // without this the previous PDF is orphaned in storage forever). If the
-  // ebook vanished, fail the job so it's visible rather than silently dropping
-  // the upload.
-  // The ebook-side write is SQL — ws_ebook has the upload-status / file-name
-  // columns. We read the old url via getEbookUrlSql (keyed by the int ebookId)
-  // and attach below via setEbookUploadStatusSql.
+  // Read the old url first so the replaced file can be deleted from Spaces
+  // afterwards (otherwise it is orphaned). A vanished ebook fails the job loudly.
   const nameField = target === "demoUrl" ? "demoFileName" : "bookFileName";
   let oldUrl: string | null = null;
-  // getEbookUrlSql returns null both when the slot is empty AND when the row
-  // is gone; re-check existence so a missing ebook fails loudly.
+  // getEbookUrlSql returns null for both an empty slot and a missing row.
   if (!(await ebookExistsSql(String(row.ebookId)))) {
     throw new Error(`Ebook ${row.ebookId} not found — cannot attach PDF.`);
   }
   oldUrl = await getEbookUrlSql(String(row.ebookId), target);
 
-  // The completed write sets status="completed" + the url/filename in one update
-  // (via setProgress's `set`), so the ebook never reads completed without its
-  // bookUrl/demoUrl.
   row.fileUrl = fileUrl;
   row.finishedAt = new Date();
   await setProgress(100, "completed", {
@@ -258,16 +221,11 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
     [nameField]: row.fileName,
   });
 
-  // Best-effort cleanup of the staged temp file.
   await fs.unlink(row.tempPath).catch(() => {});
 
-  // Delete the PDF this upload replaced from Spaces — only AFTER the new one is
-  // attached, only if it actually changed, and only if it lives in OUR bucket
-  // (deleteFromS3FileUrl keys off the URL path against DO_BUCKET, so a foreign
-  // URL — e.g. an externally-hosted link — must not be passed to it). A
-  // re-upload of the same URL or an empty slot has nothing to remove.
-  // Best-effort: deleteFromS3FileUrl swallows its own errors, so a storage blip
-  // can't fail the job.
+  // Only after the new file is attached, only if changed, and only for our own
+  // bucket (deleteFromS3FileUrl keys off the path, so a foreign URL must not
+  // reach it). It swallows its own errors, so a storage blip can't fail the job.
   if (oldUrl && oldUrl !== fileUrl && isOwnBucketUrl(oldUrl)) {
     await deleteFromS3FileUrl(oldUrl);
     logger.info("PDF upload: removed replaced file from Spaces", {
@@ -282,12 +240,10 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
 }
 
 /**
- * Boot rehydrate — any job left in queued/in_progress (e.g. the pod died
- * mid-batch) is re-enqueued so the march resumes. in_progress is reset to
- * queued first; the deterministic jobId keeps this idempotent.
+ * Re-enqueues jobs left queued/in_progress (e.g. the pod died mid-batch);
+ * in_progress is reset to queued first. The deterministic jobId keeps it idempotent.
  */
 async function rehydratePendingJobs(): Promise<number> {
-  // The service resets in_progress→queued and returns the ids to enqueue.
   const ids = await rehydrateRowsSql();
   let count = 0;
   for (const id of ids) {
@@ -308,7 +264,6 @@ export async function initPdfUploadScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  // Reuse the producer queue if enqueue already lazily created it in this process.
   ensureProducer();
 
   worker = new Worker<PdfUploadJobData>(
@@ -318,9 +273,7 @@ export async function initPdfUploadScheduler(): Promise<void> {
     },
     {
       connection: buildConnection(),
-      // concurrency 1 → strict one-at-a-time, in-order processing. This is the
-      // whole point: every PDF marches queued → in_progress → completed, one
-      // after another, so none is skipped and the admin sees a clean sequence.
+      // Strict one-at-a-time, in-order processing is the point of this queue.
       concurrency: 1,
     }
   );
@@ -334,8 +287,7 @@ export async function initPdfUploadScheduler(): Promise<void> {
       attemptsMade: job.attemptsMade,
       error: err.message,
     });
-    // Only flip the row to "failed" once retries are exhausted — interim
-    // attempts keep it visible as in_progress.
+    // Only once retries are exhausted; interim attempts stay in_progress.
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
       try {
         const row: any = await updateJobSql(job.data.jobRecordId, {
@@ -345,8 +297,7 @@ export async function initPdfUploadScheduler(): Promise<void> {
         });
         if (row) {
           emitPdfJobUpdate(toUpdate(row));
-          // Persist "failed" onto the ebook slot too (note: bookUrl/demoUrl is
-          // left as-is — a failed re-upload keeps the previous file).
+          // bookUrl/demoUrl is left as-is: a failed re-upload keeps the previous file.
           const target: "bookUrl" | "demoUrl" =
             row.targetField === "demoUrl" ? "demoUrl" : "bookUrl";
           await setEbookUploadStatusSql(String(row.ebookId), target, { status: "failed" }).catch(() => {});
@@ -373,8 +324,8 @@ export async function initPdfUploadScheduler(): Promise<void> {
   logger.info("BullMQ PDF upload scheduler started.", { rehydrated });
 }
 
-/** Graceful shutdown — close worker/events/queue + the dedicated connection. */
-export async function shutdownPdfUploadScheduler(): Promise<void> {
+export
+ async function shutdownPdfUploadScheduler(): Promise<void> {
   try {
     await worker?.close();
     await queueEvents?.close();

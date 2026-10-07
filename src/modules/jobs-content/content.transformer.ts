@@ -1,3 +1,4 @@
+// Jobs content: row (card/detail JSON) to DTO mapping (response shape is frozen).
 import type { Prisma } from "@prisma/client";
 import type { CONTENT_FULL_INCLUDE } from "./content.repository";
 import type { JobContentDto, RefDto } from "./content.types";
@@ -7,9 +8,8 @@ type ContentRow = Prisma.JobContentGetPayload<{ include: typeof CONTENT_FULL_INC
 const toRef = (row: { id: bigint; name?: string | null; label?: string | null; slug?: string | null } | null | undefined): RefDto | undefined =>
   row ? { _id: String(row.id), name: row.name ?? row.label ?? undefined, slug: row.slug ?? undefined } : undefined;
 
-// Snake_case, un-typed on purpose — see content.repository.ts's comment.
-// `card` fields win over `detail` fields when both are present, matching
-// Laravel's `Content::field()` precedence (card → detail → base column).
+// Snake_case and untyped on purpose (see content.repository.ts). Precedence
+// matches Laravel's `Content::field()`: card → detail → base column.
 type Raw = Record<string, unknown>;
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 const num = (v: unknown): number | undefined => {

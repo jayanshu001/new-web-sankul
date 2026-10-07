@@ -1,19 +1,6 @@
 /**
- * SQL (Prisma) port of the live-session reminder write paths — set/replace,
- * remove, and the admin sync/cancel hooks. Flag: `client-live-reminder`.
- *
- * Mirrors src/client/live-reminder/live-reminder.service.ts byte-for-byte on
- * the API contract, but reads/writes ws_live_session, ws_live_session_reminder
- * and ws_notification via Prisma instead of Mongoose.
- *
- * What stays untouched (NOT migrated here):
- *   - BullMQ scheduling: scheduleNotificationJob / cancelNotificationJob are
- *     called exactly as on Mongo, just with the SQL notification id stringified.
- *     The notification dispatcher's worker already dual-reads SQL/Mongo, so the
- *     backing row created in ws_notification fires the same FCM path.
- *
- * The session's first liveCourseId comes from the ws_live_session_course join
- * table (the Mongo doc carried liveCourseIds[] inline; SQL normalises it).
+ * Live reminders: set/replace and remove writes, plus the admin sync/cancel hooks.
+ * Each reminder is backed by a scheduled ws_notification row + a BullMQ job keyed by its id.
  */
 import {
   scheduleNotificationJob,
@@ -22,18 +9,12 @@ import {
 import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
 
-
 export const parseReminderId = (id: string | number | null | undefined): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/**
- * SQL reminder row → the Mongo-shaped object the live-reminder controller's
- * `publicReminder` shaper consumes (`_id`, `liveSessionId`, `liveCourseId`,
- * `minutesBefore`, `remindAt`, `sessionScheduledAt`, `status`, timestamps).
- * Keeps the set/remove response byte-compatible without touching the controller.
- */
+/** The shape the controller's `publicReminder` shaper consumes; keeps the response frozen. */
 function toReminderShape(
   r: any,
   session?: { id: number; title: string | null; status: string; scheduledAt: Date | null; streamId: string | null; subject?: string | null } | null,
@@ -67,14 +48,13 @@ function toReminderShape(
   };
 }
 
-// Same clamp as the Mongo service: never fire in the past.
+// Never fire in the past.
 function computeRemindAt(scheduledAt: Date, minutesBefore: number): Date {
   const target = scheduledAt.getTime() - minutesBefore * 60_000;
   const soonest = Date.now() + 1_000;
   return new Date(Math.max(target, soonest));
 }
 
-// First liveCourseId for a session, from the normalised join table (or null).
 async function firstLiveCourseId(liveSessionId: number): Promise<number | null> {
   const link = await prisma.liveSessionCourse.findFirst({
     where: { liveSessionId },
@@ -84,7 +64,6 @@ async function firstLiveCourseId(liveSessionId: number): Promise<number | null> 
   return link?.liveCourseId ?? null;
 }
 
-// Create the scheduled Notification row (ws_notification) + BullMQ job.
 async function provisionNotification(
   customerId: number,
   session: { id: number; title: string | null; scheduledAt: Date | null; streamId: string | null },
@@ -116,15 +95,14 @@ async function provisionNotification(
   try {
     await scheduleNotificationJob(String(notif.id), remindAt);
   } catch (err) {
-    // Couldn't enqueue (e.g. Redis/BullMQ down) — don't leave an orphan row.
+    // Couldn't enqueue (e.g. Redis down): don't leave an orphan row.
     await prisma.notification.delete({ where: { id: notif.id } }).catch(() => {});
     throw err;
   }
   return notif.id;
 }
 
-// Cancel a reminder's BullMQ job and drop its scheduled Notification row.
-// Only rows still in "scheduled" status are deleted (a delivered feed row stays).
+// Only rows still "scheduled" are deleted; a delivered feed row stays.
 async function deprovisionNotification(notificationId?: number | null): Promise<void> {
   if (!notificationId) return;
   try {
@@ -144,11 +122,7 @@ export type UpsertReminderSqlResult =
   | { ok: true; reminder: any; session: any }
   | { ok: false; status: number; message: string };
 
-/**
- * Create or replace the caller's reminder for a SCHEDULED session (SQL).
- * `customerId`/`liveSessionId` arrive as the raw strings from the route; the
- * SQL branch parses them to ints (returning the same 422 the Mongo guard would).
- */
+/** Create or replace the caller's reminder for a SCHEDULED session. Ids arrive as raw route strings. */
 export async function upsertReminderSql(
   customerId: string,
   liveSessionId: string,
@@ -192,7 +166,6 @@ export async function upsertReminderSql(
   const liveCourseId = await firstLiveCourseId(sid);
   const remindAt = computeRemindAt(session.scheduledAt, minutesBefore);
 
-  // Replace any existing reminder's backing notification before re-provisioning.
   const existing = await prisma.liveSessionReminder.findFirst({
     where: { customerId: cid, liveSessionId: sid },
     select: { id: true, notificationId: true },
@@ -219,16 +192,10 @@ export async function upsertReminderSql(
       });
 
   logger.info("upsertReminderSql service completed", { traceId, customerId, liveSessionId, remindAt, minutesBefore });
-  // Mongo-shaped so the existing controller's publicReminder renders it (the
-  // controller re-reads via Mongo findById which returns null on the SQL path,
-  // then falls back to this object).
   return { ok: true, reminder: toReminderShape(reminder, session, liveCourseId), session };
 }
 
-/**
- * Remove the caller's reminder for a session (SQL). Returns the deleted reminder
- * row, or null if there wasn't one.
- */
+/** Returns the deleted reminder, or null if there wasn't one. */
 export async function removeReminderSql(
   customerId: string,
   liveSessionId: string,
@@ -255,8 +222,8 @@ export async function removeReminderSql(
 }
 
 /**
- * Admin hook (SQL) — a session's schedule changed: re-point every reminder's
- * fire time + job, or cancel them if the session is no longer schedulable.
+ * Admin hook for a schedule change: re-point every reminder's fire time + job, or cancel
+ * them if the session is no longer schedulable.
  */
 export async function syncRemindersForSessionSql(liveSessionId: number): Promise<void> {
   const reminders = await prisma.liveSessionReminder.findMany({
@@ -310,10 +277,7 @@ export async function syncRemindersForSessionSql(liveSessionId: number): Promise
   });
 }
 
-/**
- * Admin hook (SQL) — a session was deleted: cancel and remove every reminder
- * (and its backing job) for it.
- */
+/** Admin hook for a deleted session: cancel and remove every reminder and its job. */
 export async function cancelRemindersForSessionSql(liveSessionId: number): Promise<void> {
   const reminders = await prisma.liveSessionReminder.findMany({ where: { liveSessionId } });
   if (reminders.length === 0) return;

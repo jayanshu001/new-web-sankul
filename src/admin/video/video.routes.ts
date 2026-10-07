@@ -1,3 +1,4 @@
+// Admin videos: video routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { cacheRoute } from "../../middlewares/cacheRoute";

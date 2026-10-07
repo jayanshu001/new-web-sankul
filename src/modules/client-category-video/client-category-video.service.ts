@@ -1,20 +1,11 @@
+// Category videos: listings, progress, notes flags and entitlement checks.
 /**
- * Client category-video reads — SQL branch for
- *   GET /client/video-categories/:id/videos        (listVideosByCategory)
- *   GET /client/video-categories/:id/videos/:vid    (getVideoByCategory)
- *
- * Gated behind `isMysqlModule("client-category-video")`. Reads ws_video +
- * ws_video_category + ws_lecture_progress (per-row resume badge). Scope is
- * resolved by the catalog-category-tree SQL resolver. The encryption envelope
- * (resolveVideoSource + encrypt) stays controller-owned (DB-agnostic).
- *
- * Drift: ws_video has no live-session back-link column → per-row multi-quality
- * recordings are always empty on SQL (FE falls back to the synthetic ladder),
- * matching how SQL videos (not promoted-from-live) behave.
+ * The encryption envelope stays controller-owned. ws_video has no live-session
+ * back-link, so per-row multi-quality recordings are always empty here (the FE
+ * falls back to the synthetic ladder).
  */
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-
 
 export const parseCvId = (id: string): number | null => {
   const n = Number(id);
@@ -24,7 +15,6 @@ export const parseCvId = (id: string): number | null => {
 export const findCategory = (id: number) =>
   prisma.videoCategory.findFirst({ where: { id }, select: { id: true, title: true, image: true } });
 
-/** Category DTO shaped like the Mongo `category` object (passthrough-ish). */
 export const categoryDto = (c: any) => ({ _id: String(c.id), title: c.title ?? null, image: c.image ?? null });
 
 const videoSelect = {
@@ -32,7 +22,6 @@ const videoSelect = {
   youtube_id: true, aws_id: true, vimeo_id: true, priceType: true, videoCategoryId: true,
 } as const;
 
-/** Paginated active videos in a category (+ optional title search / price filter). */
 export const listVideos = async (opts: {
   categoryId: number; search: string | null; priceType: "free" | "paid" | null; skip: number; limitNum: number;
 }) => {
@@ -50,7 +39,6 @@ export const listVideos = async (opts: {
 export const findVideoInCategory = (categoryId: number, videoId: number) =>
   prisma.video.findFirst({ where: { id: videoId, videoCategoryId: categoryId, status: true }, select: videoSelect });
 
-/** Per-video resume badges for a customer over a set of videoIds. */
 export const progressByVideo = async (customerId: number, videoIds: number[]): Promise<Map<number, any>> => {
   if (!videoIds.length) return new Map();
   const rows = await prisma.lectureProgress.findMany({
@@ -61,15 +49,11 @@ export const progressByVideo = async (customerId: number, videoIds: number[]): P
 };
 
 /**
- * Video ids (of the page) the customer has at least one saved note on — text
- * (`ws_lecture_note`) OR audio (`ws_lecture_audio_note`). Two `findMany`s over the
- * page's ids, not one query per row.
- *
- * Deliberately NOT filtered by `lecture_type` or `course_id`: the notes-list
- * endpoint keys on (customer, lectureType, videoId) and ignores the container, so
- * scoping the flag tighter than the list would flag `hasNotes: false` on a video
- * that still opens with notes in it. `video_id` is only ever set on recorded-video
- * notes, so the id filter alone is already the right cut.
+ * Video ids on the page with at least one text or audio note. Deliberately not
+ * filtered by `lecture_type` or `course_id`: the notes list keys on
+ * (customer, lectureType, videoId) and ignores the container, so a tighter flag
+ * would say `hasNotes: false` on a video that opens with notes. `video_id` is only
+ * set on recorded-video notes.
  */
 export const videosWithNotes = async (customerId: number, videoIds: number[]): Promise<Set<number>> => {
   if (!videoIds.length) return new Set();
@@ -82,20 +66,17 @@ export const videosWithNotes = async (customerId: number, videoIds: number[]): P
   return out;
 };
 
-/** ALL owning containers for a category (a category may sit under multiple packages). */
+/** A category may sit under multiple packages; returns every owning container. */
 export const scopesForCategory = async (categoryId: number) => {
   const { resolveVideoScopes } = await import("../catalog-category-tree/category-tree.service");
   return resolveVideoScopes(categoryId);
 };
 
 /**
- * The FIRST scope (in course→live→package priority) the customer holds an active
- * subscription for, or null if none. Unlike isEntitledForScope (which checks ONE
- * container), this checks EVERY owning container so a buyer of any owning package is
- * entitled — and returns which one, so the media token can be scoped to a container the
- * customer actually owns (keeping /media/resolve's single-scope re-check valid). Uses
- * the same gates as isEntitledForScope (status=true + endAt in future; live also
- * payment_status=verified).
+ * The first scope (course → live → package priority) the customer holds an active
+ * subscription for, or null. Checks every owning container, so a buyer of any of
+ * them is entitled, and returns which one so the media token is scoped to a
+ * container the customer owns (keeping /media/resolve's single-scope re-check valid).
  */
 export const entitledScopeFor = async (
   customerId: number | null,
@@ -123,8 +104,8 @@ export const entitledScopeFor = async (
       : Promise.resolve([]),
     liveIds.length
       ? prisma.liveCourseSubscription.findMany({
-          // `paymentStatus` dropped 2026-08-25 — payment lives on ws_live_course_order
-          // and a subscription row exists only for a paid one, so `status` is the gate.
+          // Payment lives on ws_live_course_order and a subscription row exists only
+          // for a paid order, so `status` is the gate.
           where: { customerId, status: true, endAt: { gt: now }, liveCourseId: { in: liveIds } },
           select: { liveCourseId: true },
         })
@@ -145,17 +126,9 @@ export const entitledScopeFor = async (
 };
 
 /**
- * Is the customer entitled to PAID content under this resolved category scope?
- *
- * Mirrors the exact gates used by lecture-detail (client-lecture.hasActive*Sub)
- * and the progress heartbeat (client-lecture-progress.reportContainerProgress)
- * so all three package/course-scoped video endpoints agree. Free videos never
- * reach here — the caller only gates paid rows. Returns false for a missing
- * user, a null/unknown scope, or no active subscription.
- *
- * Parity note: ws_package_course_subscription has no payment_status column, so
- * the course/package gate collapses to status=true; ws_live_course_subscription
- * keeps the verified check.
+ * Uses the same gates as lecture-detail (client-lecture.hasActive*Sub) and the
+ * progress heartbeat so all package/course-scoped video endpoints agree. Only
+ * paid rows reach here. False for a missing user, unknown scope, or no active sub.
  */
 export const isEntitledForScope = async (
   customerId: number | null,

@@ -1,3 +1,4 @@
+// Client payments: book cart create-order handler.
 import { Request, Response } from "express";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
@@ -7,13 +8,10 @@ import {
   writeBookOrderMysql,
 } from "../../modules/book-order/book-order.service";
 
-/** Non-null Razorpay client (the controller has already null-checked it). */
 type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
 
-// POST /api/v1/client/payment/create-order
-// Reads the customer's active book cart, creates a local BookOrder (PENDING),
-// then a Razorpay order, stores the razorpayOrderId on the BookOrder, and
-// returns the bits the app needs to launch the Razorpay checkout.
+// Creates a PENDING BookOrder from the active book cart plus a Razorpay order, and
+// returns what the app needs to launch checkout.
 export const createBookOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -31,17 +29,15 @@ export const createBookOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // ── MySQL book write path (book-order) ───────────────────────────────────
-    const customerIdInt = Number(customerId); // C3 seam
+    const customerIdInt = Number(customerId);
     if (!Number.isInteger(customerIdInt)) {
       logger.warn("createBookOrderPayment[mysql] non-int customer id", { traceId, customerId });
       return res.status(400).json({ success: false, message: "Invalid customer id." });
     }
     return createBookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
   } catch (e: any) {
-    // Razorpay's SDK errors often arrive as { statusCode, error: { description } }
-    // and Mongo validation errors come with .errors. Surface the most useful
-    // string we can find so the next 500 actually tells us what blew up.
+    // Razorpay SDK errors often arrive as { statusCode, error: { description } };
+    // surface the most useful string so a 500 says what failed.
     const logMessage =
       e?.error?.description ||
       e?.message ||
@@ -51,9 +47,8 @@ export const createBookOrderPayment = async (req: Request, res: Response) => {
   }
 };
 
-// MySQL book create-order. Phase 1: preview the cart (validate + totals + priced
-// items). Phase 2: create the Razorpay order, then write the pending order + item
-// rows. Same response shape as the Mongo branch (bookOrderId = MySQL order id).
+// Phase 1: preview the cart (validate + totals + priced items). Phase 2: create the
+// Razorpay order, then write the pending order + item rows.
 const createBookOrderMysqlPath = async (
   req: Request,
   res: Response,
@@ -90,7 +85,7 @@ const createBookOrderMysqlPath = async (
     preview: preview.preview,
     razorpayOrderId: rzpOrder.id,
     razorpayOrderPayload: JSON.stringify(rzpOrder),
-    userIp: req.ip ?? null, // client IP → ws_book_order.user_ip
+    userIp: req.ip ?? null,
   });
 
   logger.info("createBookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount });

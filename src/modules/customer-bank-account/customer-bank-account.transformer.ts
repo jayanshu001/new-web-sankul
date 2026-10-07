@@ -1,3 +1,4 @@
+// Customer bank accounts: row to DTO mapping (response shape is frozen).
 import type { CustomerBankAccount } from "@prisma/client";
 import type { BankAccountDto } from "./customer-bank-account.types";
 

@@ -1,3 +1,4 @@
+// Referral wallet: debits redeemed coins after a verified purchase.
 import { debitWalletForOrderMysql } from "../../modules/referral/referral.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -9,14 +10,10 @@ interface DebitOpts {
   source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 }
 
-// Debits redeemed wallet coins from the buyer's reward_points after a verified
-// purchase. Idempotent on (source, orderId, customer) — a retried verify/webhook
-// is a no-op.
-//
-// NEVER THROWS: like creditReferrer, wallet debit is a post-payment side effect.
-// The customer already paid the reduced amount, so provisioning must never be
-// blocked by a debit failure — errors are logged and swallowed. (The 50% cap at
-// create-order guarantees the customer still paid the majority in cash.)
+// Debits redeemed wallet coins from reward_points after a verified purchase.
+// Idempotent on (source, orderId, customer), so a retried verify/webhook is a no-op.
+// Never throws: the customer already paid, so a debit failure is logged and swallowed
+// rather than blocking provisioning (the 50% cap at create-order bounds the loss).
 export async function debitWallet(opts: DebitOpts): Promise<void> {
   const { customerId, orderId, coin, source } = opts;
   const c = Number(coin);

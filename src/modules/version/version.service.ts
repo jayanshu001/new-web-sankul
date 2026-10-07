@@ -1,3 +1,4 @@
+// App version: latest and last-supported version code settings.
 import { versionRepository } from "./version.repository";
 import { toVersionDto } from "./version.transformer";
 import type { VersionDto, VersionUpsertInput } from "./version.types";

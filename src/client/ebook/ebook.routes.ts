@@ -1,3 +1,4 @@
+// Client ebooks: catalog, subscription, invoice and download routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
@@ -16,20 +17,17 @@ const router = Router();
 
 router.use(authenticate);
 
-// listEbooks / getEbookDetail cache internally now (catalog-ebook.service.ts
-// uses cache.aside — shared data cached, isPurchased/daysLeft/demoMediaToken/
-// bookMediaToken always live). Don't wrap these in an outer
-// cacheRoute({ scope: CacheScope.User }) — see course.routes.ts for why.
+// listEbooks / getEbookDetail cache internally (shared data cached; isPurchased/daysLeft/
+// media tokens always live). Don't wrap them in cacheRoute({ scope: CacheScope.User });
+// see course.routes.ts for why.
 router.get("/", listEbooks);
 
-// Tier-3 (wholly per-user) — NOT cached: my subscriptions / my invoice.
+// Per-user, not cached.
 router.get("/subscriptions", listMySubscriptions);
 router.get("/orders/:orderId/invoice", getEbookOrderInvoice);
 
-// Downloads — must be registered BEFORE the /:id catch-all so the literal
-// "/downloads" segment isn't swallowed as an ebook id. Tier-3 per-user list, not
-// cached; the download writes below touch only the user's download rows (which no
-// cached list/detail response embeds), so no autoFlushGroup is needed here.
+// Must be registered before the /:id catch-all. Per-user and not cached; download writes
+// touch only rows no cached response embeds, so no autoFlushGroup is needed.
 router.get("/downloads", listEbookDownloads);
 router.delete("/downloads/:ebookId", removeEbookDownload);
 router.post("/:id/download", recordEbookDownload);

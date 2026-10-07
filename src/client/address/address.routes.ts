@@ -1,3 +1,4 @@
+// Client addresses: address book CRUD and location dropdown routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -11,7 +12,6 @@ import {
   setDefaultAddress,
   deleteAddress,
   getStates,
-  // getDistrictsByState, // deprecated — use /cities instead
   listCities,
   listCentersByCity,
   getEducations,
@@ -20,24 +20,19 @@ import {
 
 const router = Router();
 
-// Public location dropdowns (no auth required). Tier-1 shared reference data;
-// no dedicated entity tag → "misc", long TTL. Address CRUD below is per-user.
-// Customer reference lookups — flushed by admin/address + admin/customer-master
-// writes (states, districts, educations) and by admin/goal (characteristic embeds
-// customerTargetGoal rows via getActiveGoals, so "goal" fans out to this tag).
+// Public location dropdowns (no auth). Address CRUD below is per-user. Flushed by
+// admin/address + admin/customer-master writes, and by admin/goal (getActiveGoals
+// embeds customerTargetGoal rows).
 const REF = { ttl: CACHE_TTL.DAY, entity: CacheEntity.CustomerLookup as const, scope: CacheScope.Shared as const };
-// NOT a customer lookup: /cities/:cityId/centers returns OFFLINE centres (the
-// same getCentersWithBatchesByCitiesMysql data as client/offline), so it carries
-// the "offline" tag and is swept by admin/offline writes instead.
+// /cities/:cityId/centers returns offline centres (same data as client/offline), so it
+// carries the "offline" tag and is swept by admin/offline writes.
 const REF_OFFLINE = { ttl: CACHE_TTL.DAY, entity: CacheEntity.Offline as const, scope: CacheScope.Shared as const };
 router.get("/states", cacheRoute(REF), getStates);
-// router.get("/states/:stateId/districts", getDistrictsByState); // deprecated
 router.get("/cities", cacheRoute(REF), listCities);
 router.get("/cities/:cityId/centers", cacheRoute(REF_OFFLINE), listCentersByCity);
 router.get("/educations", cacheRoute(REF), getEducations);
 router.get("/characteristic", cacheRoute(REF), getCharacteristic);
 
-// Address CRUD (auth required)
 router.get("/", authenticate, getMyAddresses);
 router.post("/", authenticate, createAddress);
 router.get("/:id", authenticate, getAddressById);

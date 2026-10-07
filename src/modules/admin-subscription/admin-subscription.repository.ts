@@ -1,20 +1,18 @@
+// Admin subscriptions: Prisma queries for subscription reports, grants and summaries.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { andWhere } from "../../utils/reportFilters";
 import { buildPrismaPrefixSearch, searchNumericId } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-subscription MySQL branch (Wave 7).
- * Read + report aggregation over ALREADY-MIGRATED tables — no new tables:
+ * Admin subscription reads + report aggregation:
  *  - course/package subs → ws_package_course_subscription (+ course/package/type/customer/plan)
  *  - ebook subs          → ws_ebook_subscription (+ ebook/customer)
  *  - reports             → groupBy/count/sum over subs + ws_book_order + ws_ebook_order
  *
- * ⚠ Drift: ws_package_course_subscription has NO payment_status / paid_amount /
- * razorpay / target_package_id columns. SQL package_id = the real package
- * (pcb_id = the plan); amount = paid amount; remarks = remark; payment_type ~
- * paymentMethod. The 3 subscription WRITES + the 2 address handlers stay Mongo
- * (write Mongo-only fields / CustomerAddress populate). Reads/reports only here.
+ * ws_package_course_subscription: package_id = the real package, pcb_id = the plan,
+ * amount = paid amount, remarks = remark, payment_type ≈ paymentMethod. It has no
+ * payment_status / razorpay columns (gateway data lives on the linked order).
  */
 export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
@@ -25,25 +23,23 @@ export interface CourseSubFilter {
   // orderIdsIn → subscriptions whose order matched a promocode (resolved upstream).
   promoterId?: number; orderMethod?: string; orderIdsIn?: number[];
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
-  // independent ranges on the subscription's own start/end columns (createdAt is fromDate/toDate)
+  // Independent ranges on the subscription's own start/end columns (createdAt is fromDate/toDate).
   startFrom?: Date; startTo?: Date; endFrom?: Date; endTo?: Date;
   courseIdsIn?: number[]; packageIdsIn?: number[];
-  // raw search term: customer name/phone/email, Razorpay order/payment id, and (all
+  // Raw search term: customer name/phone/email, Razorpay order/payment id, and (all
   // digits) customer id / order id / tracking — matched in-query, see buildSubWhere.
   search?: string;
 }
 
 export const adminSubscriptionRepository = {
-  // ── course/package subscription list + detail ──────────────────────────────
   // Reports contract: the caller composes the final `where` (base filters AND a
   // normalized-status fragment) with reportFilters.andWhere, then passes it here.
   buildCourseSubBaseWhere: (opts: CourseSubFilter): Prisma.PackageCourseSubscriptionWhereInput => buildSubWhere(opts),
   listCourseSubsByWhere: (where: Prisma.PackageCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
     prisma.packageCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
-  // Keyset page for the UNBOUNDED report export: id DESC (≈ the createdAt-DESC
-  // default) fetching rows strictly older than the last id seen — no deep OFFSET,
-  // so each page is O(take) on the PK index and the caller can walk the entire
-  // filtered set (300k+) without a row cap. See the service export iterator.
+  // Keyset page for the unbounded report export: id DESC (≈ the createdAt-DESC default),
+  // rows strictly older than the last id seen — no deep OFFSET, so each page is O(take)
+  // on the PK index and the caller can walk the entire filtered set (300k+).
   listCourseSubsPageKeyset: (where: Prisma.PackageCourseSubscriptionWhereInput, beforeId: number | undefined, take: number) =>
     prisma.packageCourseSubscription.findMany({
       where: beforeId ? andWhere(where, { id: { lt: beforeId } }) : where,
@@ -78,14 +74,12 @@ export const adminSubscriptionRepository = {
   transaction: <P extends Prisma.PrismaPromise<unknown>[]>(ops: [...P]) => prisma.$transaction(ops),
 
   /**
-   * The customer who owns this subscription. Read BEFORE an admin revoke so the
-   * caller can flush that customer's per-user route cache — on delete the row is
-   * gone afterwards, so this cannot be resolved after the fact.
+   * Read before an admin revoke so the caller can flush that customer's per-user route
+   * cache — after a delete the owner can no longer be resolved.
    */
   findSubscriptionCustomerId: (id: number) =>
     prisma.packageCourseSubscription.findUnique({ where: { id }, select: { customerId: true } }),
 
-  // ── write (admin manual grant) ──────────────────────────────────────────────
   // Full plan row for create-time validation + pricing/duration.
   findPlanById: (id: number) =>
     prisma.packageCourseEbookPrice.findUnique({
@@ -192,7 +186,6 @@ export const adminSubscriptionRepository = {
         materialAmount: d.materialAmount,
         payment_type: d.payment_type,
         remarks: d.remarks,
-        // Admin-initiated manual grant → both audit columns = the acting admin.
         created_by: d.actingAdminId ?? null,
         updated_by: d.actingAdminId ?? null,
         createdAt: d.now,
@@ -221,8 +214,7 @@ export const adminSubscriptionRepository = {
         ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
         ...(d.trackingId !== undefined ? { trackingId: d.trackingId } : {}),
         ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
-        // Admin edit → stamp updated_by (created_by left untouched). Only when the
-        // acting admin resolved, so a system caller never nulls an existing value.
+        // Only when the acting admin resolved, so a system caller never nulls an existing value.
         ...(d.actingAdminId != null ? { updated_by: d.actingAdminId } : {}),
         updatedAt: d.now,
       },
@@ -278,17 +270,12 @@ export const adminSubscriptionRepository = {
     return rows.map((r) => Number(r.id));
   },
 
-  // ── search-id resolvers (cross-table search) ────────────────────────────────
   courseIdsByText: async (q: string) => (await prisma.course.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
   packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
 
-  // ── plans-for-target ─────────────────────────────────────────────────────────
-  // `status` undefined = no status filter (both active and inactive). The caller
-  // owns the default — the controller maps an absent `?status=` to `true` so
-  // existing callers are unaffected; only `?status=all` widens it. Deliberately NOT
-  // hard-coded here any more: the sibling live-course / test-series / ebook plan
-  // endpoints all return inactive rows, and the admin picker needs to show a
-  // deactivated plan rather than silently dropping it.
+  // `status` undefined = no status filter. The controller maps an absent `?status=` to
+  // `true`; only `?status=all` widens it. Not hard-coded here: the sibling plan endpoints
+  // all return inactive rows, and the admin picker must show a deactivated plan.
   plansForTarget: (opts: { courseId?: number; packageId?: number; status?: boolean }) =>
     prisma.packageCourseEbookPrice.findMany({
       where: {
@@ -299,13 +286,11 @@ export const adminSubscriptionRepository = {
       orderBy: { duration: "asc" },
     }),
 
-  // ── ebook subs ─────────────────────────────────────────────────────────────────
   listEbookSubs: (opts: { customerId?: number; ebookId?: number; status?: boolean; fromDate?: Date; toDate?: Date; skip: number; take: number }) =>
     prisma.eBookSubscription.findMany({ where: buildEbookSubWhere(opts), orderBy: { id: "desc" }, skip: opts.skip, take: opts.take }),
   countEbookSubs: (opts: { customerId?: number; ebookId?: number; status?: boolean; fromDate?: Date; toDate?: Date }) =>
     prisma.eBookSubscription.count({ where: buildEbookSubWhere(opts) }),
 
-  // ── reports ────────────────────────────────────────────────────────────────────
   countSubs: (where: Prisma.PackageCourseSubscriptionWhereInput) => prisma.packageCourseSubscription.count({ where }),
   countEbookSubsRaw: (where: Prisma.EBookSubscriptionWhereInput) => prisma.eBookSubscription.count({ where }),
   ebookOrderRevenue: (where: Prisma.EBookOrderWhereInput) => prisma.eBookOrder.aggregate({ where, _sum: { orderPrice: true }, _count: { _all: true } }),
@@ -350,17 +335,15 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   // AND-ed fragments (kept off the top-level keys so they never collide with the
   // search OR below, and compose with each other).
   const and: Prisma.PackageCourseSubscriptionWhereInput[] = [];
-  // Subscription Material Report: material=true → only with-material rows; material=false
-  // → only without. Mirrors the report label's single source of truth (service
-  // rowHasMaterial): legacy rows carry a pc_material_id, SQL-created grants carry only a
+  // Material report: true → with-material rows only, false → without. Mirrors service
+  // rowHasMaterial: legacy rows carry a pc_material_id, newer grants only a
   // material_amount — either counts.
   if (opts.hasMaterial === true) and.push({ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] });
   else if (opts.hasMaterial === false) and.push({ OR: [{ pcMaterialId: null }, { pcMaterialId: 0 }] }, { OR: [{ materialAmount: null }, { materialAmount: 0 }] });
-  // Ws Coin filter: ws_coin (Int?) lives on the linked order (ws_package_course_order).
-  // true → an order that redeemed coin (ws_coin > 0). false → the complement, spelled
-  // out explicitly (rather than a relation `isNot`, whose null-relation handling is
-  // unreliable): order-less subs (orderId null) plus orders with null/≤0 ws_coin — all
-  // "without". Relation filter, ANDed so it composes with orderMethod's own relation is.
+  // Ws Coin filter: ws_coin lives on the linked order. true → an order that redeemed
+  // coin (> 0). false → the complement spelled out explicitly (a relation `isNot`
+  // handles null relations unreliably): order-less subs plus orders with null/≤0
+  // ws_coin. ANDed so it composes with orderMethod's own relation filter.
   if (opts.hasWsCoin === true) and.push({ packageCourseOrder: { is: { wsCoin: { gt: 0 } } } });
   else if (opts.hasWsCoin === false)
     and.push({ OR: [{ orderId: null }, { packageCourseOrder: { is: { wsCoin: null } } }, { packageCourseOrder: { is: { wsCoin: { lte: 0 } } } }] });
@@ -370,7 +353,7 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
     if (opts.toDate) where.createdAt.lte = opts.toDate;
   }
-  // independent Start / End date ranges (own columns; AND with createdAt & all else)
+  // Independent Start / End date ranges (own columns; AND with createdAt & all else).
   if (opts.startFrom || opts.startTo) {
     where.startAt = {};
     if (opts.startFrom) where.startAt.gte = opts.startFrom;
@@ -384,9 +367,9 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   // type: course = courseId>0; package = courseId null/0 AND package_id>0
   if (opts.type === "course") where.courseId = { gt: 0 };
   else if (opts.type === "package") { where.courseId = null; where.packageId = { gt: 0 }; }
-  // cross-table search OR. Customer + order clauses are relation subqueries, never a
+  // Cross-table search OR. Customer + order clauses are relation subqueries, never a
   // materialized customer-id list: a 1-char search over ws_customer (1M+ rows) blew
-  // MySQL's 65,535-placeholder cap (ER 1390) — same fix as admin-book buildOrderWhere.
+  // MySQL's 65,535-placeholder cap (ER 1390). Same approach as admin-book buildOrderWhere.
   const or: Prisma.PackageCourseSubscriptionWhereInput[] = [];
   const customerSearch = buildPrismaPrefixSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
   if (customerSearch) or.push({ customer: { is: customerSearch } });
@@ -403,7 +386,6 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   if (or.length) where.OR = or;
   return where;
 }
-// re-exported combinator used by the service to AND the status fragment on.
 export { andWhere };
 
 export type SubTrackingExportCursor = { untracked: boolean; afterTracking?: bigint; afterId?: number };

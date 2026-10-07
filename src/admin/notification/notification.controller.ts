@@ -1,3 +1,4 @@
+// Admin notifications: HTTP handlers for push broadcast, scheduling, log and image banners.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { dispatchAudience } from "./dispatcher";
@@ -24,29 +25,23 @@ import {
   deleteImageNotification as sqlDeleteImage,
 } from "../../modules/admin-notification/admin-notification.service";
 
-// Admin-supplied ids are numeric strings on the SQL path.
 const isValidId = (v: string) => parseIntId(v) != null;
-
-// ─── Broadcast / send push ──────────────────────────────────────────────────
 
 const broadcastSchema = z.object({
   title: z.string().min(1).max(255),
   body: z.string().min(1),
-  // Rich (HTML) variants from the editor — sent ONLY when real formatting exists.
-  // Android push gets these; iOS always gets plain title/body. Persisted for the
-  // in-app inbox + re-send.
+  // Sent only when real formatting exists. Android push gets these; iOS always
+  // gets plain title/body. Persisted for the in-app inbox and re-send.
   titleHtml: z.string().optional(),
   bodyHtml: z.string().optional(),
   image: z.string().optional(),
   type: z.string().max(50).optional().default("general"),
-  // Legacy / escape-hatch: hand-formed routing. `target` (below) is preferred —
-  // it lets the admin panel pick a destination semantically and have the backend
-  // build the correct FCM data fields (deepLink/viewType/screen/params).
+  // Escape hatch for hand-formed routing; prefer `target`, from which the backend
+  // builds the FCM data fields (deepLink/viewType/screen/params).
   deepLink: z.string().optional(),
   data: z.record(z.any()).optional(),
-  // Structured tap destination; resolved into deepLink + data before dispatch.
   target: notificationTargetSchema.optional(),
-  // Android notification channel (spec §3.1). Applied into data.channelId.
+  // Android notification channel; applied into data.channelId.
   channelId: z.enum(NOTIFICATION_CHANNELS).optional(),
   platforms: z.array(z.enum(["ios", "android"])).optional(),
   courseIds: z.array(z.string()).optional(),
@@ -55,16 +50,14 @@ const broadcastSchema = z.object({
   scheduledAt: z.coerce.date().optional(),
 });
 
-// POST /api/v1/admin/notifications/broadcast
 // Persists to ws_notifications and fans out via FCM synchronously.
 export const broadcastNotification = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
 
-    // In multipart/form-data (image upload) every field arrives as a STRING, so
-    // object/array fields are sent JSON-encoded by the client. Decode them back
-    // before Zod validation. JSON requests already have real objects (no-op).
+    // Multipart (image upload) sends object/array fields JSON-encoded; decode them
+    // before validation.
     const decodeJsonField = (key: string) => {
       const v = req.body[key];
       if (typeof v === "string" && v.trim()) {
@@ -81,14 +74,10 @@ export const broadcastNotification = async (req: Request, res: Response) => {
 
     const data = broadcastSchema.parse(req.body);
 
-    // Resolve the structured target (and channel) into the wire-level routing
-    // fields ONCE, here at the boundary. Everything downstream (immediate send,
-    // scheduled persistence + re-dispatch, per-recipient feed rows, FCM) keeps
-    // reading plain `deepLink` + `data`, so no other path needs to change.
-    //   - deepLink → top-level FcmPayload.deepLink (fcm.ts mirrors it into data)
-    //   - viewType/screen/params/channelId → the `data` record (all strings)
-    // Explicit `data`/`deepLink` remain an escape hatch; the resolved target
-    // wins on conflicts so the app-routing contract is guaranteed.
+    // Resolve target/channel into plain `deepLink` + `data` (all strings) once, here;
+    // everything downstream (immediate, scheduled, feed rows, FCM) reads only those.
+    // The resolved target wins over explicit `data`/`deepLink` on conflicts so the
+    // app-routing contract is guaranteed.
     const extraData: Record<string, string> = {};
     for (const [k, v] of Object.entries(data.data ?? {})) {
       extraData[k] = typeof v === "string" ? v : JSON.stringify(v);
@@ -101,7 +90,6 @@ export const broadcastNotification = async (req: Request, res: Response) => {
     if (data.channelId) extraData.channelId = data.channelId;
     data.data = Object.keys(extraData).length ? extraData : undefined;
 
-    // Audience ids are numeric strings on the SQL path.
     const idValid = (v: string) => parseIntId(v) != null;
 
     const userIdsCombined = [
@@ -129,7 +117,6 @@ export const broadcastNotification = async (req: Request, res: Response) => {
           userIds: audienceFilter.userIds,
         };
 
-    // ─── Scheduled path ───────────────────────────────────────────────────
     if (data.scheduledAt) {
       if (data.scheduledAt.getTime() <= Date.now()) {
         return res.status(400).json({
@@ -164,7 +151,6 @@ export const broadcastNotification = async (req: Request, res: Response) => {
       });
     }
 
-    // ─── Immediate send ───────────────────────────────────────────────────
     const result = await dispatchAudience(
       {
         title: data.title,
@@ -179,8 +165,7 @@ export const broadcastNotification = async (req: Request, res: Response) => {
       audienceFilter
     );
 
-    // For broadcast, persist a single row; for targeted, the dispatcher
-    // already fanned out per-recipient rows — store an admin-log parent row.
+    // Targeted sends already fanned out per-recipient rows; this is the admin-log parent row.
     await sqlCreateImmediateLog({
       broadcast: result.isBroadcast,
       title: data.title,
@@ -215,7 +200,6 @@ export const broadcastNotification = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/notifications/:id/cancel
 export const cancelScheduledNotification = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -233,8 +217,6 @@ export const cancelScheduledNotification = async (req: Request, res: Response) =
   }
 };
 
-// GET /api/v1/admin/notifications — admin-sent notifications log
-// Query: ?q=&status=&sortBy=&sortOrder=&page=&limit=
 export const listNotifications = async (req: Request, res: Response) => {
   try {
     const {
@@ -273,8 +255,6 @@ export const listNotifications = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/notifications/bulk-delete
-// Body: { ids: string[] }
 export const bulkDeleteNotifications = async (req: Request, res: Response) => {
   try {
     const raw = req.body?.ids;
@@ -298,7 +278,7 @@ export const bulkDeleteNotifications = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/notifications/:id
+// Also cancels the pending BullMQ job when the row was still scheduled.
 export const deleteNotification = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -312,10 +292,7 @@ export const deleteNotification = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Deep-link target options (searchable picker for the admin panel) ──────
-// GET /api/v1/admin/notifications/target-options?entity=&q=&page=&limit=
-// Returns { id, label } rows for the selected content entity so the panel can
-// render a server-side searchable dropdown instead of a manual id input.
+// { id, label } rows for the selected entity, backing the panel's searchable target picker.
 export const listTargetOptions = async (req: Request, res: Response) => {
   try {
     const { entity, q, page = "1", limit = "20" } = req.query as Record<string, string>;
@@ -350,7 +327,6 @@ export const listTargetOptions = async (req: Request, res: Response) => {
   }
 };
 
-// ─── ImageNotification CRUD (banners shown inside app) ─────────────────────
 const imageCreateSchema = z.object({
   image: z.string().min(1),
   redirectUrl: z.string().optional(),

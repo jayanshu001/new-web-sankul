@@ -1,21 +1,16 @@
-// src/libs/guestSession.ts
+// Guest session: static guest JWT for account-less catalog browse.
 import jwt from "jsonwebtoken";
 import { signAccessToken, verifyAccessToken } from "../utils/jwtSigner";
 import { isReviewModeOn } from "./reviewMode";
 
 /**
- * Guest login — an account-less identity (no `ws_customer` row) for catalog browse.
+ * Account-less guest identity for catalog browse. Valid only while Firebase RTDB
+ * `maintain.env` is "staging" (libs/reviewMode.ts); then `POST /client/auth/guest`
+ * issues it and it opens the GETs in middlewares/guestBrowse.ts. Any other value
+ * disables it everywhere, with no restart.
  *
- * ONE switch decides everything: Firebase Realtime DB `maintain.env` (read
- * server-side, libs/reviewMode.ts). While it is "staging":
- *   - `POST /client/auth/guest` hands out the guest token;
- *   - that token opens the guest-browsable GETs (middlewares/guestBrowse.ts).
- * The moment it is anything else ("production") the token stops working everywhere
- * and the endpoint refuses. No `.env` flag, no restart, no per-session state.
- *
- * The token is STATIC: an access-ring JWT `{ type: "guest", role: "guest" }` with no
- * `iat` and no `exp`, so every call returns the same string and it never expires on
- * its own. It carries no identity, so it never becomes `req.user`.
+ * The token is a static access-ring JWT `{ type: "guest", role: "guest" }` with no
+ * `iat`/`exp`. It carries no identity, so it never becomes `req.user`.
  *
  * ponytail: stateless, so a single guest cannot be revoked — only all of them, by
  * flipping Firebase or rotating the access key. Add a per-session store (Redis
@@ -25,7 +20,6 @@ export const isGuestModeOn = isReviewModeOn;
 
 export const guestToken = (): string => signAccessToken({ type: "guest", role: "guest" }, { noTimestamp: true });
 
-/** True for a decoded payload that is a guest token. */
 export const isGuestPayload = (decoded: any): boolean => decoded?.type === "guest" || decoded?.role === "guest";
 
 /** Signature-valid guest token AND guest mode currently on. */

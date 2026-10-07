@@ -1,19 +1,9 @@
-// src/config/streamos.ts
-//
-// StreamOS provider configuration.
-//
-// StreamOS shipped a NEW API on a new host (https://api.streamos.in/api/public/v1)
-// that shares nothing with the platform we integrated against
-// (https://streamapi.streamos.co/streamos) — different auth, paths, payloads and
-// webhook format. See docs/migration/STREAMOS_V1_CHANGE_MATRIX.md.
-//
-// Both clients therefore run side by side, selected by STREAMOS_PROVIDER:
-//   - "legacy" (default) → src/admin/live/streamos.service.ts
-//   - "v1"               → src/admin/live/streamos.v1.service.ts
-//
-// The default is deliberately "legacy": existing ws_live_session rows hold
-// legacy stream ids and legacy CDN URLs, so flipping this must be a conscious
-// deploy-time decision, never a side effect of shipping the new client.
+// StreamOS config: provider switch and v1 API settings.
+// StreamOS has two incompatible APIs (legacy streamapi.streamos.co vs v1
+// api.streamos.in; see docs/migration/STREAMOS_V1_CHANGE_MATRIX.md), selected by
+// STREAMOS_PROVIDER: "legacy" → admin/live/streamos.service.ts, "v1" →
+// admin/live/streamos.v1.service.ts. Default stays "legacy" because existing
+// ws_live_session rows hold legacy stream ids and CDN URLs.
 
 export type StreamosProvider = "legacy" | "v1";
 
@@ -33,17 +23,10 @@ export const streamosV1Base = (): string =>
 export const streamosV1ApiKey = (): string => process.env.STREAMOS_API_KEY?.trim() ?? "";
 
 /**
- * Which deployment this process is. Stamped onto every v1 stream we create and
- * checked on every v1 webhook delivery.
- *
- * StreamOS confirmed staging and production share ONE organisation and ONE API
- * key. That means both environments' streams live in the same StreamOS account,
- * and a webhook registered for one environment can receive the other's
- * recordings. Without a discriminator, a staging test recording delivered to
- * production would be hunted for among production's sessions — and on an id
- * collision could attach to the wrong class.
- *
- * Defaults to NODE_ENV so an unset var still separates prod from dev.
+ * Deployment tag stamped on every v1 stream and checked on every v1 webhook.
+ * Staging and production share one StreamOS organisation and API key, so a
+ * webhook can receive the other environment's recordings; without this tag an
+ * id collision could attach a recording to the wrong class. Defaults to NODE_ENV.
  */
 export const streamosEnvTag = (): string =>
   process.env.STREAMOS_ENV_TAG?.trim() || process.env.NODE_ENV?.trim() || "development";

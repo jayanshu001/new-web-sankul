@@ -1,3 +1,4 @@
+// Admin plans: Zod request schemas.
 import { z } from "zod";
 
 export const createPlanSchema = z
@@ -21,11 +22,9 @@ export const createPlanSchema = z
     { message: "Exactly one of courseId, packageId, ebookId must be set." }
   );
 
-// Linkage (courseId/packageId/ebookId) is editable on update. Because update is
-// a partial PATCH-style payload, the three fields are all optional; the
-// exactly-one rule is enforced only when at least one of them is present in the
-// body (i.e. the admin is actually re-linking). If none are sent, linkage is
-// left untouched. The controller nulls the other two when linkage is supplied.
+// Linkage (courseId/packageId/ebookId) is optional on update; the exactly-one rule
+// applies only when at least one is sent (re-linking). The controller nulls the
+// other two when linkage is supplied.
 export const updatePlanSchema = z
   .object({
     name: z.string().max(255).optional(),

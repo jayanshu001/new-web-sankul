@@ -1,3 +1,4 @@
+// Admin test series: HTTP handlers for series, papers, prices, subscriptions and orders.
 import { Request, Response } from "express";
 import { planInUseMessage } from "../../utils/planUsage";
 import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
@@ -38,9 +39,6 @@ function normalizeExamCategoryIds(body: Record<string, any>) {
   }
 }
 
-// ─── Test Series CRUD ────────────────────────────────────────────────────────
-
-// GET /api/v1/admin/test-series
 export const listTestSeries = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listTestSeries invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -70,7 +68,6 @@ export const listTestSeries = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/test-series/:id
 export const getTestSeriesById = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id);
@@ -89,7 +86,6 @@ export const getTestSeriesById = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/test-series
 export const createTestSeries = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createTestSeries invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -114,7 +110,6 @@ export const createTestSeries = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/test-series/:id
 export const updateTestSeries = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id);
@@ -151,9 +146,8 @@ export const updateTestSeries = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/test-series/:id
-// Refuses if any verified subscription points at this series — prevents
-// stranding paying customers. Admins should toggle status off instead.
+// Refuses if any verified subscription points at this series, so paying
+// customers are never stranded; admins should toggle status off instead.
 export const deleteTestSeries = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id);
@@ -177,9 +171,6 @@ export const deleteTestSeries = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Content Categories ──────────────────────────────────────────────────────
-
-// GET /api/v1/admin/test-series/:id/content-categories
 export const listContentCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -198,7 +189,6 @@ export const listContentCategories = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/test-series/:id/content-categories
 export const createContentCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -226,7 +216,6 @@ export const createContentCategory = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/test-series/content-categories/:categoryId
 export const updateContentCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.categoryId);
@@ -254,7 +243,6 @@ export const updateContentCategory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/test-series/content-categories/:categoryId
 // Refuses if any paper is still linked to this category.
 export const deleteContentCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -279,9 +267,6 @@ export const deleteContentCategory = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Series ↔ Exam linking ───────────────────────────────────────────────────
-
-// GET /api/v1/admin/test-series/:id/papers
 export const listPapers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -300,7 +285,7 @@ export const listPapers = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/test-series/:id/papers
+// Attach an exam to one of the series' content categories (409 if already linked).
 export const linkPaper = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -347,7 +332,6 @@ export const linkPaper = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/test-series/papers/:linkId
 export const updatePaperLink = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const linkId = String(req.params.linkId);
@@ -382,7 +366,6 @@ export const updatePaperLink = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/test-series/papers/:linkId
 export const unlinkPaper = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const linkId = String(req.params.linkId);
@@ -401,9 +384,6 @@ export const unlinkPaper = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Prices ──────────────────────────────────────────────────────────────────
-
-// GET /api/v1/admin/test-series/:id/prices
 export const listPrices = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -422,7 +402,6 @@ export const listPrices = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/test-series/:id/prices
 export const createPrice = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -448,7 +427,6 @@ export const createPrice = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/test-series/prices/:priceId
 export const updatePrice = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const priceId = String(req.params.priceId);
@@ -475,7 +453,6 @@ export const updatePrice = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/test-series/prices/:priceId
 export const deletePrice = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const priceId = String(req.params.priceId);
@@ -500,20 +477,16 @@ export const deletePrice = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Subscriptions / Orders (admin) ──────────────────────────────────────────
-
-// Shared filter mapping for the subscription report list + its CSV/Excel
-// exports, so all three honor the identical param contract (page/limit only
-// apply to the paginated list). Reused across the three handlers below.
+// Shared filter mapping for the subscription report list and its CSV/Excel
+// exports (page/limit apply only to the paginated list).
 export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
   testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
   customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
   // 422s an unrecognised status instead of silently returning an unfiltered list.
   status: assertReportStatus(q.status),
   paymentMethod: q.paymentMethod,
-  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
-  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
-  // fromDate/toDate kept as legacy aliases.
+  // Date range bounds `createdAt` at IST day edges; dateFrom/dateTo and
+  // fromDate/toDate are legacy aliases of createdFrom/createdTo.
   dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
   dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
   search: q.search,
@@ -521,15 +494,13 @@ export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportO
   sortOrder: q.sortOrder,
 });
 
-// GET /api/v1/admin/test-series/subscriptions
 export const listSubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    // Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md). Hand-rolled
-    // top-level envelope { success, summary, data, pagination } — matches the
-    // Course/Package subscription report, not the success() wrapper.
+    // Hand-rolled top-level envelope { success, summary, data, pagination }, matching
+    // the Course/Package subscription report (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md).
     const q = req.query as Record<string, string>;
     const p = Math.max(1, parseInt(q.page ?? "1", 10) || 1);
     const l = Math.min(100, Math.max(1, parseInt(q.limit ?? "20", 10) || 20));
@@ -540,7 +511,7 @@ export const listSubscriptions = async (req: Request, res: Response) => {
       limit: l,
     });
     logger.info("listSubscriptions success", { traceId, total: pagination.total });
-    // Summary cards are super-admin only (2026-09-23).
+    // Summary cards are super-admin only.
     return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? summary : undefined, data, pagination });
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -548,7 +519,7 @@ export const listSubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/test-series/subscriptions/export/csv — entire filtered set.
+// Exports the entire filtered set.
 export const exportSubscriptionsCsv = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -564,7 +535,7 @@ export const exportSubscriptionsCsv = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/test-series/subscriptions/export/excel — entire filtered set.
+// Exports the entire filtered set.
 export const exportSubscriptionsExcel = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -580,9 +551,8 @@ export const exportSubscriptionsExcel = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/test-series/:id/grant
-// Admin-side free grant. If planId is given, durationDays is derived from the
-// plan. Otherwise the body must supply durationDays explicitly.
+// Admin-side free grant. With planId, durationDays is derived from the plan;
+// otherwise the body must supply durationDays.
 export const grantSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const testSeriesId = String(req.params.id);
@@ -621,11 +591,9 @@ export const grantSubscription = async (req: Request, res: Response) => {
     });
     if ("planNotFound" in r) { logger.warn("grantSubscription plan not found", { traceId, planId: data.planId }); return failure(res, "Plan not found.", 404); }
     if ("missingDuration" in r) { logger.warn("grantSubscription missing duration", { traceId, testSeriesId }); return failure(res, "durationDays is required (or supply planId).", 422); }
-    // Mirror of the revoke paths (updateSubscription / deleteSubscription): the
-    // client test-series list + detail cache `isPurchased` / `activeSubscription`
-    // per user for 24h, and the entity sweep can't reach a per-user grant because
-    // the grant changes only THIS customer's view. Without this the buyer keeps
-    // seeing isPurchased:false until their key expires.
+    // Client test-series list/detail cache `isPurchased` / `activeSubscription` per
+    // user for 24h, and the entity sweep can't reach a per-user grant; without this
+    // flush the buyer keeps seeing isPurchased:false until the key expires.
     await flushUserRouteCache(customerN);
     logger.info("grantSubscription success", { traceId, testSeriesId, customerId: data.customerId, subscriptionId: r.subscription._id });
     return success(res, { subscription: r.subscription }, "Subscription granted.", 201);
@@ -635,8 +603,8 @@ export const grantSubscription = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/test-series/subscriptions/:subscriptionId — single record,
-// customer / test series / plan populated for the admin Subscription Details page.
+// Single record with customer / test series / plan populated for the admin
+// Subscription Details page.
 export const getSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.subscriptionId);
@@ -655,7 +623,6 @@ export const getSubscription = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/test-series/subscriptions/:subscriptionId
 export const updateSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.subscriptionId);
@@ -688,7 +655,6 @@ export const updateSubscription = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/test-series/subscriptions/:subscriptionId
 export const deleteSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.subscriptionId);
@@ -710,7 +676,6 @@ export const deleteSubscription = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/test-series/orders
 export const listOrders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listOrders invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -736,7 +701,6 @@ export const listOrders = async (req: Request, res: Response) => {
   }
 };
 
-// Re-export enums consumed by routes (none needed externally; placeholder).
 export const _PaymentMethod = PaymentMethod;
 export const _OrderStatus = PackageCourseEbookOrderStatus;
 export const _OrderType = PackageCourseEbookOrderType;

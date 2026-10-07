@@ -1,13 +1,4 @@
-/**
- * Popup notification — stable API shape (Mongo-compatible for admin / client).
- *
- * Field-name divergences (handled by the transformer):
- *   API `promoExpireAt`         ↔ MySQL `promo_expire_at` (a nullable `date`)
- *   API `createdAt`/`updatedAt` ↔ MySQL `created_at`/`updated_at`
- *
- * Client "active popup" = status:true AND promo_expire_at > now, newest first.
- */
-
+// Popups: DTO and input types.
 export interface PopupDto {
   _id: string;
   title: string;
@@ -27,7 +18,7 @@ export interface PopupCreateInput {
   image: string;
   discount?: string;
   promocode?: string;
-  /** ISO date string or Date; persisted to the MySQL `date` column. */
+  /** ISO date string or Date; persisted to a MySQL `date` column. */
   promoExpireAt: string | Date;
   status?: boolean;
 }

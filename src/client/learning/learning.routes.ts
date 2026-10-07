@@ -1,3 +1,4 @@
+// Client learning: resume feed and live-session progress routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
@@ -9,11 +10,9 @@ const router = Router();
 
 router.use(authenticate, requireRole("customer"));
 
-// Unified Resume-Learning feed across Course / Package / Live Course.
 router.get("/progress/my", listMyLearningProgress);
 
-// Live-session playback heartbeat (mirror of the video heartbeat at
-// /courses/lectures/:videoId/progress, but for raw live-session recordings).
+// Live-session counterpart of /courses/lectures/:videoId/progress.
 router.post(
   "/progress/live-sessions/:liveSessionId",
   reportLiveSessionProgress

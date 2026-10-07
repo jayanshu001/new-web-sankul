@@ -1,3 +1,4 @@
+// Admin videos: list, CRUD, ordering and the pre-requisites category picker.
 import { adminVideoRepository as repo } from "./admin-video.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { nextOrder } from "../../utils/listOrdering";
@@ -8,7 +9,7 @@ export const parseVideoId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// Mirrors the controller's toItem() response shape exactly.
+// Response shape is frozen (admin table parses it).
 const toItem = (v: any) => ({
   id: String(v.id),
   name: v.title,
@@ -17,9 +18,8 @@ const toItem = (v: any) => ({
   topic: v.topic,
   type: v.priceType,
   status: v.status,
-  // Always a uniform object shape (id always present; name/slug null when the
-  // category row doesn't resolve) — never a bare string. A mixed object/string
-  // shape breaks the admin table for unresolved (orphaned) category refs.
+  // Always an object (name/slug null when the category doesn't resolve), never a bare
+  // string: a mixed shape breaks the admin table for orphaned category refs.
   video_category: v.videoCategoryId != null
     ? { id: String(v.videoCategoryId), name: v.VideoCategory?.title ?? null, slug: v.VideoCategory?.slug ?? null }
     : null,
@@ -45,7 +45,6 @@ const uniqueSlug = async (base: string, exceptId?: number): Promise<string> => {
   return candidate;
 };
 
-// ── list / prereqs / get ──────────────────────────────────────────────────────
 export const listVideos = async (q: { search?: string; status?: string; type?: string; platform?: string; videoCategoryId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
   const opts = {
     search: q.search,
@@ -62,15 +61,15 @@ export const listVideos = async (q: { search?: string; status?: string; type?: s
   return { items: rows.map(toItem), total };
 };
 
+// Category picker rows (parentId/ancestors/has_children) plus type and platform options.
 export const getPreRequisites = async (opts: { search?: string; limit?: number } = {}) => {
   // `search` (title contains) + `limit` power the picker's server-side search. Note
   // `childParentIds()` scans ALL categories, so `has_children` stays correct even when
   // the returned rows are a search/limit slice (a parent may be off-page).
   const [cats, parentIds] = await Promise.all([repo.listActiveCategories(opts), repo.childParentIds()]);
-  // parentId + ancestors[{id,name}] (root→immediate-parent) so the videos-list modal
-  // can render the greyed parent rows for a match (the feed was flat with no parent link).
-  // Parent is sourced from ws_video_category_relation (the DAG edge table), collapsed
-  // to a deterministic single parent — not the legacy ws_video_category.parent column.
+  // parentId + ancestors[{id,name}] (root→immediate parent) so the picker can render
+  // greyed parent rows for a match. Parent comes from the ws_video_category_relation
+  // DAG collapsed to one deterministic parent, not the legacy `parent` column.
   const primaryParent = await repo.primaryParents(cats.map((c) => c.id));
   const parentOf = (id: number) => primaryParent.get(id) ?? 0;
   const ancestorsFor = await resolveAncestors(cats.map((c) => parentOf(c.id)), repo.categoriesByIds);
@@ -93,7 +92,6 @@ export const getVideo = async (id: number) => {
   return v ? toItem(v) : null;
 };
 
-// ── create / update ─────────────────────────────────────────────────────────
 export interface VideoCreateInput { videoCategoryId: string; name: string; slug: string; topic: string; order?: number; type: "free" | "paid"; youtube?: boolean; vimeo?: boolean; aws?: boolean; youtubeId?: string | null; vimeoId?: string | null; awsId?: string | null; status: boolean }
 
 export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; reason: "category" } | { ok: true; data: any }> => {
@@ -101,9 +99,8 @@ export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; rea
   if (!catId || !(await repo.categoryExists(catId))) return { ok: false, reason: "category" };
   const slug = await uniqueSlug(d.slug);
   const platform = pickPlatform(d)!;
-  // No explicit order → MAX(order) + 1, i.e. last in the app (same rule as exams).
-  // The admin list is unaffected either way — it sorts by recency; this only
-  // positions the row in the CLIENT catalog's `order ASC`.
+  // No explicit order → MAX(order) + 1 (same rule as exams). Only affects the client
+  // catalog's `order ASC`; the admin list sorts by recency.
   const order = d.order ?? nextOrder(await repo.maxOrder());
   const created = await repo.create({
     videoCategoryId: catId, title: d.name, slug, topic: d.topic, order, priceType: d.type, platform,
@@ -115,6 +112,7 @@ export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; rea
   return { ok: true, data: toItem(created) };
 };
 
+// Partial update; switching platform clears the other providers' ids.
 export const updateVideo = async (id: number, d: any): Promise<"not_found" | "category" | any> => {
   const video = await repo.findBare(id);
   if (!video) return "not_found";

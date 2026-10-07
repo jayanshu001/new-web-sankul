@@ -1,6 +1,6 @@
+// Admin masters: Zod schemas for educator, category, material and video payloads.
 import { z } from "zod";
 
-// Educator Validation
 export const createEducatorSchema = z.object({
   name: z.string().min(1, "Name is required"),
   image: z.string().url("Image must be a valid URL"),
@@ -11,12 +11,10 @@ export const createEducatorSchema = z.object({
 });
 
 export const updateEducatorSchema = createEducatorSchema.partial().extend({
-  // Allow an explicit null to CLEAR the stored image (omit = keep current,
-  // URL string / file upload = set). Additive; create still requires a URL.
+  // null clears the stored image; omit keeps it; URL/file upload sets it.
   image: z.string().url("Image must be a valid URL").nullable().optional(),
 });
 
-// Subject Category Validation
 export const createSubjectCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(1, "Slug is required"),
@@ -28,7 +26,6 @@ export const createSubjectCategorySchema = z.object({
 
 export const updateSubjectCategorySchema = createSubjectCategorySchema.partial();
 
-// Material Validation
 export const createMaterialSchema = z.object({
   title: z.string().min(1, "Title is required"),
   image: z.string().url("Image must be a valid URL").optional(),
@@ -37,7 +34,6 @@ export const createMaterialSchema = z.object({
 
 export const updateMaterialSchema = createMaterialSchema.partial();
 
-// Video Validation
 export const createVideoSchema = z.object({
   videoCategoryId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId"),
   title: z.string().min(1, "Title is required"),
@@ -54,7 +50,6 @@ export const createVideoSchema = z.object({
 
 export const updateVideoSchema = createVideoSchema.partial();
 
-// Video Category Validation
 export const createVideoCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(1, "Slug is required"),
@@ -68,7 +63,6 @@ export const createVideoCategorySchema = z.object({
 
 export const updateVideoCategorySchema = createVideoCategorySchema.partial();
 
-// Package Category Validation
 export const createPackageCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(1, "Slug is required"),

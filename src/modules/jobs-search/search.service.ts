@@ -1,3 +1,4 @@
+// Jobs search index: keeps search documents in sync with published content.
 import { prisma } from "../../config/prisma";
 import { searchRepository } from "./search.repository";
 

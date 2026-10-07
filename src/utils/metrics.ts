@@ -1,35 +1,10 @@
-// src/utils/metrics.ts
-//
-// Minimal Prometheus-compatible metrics registry. We don't pull `prom-client`
-// as a dependency — RED metrics + a handful of gauges are simple enough to
-// emit in the text exposition format ourselves.
-//
-// Exposed via GET /metrics (token-gated; see app.ts). Scrape with Prometheus
-// or any compatible agent.
-//
-// Metric inventory:
-//   http_requests_total{method,route,status}      counter
-//   http_request_duration_ms{method,route,status} histogram (bucketed)
-//   queue_depth{queue,state}                      gauge
-//   queue_jobs_dlq_total{queue}                   counter
-//   cache_hits_total{domain}                      counter
-//   cache_misses_total{domain}                    counter
-//
-//   process_resident_memory_bytes{pid,instance}   gauge (sampled at scrape)
-//   nodejs_heap_used_bytes{pid,instance}           gauge (sampled at scrape)
-//   nodejs_heap_total_bytes{pid,instance}          gauge (sampled at scrape)
-//   nodejs_eventloop_lag_seconds{pid,instance}     gauge (sampled at scrape)
-//
-// Label cardinality is bounded by funnelling unknown routes through the
-// `normalizeRoute` helper before recording.
+// Metrics: minimal Prometheus text-format registry (no prom-client dependency), served at
+// token-gated GET /metrics. Route labels go through `normalizeRoute` to keep
+// cardinality bounded.
 
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 type Labels = Record<string, string | number>;
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Process/instance identity — constant labels for the process-level gauges.
-// ──────────────────────────────────────────────────────────────────────────────
 
 const PID = String(process.pid);
 const INSTANCE = process.env.INSTANCE_ID ?? process.env.pm_id ?? PID;
@@ -48,10 +23,6 @@ const formatLabels = (labels: Labels): string => {
     .map(([k, v]) => `${k}="${String(v).replace(/"/g, '\\"')}"`)
     .join(",")}}`;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Counter
-// ──────────────────────────────────────────────────────────────────────────────
 
 class Counter {
   private values = new Map<string, { labels: Labels; value: number }>();
@@ -74,10 +45,6 @@ class Counter {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Gauge
-// ──────────────────────────────────────────────────────────────────────────────
-
 class Gauge {
   private values = new Map<string, { labels: Labels; value: number }>();
 
@@ -95,10 +62,6 @@ class Gauge {
     return lines.join("\n");
   }
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Histogram (fixed buckets)
-// ──────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 
@@ -150,10 +113,6 @@ class Histogram {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Registry
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const httpRequestsTotal = new Counter(
   "http_requests_total",
   "Total HTTP requests, labelled by method, route, and status."
@@ -184,13 +143,7 @@ export const cacheMissesTotal = new Counter(
   "Cache misses via cache.aside (loader invoked), labelled by domain."
 );
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Process-level gauges (additive; labelled by pid + instance).
-//
-// These reflect the state of THIS Node process at scrape time. They are sampled
-// inside renderMetrics() below so the emitted values are always current, mirroring
-// the default process metrics that prom-client would otherwise expose.
-// ──────────────────────────────────────────────────────────────────────────────
+// Process-level gauges, sampled in renderMetrics() at scrape time.
 
 export const processResidentMemoryBytes = new Gauge(
   "process_resident_memory_bytes",
@@ -212,22 +165,17 @@ export const nodejsEventLoopLagSeconds = new Gauge(
   "Mean event-loop lag in seconds since the previous scrape, labelled by pid and instance."
 );
 
-// Started once at module load; sampled + reset each scrape so the reported mean
-// reflects the interval between scrapes rather than the whole process lifetime.
+// Reset each scrape so the mean covers the interval since the last scrape, not the process lifetime.
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
 eventLoopDelay.enable();
 
-/**
- * Refresh the process-level gauges from live runtime counters. Called from
- * renderMetrics() so /metrics always exposes current values.
- */
 const sampleProcessMetrics = (): void => {
   const mem = process.memoryUsage();
   processResidentMemoryBytes.set(mem.rss, PROCESS_LABELS);
   nodejsHeapUsedBytes.set(mem.heapUsed, PROCESS_LABELS);
   nodejsHeapTotalBytes.set(mem.heapTotal, PROCESS_LABELS);
 
-  // `mean` is in nanoseconds; convert to seconds. Guard against NaN (no samples yet).
+  // `mean` is in ns and NaN before the first sample.
   const meanNs = eventLoopDelay.mean;
   nodejsEventLoopLagSeconds.set(
     Number.isFinite(meanNs) ? meanNs / 1e9 : 0,
@@ -255,10 +203,8 @@ export const renderMetrics = (): string => {
 };
 
 /**
- * Collapse Express routes with path params to their template form so we
- * don't blow up label cardinality on `/courses/507f1f77...`. Express
- * exposes `req.route.path` for matched routes; we fall back to a coarse
- * normalization for unmatched ones.
+ * Route template for the metric label (bounds cardinality). Uses `req.route.path`
+ * when matched, else replaces id-like path segments.
  */
 export const normalizeRoute = (req: {
   baseUrl?: string;
@@ -270,7 +216,6 @@ export const normalizeRoute = (req: {
     const base = req.baseUrl || "";
     return `${base}${tpl}`;
   }
-  // Fallback: replace any segment that looks like an ObjectId / UUID / number.
   const p = req.path || "";
   return p
     .replace(/\/[0-9a-fA-F]{24}(?=\/|$)/g, "/:id")

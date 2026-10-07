@@ -1,10 +1,4 @@
-/**
- * Package · Chat (READ + WRITE — Phase 3b) service — dual-path (MySQL ↔ Mongo).
- *
- * Module key: `package-chat`. See types.ts for the schema-extension + field map.
- * Read = the subscription-gated client listing; write = the admin post/delete.
- * Flag OFF until go-live.
- */
+// Package chat: list, post and delete package chat messages.
 import { packageChatRepository as repo } from "./package-chat.repository";
 import { toPackageChatDto } from "./package-chat.transformer";
 import type {
@@ -13,21 +7,14 @@ import type {
   PostChatInput,
 } from "./package-chat.types";
 
-
-
 export const parsePackageChatId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Does this package exist? (write-path guard.) */
 export const packageExists = (packageId: number): Promise<boolean> =>
   repo.packageExists(packageId);
 
-/**
- * Paginated chat messages for a package (newest first) + total. Mirrors the
- * Mongo `find().sort({createdAt:-1}).skip().limit()` + countDocuments().
- */
 export const listChatMessagesMysql = async (
   packageId: number,
   page: number,
@@ -41,10 +28,7 @@ export const listChatMessagesMysql = async (
   return { data: rows.map(toPackageChatDto), total };
 };
 
-/**
- * Post a chat message. `message` is NOT NULL in SQL → store "" when only media
- * is provided (Mongo defaults `text` to ""). senderType defaults to 'admin'.
- */
+/** `message` is NOT NULL, so media-only posts store "". senderType defaults to 'admin'. */
 export const postChatMessageMysql = async (
   input: PostChatInput
 ): Promise<PackageChatDto> => {
@@ -59,7 +43,6 @@ export const postChatMessageMysql = async (
   return toPackageChatDto(row);
 };
 
-/** Delete a message; returns true if a row was deleted, false if absent. */
 export const deleteChatMessageMysql = async (id: number): Promise<boolean> => {
   const deleted = await repo.deleteById(id);
   return deleted !== null;

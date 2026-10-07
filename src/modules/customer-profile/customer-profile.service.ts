@@ -1,40 +1,21 @@
-/**
- * Customer profile service — MySQL (Prisma) branch.
- *
- * Gated behind `isMysqlModule("customer-profile")`. The existing Mongo service
- * (`src/client/profile/customer.service.ts`) calls these when the flag is on and
- * keeps its own Mongoose path otherwise. Returns the same `{ ok, message, data }`
- * envelope so the controller is unchanged.
- *
- * Decisions encoded:
- *   - name: split full_name → first/middle/last; join on write
- *   - goals: JSON int ids ↔ [{ _id, name }] via ws_customer_target_goal
- *   - isProfileCompleted: derived (full_name present), not stored
- *   - device tokens: single `device` column (newest wins), no array
- *   - facebookId: read-only (not written here)
- */
+// Customer profile: profile read/update, picture, account delete and device tokens.
 import { customerProfileRepository as repo } from "./customer-profile.repository";
 import { toProfileDto } from "./customer-profile.transformer";
 import { splitFullName, joinFullName } from "./customer-profile.name";
 import type { ProfileUpdateInput } from "./customer-profile.types";
 import { parseGoalSelection, parseLabels, type GoalSelection } from "../../utils/goalSelection";
-
-
 type Ok<T> = { ok: true; message: string; data: T };
 type Err = { ok: false; message: string };
 type Envelope<T> = Ok<T> | Err;
 
-/** Parse a string id to a positive int, else null. */
 export const parseProfileId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
 /**
- * Build the stored goal selection for the `goal` JSON column from incoming
- * goals. Validates against ws_customer_target_goal: unknown goals are dropped
- * and each goal's labelIds are filtered to labels that actually exist on it
- * (mirrors the lenient Mongo behavior — invalid ids are silently ignored).
+ * Lenient by design: unknown goals and labelIds that don't exist on the goal are
+ * silently dropped, not rejected.
  */
 const buildGoalSelection = async (goals: unknown): Promise<GoalSelection[]> => {
   const parsed = parseGoalSelection(goals);
@@ -44,13 +25,12 @@ const buildGoalSelection = async (goals: unknown): Promise<GoalSelection[]> => {
   const out: GoalSelection[] = [];
   for (const sel of parsed) {
     const validLabelIds = labelIdsByGoal.get(sel.goalId);
-    if (!validLabelIds) continue; // unknown goal
+    if (!validLabelIds) continue;
     out.push({ goalId: sel.goalId, labelIds: sel.labelIds.filter((id) => validLabelIds.has(id)) });
   }
   return out;
 };
 
-// ─── Get profile ───────────────────────────────────────────────────────────────
 export const getProfile = async (customerId: number): Promise<Envelope<ReturnType<typeof toProfileDto>>> => {
   const row = await repo.findActiveById(customerId);
   if (!row) return { ok: false, message: "Customer not found." };
@@ -58,7 +38,7 @@ export const getProfile = async (customerId: number): Promise<Envelope<ReturnTyp
   return { ok: true, message: "Profile fetched successfully.", data: toProfileDto(row, goals) };
 };
 
-// ─── Update profile ─────────────────────────────────────────────────────────────
+// Partial update: name parts merge into full_name, email must be unique, goals are sanitized.
 export const updateProfile = async (
   customerId: number,
   input: ProfileUpdateInput
@@ -66,7 +46,6 @@ export const updateProfile = async (
   const current = await repo.findActiveById(customerId);
   if (!current) return { ok: false, message: "Customer not found." };
 
-  // Email uniqueness (mirrors Mongo path).
   if (input.email) {
     const taken = await repo.emailTakenByOther(input.email, customerId);
     if (taken) return { ok: false, message: "Email address is already in use by another account." };
@@ -74,7 +53,6 @@ export const updateProfile = async (
 
   const data: Record<string, unknown> = {};
 
-  // Name: join provided first/middle/last over the existing split.
   if (input.firstName !== undefined || input.middleName !== undefined || input.lastName !== undefined) {
     const existing = splitFullName(current.fullName);
     data.fullName = joinFullName(
@@ -105,7 +83,6 @@ export const updateProfile = async (
   return { ok: true, message: "Profile updated successfully.", data: toProfileDto(updated, goals) };
 };
 
-// ─── Profile picture ─────────────────────────────────────────────────────────────
 /** Returns the previous picture url (for S3 cleanup) or an error. */
 export const upsertProfilePicture = async (
   customerId: number,
@@ -128,14 +105,13 @@ export const deleteProfilePicture = async (
   return { ok: true, message: "Profile picture deleted successfully.", data: { profilePicture: "", previousUrl } };
 };
 
-// ─── Delete account ──────────────────────────────────────────────────────────────
+// Soft delete; also wipes the offline-download key.
 export const deleteAccount = async (customerId: number): Promise<Envelope<null>> => {
   const res = await repo.softDelete(customerId);
   if (res.count === 0) return { ok: false, message: "Customer not found." };
   return { ok: true, message: "Account deleted successfully.", data: null };
 };
 
-// ─── Device tokens (single-token / legacy `device` column) ───────────────────────
 export const registerDeviceToken = async (
   customerId: number,
   token: string,
@@ -150,12 +126,13 @@ export const unregisterDeviceToken = async (
   customerId: number,
   token: string
 ): Promise<Envelope<null>> => {
-  // Match-or-not, treat as success if the customer exists; clearing a token that
-  // isn't the current one is a no-op (other device already replaced it).
+  // Success whenever the customer exists: a non-matching token was already
+  // replaced by another device.
   await repo.clearDeviceToken(customerId, token);
   return { ok: true, message: "Device token unregistered.", data: null };
 };
 
+// Post-login FCM token sync keyed by phone (no auth context).
 export const updateFirebaseTokenByPhone = async (
   phone: string,
   token: string,

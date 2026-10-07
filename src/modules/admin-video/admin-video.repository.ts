@@ -1,12 +1,12 @@
+// Admin videos: Prisma queries for videos and the category picker.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { parentIdsWithChildren, primaryParentsOf } from "../../utils/videoCategoryRelation";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-video MySQL branch (ws_video).
- * Video belongs to one VideoCategory (vcategory_id). platform = youtube|vimeo|aws
- * with the matching *_id column carrying the provider id. priceType enum (free|paid).
+ * ws_video. A video belongs to one VideoCategory (vcategory_id); platform is
+ * youtube|vimeo|aws with the matching *_id column carrying the provider id.
  */
 export const adminVideoRepository = {
   list: (opts: { search?: string; status?: boolean; type?: "free" | "paid"; platform?: string; videoCategoryId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) =>
@@ -26,10 +26,9 @@ export const adminVideoRepository = {
 
   categoryExists: (id: number) => prisma.videoCategory.findUnique({ where: { id }, select: { id: true } }),
 
-  /** Active categories for the pre-requisites dropdown. The parent/child hierarchy
-   *  is resolved separately from ws_video_category_relation (see the service), so
-   *  the `parent` column is intentionally NOT selected here.
-   *  `search` = title contains-match; `limit` caps the page (omit → all, back-compat). */
+  /** Active categories for the pre-requisites dropdown. Hierarchy comes from
+   *  ws_video_category_relation (see the service), so `parent` is intentionally not
+   *  selected. `search` = title contains-match; `limit` omitted → all rows. */
   listActiveCategories: (opts: { search?: string; limit?: number } = {}) =>
     prisma.videoCategory.findMany({
       where: { status: true, ...(buildPrismaSearch(opts.search, ["title"]) ?? {}) },
@@ -42,9 +41,8 @@ export const adminVideoRepository = {
   // Batched `child → primary parent` map from the relation DAG (deterministic single
   // parent), for the picker's parentId + ancestor-chain resolution.
   primaryParents: (ids: number[]) => primaryParentsOf(ids),
-  // Batched {id, name, parent} loader for ancestor-chain resolution — parent resolved
-  // from ws_video_category_relation. Status-agnostic so a disabled parent still resolves
-  // (it renders as a greyed row). One query/level.
+  // Batched {id, name, parent} loader for ancestor-chain resolution (parent from the
+  // relation DAG). Status-agnostic so a disabled parent still resolves (greyed row).
   categoriesByIds: async (ids: number[]) => {
     if (!ids.length) return [];
     const [cats, parents] = await Promise.all([
@@ -73,24 +71,17 @@ export const adminVideoRepository = {
 };
 
 /**
- * Admin list ordering. RECENCY IS THE CONTRACT here: the newest video is always
- * row #1, whatever `ws_video.order` says.
+ * Admin list ordering: recency is the contract, so the newest video is always row #1.
  *
- * `sort_by=order` (the default, and what the admin UI sends) therefore maps to
- * `created_at DESC` — NOT to the `order` column. `sort_dir` is deliberately
- * ignored in that case: the requirement is "newest on top", so honouring
- * `sort_dir=asc` (which the UI does send) would invert exactly what was asked
- * for. Every other `sort_by` still sorts by its own column in the requested
- * direction.
+ * `sort_by=order` (the default the admin UI sends) maps to `created_at DESC`, not the
+ * `order` column, and `sort_dir` is ignored in that case — the UI sends `sort_dir=asc`,
+ * which would invert "newest on top". Other `sort_by` values sort their own column.
  *
- * Consequence, on purpose: manual reordering is INVISIBLE on this screen. The
- * `order` column is still written — append-on-create (`MAX(order) + 1`) and
- * `setOrder` both keep maintaining it, and the client catalog still sorts by it
- * (`order ASC, created_at ASC`) — but nothing here reads it. To restore curated
- * ordering, return `[{ order: sortDir }, { id: "desc" }]` for the "order" case.
+ * So manual reordering is intentionally invisible here. `order` is still maintained
+ * (MAX(order) + 1 on create, `setOrder`) and the client catalog sorts by it. To restore
+ * curated ordering, return `[{ order: sortDir }, { id: "desc" }]` for the "order" case.
  *
- * The trailing `id DESC` is the stable tiebreaker: `created_at` is a datetime and
- * bulk-created rows can share a value, which would otherwise page unpredictably.
+ * `id DESC` is the tiebreaker: bulk-created rows can share `created_at`.
  */
 function buildOrderBy(
   sortBy: string,
@@ -110,7 +101,7 @@ function sortCol(sortBy: string): string {
 
 function buildWhere(opts: { search?: string; status?: boolean; type?: "free" | "paid"; platform?: string; videoCategoryId?: number }): Prisma.VideoWhereInput {
   const where: Prisma.VideoWhereInput = {};
-  // Unanchored `contains` (not buildPrismaPrefixSearch): no index on ws_video.title/slug/topic, so a
+  // Unanchored `contains` (not prefix search): no index on title/slug/topic, so a
   // prefix anchor only dropped mid-title matches. See pcmWhere in admin-master.repository.
   const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
   if (search) Object.assign(where, search);

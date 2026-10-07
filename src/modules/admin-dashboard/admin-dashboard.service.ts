@@ -1,14 +1,8 @@
 /**
- * Admin dashboard — SQL data layer for GET /admin/dashboard. Gated behind
- * `isMysqlModule("admin-dashboard")`. The controller keeps the (DB-agnostic)
- * window/range/bucket resolution; this returns the same revenue cards, totals,
- * time-series, recent lists and counters from SQL.
- *
- * Field drift: Mongo PackageCourseSubscription.paidAmount → SQL `amount`;
- * targetPackageId → packageId. EBookOrder revenue = order_price, status enum
- * "complete". BookOrder revenue = order_price (amount), status "verified",
- * items in order_items JSON. Customer is single `fullName` + `phoneNumber`.
- * Time-series buckets via raw SQL HOUR()/DAYOFMONTH() in IST (CONVERT_TZ).
+ * Admin dashboard: data layer for GET /admin/dashboard; the controller owns
+ * window/range/bucket resolution. Revenue columns: package/course subs `amount`; ebook/book orders
+ * `order_price` (ebook status "complete", book status "verified", book items in the
+ * order_items JSON).
  */
 import { prisma } from "../../config/prisma";
 import * as dashTransformer from "./admin-dashboard.transformer";
@@ -58,21 +52,17 @@ const testSeriesRevenue = (w: Win) => paidSubRevenue(w, "ws_test_series_subscrip
 // `discount_price` is the charged amount (was paid_amount until 2026-08-27).
 const liveCourseRevenue = (w: Win) => paidSubRevenue(w, "ws_live_course_subscription", "ws_live_course_order");
 
-// ── time-series buckets (HOUR / DAYOFMONTH / MONTH, IST) ──────────────────────
 /**
- * ⚠ DAYOFMONTH only makes sense INSIDE one month. Over a year window it collapses
- * Jan 5 + Feb 5 + Mar 5 … into slot 5, so `totalRange=year` was charting 31
- * meaningless buckets built from every row in the range. Ranges longer than a
- * month now bucket by MONTH (1-12); the controller reports which via `unit`, which
- * it already returns.
+ * DAYOFMONTH only makes sense inside one month (over a year it collapses Jan 5 +
+ * Feb 5 … into one slot), so ranges longer than a month bucket by MONTH (1-12); the
+ * controller reports which via `unit`.
  */
 const seriesFor = async (table: string, revenueCol: string, w: Win, unit: BucketUnit, extraWhere = "") => {
   const fn = unit === "hour" ? "HOUR" : unit === "month" ? "MONTH" : "DAYOFMONTH";
   const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
-    // created_at is stored as IST wall-clock (see config/prisma.ts IST shift), so
-    // HOUR()/DAYOFMONTH() on the raw column already yields the IST bucket — no
-    // CONVERT_TZ needed. The `?` bounds (UTC Dates) are auto-shifted +5:30 to IST
-    // by the Prisma raw-query middleware, so they still match.
+    // created_at is stored as IST wall-clock (config/prisma.ts IST shift), so HOUR()/
+    // DAYOFMONTH() on the raw column already yields the IST bucket; no CONVERT_TZ. The
+    // `?` bounds are auto-shifted +5:30 by the Prisma raw-query middleware.
     `SELECT ${fn}(created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(${revenueCol}),0) AS earnings
      FROM ${table}
      WHERE created_at >= ? AND created_at <= ? ${extraWhere}
@@ -97,22 +87,14 @@ const paidSubSeriesFor = async (subTable: string, orderTable: string, revenueExp
 };
 
 /**
- * The twelve summary counters on ONE connection.
- *
- * They were twelve entries in the big `Promise.all`, so each acquired its own pool
- * connection. Individually they are ~1ms index counts; the problem is the burst.
- * Prisma's default pool is `physical_cpus * 2 + 1` — five connections on a 2-vCPU
- * box — and the dashboard fires ~25 other queries alongside them. Forty concurrent
- * queries against five connections queue in waves, and once one wave is slow the
- * rest wait behind it until `pool_timeout` (10s default) fires:
- * "Timed out fetching a new connection from the connection pool".
- *
- * `$transaction([...])` runs the array sequentially on a SINGLE connection, so this
- * removes eleven connection acquisitions from the burst. Kept on the typed Prisma
- * API rather than one hand-written SQL statement with twelve scalar subqueries:
- * that version needed literal table names and silently broke on `Inquiry`, whose
- * table is `ws_website_inquiry`, not `ws_inquiry`.
- */
+ /**
+  * The twelve summary counters on one connection. As separate `Promise.all` entries
+  * they each took a pool connection; alongside the dashboard's ~25 other queries that
+  * burst exhausts Prisma's small default pool and trips `pool_timeout` ("Timed out
+  * fetching a new connection"). `$transaction([...])` runs them sequentially on a
+  * single connection. Kept on the typed Prisma API rather than one raw SQL statement,
+  * which needed literal table names and broke on `Inquiry` (table `ws_website_inquiry`).
+  */
 const summaryCounters = async () => {
   const [
     totalCustomers, activeCustomers, totalCourses, totalPackages, totalEbooks, totalBooks,
@@ -307,11 +289,8 @@ export const fetchDashboardData = async (opts: {
       pkgPrev: pkgRevP.revenue, coursePrev: courseRevP.revenue, ebookPrev: ebookRevP.revenue, bookPrev: bookRevP.revenue,
       testSeriesPrev: tsRevP.revenue, liveCoursePrev: lcRevP.revenue,
     },
-    // Total Order Reports chart folds ALL six paid categories so the aggregate stays
-    // consistent with the per-category cards (test-series + live-course included).
-    // Folded from `series` rather than re-aggregated: every series query already
-    // COUNTs and SUMs the same window/filter, so summing the buckets is the same
-    // number without a second pass over the range.
+    // Total Order Reports folds all six paid categories so it matches the per-category
+    // cards. Summed from `series` (same window/filter) to avoid a second pass.
     totals: {
       orders: series.reduce((n, r) => n + r.orders, 0),
       earnings: series.reduce((n, r) => n + r.earnings, 0),

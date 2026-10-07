@@ -1,34 +1,18 @@
-// Shared helpers for building uniform free-text search across every module.
-//
-// One place so all list endpoints behave identically for English / Hindi / Gujarati /
-// emoji and are consistently case-insensitive. Design:
-//   - Trim the term at both ends, PRESERVE internal spaces.
-//   - Tokenize on whitespace; AND each token; each token ORs across the given fields.
-//     ("ram sita" over [name] => rows whose name contains BOTH "ram" AND "sita",
-//      in any order — the least-surprising multi-word behavior.)
-//   - Case- AND accent-insensitivity comes from the column collation
-//     (utf8mb4_0900_ai_ci). Prisma MySQL has no `mode:"insensitive"` (Postgres-only),
-//     and we deliberately DO NOT wrap columns in LOWER()/BINARY so indexes still apply.
-//
-// The searchable columns must be utf8mb4 for non-Latin/emoji terms to match — see
-// docs/migration/schema-changes/2026-07-16_search_columns_utf8mb4.sql.
+// Search filter: uniform free-text search for every module. The term is trimmed and split on
+// whitespace; every token must match (AND), each token ORs across the fields.
+// Case/accent-insensitivity comes from the utf8mb4_0900_ai_ci column collation:
+// Prisma MySQL has no `mode: "insensitive"`, and wrapping columns in LOWER()/BINARY
+// would defeat indexes. Searched columns must be utf8mb4 for non-Latin/emoji terms
+// (docs/migration/schema-changes/2026-07-16_search_columns_utf8mb4.sql).
 
-// Split a raw term into search tokens: trim the ends, drop empty tokens, split on any
-// run of whitespace (so double spaces / tabs collapse). Returns [] when empty.
 export function searchTokens(term: string | undefined | null): string[] {
   const trimmed = typeof term === "string" ? term.trim() : "";
   if (!trimmed) return [];
   return trimmed.split(/\s+/);
 }
 
-// Build a Prisma `where` fragment that matches `term` across one or more fields,
-// tokenized + case-insensitive (see file header). Returns `undefined` when the term is
-// empty or no fields are given, so callers can spread/skip it safely:
-//
-//   const search = buildPrismaSearch(input.search, ["title", "streamId"]);
-//   if (search) and.push(search);
-//
-// Shape: { AND: [ { OR: [ { field: { contains: token } }, ... ] }, ... ] }
+// Prisma `where` fragment matching `term` across `fields`; `undefined` when there is
+// nothing to search, so callers can skip it.
 export function buildPrismaSearch(
   term: string | undefined | null,
   fields: string[]
@@ -42,30 +26,13 @@ export function buildPrismaSearch(
   };
 }
 
-// Prefix-ANCHORED variant: the first token is matched as `LIKE 'token%'` instead of
-// `LIKE '%token%'`. Unlike `contains`, a trailing-only wildcard lets MySQL use a B-tree
-// index range scan on the column instead of a full table scan — critical for large tables
-// where `buildPrismaSearch` would time out (see ws_customer: 1M+ rows, no index helps a
-// leading-wildcard search). Matches the legacy PHP admin's `LIKE 'term%'` search behavior.
-//
-// ONLY the first token is anchored; every token after it falls back to `contains`. This
-// is not a detail — anchoring every token makes ANY multi-word search unsatisfiable on a
-// single-field search, because one value cannot start with two different tokens:
-//
-//   "Week 01" over [title]  =>  title LIKE 'Week%' AND title LIKE '01%'   -- always 0 rows
-//
-// which silently broke multi-word search on every list/picker endpoint using this helper
-// (the reported case: GET /admin/videos/pre-requisites?search=Week+01 returned nothing
-// while "Week 01 (Constable)" and friends existed). The first token keeps the index range
-// scan; the remaining tokens only narrow the rows that scan already returned, so the
-// query plan is no worse than a single-token search.
-//
-// Consequence, on purpose: the term must match from the START of a value — "Week 01"
-// finds "Week 01 (PSI)" but not "Physics Week 01". That is the trade-off that buys the
-// index; use `buildPrismaSearch` where unanchored matching matters more than speed.
-//
-// Same tokenize/AND/OR shape as `buildPrismaSearch`, so callers swap one for the other
-// without changing anything else.
+// Prefix-anchored variant for large tables (e.g. ws_customer): the first token is
+// `LIKE 'token%'`, which can use a B-tree range scan where a leading wildcard cannot.
+// Only the first token is anchored; the rest use `contains`. Anchoring every token
+// makes multi-word search on one field unsatisfiable ("Week 01" would need a value
+// starting with both "Week" and "01"). Trade-off: "Week 01" finds "Week 01 (PSI)" but
+// not "Physics Week 01"; use `buildPrismaSearch` when that matters more than speed.
+// Same shape as `buildPrismaSearch`, so the two are interchangeable.
 export function buildPrismaPrefixSearch(
   term: string | undefined | null,
   fields: string[]
@@ -92,16 +59,9 @@ export function searchNumericId(term: string | undefined | null): { big: bigint;
   return { big, int: big <= BigInt(2147483647) ? Number(big) : undefined };
 }
 
-// Raw-SQL variant for the few repositories that build LIKE clauses by hand (JSON-column
-// / cross-table searches Prisma can't express). Emits one AND-joined group per token;
-// within a group each column is OR-ed. Values are returned separately so callers keep
-// binding them as `?` parameters — NEVER interpolate the term into SQL.
-//
-//   const s = buildLikeTokens(opts.search, ["c.full_name", "c.phone"]);
-//   if (s) { whereParts.push(s.sql); params.push(...s.params); }
-//
-// `sql` is a parenthesized boolean expression (no leading AND/WHERE), e.g.
-//   ((`c`.`full_name` LIKE ? OR `c`.`phone` LIKE ?) AND (`c`.`full_name` LIKE ? ...))
+// Raw-SQL variant for hand-built LIKE clauses. `sql` is a parenthesized boolean
+// expression (no leading AND/WHERE); bind `params` as `?` placeholders and never
+// interpolate the term into SQL.
 export function buildLikeTokens(
   term: string | undefined | null,
   columns: string[]
@@ -119,10 +79,7 @@ export function buildLikeTokens(
   return { sql: `(${groups.join(" AND ")})`, params };
 }
 
-// In-memory variant for post-fetch array filters. True when EVERY token appears
-// (case-insensitively) in at least one of the provided haystack strings.
-//
-//   rows.filter((r) => matchesAllTokens(term, [r.title, r.author]))
+// In-memory variant: true when every token appears (case-insensitively) in some haystack.
 export function matchesAllTokens(
   term: string | undefined | null,
   haystacks: Array<string | undefined | null>

@@ -1,3 +1,4 @@
+// Admin exports: HTTP handlers to request, poll and download report exports.
 import { Request, Response } from "express";
 import { z } from "zod";
 import {
@@ -22,7 +23,7 @@ const adminId = (req: Request): number | null => {
 };
 const isSuperAdmin = (req: Request): boolean => (req.user as any)?.role === "super_admin";
 
-// POST /api/v1/admin/exports — create a job, enqueue, return immediately (202).
+// Queue an export job; replies 202 with the jobId to poll.
 export const createExport = async (req: Request, res: Response) => {
   try {
     const parsed = createExportSchema.safeParse(req.body);
@@ -42,7 +43,6 @@ export const createExport = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/exports/:jobId — poll status (+ freshly-signed downloadUrl when ready).
 export const getExport = async (req: Request, res: Response) => {
   try {
     const job = await findExportJob(req.params.jobId as string);
@@ -56,7 +56,7 @@ export const getExport = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/exports/:jobId/download — 302 to a fresh signed URL (alt to downloadUrl).
+// Redirect to a signed URL once ready (owner or super admin only).
 export const downloadExport = async (req: Request, res: Response) => {
   try {
     const job = await findExportJob(req.params.jobId as string);

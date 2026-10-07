@@ -1,3 +1,4 @@
+// PDF upload progress: admin Socket.io namespace streaming per-job and batch-done events.
 import { Socket, Namespace } from "socket.io";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import { io } from "./livechat.socket";
@@ -6,17 +7,12 @@ import logger from "../utils/logger";
 // PDF-upload job lifecycle status (mirrors ws_pdf_upload_job.status).
 type PdfUploadJobStatus = "queued" | "in_progress" | "completed" | "failed";
 
-// Admin-side live progress for PDF upload batches. This is a NAMESPACE on the
-// shared Socket.io server created by initLiveChatSocket() — not a second server
-// (two Socket.io servers on the same httpServer/path would collide). The
-// default namespace authenticates customer tokens; this `/admin/pdf-uploads`
-// namespace has its own `.use()` guard accepting only ADMIN tokens. The shared
-// server already has the Redis adapter attached, so emits fan out across pods.
-//
-// Admins join a room per batchId and receive a `pdf_job_update` event on every
-// job state change, plus a `pdf_batch_done` event when the batch finishes. The
-// events are emitted by the BullMQ worker (pdfUpload.scheduler.ts) via the
-// helpers below, so the worker never imports socket.io internals directly.
+// Admin live progress for PDF upload batches: a namespace on the shared Socket.io
+// server from initLiveChatSocket(), not a second server (two on the same path would
+// collide). The default namespace takes customer tokens; `/admin/pdf-uploads` has its
+// own admin-only guard. Admins join a room per batchId and get `pdf_job_update` per job
+// state change and `pdf_batch_done` at the end, emitted by the BullMQ worker
+// (pdfUpload.scheduler.ts) through the helpers below.
 
 const NAMESPACE = "/admin/pdf-uploads";
 
@@ -34,13 +30,10 @@ interface AdminSocket extends Socket {
   adminRole?: string;
 }
 
-/**
- * The payload pushed on every job state change. Mirrors the persisted
- * PdfUploadJob fields the admin UI needs to render a row.
- */
+/** Pushed on every job state change; the PdfUploadJob fields the admin UI renders. */
 export interface PdfJobUpdate {
   batchId: string;
-  jobId: string; // PdfUploadJob._id (also the BullMQ jobId)
+  jobId: string; // also the BullMQ jobId
   index: number;
   fileName: string;
   ebookId: string;
@@ -58,11 +51,8 @@ export interface PdfBatchSummary {
 }
 
 /**
- * Attach the admin PDF-progress namespace to the shared Socket.io server.
- * MUST be called AFTER initLiveChatSocket() (which creates `io` and attaches
- * the Redis adapter); the adapter is shared, so emits fan out across every pod
- * (the admin watching may be connected to a different pod than the worker that
- * ran the job).
+ * Must be called after initLiveChatSocket(), which creates `io` and attaches the shared
+ * Redis adapter, so emits reach admins connected to a different pod than the worker.
  */
 export function initPdfProgressSocket(): void {
   if (!io) {
@@ -74,7 +64,6 @@ export function initPdfProgressSocket(): void {
 
   nsp = io.of(NAMESPACE);
 
-  // Only admin tokens may connect.
   nsp.use((socket: AdminSocket, next) => {
     try {
       const token =
@@ -120,13 +109,11 @@ export function initPdfProgressSocket(): void {
   });
 }
 
-/** Emit a single job's new state to everyone watching its batch. */
 export function emitPdfJobUpdate(update: PdfJobUpdate): void {
   if (!nsp) return;
   nsp.to(pdfBatchRoom(update.batchId)).emit("pdf_job_update", update);
 }
 
-/** Emit the batch summary once the last job in a batch finishes. */
 export function emitPdfBatchDone(summary: PdfBatchSummary): void {
   if (!nsp) return;
   nsp.to(pdfBatchRoom(summary.batchId)).emit("pdf_batch_done", summary);

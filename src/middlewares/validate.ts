@@ -1,15 +1,12 @@
-// src/middlewares/validate.ts
+// Request validation: Zod body/query/params middleware.
 import { Request, Response, NextFunction, RequestHandler } from "express";
 import { ZodError, ZodSchema } from "zod";
 import { failure } from "../utils/httpResponse";
 
 /**
- * Validate `req.body`, `req.query`, and/or `req.params` against Zod schemas.
- * Unknown fields are rejected by passing a `.strict()` object schema in.
- *
- * On failure: responds 422 with a flat `field -> message` map under `messages`.
- * On success: replaces the request slice with the parsed (coerced/defaulted)
- * value, so downstream handlers receive typed input.
+ * Validates body/query/params against Zod schemas (pass `.strict()` to reject unknown
+ * fields). Failure: 422 with a flat `field -> message` map under `messages`. Success:
+ * replaces the request slice with the parsed (coerced/defaulted) value.
  */
 export const validate = (schemas: {
   body?: ZodSchema;
@@ -19,11 +16,8 @@ export const validate = (schemas: {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       if (schemas.body) req.body = schemas.body.parse(req.body);
-      // `req.query` CANNOT be assigned in Express 5 — it is a getter-only accessor
-      // on the request prototype, so `req.query = parsed` throws
-      // "Cannot set property query of #<IncomingMessage> which has only a getter"
-      // (a 500 at request time, invisible to typecheck). Defining an own property
-      // shadows the prototype getter, which is the supported way to replace it.
+      // Express 5's `req.query` is a getter-only prototype accessor; assigning it throws
+      // at runtime (invisible to typecheck). An own property shadows the getter.
       if (schemas.query) {
         Object.defineProperty(req, "query", {
           value: schemas.query.parse(req.query),

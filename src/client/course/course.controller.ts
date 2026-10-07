@@ -1,3 +1,4 @@
+// Client courses: HTTP handlers for catalog, detail, shipping, orders and invoices.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -20,16 +21,11 @@ import {
 } from "../../modules/catalog-course/catalog-course.service";
 import type { ListCoursesOptions } from "../../modules/catalog-course/catalog-course.types";
 
-// Legacy Mongo ObjectId shape (24-hex). Retained only so the order-id validation
-// stays identical to the pre-migration contract; SQL order ids are ints.
+// Accepts a 24-hex legacy id as well as a positive int so order-id validation keeps
+// its original contract; real order ids are ints.
 const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 
-/**
- * Map the listing query string → the MySQL `listCoursesWithPlans` options.
- * `userId` in the migrated id-space is the int customer id (customer-auth); we
- * parse it defensively so a stray ObjectId (while flag OFF) just yields no
- * purchase-state rather than throwing.
- */
+/** `userId` is parsed defensively: a non-int id yields no purchase state rather than throwing. */
 function toMysqlCourseOptions(
   query: Record<string, string>,
   userId?: string,
@@ -55,13 +51,10 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
   logger.info("listCoursesHandler invoked", { traceId, path: req.originalUrl, userId });
 
   try {
-    // Composes catalog-course + commerce-price + commerce-subscription; returns
-    // the { data, pagination } contract.
     const result = await listCoursesWithPlans(
       toMysqlCourseOptions(req.query as Record<string, string>, userId)
     );
     logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total, source: "mysql" });
-    // Drop list-unused course fields (docs/api-optimization GET_client_courses).
     const data = omitList(result.data as any[], ["withMaterial", "withoutMaterial", "order", "status", "videoCategoryId", "pcMaterialId"]);
     return res.status(200).json({ success: true, data, pagination: result.pagination });
   } catch (err) {
@@ -75,8 +68,6 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/courses/categories
-// Lists active course subject categories with the count of active courses in each.
 export const listCourseCategoriesHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -97,8 +88,6 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
   }
 };
 
-// GET /api/v1/client/courses/categories/:categoryId/courses
-// Lists active courses inside a given category, with plans (same shape as the main list).
 export const listCoursesByCategoryHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -128,6 +117,7 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
   }
 };
 
+// Course detail without tab content; queues a VIEW_COURSE CRM lead for signed-in users.
 export const getCourseByIdHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -142,7 +132,6 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
   try {
     if (!userId && !req.isGuest) return failure(res, "Unauthorized request.", 401);
 
-    // ─── SQL branch (int id-space) ───
     const cidNum = parseCourseId(courseId);
     const userNum = userId ? parseCourseId(String(userId)) : null;
     if (cidNum == null) return failure(res, "Please select valid package", 400);
@@ -154,9 +143,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
       queueCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }, { traceId, userId, courseId });
     }
     logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
-    // Drop the nested catalog trees + empty promo list — RN loads tab content via
-    // GET /client/catalog/:type/:id/{videos|materials|tests}. Keeps course/scope/
-    // plans/shareableLink. See docs/api-optimization Phase 3.
+    // Tab content is loaded via GET /client/catalog/:type/:id/{videos|materials|tests}.
     const slimResponse = omit(sqlResponse as any, ["videos", "materials", "tests", "availablePromoCode"]);
     return success(res, slimResponse, "Course details fetched successfully.", 200);
   } catch (err) {
@@ -231,8 +218,7 @@ export const getOrderDetailsHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    // Accept a SQL int order id (MySQL id-space) OR a legacy Mongo ObjectId. The
-    // service resolves ownership; a non-int (ObjectId) simply yields no SQL row.
+    // A non-int (legacy 24-hex) id passes validation but simply matches no row.
     if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       return failure(res, "Please select valid package", 400);
     }
@@ -256,6 +242,7 @@ export const getOrderDetailsHandler = async (req: Request, res: Response) => {
   }
 };
 
+// Render a purchase-history receipt as PDF, picking the builder by the id prefix.
 export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -269,10 +256,9 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    // This route serves every row of `GET /client/purchase-history/subscriptions`,
-    // whose `_id` encodes WHICH table the id belongs to (the PK spaces are separate
-    // and overlap numerically). The vocabulary is defined by that list and mirrored
-    // in purchase-history/receipts.controller.ts — keep the two in sync:
+    // Serves every row of GET /client/purchase-history/subscriptions, whose `_id`
+    // prefix says which table the id belongs to (PK spaces overlap numerically).
+    // Keep in sync with purchase-history/receipts.controller.ts:
     //   (plain) → package/course ORDER id, falling back to a subscription id
     //   "lc_"   → live-course subscription id
     //   "ts_"   → test-series ORDER id
@@ -289,15 +275,11 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
     const rawOrderId = matched ? orderId.slice(matched[0].length) : orderId;
     const build = matched ? matched[1] : buildCourseReceiptHtml;
 
-    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. Each
-    // builder does its own ownership (_id + customerId) + paid re-validation.
+    // Each builder does its own ownership (_id + customerId) and paid re-validation.
     if (!isObjectId(rawOrderId) && !/^[1-9][0-9]*$/.test(rawOrderId)) {
       return failure(res, "Please select valid package", 400);
     }
 
-    // Build the receipt HTML (shared EJS template — identical across course /
-    // live-course / test-series / ebook / book invoices) then rasterise it via
-    // the shared Puppeteer renderer.
     const html = await build(rawOrderId, userId);
     const buffer = await renderPdfFromHtml(html);
     res.setHeader("Content-Type", "application/pdf");

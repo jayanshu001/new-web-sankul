@@ -1,15 +1,12 @@
+// Video URL encryption: AES token scheme the client uses to decrypt video URLs.
 import { createCipheriv, createDecipheriv } from "crypto";
 
-// Staging (websankul-api-staging) alphabets; video-URL decrypt on the client
-// depends on this exact scheme: each digit 0..9 of the 16-digit numeric token
-// selects one character from each alphabet.
+// Client video-URL decryption depends on this exact scheme: each digit of the
+// 16-digit numeric token selects one character from each alphabet.
 const KEY_ALPHABET = "!*@#)($^%1fgv&C3";
 const VECTOR_ALPHABET = "?\\:><{}@#Vjekl44";
 
-/**
- * Returns a numeric string with exactly `digits` digits (matches staging's
- * Math.floor(10^(n-1) + random*(10^n - 10^(n-1) - 1))).
- */
+/** Numeric string with exactly `digits` digits. */
 export function generateToken(digits: number): string {
   const lo = Math.pow(10, digits - 1);
   const hi = Math.pow(10, digits) - Math.pow(10, digits - 1) - 1;
@@ -33,9 +30,8 @@ export function generateVector(token: string): Buffer {
 }
 
 /**
- * AES-128-CBC with PKCS7 padding, base64-encoded ciphertext. Byte-identical to
- * CryptoJS.AES.encrypt(plain, Utf8.parse(key), { iv: Utf8.parse(iv) }).toString()
- * as used in websankul-api-staging.
+ * AES-128-CBC/PKCS7, base64 output. Byte-identical to
+ * CryptoJS.AES.encrypt(plain, Utf8.parse(key), { iv: Utf8.parse(iv) }).toString().
  */
 export function encrypt(plain: string, key: Buffer, vector: Buffer): string {
   const cipher = createCipheriv("aes-128-cbc", key, vector);
@@ -47,10 +43,8 @@ export function encrypt(plain: string, key: Buffer, vector: Buffer): string {
 }
 
 /**
- * Inverse of `encrypt` — base64 ciphertext + same (key, iv) returns the
- * original UTF-8 plaintext. Used server-side to unwrap VideoCrypt's per-quality
- * MP4 URLs (their download_url[i].url is encrypted with their own data.token);
- * we then re-encrypt with our own token before shipping the envelope.
+ * Inverse of `encrypt`. Used to unwrap VideoCrypt's per-quality MP4 URLs
+ * (encrypted with their own data.token) before re-encrypting with ours.
  */
 export function decrypt(ciphertextBase64: string, key: Buffer, vector: Buffer): string {
   const decipher = createDecipheriv("aes-128-cbc", key, vector);
@@ -62,14 +56,10 @@ export function decrypt(ciphertextBase64: string, key: Buffer, vector: Buffer): 
 }
 
 /**
- * Opens a per-response crypto context: mints one 16-digit `token`, derives the
- * key+IV from it once, and returns an `enc()` that encrypts any URL/id string
- * in place using the shared AES-128-CBC scheme. Ship the returned `token`
- * alongside the ciphertext(s); the client re-derives key+IV from `token` and
- * decrypts. Empty/nullish input encrypts to "" so callers can wrap optional
- * fields without branching. Use this anywhere a response would otherwise leak a
- * raw playable URL (e.g. the live-session hlsUrl/hlsUrls/recordings), so every
- * surface stays on the same {token, ciphertext} contract as `/v1/lecture`.
+ * Per-response crypto context: one 16-digit `token` plus an `enc()` using the key+IV
+ * derived from it. Ship `token` with the ciphertexts so the client can decrypt.
+ * Nullish/empty input encrypts to "". Use wherever a response would otherwise
+ * leak a raw playable URL, to stay on the `/v1/lecture` {token, ciphertext} contract.
  */
 export function newEncryptor(): {
   token: string;

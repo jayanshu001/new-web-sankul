@@ -1,3 +1,4 @@
+// Admin live polls: poll CRUD for a live class, broadcast to the room over Socket.io.
 import { Request, Response } from "express";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { resolveLiveClassId } from "../live/live.guards";
@@ -5,7 +6,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
-// POST /api/v1/admin/live-polls
+// Opening a poll closes the class's previous active poll (both events are emitted).
 export const createPoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createPoll invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -47,7 +48,6 @@ export const createPoll = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/admin/live-polls/:pollId/close
 export const closePoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const pollId = req.params.pollId as string;
@@ -66,7 +66,6 @@ export const closePoll = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-polls/:liveClassId
 export const getPollsByClass = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { liveClassId } = req.params;
@@ -86,7 +85,7 @@ export const getPollsByClass = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/admin/live-polls/:pollId — edit question/options (only when 0 votes)
+// Only open polls with no votes can be edited.
 export const updatePoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const pollId = req.params.pollId as string;
@@ -144,7 +143,6 @@ export const updatePoll = async (req: Request, res: Response) => {
       createdAt: result.createdAt,
     };
 
-    // Broadcast updated poll to all students — they re-render the poll card
     io?.to(roomKey(result.liveClassId)).emit("poll_updated", { poll: pollData });
 
     logger.info("updatePoll success", { traceId, pollId, adminId: req.user!.id });
@@ -155,7 +153,6 @@ export const updatePoll = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/live-polls/:pollId
 export const deletePoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const pollId = req.params.pollId as string;
@@ -175,7 +172,6 @@ export const deletePoll = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-polls/:pollId/results
 export const getPollResults = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const pollId = req.params.pollId as string;
@@ -186,7 +182,7 @@ export const getPollResults = async (req: Request, res: Response) => {
     if (!pid) return failure(res, "Invalid pollId.", 422);
     const poll = await liveSql.getPollResults(pid);
     if (poll === "not_found") return failure(res, "Poll not found.", 404);
-    // voterCount = sum of option votes (votes table may be sparse on staging).
+    // voterCount is derived from option tallies; the votes table may be sparse.
     const voterCount = poll.options.reduce((s: number, o: any) => s + (o.votes || 0), 0);
     return success(res, { poll, voterCount }, "Poll results fetched.");
   } catch (err) {

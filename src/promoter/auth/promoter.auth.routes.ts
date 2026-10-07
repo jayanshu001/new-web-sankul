@@ -1,3 +1,4 @@
+// Promoter auth: login, token refresh, logout and profile routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -26,8 +27,7 @@ router.post(
   logoutAllDevicesHandler({
     type: "promoter",
     extraTeardown: async (promoterId) => {
-      // SQL bookkeeping cleanup (authoritative revocation is the Redis cutoff in
-      // revokeAllTokensForUser).
+      // Bookkeeping only; the authoritative revocation is the Redis cutoff in revokeAllTokensForUser.
       const numId = Number(promoterId);
       if (Number.isInteger(numId) && numId > 0) await promoterAuthRepository.deactivateAllTokens(numId);
     },

@@ -1,3 +1,4 @@
+// Admin permissions: catalog, tree and permission CRUD routes (strict RBAC).
 import { Router } from "express";
 import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
 import {
@@ -13,10 +14,8 @@ import { getPermissionCatalog } from "./catalog.controller";
 const router = Router();
 
 // Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC
-// (`permissions.*` in rbacRouteMap) is HARD-enforced here regardless of
-// RBAC_ENFORCE — this router is the security boundary itself. Replaced the old
-// requireRole("super_admin") floor 2026-09-11, which 403'd admins holding the
-// permission before RBAC ran.
+// (`permissions.*` in rbacRouteMap) is hard-enforced here regardless of
+// RBAC_ENFORCE because this router is the security boundary itself.
 router.use(enforceRbacStrict);
 
 router.get("/catalog", getPermissionCatalog);

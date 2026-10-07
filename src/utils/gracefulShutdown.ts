@@ -1,21 +1,7 @@
-// src/utils/gracefulShutdown.ts
-//
-// Orchestrated shutdown on SIGTERM/SIGINT. Order matters:
-//
-//   1. Flip a "shutting down" flag so /readyz starts returning 503 → load
-//      balancer stops sending new traffic to this pod within ~5s (one health
-//      check interval).
-//   2. Stop accepting new HTTP connections (server.close()), but allow
-//      in-flight requests to finish for up to DRAIN_MS.
-//   3. Drain the notification scheduler worker.
-//   4. Close MySQL (Prisma) + Redis connections.
-//   5. Exit 0.
-//
-// If anything hangs past HARD_TIMEOUT_MS, the watchdog force-exits with code
-// 1 so the process supervisor (PM2/K8s) restarts us.
-//
-// This module is intentionally NOT a class — there's exactly one shutdown
-// per process and a module-level state is the simplest correct shape.
+// Graceful shutdown on SIGTERM/SIGINT. Order matters: flip the flag so /readyz returns
+// 503 and the LB stops routing here, stop accepting connections (in-flight
+// requests get up to DRAIN_MS), drain the BullMQ workers, then close Prisma +
+// Redis. Past HARD_TIMEOUT_MS the watchdog exits 1 so PM2/K8s restarts us.
 
 import type { Server } from "http";
 import { disconnectPrisma } from "../config/prisma";
@@ -31,14 +17,12 @@ const HARD_TIMEOUT_MS = Number(process.env.SHUTDOWN_HARD_TIMEOUT_MS) || 30_000;
 let shuttingDown = false;
 let shutdownPromise: Promise<void> | null = null;
 
-/** Read-only: true once a shutdown signal has been received. Health probe
- *  reads this so /readyz starts failing immediately. */
+/** True once a shutdown signal arrived; /readyz reads it to start failing immediately. */
 export const isShuttingDown = (): boolean => shuttingDown;
 
 export interface ShutdownHooks {
   httpServer?: Server;
-  /** Additional teardown to run before Mongo/Redis close (e.g. websocket
-   *  servers, third-party SDKs that hold connections). */
+  /** Teardown run before the DB/Redis close (websocket servers, SDKs holding connections). */
   preClose?: () => Promise<void>;
 }
 
@@ -66,8 +50,7 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
     watchdog.unref?.();
 
     shutdownPromise = (async () => {
-      // Step 1: stop accepting new connections. Existing keep-alive sockets
-      // will be closed when their next request finishes (Node 18.2+).
+      // Existing keep-alive sockets close when their next request finishes (Node 18.2+).
       if (hooks.httpServer) {
         logger.info("Closing HTTP server (no new connections).");
         // Race close() with DRAIN_MS so a stuck handler can't pin us forever.
@@ -77,7 +60,6 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         ]);
       }
 
-      // Step 2: app-specific teardown (websockets, etc).
       if (hooks.preClose) {
         try {
           await hooks.preClose();
@@ -86,8 +68,8 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         }
       }
 
-      // Step 3: drain the BullMQ worker. Its own close() waits for the
-      // active job to finish (or fail) before returning.
+      // Each BullMQ worker's close() waits for its active job to finish, so
+      // in-flight notifications/PDF uploads/exports aren't lost.
       try {
         logger.info("Draining notification scheduler.");
         await shutdownNotificationScheduler();
@@ -97,8 +79,6 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         });
       }
 
-      // Drain the PDF upload worker too — its close() waits for the active
-      // upload to finish before returning, so the in-flight PDF isn't lost.
       try {
         logger.info("Draining PDF upload scheduler.");
         await shutdownPdfUploadScheduler();
@@ -108,8 +88,6 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         });
       }
 
-      // Drain the report-export worker too — close() waits for the active
-      // export generation to finish so an in-flight file isn't lost.
       try {
         logger.info("Draining report-export scheduler.");
         await shutdownExportScheduler();
@@ -119,8 +97,7 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         });
       }
 
-      // Step 4: close the data stores. Redis QUIT waits for in-flight commands
-      // to finish; Prisma disconnects its pool.
+      // Redis QUIT waits for in-flight commands to finish.
       try {
         logger.info("Closing MySQL (Prisma) + Redis connections.");
         await Promise.allSettled([redisClient.quit(), disconnectPrisma()]);

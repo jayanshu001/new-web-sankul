@@ -1,3 +1,4 @@
+// Admin promoters: promoter CRUD and dashboard routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";

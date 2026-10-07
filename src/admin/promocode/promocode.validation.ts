@@ -1,8 +1,8 @@
+// Admin promocodes: Zod request schemas.
 import { z } from "zod";
 import { PromocodeType } from "../../shared/enums";
 
-// Accept a 24-hex Mongo ObjectId OR a positive integer id (the SQL/MySQL branch
-// sends int ids). Mirrors how ebook.validation was widened for examCountdown.
+// Accepts a 24-hex legacy id or a positive integer id.
 const objectIdOrIntRegex = /^(?:[0-9a-fA-F]{24}|[1-9][0-9]*)$/;
 
 const promocodeBase = z.object({
@@ -32,7 +32,6 @@ const discountErr = {
 export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 
-// A single entity-type group: one type + its selected ids.
 export const appliesToGroupSchema = z.object({
   type: z.enum(APPLIES_TO_TYPES),
   ids: z
@@ -40,33 +39,28 @@ export const appliesToGroupSchema = z.object({
     .min(1, "Select at least one item"),
 });
 
-// Multi-type input: accept EITHER a single { type, ids } object (legacy) OR an
-// array [{ type, ids }, …] (a single promocode spanning multiple module types,
-// e.g. Test Series + Packages + Courses). Both normalize to an array of groups.
+// Accepts a single { type, ids } object or an array of them (one promocode
+// spanning several module types); both normalize to an array of groups.
 export const appliesToSchema = z.union([
   appliesToGroupSchema.transform((g) => [g]),
   z.array(appliesToGroupSchema).min(1, "Select at least one item"),
-]); // { type, ids: string[] }[]
+]);
 
 const percentage = z
   .number()
   .min(0, "must be >= 0")
   .max(100, "must be <= 100");
 
-// Per-plan promoter/customer split. The full array is the desired set on update
-// (replace-semantics); rows whose parent entity isn't in `appliesTo.ids` are
-// ignored rather than rejected (see TASK 2 #3).
+// Per-plan promoter/customer split. On update the full array is the desired set
+// (replace-semantics); rows whose parent isn't in `appliesTo.ids` are ignored.
 export const planLinkSchema = z.object({
-  // Accept a Mongo ObjectId OR a positive-int id — the MySQL branch returns
-  // numeric-string plan ids (e.g. "97", "1166"), same format as appliesTo.ids.
+  // Numeric-string plan ids (e.g. "97"), same format as appliesTo.ids.
   planId: z.string().regex(objectIdOrIntRegex, "Invalid id"),
   promoterPercentage: percentage.default(0),
   customerPercentage: percentage.default(0),
-  // REQUIRED (2026-09-10; optional 2026-08-21..). `planId` is not unique across
-  // plan tables: ws_live_course_plan / ws_test_series_price /
-  // ws_package_course_ebook_price have overlapping id spaces, so a live-course
-  // plan and a test-series plan with the same id are two different links. The
-  // old first-match fallback stored one of them under the other's row.
+  // Required: `planId` is not unique across plan tables (ws_live_course_plan,
+  // ws_test_series_price and ws_package_course_ebook_price have overlapping id
+  // spaces), so planKind is what distinguishes two links with the same id.
   planKind: z.enum(["price", "livePlan", "testSeriesPrice"], {
     required_error: "planKind is required (price | livePlan | testSeriesPrice)",
     invalid_type_error: "planKind must be price | livePlan | testSeriesPrice",

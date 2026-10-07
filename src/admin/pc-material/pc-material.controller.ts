@@ -1,10 +1,4 @@
-// src/admin/pc-material/pc-material.controller.ts
-//
-// Package Course Material — a single-field ({ title }) master managed from the
-// admin "Package Course Material Page". JSON-only (no multipart), thin handlers:
-// validate -> mutate -> respond. Errors flow through the global errorHandler via
-// asyncHandler. Backed by the admin-master SQL module.
-
+// Admin PC materials: HTTP handlers for the PC material master CRUD.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { HttpError } from "../../middlewares/errorHandler";
@@ -16,9 +10,8 @@ import * as master from "../../modules/admin-master/admin-master.service";
 
 export const listPcMaterials = asyncHandler(async (req: Request, res: Response) => {
   const { search, page, limit } = req.query as Record<string, string>;
-  // Pagination is opt-in: page/limit present → paginate + return a `pagination`
-  // block; otherwise the full list (back-compat for eager dropdown callers).
-  // `search` is honored in both modes so pickers can type-ahead.
+  // Pagination is opt-in (page/limit); otherwise the full list for dropdown callers.
+  // `search` applies in both modes.
   const paginate = page !== undefined || limit !== undefined;
   const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
   const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);

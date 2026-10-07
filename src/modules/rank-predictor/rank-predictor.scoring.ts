@@ -1,3 +1,4 @@
+// Rank predictor: pure answer-sheet scoring, percentile and paper-series helpers.
 import {
   ANSWER_VERDICT,
   CANCELLED_QUESTION,
@@ -19,6 +20,7 @@ export const acceptedOptionsOf = (entry: AnswerKeyEntry): number[] | null => {
 export const cancelledCountOf = (answerKey: AnswerKeyMap): number =>
   Object.values(answerKey).filter((entry) => entry === CANCELLED_QUESTION).length;
 
+// Per-question verdict and marks, sorted by question number.
 export const buildAnswerReview = (
   answers: AnswerMap,
   answerKey: AnswerKeyMap,
@@ -85,6 +87,7 @@ export const scoreSubmission = (
   return result;
 };
 
+// Share of other candidates ranked below, 0-100 to two decimals.
 export const percentileFor = (rank: number, total: number): number => {
   if (total <= 0 || rank <= 0) return 0;
   if (total === 1) return 100;
@@ -94,6 +97,7 @@ export const percentileFor = (rank: number, total: number): number => {
 export const lowConfidencePct = (lowConfidenceCount: number, totalQuestions: number): number =>
   totalQuestions <= 0 ? 0 : (lowConfidenceCount / totalQuestions) * 100;
 
+// Trimmed, upper-cased, de-duplicated and sorted series letters.
 export const normalizePaperSeries = (input: unknown): string[] => {
   if (!Array.isArray(input)) return [];
 

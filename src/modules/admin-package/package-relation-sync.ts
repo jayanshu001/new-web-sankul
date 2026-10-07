@@ -1,19 +1,16 @@
 /**
- * Keep `ws_video_category_package_relation` (PackageVideoCategoryRelation) in sync
- * with the video-category DAG.
+ * Package relation sync: keeps `ws_video_category_package_relation` in sync with the DAG.
  *
- * A package "contains" every `ws_video_category_relation` edge in the DOWNWARD
- * closure of its active specific-subjects (`ws_package_specific_subject`). The SQL
- * package-save path only writes the subjects, and the DAG (`ws_video_category_relation`)
- * is edited independently by the video-category admin — so this recomputes the flat
- * relation rows on BOTH triggers:
+ * A package "contains" every `ws_video_category_relation` edge in the downward closure
+ * of its active specific-subjects (`ws_package_specific_subject`). Package save writes
+ * only the subjects and the DAG is edited independently, so the flat rows are
+ * recomputed on both triggers:
  *   - a package's subjects change  → `resyncPackageRelations([packageId])`
- *   - the DAG gains/loses an edge  → `resyncAllPackageRelations()` (rebuild all,
- *     since a moved/added edge can change any package whose subtree includes it).
+ *   - the DAG gains/loses an edge  → `resyncAllPackageRelations()` (any package whose
+ *     subtree includes the edge may change).
  *
- * Note: the SQL client tree/scope/media path already works off the subjects + the DAG
- * directly (see catalog-category-tree), so this table is effectively a denormalized
- * cache — kept current here for consumers that read it directly.
+ * The client tree/scope/media path reads the subjects + DAG directly (see
+ * catalog-category-tree), so this table is a denormalized cache for direct readers.
  */
 import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";

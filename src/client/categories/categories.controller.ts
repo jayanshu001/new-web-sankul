@@ -1,3 +1,4 @@
+// Client categories: HTTP handlers for category items, children and exam-countdown products.
 import { Request, Response } from "express";
 import cache, { CacheDomain } from "../../libs/cache";
 import { CacheEntity } from "../../middlewares/flushGroups";
@@ -24,13 +25,11 @@ import {
   parseVideoCategoryId,
 } from "../../modules/catalog-video/catalog-video.service";
 
-// Media is never returned inline. Each playable row carries a short-lived,
-// customer-bound `mediaToken` (utils/mediaToken) that the client exchanges at
-// POST /client/media/resolve for the real URL. Unpurchased paid rows get
-// `mediaToken: null` — no id/url of any kind. Free rows get a `free` token.
-// Map the resolved category scope to a re-checkable media scope so /media/resolve
-// can re-verify the subscription live. course/package/liveCourse are all handled
-// by the resolver's entitlement switch; anything else falls back to `trusted`.
+// Media is never returned inline: each playable row carries a short-lived,
+// customer-bound `mediaToken` the client exchanges at POST /client/media/resolve.
+// Unpurchased paid rows get `mediaToken: null`; free rows get a `free` token.
+// The scope mapped here lets /media/resolve re-verify the subscription live;
+// unknown kinds fall back to `trusted`.
 function toMediaScope(scope: { kind: string; id: string } | null | undefined): MediaScope {
   if (scope && (scope.kind === "course" || scope.kind === "package" || scope.kind === "liveCourse")) {
     return { kind: scope.kind, id: Number(scope.id) } as MediaScope;
@@ -38,6 +37,7 @@ function toMediaScope(scope: { kind: string; id: string } | null | undefined): M
   return { kind: "trusted" };
 }
 
+// Customer-bound media token for a video row; null when paid and not entitled.
 function mediaTokenForVideo(v: { id: number; priceType: string }, entitled: boolean, customerId: number | null, scope: { kind: string; id: string } | null | undefined): string | null {
   if (customerId == null) return null;
   const isPaid = v.priceType === "paid";
@@ -54,7 +54,7 @@ function parsePaging(req: Request) {
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, search: search.trim() };
 }
 
-// GET /client/video-categories/:id/videos
+// Videos in a category with per-user progress/notes; paid rows tokenized only when entitled.
 export const listVideosByCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -70,15 +70,10 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const typeQ = String(req.query.type ?? "").toLowerCase();
     const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
 
-    // The full response is deliberately NEVER route-cached (see categories.routes.ts)
-    // because it embeds live per-user progress/notes + a short-lived customer-bound
-    // mediaToken. But the video LIST + owning-scope lookup below is pure catalog data
-    // — identical for every caller of this category/page/filter — so cache just that
-    // slice with a short cache-aside TTL. The per-user overlay (progress, notes,
-    // entitlement, token) below is always computed fresh, every request. Tagged
-    // CacheEntity.Video (not a bespoke tag) so admin video writes — which already
-    // call autoFlushGroup(CacheEntity.Video) — invalidate this too; see
-    // libs/cache.ts's invalidateEntity, wired into middlewares/autoFlush.ts.
+    // The full response is never route-cached (it embeds per-user progress/notes and
+    // a customer-bound mediaToken), but the video list + owning-scope lookup is pure
+    // catalog data, so only that slice is cached. Tagged CacheEntity.Video so admin
+    // video writes (autoFlushGroup) invalidate it too.
     const [{ rows, total }, scopes] = await cache.aside({
       key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
       ttlSeconds: 60,
@@ -88,22 +83,19 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
           cvSql.scopesForCategory(catId),
         ]),
     });
-    // Representative owning container for the response `scope` field (course→live→package
-    // priority; back-compat with the old single-scope shape).
+    // Representative owning container for the response `scope` field
+    // (course → live → package priority).
     const scope = scopes[0] ?? null;
 
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const videoIds = rows.map((v) => v.id);
-    // Progress + saved-note presence for this page, both keyed on (customer, video).
     const [progMap, notedVideoIds] = uid != null
       ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds)])
       : [new Map<number, any>(), new Set<number>()];
 
-    // Entitlement gate: paid videos only get a (playable) media token when the caller
-    // holds an active subscription for ANY of this category's owning containers (a video
-    // can belong to multiple packages — a buyer of any one is entitled). The token is
-    // scoped to the container they actually own so /media/resolve's re-check passes.
-    // Unpurchased paid rows get `mediaToken: null`. Free rows get a free token.
+    // Paid videos get a playable token only when the caller holds an active subscription
+    // for ANY owning container (a video can belong to several packages). The token is
+    // scoped to the container they own so /media/resolve's re-check passes.
     const entitledScope = await cvSql.entitledScopeFor(uid, scopes);
     const entitled = entitledScope != null;
 
@@ -114,9 +106,8 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
         _id: String(v.id), title: v.title, topic: v.topic, platform: v.platform,
         isPaid,
         progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed } : null,
-        // At least one saved note (text or audio) by this customer on this video.
         hasNotes: notedVideoIds.has(v.id),
-        recordings: [], // SQL videos carry no live-session back-link
+        recordings: [],
         qualities: defaultListingQualities(),
         mediaToken: mediaTokenForVideo(v, entitled, uid, entitledScope),
       };
@@ -134,10 +125,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/video-categories/:id/videos/:videoId
-// Resolves a single recorded video through ytdl-core (YouTube) or VideoCrypt
-// (AWS) and returns the encrypted multi-resolution envelope. The list endpoint
-// stays metadata-only; this is the detail call the FE makes on row tap.
+// Detail call the FE makes on row tap; the list endpoint stays metadata-only.
 export const getVideoByCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id ?? "");
@@ -151,10 +139,8 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     const v = await cvSql.findVideoInCategory(catId, vidId);
     if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
 
-    // Resolve ALL owning containers, then gate paid videos on an active subscription
-    // for ANY of them (a video's category can belong to multiple packages — a buyer of
-    // any one is entitled). The token is scoped to the container the caller actually
-    // owns so /media/resolve's re-check passes. Free videos skip the gate.
+    // Paid videos are gated on an active subscription for ANY owning container; the
+    // token is scoped to the one the caller owns so /media/resolve's re-check passes.
     const scopes = await cvSql.scopesForCategory(v.videoCategoryId ?? catId);
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     if (uid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
@@ -163,8 +149,7 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
     }
 
-    // No inline media — mint a media token the client resolves at /media/resolve.
-    const sc = scopes[0] ?? null; // representative scope for the response shape
+    const sc = scopes[0] ?? null;
     const mediaToken = v.priceType === "paid"
       ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(entitledScope), cust: uid })
       : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });
@@ -179,7 +164,7 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/material-categories/:id/materials
+// Materials in a category; isPurchased optionally scoped to one entry-point container.
 export const listMaterialsByCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -210,7 +195,6 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/exam-categories/:id/exams
 export const listExamsByCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -235,21 +219,16 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Category children (drill-down) ──────────────────────────────────────────
-// All three return { parent, list } where list[].category carries the same
-// shape used in the package detail: { ...categoryDoc, havingChildDirectory, count }.
-// Use `havingChildDirectory` on the client to decide whether tapping a card
-// should drill deeper or open the items list.
+// The three children endpoints return { parent, list } where list[].category matches
+// the package-detail shape ({ ...category, havingChildDirectory, count }); clients use
+// `havingChildDirectory` to decide between drilling deeper and opening the items list.
 
-// GET /client/video-categories/:id/children
 export const listVideoCategoryChildren = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("listVideoCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // A MySQL category id is an int. Children resolve via the SQL `parent`
-    // self-FK.
     const catId = parseVideoCategoryId(id);
     if (catId == null) {
       logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
@@ -274,15 +253,12 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
   }
 };
 
-// GET /client/material-categories/:id/children
 export const listMaterialCategoryChildren = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("listMaterialCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // A MySQL category id is an int. Children resolve via the SQL `parent`
-    // self-FK.
     const catId = parseMaterialCategoryId(id);
     if (catId == null) {
       logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
@@ -307,15 +283,12 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
   }
 };
 
-// GET /client/exam-categories/:id/children
 export const listExamCategoryChildren = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("listExamCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // A MySQL category id is an int. Children resolve via the SQL `parent_id`
-    // self-FK.
     const catId = parseExamCategoryId(id);
     if (catId == null) {
       logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
@@ -340,7 +313,6 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
   }
 };
 
-// GET /client/exam-countdown-categories/:id/packages
 export const listPackagesByExamCountdownCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -364,14 +336,10 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
   }
 };
 
-// GET /client/exam-countdown/:id/packages
-// :id is an ExamCountdown _id (a single exam event), NOT a category. Returns the
-// packages AND live courses tied to that exam, merged into one `list` where each
-// row is tagged `type: "package"` or `type: "live-course"` so the FE can split
-// the listing by type. Matching is by the exam's `examCountdownIds` membership
-// (both Package and LiveCourse carry that array); package plans mirror the
-// `/exam-countdown-categories/:id/packages` shape and live-course plans mirror
-// `/client/live-courses`.
+// :id is an ExamCountdown id (one exam event), not a category. Packages and live
+// courses linked via `examCountdownIds` are merged into one `list`, each row tagged
+// `type: "package" | "live-course"`; plans mirror the
+// `/exam-countdown-categories/:id/packages` and `/client/live-courses` shapes.
 export const listProductsByExamCountdown = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -384,8 +352,7 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
     const userNum = parseEcId(String(req.user?.id ?? ""));
     const r = await ecClientSql.listProductsByCountdown(ecId, userNum, { skip, take: limitNum, search });
     if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
-    // Card list only — drop the unused examCountdown wrapper + package/live meta
-    // noise (RN reads _id/name/image/plans/isPurchased/daysLeft). See docs/api-optimization.
+    // Card list only; the app reads _id/name/image/plans/isPurchased/daysLeft.
     const ITEM_DROP = [
       "description", "withMaterial", "withoutMaterial", "withMaterialText", "withoutMaterialText",
       "subtitle", "packageTypeId", "goalId", "examId", "order", "ordered", "isPopular",
@@ -402,7 +369,6 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
   }
 };
 
-// GET /client/exam-countdown-categories/:id/books-ebooks
 // Returns books + ebooks merged into a single `list`, each row tagged with `type`.
 export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -427,12 +393,8 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
   }
 };
 
-// GET /client/exam-countdown/:id/books-ebooks
-// :id is an ExamCountdown _id (a single exam event), NOT a category. Returns the
-// books + ebooks linked to that exam via their `examCountdownIds` array, merged
-// into one `list` where each row is tagged `type: "book"` or `type: "ebook"`.
-// Shape mirrors listBooksAndEbooksByExamCountdownCategory (ebook rows get joined
-// pricing + isPaid/isPurchased/daysLeft) so the FE can reuse the same cards.
+// :id is an ExamCountdown id (one exam event), not a category. Same row shape as
+// listBooksAndEbooksByExamCountdownCategory so the FE can reuse the same cards.
 export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -456,11 +418,8 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
   }
 };
 
-// ─── Package Categories ──────────────────────────────────────────────────────
 import * as pkgCatSql from "../../modules/package-category/package-category.service";
 
-// Request origin for share links — same local helper every other client
-// controller defines (book/package/ebook/live-course/...).
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 

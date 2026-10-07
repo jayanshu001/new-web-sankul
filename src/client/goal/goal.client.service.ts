@@ -1,13 +1,12 @@
+// Client goals: goal catalog reads and the customer's goal selection logic.
 import logger from "../../utils/logger";
 import { prisma } from "../../config/prisma";
 import { redisClient } from "../../config/redis";
 import { parseGoalSelection, parseLabels, reconcileGoalSelection, type GoalSelection, type CatalogGoal } from "../../utils/goalSelection";
 
-// Goals are the customer target-goal master (`ws_customer_target_goal`), each
-// optionally carrying labels ([{ id, name }] JSON). The client selection lives on
-// `ws_customer.goal` as [{ goalId, labelIds }] (legacy flat id arrays still read).
-// It can be written here (PUT /client/goals) or via /client/profile/update — both
-// persist the same validated composite shape.
+// Goals are the `ws_customer_target_goal` master, each optionally carrying labels
+// ([{ id, name }] JSON). The customer's selection lives on `ws_customer.goal` as
+// [{ goalId, labelIds }]; legacy flat id arrays are still read.
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
 const PROFILE_CACHE_PREFIX = "cache:client:profile:";
 
@@ -17,10 +16,8 @@ const parseGoalCustomerId = (id: string): number | null => {
 };
 
 /**
- * Persist the customer's goal selection. Accepts the composite
- * `[{ goalId, labelIds }]` (or a legacy flat id array); validates against
- * ws_customer_target_goal — unknown goals dropped, label ids filtered to those
- * that exist on the goal — then stores the normalized composite on ws_customer.goal.
+ * Accepts `[{ goalId, labelIds }]` or a legacy flat id array; unknown goals are dropped
+ * and label ids filtered to those on the goal before storing on ws_customer.goal.
  */
 export const updateMyGoals = async (customerId: string, goals: unknown, traceId?: string) => {
   logger.info("updateMyGoals service invoked", { traceId, customerId });
@@ -35,10 +32,8 @@ export const updateMyGoals = async (customerId: string, goals: unknown, traceId?
     const rows = parsed.length
       ? await prisma.customerTargetGoal.findMany({ where: { id: { in: parsed.map((s) => s.goalId) }, active: true }, select: { id: true, labels: true } })
       : [];
-    // Reconcile the incoming selection against the catalog with the SAME rules as
-    // the read path: unknown/inactive goals are dropped, and a labelled goal sent
-    // with no valid label is dropped (not stored as a labelless shape) so a later
-    // GET /client/goals/my-goals can never crash the FE bottom sheet.
+    // Same reconcile rules as the read path: a labelled goal sent with no valid label is
+    // dropped (not stored labelless) so GET /client/goals/my-goals can't crash the FE sheet.
     const validGoals = new Map<number, CatalogGoal>(
       rows.map((r) => {
         const labels = parseLabels(r.labels);
@@ -72,11 +67,7 @@ export const getActiveGoals = async (traceId?: string) => {
   }));
 };
 
-/**
- * Fetches the customer's selected goals — each returned with ONLY the labels
- * the customer chose within it. A selected goal with no labels still appears
- * (empty `labels`). Order follows the stored selection.
- */
+/** Selected goals, each with only the labels the customer chose; order follows the stored selection. */
 export const getMySelectedGoals = async (customerId: string, traceId?: string) => {
   logger.info("getMySelectedGoals service invoked", { traceId, customerId });
 
@@ -96,11 +87,9 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
     const byId = new Map(rows.map((r) => [r.id, r]));
     const labelsById = new Map(rows.map((r) => [r.id, parseLabels(r.labels)]));
 
-    // Reconcile the stored selection against the CURRENT catalog before shaping,
-    // so my-goals can never emit a shape that disagrees with GET /client/goals
-    // (the goal-moved-under-another-goal bug). Stale/inactive goals and labelled
-    // goals whose chosen labels all vanished are dropped rather than returned as
-    // a labelless shape the FE bottom sheet would crash on.
+    // Reconcile against the current catalog so my-goals never disagrees with GET /client/goals.
+    // Stale goals, and labelled goals whose chosen labels all vanished, are dropped rather than
+    // returned labelless (the FE bottom sheet crashes on that shape).
     const validGoals = new Map<number, CatalogGoal>(
       rows.map((r) => {
         const labels = labelsById.get(r.id)!;

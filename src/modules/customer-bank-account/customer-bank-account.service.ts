@@ -1,13 +1,4 @@
-/**
- * Customer bank account service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Gated behind `isMysqlModule("customer-bank-account")`. The referral controller
- * branches on `isBankAccountMysql()`; on the MySQL path it passes the validated
- * payload (IFSC details already resolved server-side) and numeric ids here.
- *
- * The bank-account table has no cross-module dependency (unlike address→OfflineCity),
- * so this module can be enabled independently once verified.
- */
+// Customer bank accounts: list and CRUD of the bank accounts a customer saves for referral payouts.
 import { customerBankAccountRepository as repo } from "./customer-bank-account.repository";
 import { toBankAccountDto } from "./customer-bank-account.transformer";
 import type {
@@ -15,8 +6,6 @@ import type {
   BankAccountUpdateInput,
 } from "./customer-bank-account.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseBankAccountId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -37,7 +26,6 @@ export const listBankAccounts = async (
   return { items: rows.map(toBankAccountDto), total };
 };
 
-/** Owner-scoped fetch (withdrawal flow). Returns null if not found/owned. */
 export const getBankAccount = async (id: number, customerId: number) => {
   const row = await repo.findOwned(id, customerId);
   return row ? toBankAccountDto(row) : null;
@@ -60,6 +48,7 @@ export const updateBankAccount = async (
   return { ok: true, status: 200, data: toBankAccountDto(row) };
 };
 
+// Hard delete; 404 when not owned.
 export const deleteBankAccount = async (id: number, customerId: number): Promise<Result<null>> => {
   const res = await repo.deleteOwned(id, customerId);
   if (res.count === 0) return { ok: false, status: 404, message: "Bank account not found." };

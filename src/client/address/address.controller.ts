@@ -1,3 +1,4 @@
+// Client addresses: HTTP handlers for address book and location lookups.
 import { Request, Response } from "express";
 import {
   createAddressSchemaMysql,
@@ -9,9 +10,8 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import { pickList } from "../../utils/pick";
 
-// Mobile reads identity + display + contact fields (Edit Address prefills the
-// saved phone/alternatePhone/email, and Checkout shows the shipping phone);
-// drop customerId/status/timestamps. City picker rows need id+name only.
+// Mobile reads identity, display and contact fields (Edit Address prefills phone/
+// alternatePhone/email; Checkout shows the shipping phone). City picker rows need id+name only.
 const ADDRESS_CLIENT_FIELDS = [
   "_id", "name", "phone", "alternatePhone", "email",
   "label", "isDefault", "address", "address2", "city", "stateId", "pincode",
@@ -41,10 +41,7 @@ import type {
 } from "../../modules/customer-address/customer-address.types";
 import { getActiveGoals } from "../goal/goal.client.service";
 
-/**
- * Map the validated zod body → the MySQL service's normalized input.
- * `stateId` is an integer FK; `city` is a plain name string.
- */
+/** `stateId` is an integer FK; `city` is a plain name string. */
 const toAddressCreateInput = (body: any, customerId: number): AddressCreateInput => ({
   customerId,
   name: body.name,
@@ -59,8 +56,6 @@ const toAddressCreateInput = (body: any, customerId: number): AddressCreateInput
   label: body.label ?? null,
   status: body.status ?? true,
 });
-
-// ─── Addresses ────────────────────────────────────────────────────────────────
 
 export const getMyAddresses = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -114,9 +109,7 @@ export const createAddress = async (req: Request, res: Response) => {
   try {
     const cid = parseAddressId(String(customerId));
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-    // MySQL ids are integers, not ObjectIds — validate with the int-id schema.
     const data = createAddressSchemaMysql.parse(req.body);
-    // `city` (VARCHAR NOT NULL) is the plain city name the client sends.
     const city = (data.city ?? "").trim();
     if (!city) {
       logger.warn("createAddress missing city", { traceId, customerId });
@@ -154,8 +147,7 @@ export const updateAddress = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
     const data = updateAddressSchemaMysql.parse(req.body);
-    // `city` is a plain name string; only overwrite when a non-empty value is
-    // sent (city column is NOT NULL — never write empty).
+    // Only overwrite city when a non-empty value is sent (column is NOT NULL).
     let cityUpdate: string | undefined;
     if (data.city !== undefined) {
       const trimmed = (data.city ?? "").trim();
@@ -193,7 +185,7 @@ export const updateAddress = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/client/address/:id/default
+// Mark one address as the customer's default (per-user).
 export const setDefaultAddress = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -248,8 +240,6 @@ export const deleteAddress = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Location Dropdowns ───────────────────────────────────────────────────────
-
 export const getStates = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("getStates invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -259,7 +249,7 @@ export const getStates = async (req: Request, res: Response) => {
     const term = search;
 
     const rows = await lookupListStates({ activeOnly: true, search: term });
-    // Mobile picker reads { _id, name } only (stateCode unused across the app).
+    // Mobile picker reads { _id, name } only.
     const states = rows.map((s) => ({ _id: s._id, name: s.name }));
     logger.info("getStates success", { traceId, count: states.length, source: "mysql" });
     return res.status(200).json({ success: true, data: states });
@@ -269,10 +259,7 @@ export const getStates = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Districts (deprecated — removed in favour of /cities) ────────────────────
-
-// ─── Cities (moved from /offline) ─────────────────────────────────────────────
-
+// Cities sourced from districts, optionally filtered by stateId.
 export const listCities = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCities invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -281,7 +268,7 @@ export const listCities = async (req: Request, res: Response) => {
     const { stateId } = req.query as Record<string, string>;
     const { search } = parseListQuery(req.query);
 
-    // Optional state scope. Invalid stateId → 400.
+    // Invalid stateId → 400.
     let stateNum: number | undefined;
     if (stateId) {
       const n = Number(stateId);
@@ -290,8 +277,7 @@ export const listCities = async (req: Request, res: Response) => {
       }
       stateNum = n;
     }
-    // Cities are sourced from ws_customer_distict (districts), shaped to the
-    // offline-city contract — same fields/filters as before.
+    // Cities come from ws_customer_distict (districts), shaped to the offline-city contract.
     const data = await svcListCityDistricts(search, stateNum);
     logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
     return res.status(200).json({ success: true, data: pickList(data, CITY_CLIENT_FIELDS) });
@@ -301,16 +287,15 @@ export const listCities = async (req: Request, res: Response) => {
   }
 };
 
+// Offline centres with nested active batches for one city, paginated in memory.
 export const listCentersByCity = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const cityId = req.params.cityId as string;
   logger.info("listCentersByCity invoked", { traceId, path: req.originalUrl, cityId, userId: req.user?.id });
 
   try {
-    // ── MySQL: centers (each with nested active batches) under this city
-    // (offline-batch). SQL ids are ints, not 24-hex ObjectIds. Mirrors the
-    // vetted SQL twin in offline.controller; pagination is applied in-memory
-    // over the returned centers to preserve this route's response envelope.
+    // Centers (each with nested active batches) under this city, mirroring
+    // offline.controller; pagination is applied in memory to keep this route's envelope.
     const cid = parseOfflineId(cityId);
     if (cid == null) {
       logger.warn("listCentersByCity invalid id", { traceId, cityId });
@@ -340,7 +325,6 @@ export const getEducations = async (req: Request, res: Response) => {
 
   try {
     const rows = await lookupListEducations({ activeOnly: true });
-    // Project to the exact Mongo contract: { _id, name }
     const educations = rows.map((e) => ({ _id: e._id, name: e.name }));
     logger.info("getEducations success", { traceId, count: educations.length, source: "mysql" });
     return res.status(200).json({ success: true, data: educations });
@@ -350,10 +334,7 @@ export const getEducations = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/client/address/characteristic
- * Returns educations + active goals for onboarding screens. No auth.
- */
+// Profile-setup lookups: active educations and goals in one call.
 export const getCharacteristic = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getCharacteristic invoked", { traceId, path: _req.originalUrl });

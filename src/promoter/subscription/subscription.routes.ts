@@ -1,3 +1,4 @@
+// Promoter subscriptions: subscription list and report routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { listMySubscriptions, subscriptionReport } from "./subscription.controller";

@@ -1,3 +1,4 @@
+// Admin customers: HTTP handlers for customer CRUD, detail tabs and subscription dates.
 import { Request, Response } from "express";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
@@ -30,8 +31,6 @@ const parseStatusFilter = (status?: string): boolean | undefined => {
   if (status === "false" || status === "inactive") return false;
   return undefined;
 };
-
-// ─── List & Get ───────────────────────────────────────────────────────────────
 
 export const getCustomers = async (req: Request, res: Response) => {
   try {
@@ -77,7 +76,7 @@ export const getCustomerById = async (req: Request, res: Response) => {
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     const dto = await customerSql.getCustomer(numId);
     if (!dto) return res.status(404).json({ success: false, message: "Customer not found" });
-    // Subscription/ebook models are not yet on SQL; counts default to 0.
+    // Subscription/ebook counts are not computed here and default to 0.
     return res.status(200).json({
       success: true,
       data: { ...dto, courseSubCount: 0, ebookSubCount: 0 },
@@ -87,8 +86,7 @@ export const getCustomerById = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Pre-requisites ───────────────────────────────────────────────────────────
-
+// Dropdown data for the customer create/edit form.
 export const getCustomerPreRequisites = async (_req: Request, res: Response) => {
   try {
     const data = await customerSql.getPreRequisites();
@@ -111,13 +109,9 @@ export const getDistrictsByState = async (req: Request, res: Response) => {
   }
 };
 
-// ws_customer has no FK on education_id, so an unknown/inactive id would be
-// written happily and then read back as `educationId: null` — the admin sees the
-// save succeed and the field silently empty. 422 with a field-keyed message
-// instead, matching how the rest of the API reports a bad reference.
+// ws_customer has no FK on education_id, so an unknown/inactive id would save and
+// read back as `educationId: null`. Reject with a field-keyed 422 instead.
 const EDUCATION_INVALID = "Invalid educationId. Pick one from GET /admin/customers/pre-requisites.";
-
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 export const createCustomer = async (req: Request, res: Response) => {
   try {
@@ -207,8 +201,6 @@ export const toggleCustomerStatus = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── Subscriptions ────────────────────────────────────────────────────────────
 
 export const getCustomerCourseSubscriptions = async (req: Request, res: Response) => {
   try {
@@ -305,14 +297,11 @@ export const getCustomerAddresses = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Customer Details (aggregate for admin detail page) ──────────────────────
-
 export const getCustomerDetails = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // Profile + purchase aggregates (subscriptions/orders/addresses) all from SQL.
-    // The aggregate is built to match the Mongo handler's DTO shape exactly.
+    // Profile + purchase aggregates; DTO shape is frozen for existing clients.
     const numId = customerSql.parseCustomerId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     const profile = await customerSql.getCustomer(numId);
@@ -327,6 +316,7 @@ export const getCustomerDetails = async (req: Request, res: Response) => {
   }
 };
 
+// Admin override of a course subscription's endAt.
 export const updateCourseSubscriptionDates = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;

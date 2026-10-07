@@ -1,3 +1,4 @@
+// Client CMS: HTTP handlers for shared CMS content.
 import { Request, Response } from "express";
 import {
   listFaqsClientPaged as listFaqsService,
@@ -22,15 +23,13 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { pickList, omit } from "../../utils/pick";
 
-// Client-only field projections (mobile app reads a subset of each DTO). Applied
-// at the controller edge so the shared module transformers — and the admin
-// responses that reuse them — keep their full shape. See docs/api-optimization.
+// Client-only projections, applied here so the shared transformers (and the admin
+// responses reusing them) keep their full shape. See docs/api-optimization.
 const FAQ_CLIENT_FIELDS = ["_id", "typeId", "question", "answer"] as const;
 const SOCIAL_LINK_CLIENT_FIELDS = ["_id", "title", "link", "typeId"] as const;
 const LIVE_BANNER_CLIENT_FIELDS = ["_id", "image", "liveCourseId", "orderBy"] as const;
 const TESTIMONIAL_CLIENT_FIELDS = ["_id", "name", "description", "rating"] as const;
 
-// GET /api/v1/client/faqs[?typeId=…]
 export const listFaqs = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listFaqs invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -38,11 +37,8 @@ export const listFaqs = async (req: Request, res: Response) => {
   try {
     const { typeId, type } = req.query as Record<string, string>;
     const filterKey = typeId ?? type;
-    // An unknown type is a 422, NOT a dropped filter. Silently ignoring it returns
-    // general + referral mixed together, so a typo in the app reads as "the
-    // referral sheet gained extra content" instead of failing. Same rule
-    // /client/subscriptions/access applies to a bad `kinds`. Valid values resolve
-    // case-insensitively, so `?type=Referral` (the display label) works.
+    // An unknown type is a 422, not a dropped filter (which would silently mix general +
+    // referral FAQs). Values resolve case-insensitively, so `?type=Referral` works.
     const resolvedType = resolveFaqTypeFilter(filterKey);
     if (!resolvedType.ok) {
       logger.warn("listFaqs invalid type filter", { traceId, type: filterKey });
@@ -67,7 +63,6 @@ export const listFaqs = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/faq-types
 export const listFaqTypes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listFaqTypes invoked", { traceId, path: req.originalUrl });
@@ -87,7 +82,6 @@ export const listFaqTypes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/popup — active popup (most recent non-expired)
 export const getActivePopup = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getActivePopup invoked", { traceId, path: _req.originalUrl });
@@ -107,7 +101,6 @@ export const getActivePopup = async (_req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/banners
 export const listBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listBanners invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -132,7 +125,6 @@ export const listBanners = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/cms/live-banners
 export const listLiveBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listLiveBanners invoked", { traceId, path: req.originalUrl });
@@ -152,7 +144,6 @@ export const listLiveBanners = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/testimonials
 export const listTestimonials = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listTestimonials invoked", { traceId, path: req.originalUrl });
@@ -172,7 +163,6 @@ export const listTestimonials = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/social-links — active social links, ordered
 export const listSocialLinks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listSocialLinks invoked", { traceId, path: req.originalUrl });
@@ -192,7 +182,6 @@ export const listSocialLinks = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/social-link-types
 export const listSocialLinkTypes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listSocialLinkTypes invoked", { traceId, path: req.originalUrl });
@@ -212,9 +201,6 @@ export const listSocialLinkTypes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/current-affairs[?search=&page=&limit=] — active current
-// affairs for the home screen, newest first. Returns only the fields the client
-// renders (image, title, youtubeLink). Supports `?search=` (title) + pagination.
 export const listCurrentAffairs = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCurrentAffairs invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -234,7 +220,6 @@ export const listCurrentAffairs = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/terms[?module=xxx]
 export const getTerms = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("getTerms invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -257,7 +242,6 @@ export const getTerms = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/version — current app version config
 export const getVersion = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getVersion invoked", { traceId, path: _req.originalUrl });
@@ -272,7 +256,7 @@ export const getVersion = async (_req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/upgrade[?clientVersion=123] — whether an update is available
+// Compare the caller's clientVersion against the latest configured version.
 export const checkUpgrade = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("checkUpgrade invoked", { traceId, path: req.originalUrl, clientVersion: req.query.clientVersion });

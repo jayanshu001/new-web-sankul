@@ -1,7 +1,8 @@
+// Admin customers: Zod request schemas.
 import { z } from "zod";
 
 const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-// Accept a Mongo ObjectId (24-hex) OR a MySQL numeric id (ws_customer_* tables).
+// Accepts a 24-hex legacy id or a numeric id.
 const refIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 
 export const createCustomerSchema = z.object({

@@ -1,3 +1,4 @@
+// Admin live sessions: session lifecycle, StreamOS utility and recording routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
@@ -24,18 +25,14 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// --- Streamos passthrough utilities (defined first so they don't collide
-//     with the `:id` patterns below). -----------------------------------------
+// StreamOS utilities are defined first so they don't collide with the `:id` patterns below.
 router.post("/streamos/webhook",                 autoFlushGroup(CacheEntity.LiveCourse), updateRecordingWebhook);  // POST   /api/v1/admin/live-sessions/streamos/webhook
 router.get("/streamos/org",                      getOrgDetails);           // GET    /api/v1/admin/live-sessions/streamos/org
 router.get("/streamos/recordings/:recordingId",  getUploadedVideoDetails); // GET    /api/v1/admin/live-sessions/streamos/recordings/:recordingId
 
-// Every session write flushes the "live-course" group: three CACHED client reads
-// are built from this same live-session data via liveSql —
-// GET /client/live-courses/upcoming-sessions, /upcoming-batches and
-// /:id/sessions (all 24h TTL). Without this a newly scheduled, started, ended or
-// deleted session stayed invisible in the app for up to a day.
-// --- Live session CRUD ------------------------------------------------------
+// Every session write flushes the "live-course" group: the cached (24h) client reads
+// /client/live-courses/upcoming-sessions, /upcoming-batches and /:id/sessions are
+// built from this data and would otherwise stay stale for up to a day.
 router.post("/",          autoFlushGroup(CacheEntity.LiveCourse), createLiveSession);            // POST   /api/v1/admin/live-sessions
 router.get("/",           listLiveSessions);             // GET    /api/v1/admin/live-sessions
 router.post("/end",       autoFlushGroup(CacheEntity.LiveCourse), endLiveSession);               // POST   /api/v1/admin/live-sessions/end

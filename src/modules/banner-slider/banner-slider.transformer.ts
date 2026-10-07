@@ -1,3 +1,4 @@
+// Banner slider: row to DTO mapping and write payloads (response shape is frozen).
 import type { BannerSlider } from "@prisma/client";
 import {
   BANNER_KEYS,
@@ -11,7 +12,7 @@ import {
   type BannerUpdateInput,
 } from "./banner-slider.types";
 
-/** Resolve a banner key from either Mongo casing or raw MySQL value. */
+/** Resolve a banner key from either the API casing or the raw DB value. */
 export const resolveBannerKey = (raw?: string | null): BannerKey | undefined => {
   if (!raw) return undefined;
   if ((BANNER_KEYS as readonly string[]).includes(raw)) return raw as BannerKey;
@@ -35,7 +36,6 @@ const targetIdFor = (
   keyId?: string | number | null
 ): number | null => (key && bannerKeyNeedsTarget(key) ? parseKeyId(keyId) : null);
 
-/** MySQL row → API DTO (Mongo-compatible). */
 export const toBannerDto = (row: BannerSlider): BannerSliderDto => {
   const key = resolveBannerKey(row.key);
   return {

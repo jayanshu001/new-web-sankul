@@ -1,19 +1,9 @@
 /**
- * Camera-ingest WebSocket bridge — "go live from the browser camera".
- *
- * Browsers cannot speak RTMP, and Streamos only accepts RTMP ingest. This
- * module bridges the gap:
- *
- *   browser getUserMedia → MediaRecorder (WebM/VP8+Opus)
- *     → binary WebSocket frames → THIS server
- *     → ffmpeg (stdin pipe) transcodes WebM → FLV/H.264+AAC
- *     → RTMP push to the LiveSession's Streamos rtmpUrl
- *
- * It shares the main HTTP server with Socket.IO by handling only the
- * `/ws/camera-ingest` upgrade path and leaving every other path alone.
- *
- * Requires `ffmpeg` on the server host (same dependency as
- * scripts/go-live-from-camera.ts). Each connection is admin-authenticated.
+ * Camera ingest: go live from the browser camera. Browsers can't speak RTMP and StreamOS only accepts
+ * RTMP, so: MediaRecorder WebM frames over WebSocket → ffmpeg (stdin) transcodes to
+ * FLV/H.264+AAC → RTMP push to the session's rtmpUrl. Shares the HTTP server with
+ * Socket.IO by claiming only the `/ws/camera-ingest` upgrade path. Requires `ffmpeg` on
+ * the host; each connection is admin-authenticated.
  */
 import { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
@@ -21,9 +11,6 @@ import { spawn, spawnSync, ChildProcessWithoutNullStreams } from "child_process"
 import { redisClient } from "../config/redis";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import logger from "../utils/logger";
-// SQL (Prisma) session lookup via the admin-live service — this is the same
-// ws_live_session data the live-class service owns. ffmpeg/RTMP/WebSocket
-// transport stays identical.
 import * as adminLiveSql from "../modules/admin-live/admin-live.service";
 import { pushCredentialsExpired } from "../admin/live/streamos.provider";
 
@@ -32,7 +19,6 @@ const ADMIN_ROLES = new Set(["admin", "super_admin", "editor"]);
 // Grace period after the last chunk for ffmpeg to flush before a hard kill.
 const FLUSH_GRACE_MS = 2000;
 
-// Cached one-shot `ffmpeg -version` probe.
 let ffmpegAvailable: boolean | null = null;
 function hasFfmpeg(): boolean {
   if (ffmpegAvailable === null) {
@@ -41,12 +27,10 @@ function hasFfmpeg(): boolean {
   return ffmpegAvailable;
 }
 
-// Verify an admin JWT the same way the HTTP `authenticate` middleware does:
-// valid signature, type === "admin", an admin role, and a matching active
-// session in Redis (the 1-active-device rule).
+// Mirrors HTTP `authenticate` for admins: valid signature, type "admin", an admin role,
+// and a matching active session in Redis (the one-active-device rule).
 async function verifyAdminToken(token: string): Promise<{ id: string; role: string } | null> {
   try {
-    // Keyring-aware verify so camera-ingest socket auth survives key rotation.
     const decoded = verifyAccessToken<any>(token);
     if (decoded.type !== "admin" || !ADMIN_ROLES.has(decoded.role)) return null;
     const active = await redisClient.get(`admin_session:${decoded.id}`);
@@ -68,8 +52,7 @@ function send(ws: WebSocket, payload: Record<string, unknown>) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
-// Routes one decoded WebSocket frame: binary = media chunk → ffmpeg stdin;
-// text = JSON control message ({ type: "start" | "stop" }).
+// Binary frame = media chunk for ffmpeg stdin; text = JSON control ({ type: "start" | "stop" }).
 function handleMessage(ws: IngestSocket, data: RawData, isBinary: boolean) {
   if (isBinary) {
     if (ws.ff && ws.ff.stdin.writable) ws.ff.stdin.write(data as Buffer);
@@ -82,8 +65,7 @@ function handleMessage(ws: IngestSocket, data: RawData, isBinary: boolean) {
     return;
   }
   if (msg?.type === "start") {
-    // startBroadcast is async — a rejection here would otherwise be a silent
-    // unhandled rejection that leaves the client hanging on "connecting…".
+    // Otherwise an unhandled rejection leaves the client hanging on "connecting…".
     startBroadcast(ws, msg).catch((err) => {
       logger.error("Camera ingest: startBroadcast threw", { error: (err as Error)?.message });
       send(ws, {
@@ -115,11 +97,9 @@ export function initCameraIngest(httpServer: HttpServer) {
   });
 
   wss.on("connection", (ws: IngestSocket, req) => {
-    // CRITICAL: register the message/close/error listeners SYNCHRONOUSLY, before
-    // the async auth below. `ws` drops 'message' events that arrive with no
-    // listener attached — and the browser sends its "start" frame the instant
-    // the socket opens, i.e. *during* the auth round-trip. Frames that land
-    // pre-auth are buffered here and drained the moment we're authenticated.
+    // Listeners must be registered synchronously, before the async auth: `ws` drops
+    // messages with no listener, and the browser sends "start" the instant the socket
+    // opens. Pre-auth frames are buffered and drained once authenticated.
     let authed = false;
     const pending: Array<{ data: RawData; isBinary: boolean }> = [];
 
@@ -136,8 +116,7 @@ export function initCameraIngest(httpServer: HttpServer) {
       stopBroadcast(ws, "socket error");
     });
 
-    // Authenticate (async). Browsers can't set WS headers, so the admin token
-    // rides in the query string: ws://host/ws/camera-ingest?token=<token>
+    // Browsers can't set WS headers, so the admin token rides in `?token=`.
     void (async () => {
       let token = "";
       try {
@@ -174,7 +153,7 @@ export function initCameraIngest(httpServer: HttpServer) {
 }
 
 async function startBroadcast(ws: IngestSocket, msg: any) {
-  if (ws.started) return; // already broadcasting on this socket
+  if (ws.started) return;
 
   if (!hasFfmpeg()) {
     logger.warn("Camera ingest: start rejected — ffmpeg missing");
@@ -209,10 +188,8 @@ async function startBroadcast(ws: IngestSocket, msg: any) {
     send(ws, { type: "error", message: "Session has no rtmpUrl — (re)start it first." });
     return;
   }
-  // StreamOS v1 ingest credentials expire ~24h after they are minted, so a
-  // session provisioned days ago still carries an rtmpUrl that the server will
-  // refuse. Fail here with an actionable message instead of handing ffmpeg a
-  // dead URL and surfacing it as an opaque broadcast failure minutes later.
+  // StreamOS ingest credentials expire ~24h after minting; fail with an actionable
+  // message instead of handing ffmpeg a dead URL that fails opaquely minutes later.
   if (pushCredentialsExpired(session.pushExpiresAt)) {
     logger.warn("Camera ingest: start rejected — push credentials expired", {
       streamId,
@@ -225,8 +202,7 @@ async function startBroadcast(ws: IngestSocket, msg: any) {
     return;
   }
 
-  // MediaRecorder gives us WebM (VP8/Opus). Transcode to FLV/H.264+AAC and push
-  // RTMP — same encoder settings as scripts/go-live-from-camera.ts.
+  // Same encoder settings as scripts/go-live-from-camera.ts.
   const ff = spawn("ffmpeg", [
     "-fflags", "+genpts",
     "-i", "pipe:0",

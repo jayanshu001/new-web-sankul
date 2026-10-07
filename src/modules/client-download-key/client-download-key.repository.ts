@@ -1,16 +1,9 @@
+// Download encryption key: Prisma queries on ws_customer.download_key_hex.
 import { prisma } from "../../config/prisma";
 
 /**
- * Prisma access for `ws_customer.download_key_hex`. No business logic here —
- * the "is this the same key we already hold?" decision lives in the service.
- *
- * Every read uses an explicit `select` of just the key column. That is
- * deliberate: most customer reads in this codebase pull the whole row, and this
- * module has no reason to hold `password` / `otp` / the rest of the row in
- * memory just to answer with 64 hex characters.
- *
- * Every method is scoped by `id` (the customer PK), so no query shape in this
- * file can reach across accounts.
+ * Every read selects only the key column so `password`/`otp` are never loaded,
+ * and every query is scoped by the customer PK.
  */
 export const downloadKeyRepository = {
   /** `null` row = no such customer; `{ downloadKeyHex: null }` = customer with no key yet. */
@@ -21,12 +14,8 @@ export const downloadKeyRepository = {
     }),
 
   /**
-   * Store / replace this customer's key.
-   *
-   * `updateMany` (not `update`) so a missing or soft-deleted customer comes back
-   * as `count: 0` instead of throwing P2025 — the caller turns that into a 401
-   * rather than a 500. `updatedAt` is set explicitly to match every other write
-   * in customer-profile.repository.ts.
+   * `updateMany` so a missing or soft-deleted customer yields `count: 0` (the
+   * caller answers 401) instead of throwing P2025.
    */
   setKey: (customerId: number, keyHex: string) =>
     prisma.customer.updateMany({
@@ -34,7 +23,6 @@ export const downloadKeyRepository = {
       data: { downloadKeyHex: keyHex, updatedAt: new Date() },
     }),
 
-  /** Account deletion — clears this customer's key only. */
   clearKey: (customerId: number) =>
     prisma.customer.updateMany({
       where: { id: customerId },

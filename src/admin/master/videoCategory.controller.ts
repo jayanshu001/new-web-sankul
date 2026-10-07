@@ -1,3 +1,4 @@
+// Admin video category master: HTTP handlers for video category CRUD.
 import { Request, Response } from "express";
 import { createVideoCategorySchema, updateVideoCategorySchema } from "./master.validation";
 import * as master from "../../modules/admin-master/admin-master.service";

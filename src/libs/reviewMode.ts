@@ -1,16 +1,12 @@
-// src/libs/reviewMode.ts
+// Review mode: server-side Firebase `maintain.env` switch that gates guest mode.
 import admin from "firebase-admin";
 import logger from "../utils/logger";
 
 /**
- * Guest-mode switch, read SERVER-SIDE from the same Firebase Realtime DB node the
- * app reads (`maintain`): guest login works while `maintain.env === "staging"`.
- * Ops open/close it from the Firebase console — no `.env` flag, no restart.
- *
- * EVERY server that holds this Firebase project's service account follows the same
- * node, production included. The value is read with the Admin SDK; nothing a client
- * sends is trusted. Fails CLOSED: if Firebase cannot be read, or the listener
- * errors, guest mode is off (guest tokens answer 401).
+ * Guest mode is on while Firebase RTDB `maintain.env === "staging"`, read
+ * server-side with the Admin SDK (never trust a client value). Every server on this
+ * Firebase project follows it, production included. Fails closed: if Firebase
+ * cannot be read, guest mode is off.
  */
 export const reviewModeFrom = (maintain: unknown): boolean => (maintain as any)?.env === "staging";
 
@@ -21,9 +17,9 @@ let on = false;
 let ready: Promise<void> | null = null;
 
 /**
- * Opens the live listener; resolves once the first value (or an error / timeout) is
- * in, so the very first guest request after a restart is not answered "off" by race.
- * Own named app: utils/fcm.ts owns the default app and sets no databaseURL.
+ * Resolves on the first value (or error/timeout) so the first guest request after
+ * a restart isn't answered "off" by race. Uses its own named app because
+ * utils/fcm.ts owns the default app and sets no databaseURL.
  */
 const start = (): Promise<void> =>
   new Promise<void>((resolve) => {
@@ -52,7 +48,7 @@ const start = (): Promise<void> =>
     }
   });
 
-/** Live value of the Firebase switch. The listener starts on first use, then this is instant. */
+/** The listener starts on first use; later calls are instant. */
 export const isReviewModeOn = async (): Promise<boolean> => {
   await (ready ??= start());
   return on;

@@ -1,8 +1,9 @@
-/** Legacy MySQL FAQ categories (enum on `ws_faq.type`). */
+// FAQs: DTO, input types and the FAQ type enum.
+
+/** Enum on `ws_faq.type`. */
 export const FAQ_TYPES = ["general", "referral"] as const;
 export type FaqCategory = (typeof FAQ_TYPES)[number];
 
-/** Stable API shape (Mongo-compatible for admin / client). */
 export interface FaqTypeDto {
   _id: string;
   title: string;
@@ -12,7 +13,6 @@ export interface FaqTypeDto {
 
 export interface FaqDto {
   _id: string;
-  /** Synthetic populated shape when served from MySQL. */
   typeId: FaqTypeDto | string;
   type?: FaqCategory;
   question: string;
@@ -22,7 +22,6 @@ export interface FaqDto {
   updatedAt?: Date;
 }
 
-/** MySQL create/update payload. */
 export interface FaqCreateInput {
   type: FaqCategory;
   question: string;
@@ -30,7 +29,6 @@ export interface FaqCreateInput {
   isExpand?: boolean;
 }
 
-/** Mongo create payload (separate `ws_faq_types` collection). */
 export interface FaqCreateMongoInput {
   typeId: string;
   question: string;

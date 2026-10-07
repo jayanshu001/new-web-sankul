@@ -1,12 +1,12 @@
+// Client media: exchanges a media token for short-lived playback URLs.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { resolveMediaToken } from "../../modules/client-media/client-media.service";
 
-// POST /api/v1/client/media/resolve   { token: "<mediaToken>" }
-// Exchanges a short-lived media token for the actual (short-lived) media URL(s).
-// Re-verifies the token, binds it to the caller, and re-checks entitlement before
-// resolving. This is the ONLY endpoint that returns a real media URL.
+// Exchanges a media token for short-lived media URL(s) after re-verifying the token,
+// binding it to the caller and re-checking entitlement. The only endpoint that returns
+// a real media URL.
 export const resolveMedia = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

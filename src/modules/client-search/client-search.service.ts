@@ -1,14 +1,8 @@
 /**
- * Global search — SQL branch for GET /client/search. Gated behind
- * `isMysqlModule("client-search")`. Searches 6 entity types (courses, packages,
- * liveCourses, books, ebooks, testSeries) by name + enabled flag, attaches isPaid / plans /
- * isNew / per-customer purchase state — mirroring search.controller exactly.
- *
- * Field drift handled: Package uses `active` (not status); Course isPaid =
- * purchase≠'0'; LiveCourse/Book/Ebook per their own flags (Book paid =
- * discounted_price>0; Ebook isPaid via price>0 fallback; TestSeries paid = !is_free,
- * searched on `title`). Subscriptions:
- * ws_package_course_subscription has no payment_status col → status=true.
+ * Client search: one search across 6 entity types. Per-type field differences: Package uses
+ * `active` (not status); Course isPaid = purchase≠'0'; Book paid = discounted_price>0;
+ * Ebook isPaid via price>0 fallback; TestSeries paid = !is_free and is searched on `title`.
+ * ws_package_course_subscription has no payment_status, so status=true is the gate.
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -16,21 +10,15 @@ import { isNewItem } from "../../utils/isNew";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { pick } from "../../utils/pick";
 
-// SearchCardDto — the raw-row card fields the RN SearchScreen renders (identity +
-// image + book/ebook meta + price columns). Everything else on the Prisma row
-// (descriptions, schedules, FKs, share links, status, timestamps, feature flags)
-// is dropped to stop full-row over-fetch/leak. The computed fields (_id, isPaid,
-// isNew, plans, isPurchased, daysLeft) are layered on AFTER this pick, below.
-// A key absent on a given type's row is simply skipped. See docs/api-optimization.
+// Raw-row fields the app's SearchScreen renders; everything else on the row is dropped to
+// stop over-fetch/leak. Computed fields are layered on after this pick. See docs/api-optimization.
 const SEARCH_CARD_RAW_FIELDS = [
   "id", "name", "image", "thumbnail",
   "author", "publisher", "language", "pages",
   "price", "discounted_price", "list_price", "shipping_price",
-  // testSeries-only card meta (ws_test_series has `title`, not `name` — the
-  // card below mirrors it into `name` so the RN list renders uniformly).
+  // testSeries-only (it has `title`, not `name`; mirrored into `name` below).
   "title", "paperCount", "isFree",
 ] as const;
-
 
 export type SearchType = "courses" | "packages" | "liveCourses" | "books" | "ebooks" | "testSeries";
 export const SEARCH_TYPES: SearchType[] = ["courses", "packages", "liveCourses", "books", "ebooks", "testSeries"];
@@ -40,7 +28,6 @@ const parseId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ── per-type fetch (name search + enabled flag) ──────────────────────────────
 const fetchType = async (type: SearchType, q: string, skip: number, take: number) => {
   const name = (q || "").trim();
   const nameSearch = buildPrismaSearch(name, ["name"]);
@@ -86,8 +73,6 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "testSeries": {
-      // ws_test_series names the display column `title` (every other searched
-      // entity uses `name`), so the token search targets it explicitly.
       const titleSearch = buildPrismaSearch(name, ["title"]);
       const where: any = { status: true, ...(titleSearch ?? {}) };
       const [rows, total] = await Promise.all([
@@ -99,7 +84,6 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
   }
 };
 
-// ── isPaid per type ──────────────────────────────────────────────────────────
 const isPaidMap = async (type: SearchType, rows: any[]): Promise<Map<number, boolean>> => {
   const m = new Map<number, boolean>();
   if (type === "courses") for (const r of rows) m.set(r.id, r.purchase != null ? r.purchase !== "0" : true);
@@ -108,7 +92,7 @@ const isPaidMap = async (type: SearchType, rows: any[]): Promise<Map<number, boo
   else if (type === "books") for (const r of rows) m.set(r.id, (r.discounted_price ?? 0) > 0);
   else if (type === "testSeries") for (const r of rows) m.set(r.id, !r.isFree);
   else if (type === "ebooks") {
-    // No isPaid col on ws_ebook → price>0 fallback (active price plan).
+    // ws_ebook has no isPaid column: paid = any active plan with price>0.
     const ids = rows.map((r) => r.id);
     const paid = new Set<number>();
     if (ids.length) {
@@ -120,7 +104,7 @@ const isPaidMap = async (type: SearchType, rows: any[]): Promise<Map<number, boo
   return m;
 };
 
-// ── plans per type (same shape the catalog endpoints use) ────────────────────
+// Same plan shape the catalog endpoints use.
 const plansMap = async (type: SearchType, rows: any[]): Promise<Map<number, any>> => {
   const out = new Map<number, any>();
   const ids = rows.map((r) => r.id);
@@ -152,14 +136,12 @@ const plansMap = async (type: SearchType, rows: any[]): Promise<Map<number, any>
   return out;
 };
 
-// ── purchase state per type ──────────────────────────────────────────────────
 const attachPurchaseState = async (type: SearchType, rows: any[], customerId: number | null) => {
   const now = new Date();
   const [paidBy, plansBy] = await Promise.all([isPaidMap(type, rows), plansMap(type, rows)]);
   const base = rows.map((r) => ({
     ...pick(r, SEARCH_CARD_RAW_FIELDS), id: r.id, _id: String(r.id),
-    // testSeries rows carry `title`; every consumer of a search card reads
-    // `name`, so mirror it without dropping the native field.
+    // Every consumer reads `name`; mirror testSeries `title` without dropping it.
     ...(r.name == null && r.title != null ? { name: r.title } : {}),
     isPaid: paidBy.get(r.id) ?? true,
     isNew: isNewItem(r.createdAt ?? r.created_at ?? null, now),
@@ -195,15 +177,14 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
   }
 
   if (type === "liveCourses") {
-    // `paymentStatus` dropped 2026-08-25 — payment moved to ws_live_course_order and
-    // a subscription row is only ever written for a paid one, so `status` is the gate.
+    // A subscription row is only written for a paid ws_live_course_order, so `status` is the gate.
     const subs = await prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } });
     const life = new Set<number>(); const latest = new Map<number, Date>();
     for (const s of subs) { const e = s.endAt ?? null; if (e === null) { life.add(s.liveCourseId); continue; } if (life.has(s.liveCourseId)) continue; const prev = latest.get(s.liveCourseId); if (!prev || e > prev) latest.set(s.liveCourseId, e); }
     return base.map((it) => { if (life.has(it.id)) return { ...it, isPurchased: true, daysLeft: null }; const e = latest.get(it.id); return { ...it, isPurchased: !!e, daysLeft: e ? computeDaysLeft(e, now) : null }; });
   }
 
-  // courses / packages — sub via direct id OR via a plan (packageId) whose course/package matches
+  // courses/packages: owned via the direct id OR via a plan (packageId) whose course/package matches
   const isCourse = type === "courses";
   const planRows = await prisma.packageCourseEbookPrice.findMany({ where: isCourse ? { courseId: { in: ids } } : { packageId: { in: ids } }, select: { id: true, courseId: true, packageId: true } });
   const planToOwner = new Map<number, number>();
@@ -230,7 +211,7 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
   return base.map((it) => { if (life.has(it.id)) return { ...it, isPurchased: true, daysLeft: null }; const e = latest.get(it.id); return { ...it, isPurchased: !!e, daysLeft: e ? computeDaysLeft(e, now) : null }; });
 };
 
-// ── public API ────────────────────────────────────────────────────────────────
+// One page of a single entity type with per-customer isPurchased/daysLeft attached.
 export const searchType = async (type: SearchType, q: string, customerId: number | null, skip: number, take: number) => {
   const { rows, total } = await fetchType(type, q, skip, take);
   const items = await attachPurchaseState(type, rows, customerId);

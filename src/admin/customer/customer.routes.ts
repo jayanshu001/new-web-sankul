@@ -1,3 +1,4 @@
+// Admin customers: customer CRUD and per-customer purchase-tab routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";

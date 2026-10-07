@@ -1,3 +1,4 @@
+// Admin live-course plans: HTTP handlers for pricing-plan CRUD.
 import { Request, Response } from "express";
 import { planInUseMessage } from "../../utils/planUsage";
 import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
@@ -14,8 +15,7 @@ const createPlanSchema = z
     price:     z.number().nonnegative("price must be a non-negative number"),
     // MRP shown struck-through next to `price`. Optional.
     originalPrice: z.number().nonnegative("originalPrice must be a non-negative number").optional(),
-    // Per-plan material variant (mirrors Course/Package). withMaterial marks the
-    // plan as shipping physical material; materialPrice is the material portion.
+    // withMaterial marks the plan as shipping physical material; materialPrice is that portion.
     withMaterial: z.boolean().optional().default(false),
     materialPrice: z.number().nonnegative("materialPrice must be a non-negative number").optional(),
     isDefault: z.boolean().optional().default(false),
@@ -31,7 +31,6 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
   return failure(res, "Validation failed.", 422, { errors: messages });
 }
 
-// POST /api/v1/admin/live-courses/:id/plans
 export const createLiveCoursePlan = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.id ?? "");
@@ -46,7 +45,6 @@ export const createLiveCoursePlan = async (req: Request, res: Response) => {
   return success(res, { plan: r }, "Plan created.", 201);
 };
 
-// GET /api/v1/admin/live-courses/:id/plans
 export const listLiveCoursePlans = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.id ?? "");
@@ -64,7 +62,6 @@ export const listLiveCoursePlans = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-courses/plans/:planId
 export const getLiveCoursePlan = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const planId = String(req.params.planId ?? "");
@@ -82,7 +79,6 @@ export const getLiveCoursePlan = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/live-courses/plans/:planId
 export const updateLiveCoursePlan = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const planId = String(req.params.planId ?? "");
@@ -98,9 +94,8 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
   return success(res, { plan: r }, "Plan updated.");
 };
 
-// DELETE /api/v1/admin/live-courses/plans/:planId
-// Refuses if ANY subscription row points at the plan — verified, pending or failed,
-// expired or live. Deleting a referenced plan strands the rows that point at it.
+// Refuses if any subscription row (any status, expired or live) points at the plan;
+// deleting it would strand those rows.
 export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const planId = String(req.params.planId ?? "");

@@ -1,3 +1,4 @@
+// Educator auth: login, token rotation, logout, password and profile logic.
 import bcrypt from "bcryptjs";
 import { redisClient } from "../../config/redis";
 import {
@@ -13,8 +14,7 @@ import {
   verifyEducatorPassword,
 } from "../../modules/educator-auth/educator-auth.transformer";
 
-// JWT secrets routed through the keyring (config/jwtKeys.ts) — same pattern
-// as the customer + admin auth services.
+// JWT secrets routed through the keyring (config/jwtKeys.ts).
 const JWT_ACCESS_TTL_DAYS = 1;
 const JWT_REFRESH_TTL_DAYS = 30;
 const SALT_ROUNDS = 10;
@@ -27,10 +27,10 @@ const parseEducatorId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+// Email/password login; deactivates prior tokens and issues a fresh access/refresh pair.
 export async function educatorLogin(email: string, password: string, traceId?: string) {
   logger.info("educatorLogin service invoked", { traceId, email });
 
-  // ─── MySQL branch (ws_course_educator) ──────────────────────────────────
   const row = await repo.findActiveByEmail(email);
   if (!row) {
     logger.warn("educatorLogin service invalid credentials (sql)", { traceId, email });
@@ -40,8 +40,7 @@ export async function educatorLogin(email: string, password: string, traceId?: s
     logger.warn("educatorLogin service no password set (sql)", { traceId, educatorId: row.id });
     return { ok: false, message: "Account has no password set." };
   }
-  // Legacy rows store MD5; modern rows store bcrypt. verifyEducatorPassword
-  // handles both.
+  // Legacy rows store MD5, modern rows bcrypt; verifyEducatorPassword handles both.
   const match = await verifyEducatorPassword(password, row.password);
   if (!match) {
     logger.warn("educatorLogin service invalid credentials (sql)", { traceId, email });
@@ -67,11 +66,11 @@ export async function educatorLogin(email: string, password: string, traceId?: s
   return { ok: true, message: "Login successful.", token, refreshToken, educator: dto };
 }
 
+// Rotates tokens: the used refresh row is deactivated and a new pair issued.
 export async function educatorRefresh(refreshToken: string, traceId?: string) {
   logger.info("educatorRefresh service invoked", { traceId });
   if (!refreshToken) { logger.warn("educatorRefresh service missing token", { traceId }); return { ok: false, message: "Refresh token is required." }; }
 
-  // ─── MySQL branch (ws_course_educator) ──────────────────────────────────
   try {
     const decoded = verifyRefreshToken<any>(refreshToken);
     const id = parseEducatorId(String(decoded.id));
@@ -115,22 +114,11 @@ export async function educatorRefresh(refreshToken: string, traceId?: string) {
 export async function educatorLogout(educatorId: string, traceId?: string) {
   logger.info("educatorLogout service invoked", { traceId, educatorId });
 
-  // ─── MySQL branch ───────────────────────────────────────────────────────
-  // Kill the token that is ALREADY on the device.
-  //
-  // `deactivateTokens`/`deactivateAllTokens` below only flags the DB rows, and
-  // nothing on the request path reads them: `authenticate` validates an access
-  // token by signature + this Redis cutoff + the account gate, never by a lookup
-  // in ws_*_access_token. So without this line "logout" only blocked the REFRESH
-  // call — the access token already in the app kept opening every endpoint until
-  // it expired on its own (7 days for customers, 1 day for the staff surfaces).
-  // That is exactly the bug the client reported. `/logout-all-devices` always did
-  // this; plain logout never did.
-  //
-  // Fail-open by design (see libs/tokenRevocation.ts): if Redis is unreachable it
-  // logs and returns false rather than throwing, so a Redis blip can't make
-  // logout fail. Called FIRST so a later teardown failure still leaves the token
-  // revoked.
+  // Revoke the access token already on the device: the DB token rows below are never
+  // read on the request path (authenticate checks signature + Redis cutoff + account
+  // gate), so without this the token stays valid until expiry. Fail-open on a Redis
+  // outage (libs/tokenRevocation.ts); called first so a later teardown failure still
+  // leaves the token revoked.
   await revokeAllTokensForUser("educator", String(educatorId));
 
   const id = parseEducatorId(educatorId);
@@ -148,7 +136,6 @@ export async function educatorChangePassword(
 ) {
   logger.info("educatorChangePassword service invoked", { traceId, educatorId });
 
-  // ─── MySQL branch ───────────────────────────────────────────────────────
   const id = parseEducatorId(educatorId);
   if (!id) return { ok: false, message: "Educator not found." };
   const row = await repo.findById(id);
@@ -178,7 +165,6 @@ export async function educatorUpdateProfile(
 ) {
   logger.info("educatorUpdateProfile service invoked", { traceId, educatorId });
 
-  // ─── MySQL branch ───────────────────────────────────────────────────────
   const id = parseEducatorId(educatorId);
   if (!id) return { ok: false, message: "Educator not found." };
   const existing = await repo.findById(id);
@@ -194,7 +180,6 @@ export async function educatorUpdateProfile(
 export async function educatorGetProfile(educatorId: string, traceId?: string) {
   logger.info("educatorGetProfile service invoked", { traceId, educatorId });
 
-  // ─── MySQL branch ───────────────────────────────────────────────────────
   const id = parseEducatorId(educatorId);
   if (!id) return { ok: false, message: "Educator not found." };
   const row = await repo.findById(id);

@@ -1,3 +1,4 @@
+// Admin courses: course, plan, linked content, video-category and video routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -54,14 +55,11 @@ import { autoFlushGroup } from "../../middlewares/autoFlush";
 
 const router = Router();
 
-// All course management endpoints are admin-only.
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// GET pre-requisites
 router.get("/pre-requisites", getPreRequisites);
-// Course video-category + relation writes change catalog video composition →
-// flush "video-category" (fans out to catalog-course/catalog-package/categories/
-// free). Material writes flush "material".
+// Video-category/relation writes change catalog video composition, so they flush
+// "video-category" (fans out to catalog-course/catalog-package/categories/free).
 router.get("/video-categories", getCourseVideoCategories);
 router.post("/video-categories", autoFlushGroup(CacheEntity.VideoCategory), createCourseVideoCategory);
 router.put("/video-categories/:videoCategoryId", autoFlushGroup(CacheEntity.VideoCategory), updateCourseVideoCategory);
@@ -76,30 +74,23 @@ router.post("/materials", autoFlushGroup(CacheEntity.Material), createCourseMate
 router.put("/materials/:materialId", autoFlushGroup(CacheEntity.Material), updateCourseMaterial);
 router.delete("/materials/:materialId", autoFlushGroup(CacheEntity.Material), deleteCourseMaterial);
 
-// Route-level response cache. Reads tagged entity: CacheEntity.Course; the writes below
-// call autoFlushGroup(CacheEntity.Course) so edits clear these instantly. See cache/ROUTE_CACHE.md.
 // create/update/delete + material-categories/reorder also flush "material": they
 // rewrite ws_material_category_course, which /client/catalog/course/:id/materials
-// and /client/materials read — cached under "material", not "course".
+// and /client/materials read (cached under "material", not "course").
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), getCourses);
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Course }), getCourseById);
 
-// POST create course
 router.post("/", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), createCourse);
 
-// PUT update course
 router.put("/:id", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Course, CacheEntity.Material), updateCourse);
 
-// DELETE delete course
 router.delete("/:id", autoFlushGroup(CacheEntity.Course, CacheEntity.Material), deleteCourse);
 
-// PATCH toggle popular flag
 router.patch("/:id/popular", autoFlushGroup(CacheEntity.Course), toggleCoursePopular);
 
-// PATCH toggle status (activate/deactivate) — no required-field checks
+// Status toggle skips required-field checks.
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Course), toggleCourseStatus);
 
-// Pricing Plans
 router.get("/:id/plans", getCoursePlans);
 router.get("/:id/promocodes", getCoursePromocodes);
 router.get("/:id/exam-categories", getCourseExamCategories);
@@ -110,15 +101,14 @@ router.get("/:id/books", getCourseBooks);
 router.post("/:id/books", autoFlushGroup(CacheEntity.Course), linkCourseBooks);
 router.put("/:id/books/reorder", autoFlushGroup(CacheEntity.Course), reorderCourseBooks);
 router.delete("/:id/books/:bookId", autoFlushGroup(CacheEntity.Course), unlinkCourseBook);
-// flush CacheEntity.Plan — was unflushed: plans/prices are embedded in every
-// cached course detail/list (see flushGroups.ts's "plan" group).
+// Plans/prices are embedded in every cached course detail/list, hence the Plan flush.
 router.post("/:id/plans", autoFlushGroup(CacheEntity.Plan), createCoursePlan);
 router.get("/plans/:planId", getCoursePlanById);
 router.put("/plans/:planId", autoFlushGroup(CacheEntity.Plan), updateCoursePlan);
 router.delete("/plans/:planId", autoFlushGroup(CacheEntity.Plan), deleteCoursePlan);
 
-// Videos (writes flush "video"). NOTE: GET "/videos" is shadowed by GET "/:id"
-// above (pre-existing) — the reachable read is GET "/videos/:videoId".
+// GET "/videos" is shadowed by GET "/:id" above; the reachable read is GET "/videos/:videoId".
+
 router.get("/videos", getVideos);
 router.post("/videos", autoFlushGroup(CacheEntity.Video), createVideo);
 router.post("/videos/reorder", autoFlushGroup(CacheEntity.Video), reorderVideos);

@@ -1,3 +1,4 @@
+// Admin materials: category tree, material CRUD, ordering, cloning and linked products.
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPagination } from "../../utils/listQuery";
@@ -13,10 +14,9 @@ export const parseMaterialId = (id: string): number | null => {
 const slugify = (input: string): string =>
   input.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-// ── transformers ─────────────────────────────────────────────────────────────
 /**
- * `ws_material_category` row → Mongo-shaped MaterialCategory. parent 0 → null
- * (root); ancestors[]/childCategoryIds[] synthesized empty (single-parent SQL).
+ * `ws_material_category` row → MaterialCategory DTO. parent 0 → null (root);
+ * ancestors[]/childCategoryIds[] are emitted empty (single-parent tree).
  */
 export const toCategoryDto = (row: MaterialCategory) => ({
   _id: String(row.id),
@@ -32,14 +32,13 @@ export const toCategoryDto = (row: MaterialCategory) => ({
   updatedAt: row.updated_at ?? null,
 });
 
-/** `ws_material` row → Mongo-shaped Material. SQL-absent fields synthesized. */
+/** `ws_material` row → Material DTO; fields with no column are synthesized. */
 type MatRow = Material & { MaterialCategory?: { id: number; name: string } | null };
 export const toMaterialDto = (row: MatRow) => ({
   _id: String(row.id),
   title: row.name,
   description: null,
   materialCategoryId: row.materialCategoryId != null ? String(row.materialCategoryId) : null,
-  // Related category (id + name) for display — joined via the repo's include.
   materialCategory: row.MaterialCategory ? { id: String(row.MaterialCategory.id), name: row.MaterialCategory.name } : null,
   file: row.file,
   fileName: row.fileName ?? null,
@@ -57,7 +56,7 @@ export const toMaterialDto = (row: MatRow) => ({
   updatedAt: row.updated_at ?? null,
 });
 
-// ── categories: list / tree / get ──────────────────────────────────────────────
+// Full nested category tree (children[] per node), optional status filter.
 export const listCategoriesTree = async (status?: boolean) => {
   const all = await repo.listAllCategories(status);
   const byParent = new Map<number, any[]>();
@@ -73,6 +72,7 @@ export const listCategoriesTree = async (status?: boolean) => {
   return (byParent.get(ROOT) ?? []).map(attach);
 };
 
+// Paged picker rows with hasChildren and ancestors[{id,name}].
 export const listCategories = async (q: { parent?: string; search?: string; status?: boolean; sortBy?: string; sortOrder?: string; page: number; limit: number }) => {
   let parent: number | "root" | undefined;
   if (q.parent === "root" || q.parent === "null") parent = "root";
@@ -87,8 +87,8 @@ export const listCategories = async (q: { parent?: string; search?: string; stat
   // from this page).
   const parents = await repo.parentIdsWithChildren(rows.map((r) => r.id));
   const withChildren = new Set(parents.map((p) => p.parent));
-  // ancestors[{id,name}] root→immediate-parent, so a search-filtered picker can render
-  // the greyed parent rows for each match. Overrides toCategoryDto's empty placeholder.
+  // ancestors[{id,name}] root→immediate parent, so a search-filtered picker can render
+  // greyed parent rows for each match. Overrides toCategoryDto's empty placeholder.
   const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.categoriesByIds);
   return {
     data: rows.map((row) => ({
@@ -105,7 +105,6 @@ export const getCategoryById = async (id: number) => {
   return row ? toCategoryDto(row) : null;
 };
 
-// ── categories: write (single-parent; DAG dropped) ──────────────────────────────
 export interface CategoryWriteInput { title?: string; slug?: string; image?: string; parent?: string | null; order?: number; status?: boolean }
 
 export const createCategory = async (d: CategoryWriteInput) => {
@@ -139,12 +138,9 @@ export const updateCategory = async (id: number, d: CategoryWriteInput): Promise
   if (d.title !== undefined) {
     data.name = d.title;
   }
-  // Slug resolution — ORDER MATTERS: a rename must not be overwritten by an
-  // echoed slug. The admin form posts the STORED slug back unchanged on every
-  // save, and the old `if (d.slug !== undefined) data.slug = d.slug` ran LAST,
-  // so it pinned the original slug forever — renaming a category to
-  // "Material Twoooo" left slug "material-one". Comparing the incoming value
-  // against the stored one separates a deliberate edit from that echo.
+  // Slug resolution — order matters. The admin form posts the stored slug back
+  // unchanged on every save, so comparing against the stored value separates a
+  // deliberate edit from that echo (otherwise a rename keeps the original slug):
   //   * explicit, genuinely-changed slug   → wins
   //   * echoed (or absent) slug + a rename → re-slug from the new title
   //   * echoed slug, no rename             → left untouched
@@ -160,6 +156,7 @@ export const updateCategory = async (id: number, d: CategoryWriteInput): Promise
   return toCategoryDto(await repo.updateCategory(id, data));
 };
 
+// Refuses while the category has children or materials.
 export const deleteCategory = async (id: number): Promise<"not_found" | "has_children" | "has_materials" | true> => {
   if (!(await repo.findCategoryById(id))) return "not_found";
   if ((await repo.childCount(id)) > 0) return "has_children";
@@ -185,9 +182,9 @@ export const reorderCategories = async (orders: Array<{ id: string; order: numbe
 };
 
 /**
- * Deep-clone a category subtree + its materials. Returns "not_found" when the
- * source category is absent, else a DTO matching the legacy Mongo handler shape:
- * `{ id, name, parent, createdAt, itemsCloned: { subCategories, materials } }`.
+ * Deep-clone a category subtree + its materials. Returns "not_found" when the source
+ * is absent, else `{ id, name, parent, createdAt, itemsCloned: { subCategories, materials } }`
+ * (frozen response shape).
  */
 export const duplicateCategory = async (id: number): Promise<"not_found" | {
   id: string;
@@ -208,7 +205,6 @@ export const duplicateCategory = async (id: number): Promise<"not_found" | {
   };
 };
 
-// category sub-resources
 export const getCategoryCourses = async (
   id: number,
   q: { search?: string; skip: number; take: number; page: number; limit: number },
@@ -225,11 +221,9 @@ export const getCategoryCourses = async (
 
 /**
  * Every product linked to this material category — courses, packages and live
- * courses — in one paginated list, each row tagged with its `type` so the admin
- * can tell them apart and link through to the right detail page.
- *
- * The older `getCategoryCourses` (GET .../courses) returns plain courses only and
- * is kept for existing callers.
+ * courses — in one paginated list, each row tagged with its `type`.
+ * `getCategoryCourses` (GET .../courses) returns plain courses only and is kept for
+ * existing callers.
  */
 export const getCategoryLinkedProducts = async (
   id: number,
@@ -257,7 +251,6 @@ export const getCategoryMaterials = async (id: number, page: number, limit: numb
   return { data: rows.map((r) => toMaterialDto(r as MatRow)), total };
 };
 
-// ── materials (leaf) ────────────────────────────────────────────────────────────
 export const listMaterials = async (q: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean; page: number; limit: number }) => {
   const opts = { search: q.search, materialCategoryId: q.materialCategoryId, status: q.status, isPaid: q.isPaid };
   const [rows, total] = await Promise.all([
@@ -278,12 +271,10 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
   const catId = d.materialCategoryId ? parseMaterialId(d.materialCategoryId) : null;
   if (!catId || !(await repo.findCategoryById(catId))) return "category";
   const now = new Date();
-  // Paid/Free is admin-controlled (same as exams' isPaid / videos' priceType);
-  // omitted → paid, so an old admin build that never sends it stays paid. The
-  // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
-  // downloadCount) are still dropped on this admin write path.
-  // No explicit order → MAX(order_by) + 1 across all materials — last in the app
-  // whichever category it lands in (same table-wide rule as exams).
+  // Paid/Free is admin-controlled; omitted → paid, so an old admin build that never
+  // sends it stays paid. Fields with no column (description/thumbnail/fileSize/
+  // fileMime/language/isPreview/downloadCount) are dropped.
+  // No explicit order → MAX(order_by) + 1 across all materials (same rule as exams).
   const matOrder = d.order ?? nextOrder(await repo.maxMaterialOrder());
   const created = await repo.createMaterial({
     materialCategoryId: catId,
@@ -330,6 +321,7 @@ export const toggleMaterialStatus = async (id: number): Promise<"not_found" | { 
   return { status: updated.status };
 };
 
+// Reorder within one category; duplicate order values are rejected.
 export const reorderMaterials = async (materialCategoryId: number, orders: Array<{ id: string; order: number }>): Promise<"dup" | "no_valid" | true> => {
   const values = new Set(orders.map((o) => o.order));
   if (values.size !== orders.length) return "dup";

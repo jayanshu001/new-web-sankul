@@ -1,3 +1,4 @@
+// Educator dashboard: summary route.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { getDashboard } from "./dashboard.controller";

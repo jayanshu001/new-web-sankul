@@ -1,3 +1,4 @@
+// Admin auth: admin user row to DTO mapping with derived role and permission keys.
 import type {
   AdminUser,
   AdminRoleRow,
@@ -6,22 +7,15 @@ import type {
 import { AdminRole } from "../../shared/enums";
 
 /**
- * Wildcard permission key returned for super-admins. The panel treats
- * `permissions.includes("*")` as "all access" (super-admin bypasses per-permission
- * gating; the API itself enforces roles, not permission keys).
+ * Wildcard permission key for super-admins; the panel treats `permissions.includes("*")`
+ * as all access. The API itself enforces roles, not permission keys.
  */
 export const SUPER_ADMIN_PERMISSION_WILDCARD = "*";
 
 /**
- * Shape returned to the admin client on login / refresh / profile-update.
- *
- * `roles` and `permissions` are FLAT STRING arrays for the role-based UI:
- *  - `roles`       — all assigned role names, e.g. ["editor"].
- *  - `permissions` — the EFFECTIVE, de-duplicated permission KEYS the user has
- *                    (merged from role grants + direct grants), e.g.
- *                    ["books.edit","courses.view"]. Super-admins get ["*"].
- * These are the same dotted keys used in the Permissions catalog, so the UI's
- * `permissions.includes("books.edit")` checks line up exactly.
+ * Login / refresh / profile-update DTO. `roles` and `permissions` are flat string
+ * arrays; `permissions` is the effective, de-duplicated set of dotted catalog keys
+ * (role grants + direct grants), e.g. ["books.edit"]. Super-admins get ["*"].
  */
 export interface AdminDto {
   id: string;
@@ -31,22 +25,15 @@ export interface AdminDto {
   role: string;
   roles: string[];
   permissions: string[];
-  /**
-   * True for super-admins. The panel uses this as the "allow all" short-circuit
-   * so it never has to list every catalog key. Equivalent to
-   * `permissions.includes("*")` / `role === "super_admin"`, surfaced explicitly
-   * per the frontend RBAC contract (rbac-module-visibility.md §2).
-   */
+  /** Explicit "allow all" flag for the panel; equivalent to permissions ["*"] / super_admin. */
   isSuperAdmin: boolean;
   image: string;
   isDark: boolean;
 }
 
 /**
- * Derive the legacy single `role` string from spatie role names. The Mongo
- * model carries an explicit `role` enum (super_admin/admin/editor); SQL only
- * has role rows, so we map the highest-privilege matching role name, falling
- * back to "admin".
+ * Derive the single `role` string from spatie role names: the highest-privilege
+ * matching name, falling back to "admin".
  */
 export const deriveRole = (roleNames: string[]): string => {
   const lower = roleNames.map((n) => n.toLowerCase());
@@ -55,10 +42,6 @@ export const deriveRole = (roleNames: string[]): string => {
   return AdminRole.ADMIN;
 };
 
-/**
- * Shape returned by the administrator CRUD/list endpoints. Mirrors the Mongo
- * `PUBLIC_FIELDS` projection (uses `_id`, carries status + timestamps).
- */
 export interface AdminListDto {
   _id: string;
   firstName: string;
@@ -113,8 +96,8 @@ export const toAdminDto = (
   const roleNames = roles.map((r) => r.name);
   const role = deriveRole(roleNames);
   const isSuperAdmin = role === AdminRole.SUPER_ADMIN;
-  // Super-admins short-circuit to the wildcard; everyone else gets their
-  // effective keys flattened, de-duplicated, and sorted for a stable payload.
+  // Super-admins get the wildcard; everyone else gets sorted, de-duplicated keys for
+  // a stable payload.
   const permissionKeys = isSuperAdmin
     ? [SUPER_ADMIN_PERMISSION_WILDCARD]
     : Array.from(new Set(permissions.map((p) => p.name))).sort();

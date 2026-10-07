@@ -1,6 +1,5 @@
+// Admin materials: Zod request schemas.
 import { z } from "zod";
-
-// ─── Category ─────────────────────────────────────────────────────────────────
 
 const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
@@ -34,8 +33,6 @@ export const reorderCategoriesSchema = z.object({
   parent: z.string().nullable().optional(),
   orders: z.array(z.object({ id: z.string(), order: z.number().int() })).min(1),
 });
-
-// ─── Leaf Material ────────────────────────────────────────────────────────────
 
 export const createMaterialSchema = z.object({
   title: z.string().min(1).max(255),

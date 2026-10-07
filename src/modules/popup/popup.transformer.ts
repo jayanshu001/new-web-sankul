@@ -1,3 +1,4 @@
+// Popups: row to DTO mapping (response shape is frozen).
 import type { PopupNotifications } from "@prisma/client";
 import type { PopupCreateInput, PopupDto, PopupUpdateInput } from "./popup.types";
 

@@ -1,3 +1,4 @@
+// Admin subscriptions: HTTP handlers for grants, edits, reports, exports and customer addresses.
 import { Request, Response } from "express";
 import {
   createSubscriptionSchema,
@@ -23,10 +24,8 @@ import { isSuperAdmin, requirePermission } from "../../middlewares/requirePermis
 import type { DateShift } from "../../utils/subscriptionRemarkHistory";
 import { success, failure, actionFailure, type ActionError } from "../../utils/httpResponse";
 
-// Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
-// 422 from assertReportStatus) instead of flattening every failure to 500. These
-// handlers return a hand-rolled { success, message } envelope rather than
-// failure()'s — kept as-is, only the code is corrected.
+// Honors a thrown HttpError's own 4xx (e.g. assertReportStatus's 422) instead of
+// flattening every failure to 500. Envelope stays the hand-rolled { success, message }.
 const errStatus = (error: unknown): number => {
   const statusCode = (error as { statusCode?: unknown } | null)?.statusCode;
   return typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 ? statusCode : 500;
@@ -38,16 +37,10 @@ const paginated = (req: Request) => {
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum };
 };
 
-// ─── Course/Package subscriptions ──────────────────────────────────────────────
-
-// Shared filter mapping for the report list + its CSV/Excel exports, so all
-// three honor the identical param contract. The date-range filter bounds
-// `createdAt` (records created between X and Y) at IST day boundaries — accepted
-// as `createdFrom`/`createdTo` (the unified cross-report name, see
-// reports-date-filter-created-at.md) with `dateFrom`/`dateTo` + `fromDate`/`toDate`
-// as legacy aliases. startFrom/startTo → startAt & endFrom/endTo → endAt remain
-// supported for back-compat but the merged report's date boxes now use createdAt.
-// activationType accepted, see service note.
+// Shared filter mapping for the report list and its CSV/Excel exports. The date
+// range bounds `createdAt` at IST day boundaries via `createdFrom`/`createdTo`
+// (`dateFrom`/`dateTo` and `fromDate`/`toDate` are legacy aliases);
+// startFrom/startTo and endFrom/endTo still filter startAt/endAt.
 export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
   customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
   // 422s an unrecognised status instead of silently returning an unfiltered list.
@@ -71,14 +64,14 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
     const { summary, data, pagination } = await subSql.listCourseSubscriptions({
       ...reportQueryFrom(q), page: pageNum, limit: limitNum,
     });
-    // Summary cards (Total/Revenue/Active/Expired) are super-admin only (2026-09-23).
+    // Summary cards (Total/Revenue/Active/Expired) are super-admin only.
     return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? summary : undefined, data, pagination });
   } catch (error: any) {
     return res.status(errStatus(error)).json({ success: false, message: error.message });
   }
 };
 
-// GET /admin/subscriptions/export/csv — entire filtered set, no pagination.
+// Exports the entire filtered set, no pagination.
 export const exportCourseSubscriptionsCsv = async (req: Request, res: Response) => {
   try {
     const csv = await subSql.buildCourseSubscriptionsCsv(reportQueryFrom(req.query as Record<string, string>));
@@ -91,7 +84,7 @@ export const exportCourseSubscriptionsCsv = async (req: Request, res: Response) 
   }
 };
 
-// GET /admin/subscriptions/export/excel — entire filtered set, no pagination.
+// Exports the entire filtered set, no pagination.
 export const exportCourseSubscriptionsExcel = async (req: Request, res: Response) => {
   try {
     const buf = await subSql.buildCourseSubscriptionsXlsx(reportQueryFrom(req.query as Record<string, string>));
@@ -117,13 +110,12 @@ export const getCourseSubscriptionById = async (req: Request, res: Response) => 
   }
 };
 
-// All subscription reads/writes now run on SQL (admin-subscription module).
-// ws_package_course_subscription has no payment_status column, so paymentStatus
-// is Mongo-only history (status conveys active). Gateway methods map to the SQL
-// 2-value `payment_type` enum; everything else (admin/offline grants —
-// backend/bank/cash/free) is treated as "backend".
+// ws_package_course_subscription has no payment_status column (status conveys
+// active). Gateway methods map to the 2-value `payment_type` enum; every other
+// method (admin/offline grants: backend/bank/cash/free) is stored as "backend".
 const ONLINE_METHODS: string[] = [PaymentMethod.RAZORPAY, PaymentMethod.PAYKUN, PaymentMethod.PAYTM];
 
+// Admin grant of a course/package subscription (extend=true adds a continuing row).
 export const createCourseSubscription = async (req: Request, res: Response) => {
   try {
     const data = createSubscriptionSchema.parse(req.body);
@@ -181,10 +173,6 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Helper endpoints for the Add-Subscription form ───────────────────────────
-
-// GET /admin/subscriptions/plans?courseId=...&packageId=...&status=true|false|all
-//
 // `status` is opt-in and DEFAULTS TO "true" (active only) when absent — existing
 // callers, including the customer-facing app, must keep seeing active plans only.
 // `all` is what the Add-Subscription picker sends so an admin can see a plan they
@@ -216,7 +204,6 @@ export const listPlansForTarget = async (req: Request, res: Response) => {
   }
 };
 
-// GET /admin/subscriptions/customer-addresses/:customerId
 export const listCustomerAddresses = async (req: Request, res: Response) => {
   try {
     const { customerId } = req.params as Record<string, string>;
@@ -230,7 +217,6 @@ export const listCustomerAddresses = async (req: Request, res: Response) => {
   }
 };
 
-// POST /admin/subscriptions/customer-addresses
 export const adminCreateCustomerAddress = async (req: Request, res: Response) => {
   try {
     const data = adminCreateAddressSchema.parse(req.body);
@@ -264,7 +250,6 @@ export const adminCreateCustomerAddress = async (req: Request, res: Response) =>
   }
 };
 
-// PUT /admin/subscriptions/customer-addresses/:id
 export const adminUpdateCustomerAddress = async (req: Request, res: Response) => {
   try {
     const data = adminUpdateAddressSchema.parse(req.body);
@@ -298,7 +283,6 @@ export const adminUpdateCustomerAddress = async (req: Request, res: Response) =>
   }
 };
 
-// DELETE /admin/subscriptions/customer-addresses/:id?customerId=...
 export const adminDeleteCustomerAddress = async (req: Request, res: Response) => {
   try {
     const aid = parseAddressId(req.params.id as string);
@@ -553,9 +537,6 @@ export const listEbookSubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Reports ──────────────────────────────────────────────────────────────────
-
-// GET /subscriptions/reports/summary
 export const reportSummary = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
@@ -565,7 +546,6 @@ export const reportSummary = async (req: Request, res: Response) => {
   }
 };
 
-// GET /subscriptions/reports/by-course
 export const reportByCourse = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
@@ -575,7 +555,6 @@ export const reportByCourse = async (req: Request, res: Response) => {
   }
 };
 
-// GET /subscriptions/reports/by-ebook
 export const reportByEbook = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
@@ -585,7 +564,6 @@ export const reportByEbook = async (req: Request, res: Response) => {
   }
 };
 
-// GET /subscriptions/reports/book-orders
 export const reportBookOrders = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate, status } = req.query as Record<string, string>;

@@ -1,3 +1,4 @@
+// Course/package orders: Prisma queries and the fulfilment transaction.
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
 import type {
@@ -7,7 +8,6 @@ import type {
 
 /**
  * Physical-material split written onto a fresh subscription (PC_MATERIAL_SUBSCRIPTION_FLOW).
- * Computed by the service from the paid amount + plan; the repo just persists it.
  *  - courseAmount   : digital portion (always set; = full paid amount when no material)
  *  - materialAmount : physical portion, residual of (paid − course); null when no material
  *  - pcMaterialId   : the entitled material kit copied from the Course/Package; null when no material
@@ -22,41 +22,17 @@ export type MaterialFulfillment = {
 };
 
 /**
- * Prisma persistence for the commerce · order WRITE branch (Phase 3b, COURSE
- * path). Tables: `ws_package_course_order` (the order-of-record),
- * `ws_package_course_subscription` (the entitlement), and
- * `ws_package_course_subscription_tracking` (status trail).
- *
- * Reads here serve the verify owner-lookup + the upsert-extend active-sub query.
- * Writes are exposed as a single transactional fulfillment (`verifyCourseTx`) so
- * a mid-write crash can't leave a complete order with no entitlement.
- *
- * `customer_id` TYPE SPLIT: the order table is VARCHAR, the subscription table is
- * INT (see types.ts). Callers pass the int customer id; we cast to string for the
- * order-row queries/writes.
+ * Fulfillment is a single transaction so a mid-write crash can't leave a complete order with
+ * no entitlement. `customer_id` is VARCHAR on the order table and INT on the subscription
+ * table (see types.ts).
  */
 export const commerceOrderRepository = {
-  // ── reads (owner lookup + upsert-extend) ──────────────────────────────────
-
-  /**
-   * The course order owning this Razorpay order id, scoped to the customer.
-   * Mirrors the Mongo `PackageCourseSubscription.findOne({razorpayOrderId,
-   * customerId})` owner lookup — but in SQL the razorpay id lives on the ORDER
-   * row. Only course orders qualify: a course order's matching subscription (once
-   * created) has a non-null course_id; at order time we tell course-vs-ebook
-   * apart by the plan, but for the lookup we simply return the order row and let
-   * the service confirm the plan is a course plan.
-   */
+  /** Scoped to the customer; the service confirms the plan kind. */
   findOrderByRazorpay: (razorpayOrderId: string, customerIdStr: string) =>
     prisma.packageCourseOrder.findFirst({
       where: { gatewayOrderId: razorpayOrderId, userId: Number(customerIdStr) },
     }),
 
-  /**
-   * A plan row (PackageCourseEbookPrice) — to read its course_id + duration, plus
-   * the material facts (`with_material` / `material_price`) the verify path needs
-   * to split the paid amount into course/material portions.
-   */
   findPlan: (planId: number) =>
     prisma.packageCourseEbookPrice.findUnique({
       where: { id: planId },
@@ -72,11 +48,6 @@ export const commerceOrderRepository = {
       },
     }),
 
-  /**
-   * The material kit (`pc_material_id`) the customer is entitled to — copied from
-   * the purchased Course onto the subscription when the plan has material. Null if
-   * the course has no material kit configured.
-   */
   findCoursePcMaterialId: async (courseId: number): Promise<number | null> => {
     const course = await prisma.course.findUnique({
       where: { id: courseId },
@@ -85,7 +56,6 @@ export const commerceOrderRepository = {
     return course?.pcMaterialId ?? null;
   },
 
-  /** Twin of findCoursePcMaterialId for PACKAGE plans (reads ws_package). */
   findPackagePcMaterialId: async (packageId: number): Promise<number | null> => {
     const pkg = await prisma.package.findUnique({
       where: { id: packageId },
@@ -94,13 +64,7 @@ export const commerceOrderRepository = {
     return pkg?.pcMaterialId ?? null;
   },
 
-  /**
-   * The customer's existing ACTIVE verified course subscription for the same
-   * course (for upsert-extend). Mirrors the Mongo target filter:
-   *   {_id≠self, customerId, status:true, paymentStatus:"verified", courseId}
-   * In SQL `status=true` IS the verified-entitlement gate (no payment_status
-   * column on the subscription table — that lives on the order row).
-   */
+  /** `status=true` is the verified-entitlement gate; payment status lives on the order row. */
   findActiveCourseSub: (
     customerId: number,
     courseId: number,
@@ -118,16 +82,10 @@ export const commerceOrderRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  /** The subscription created for a given order (idempotency re-entry). */
   findSubByOrder: (orderId: number) =>
     prisma.packageCourseSubscription.findFirst({ where: { orderId } }),
 
-  /**
-   * PACKAGE upsert-extend twin of findActiveCourseSub. The customer's existing
-   * ACTIVE verified PACKAGE subscription for the same package — gated by
-   * package_id (and course_id NULL, so a course sub for a bundled course can't be
-   * mistaken for the package entitlement). `status=true` is the verified gate.
-   */
+  /** course_id NULL so a course sub for a bundled course can't be mistaken for the package entitlement. */
   findActivePackageSub: (
     customerId: number,
     packageId: number,
@@ -146,12 +104,7 @@ export const commerceOrderRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  /**
-   * PACKAGE transactional fulfillment — twin of verifyCourseTx, but the sub row
-   * sets `packageId` (the target package) with `courseId: null`, mirroring the
-   * Mongo package sub (targetPackageId set, courseId unset). Plan id → pcb_id.
-   * Same one-order-one-row rule as verifyCourseTx — renewals never fold.
-   */
+  /** Twin of verifyCourseTx; the sub row sets `packageId` with `courseId: null`. */
   verifyPackageTx: (input: {
     orderId: number;
     razorpayPaymentId: string;
@@ -161,8 +114,6 @@ export const commerceOrderRepository = {
     amount: number;
     now: Date;
     material: MaterialFulfillment;
-    // Window for THIS purchase (see verifyCourseTx). Renewal → continues from the
-    // prior row's endAt; first purchase → starts now. Always writes a NEW row.
     startAt: Date;
     endAt: Date;
     extended: boolean;
@@ -179,11 +130,7 @@ export const commerceOrderRepository = {
       if (claim.count === 0) return null;
       const order = await tx.packageCourseOrder.findUniqueOrThrow({ where: { id: input.orderId } });
 
-      // A tracking row (the dispatch record) is created ONLY for material plans —
-      // the kit still has to ship, so status starts "pending". "Without Material" /
-      // digital-only orders have nothing to dispatch, so no tracking row is created
-      // and trackingId stays null. Renewals included — a with-material renewal
-      // ships a NEW kit and gets its own dispatch row.
+      // Dispatch (tracking) row only for material plans; a with-material renewal ships a new kit.
       const tracking = input.material.withMaterial
         ? await tx.packageCourseSubscriptionTracking.create({
             data: { orderId: input.orderId, status: "pending" },
@@ -196,8 +143,6 @@ export const commerceOrderRepository = {
           packageId: input.packageId,
           courseId: null,
           planId: input.planId,
-          // Material kit + price split — copied from the package when the plan
-          // carries material; null/full-course otherwise (see MaterialFulfillment).
           pcMaterialId: input.material.pcMaterialId,
           // Dispatch address captured at order time (null for digital-only).
           shippingId: order.shipping ?? undefined,
@@ -212,8 +157,7 @@ export const commerceOrderRepository = {
               : null,
           status: true,
           payment_type: "online",
-          // ws_package_course_subscription.created_at has NO DB default (introspected
-          // legacy table) — set it explicitly or purchase-history purchasedAt is null.
+          // created_at has no DB default; without it purchase-history purchasedAt is null.
           createdAt: input.now,
           updatedAt: input.now,
         },
@@ -221,12 +165,7 @@ export const commerceOrderRepository = {
       return { order, subscription: sub, extended: input.extended };
     }),
 
-  // ── write: create the pending order row (create-order endpoint) ────────────
-
   /**
-   * Create a pending course order. customerId is an int; cast to string for the
-   * VARCHAR order column.
-   *
    * MONEY COLUMN CONTRACT (the three columns must always satisfy this identity):
    *
    *   price − code_discount − ws_coin  =  discount_price
@@ -240,21 +179,13 @@ export const commerceOrderRepository = {
    *  - `amount` (SQL `discount_price`)         = what the customer actually paid,
    *    i.e. what was charged to Razorpay (post-promo AND post-coin).
    *
-   * CODE COLUMNS: `promocode` / `refferalcode` are `json` columns holding the
-   * purchase-time SNAPSHOT of the redeemed code — the full legacy object (nested
-   * promoter + the purchased plan's link row), built by
-   * `modules/order-code-snapshot`. Exactly one of the two is ever set: a real
-   * promocode → `promocode`, a customer referral code → `refferalcode`.
+   * CODE COLUMNS: `promocode` / `refferalcode` hold the purchase-time snapshot object built by
+   * `modules/order-code-snapshot`; exactly one is ever set. The object is a READ CONTRACT:
+   * `modules/promoter-data` reads it via JSON paths (`$.promoterId`,
+   * `$.promotedPackageCourseEbook[0].promoterPercentage`), so a bare code string would make the
+   * order invisible to promoter attribution. Never flatten these.
    *
-   * ⚠ The object is a READ CONTRACT, not a convenience. `modules/promoter-data`
-   * derives the promoter dashboard straight off these columns via JSON paths
-   * (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`), so a
-   * bare code string — while a perfectly valid json value — matches none of them
-   * and makes the order invisible to promoter attribution. Never flatten these.
-   *
-   * `shippingId` (the chosen CustomerShipping address) is persisted on the order
-   * row for "With Materials" plans so the physical kit has a dispatch address;
-   * null/undefined for digital-only orders.
+   * `shippingId` is the kit dispatch address for "With Materials" plans; null for digital-only.
    */
   createPendingOrder: (input: {
     customerId: number;
@@ -270,8 +201,7 @@ export const commerceOrderRepository = {
     /** Referral snapshot object → `refferalcode` (null for promocode / no code). */
     referralCode?: ReferralSnapshot | null;
     razorpayOrderId: string;
-    // Business key (the receipt id) → unique_id; full Razorpay order response
-    // (JSON string) → razorpay_order. Mirrors the ebook/book order create paths.
+    // Receipt id → unique_id; full Razorpay order response (JSON string) → razorpay_order.
     uniqueId?: string | null;
     razorpayOrderPayload?: string | null;
     shippingId?: number | null;
@@ -296,32 +226,20 @@ export const commerceOrderRepository = {
         referrerId: input.referrerId ?? null,
         wsCoin: input.coin ?? null,
         status: "pending",
-        // Explicit stamps: the ws_package_course_order columns have no DB default,
-        // so created_at/updated_at would land NULL on new rows otherwise (mirrors
-        // the ebook-order create path).
+        // No DB default on these columns; they would land NULL otherwise.
         createdAt: new Date(),
         updatedAt: new Date(),
       },
     }),
 
-  // ── write: verify fulfillment (ONE transaction) ───────────────────────────
-
   /**
-   * Transactional course fulfillment. Within one $transaction:
-   *  1. flip the order row → complete + razorpay_payment_id
-   *  2. create the subscription row for THIS order + its tracking row
-   * The tracking row's `order` column = order.id (NOT subscription.id).
+   * One $transaction: flip the order → complete, then create THIS order's subscription row +
+   * tracking row (tracking `order` = order.id, not subscription.id).
    *
-   * ONE ORDER = ONE SUBSCRIPTION ROW. A renewal does NOT fold onto the customer's
-   * existing row: it writes its own row starting where the previous one ends, so
-   * every purchase keeps its own price, plan, material split and dispatch record,
-   * and `order_id` on a row always points at the order that paid for it. Readers
-   * dedupe per target keeping the furthest endAt (client-my-subscriptions.service,
-   * profile-dashboard.sql, client-dashboard.service), so a stack of rows presents
-   * as one card with the extended date.
-   *
-   * `now` and the window are computed by the service (DAYS planDuration) and
-   * passed in — the repo stays IO-only.
+   * ONE ORDER = ONE SUBSCRIPTION ROW: a renewal writes its own row starting where the previous
+   * one ends, so each purchase keeps its own price, plan, material split and dispatch record.
+   * Readers dedupe per target keeping the furthest endAt (client-my-subscriptions,
+   * profile-dashboard, client-dashboard), so stacked rows present as one card.
    */
   verifyCourseTx: (input: {
     orderId: number;
@@ -332,13 +250,9 @@ export const commerceOrderRepository = {
     amount: number;
     now: Date;
     material: MaterialFulfillment;
-    // The window for THIS purchase, computed by the service. A renewal continues
-    // from the prior row's endAt; a first purchase starts now. Either way the row
-    // written below is a NEW one — see the `extended` note in the doc block.
     startAt: Date;
     endAt: Date;
-    // True when this purchase continues an existing entitlement. Reported back for
-    // the caller's benefit only — it does NOT change what is written.
+    // Reported back to the caller only; it does NOT change what is written.
     extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
@@ -353,11 +267,7 @@ export const commerceOrderRepository = {
       if (claim.count === 0) return null;
       const order = await tx.packageCourseOrder.findUniqueOrThrow({ where: { id: input.orderId } });
 
-      // A tracking row (the dispatch record) is created ONLY for material plans —
-      // there's a physical kit to ship, so status starts "pending". "Without
-      // Material" / digital-only subs have nothing to dispatch, so no tracking row
-      // is created and trackingId stays null. This runs for renewals too: a
-      // with-material renewal ships a NEW kit, so it gets its own dispatch row.
+      // Dispatch (tracking) row only for material plans; a with-material renewal ships a new kit.
       const tracking = input.material.withMaterial
         ? await tx.packageCourseSubscriptionTracking.create({
             data: { orderId: input.orderId, status: "pending" },
@@ -369,8 +279,6 @@ export const commerceOrderRepository = {
           orderId: input.orderId,
           courseId: input.courseId,
           planId: input.planId,
-          // Material kit + price split — copied from the course when the plan
-          // carries material; null/full-course otherwise (see MaterialFulfillment).
           pcMaterialId: input.material.pcMaterialId,
           // Dispatch address captured at order time (null for digital-only).
           shippingId: order.shipping ?? undefined,
@@ -385,8 +293,7 @@ export const commerceOrderRepository = {
               : null,
           status: true,
           payment_type: "online",
-          // ws_package_course_subscription.created_at has NO DB default (introspected
-          // legacy table) — set it explicitly or purchase-history purchasedAt is null.
+          // created_at has no DB default; without it purchase-history purchasedAt is null.
           createdAt: input.now,
           updatedAt: input.now,
         },

@@ -1,3 +1,4 @@
+// Admin jobs portal: previous-paper CRUD and PDF upload routes.
 import { Router } from "express";
 import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo, watermarkPdfs } from "../../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../../config/uploadFolders";

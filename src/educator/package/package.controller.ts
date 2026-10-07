@@ -1,9 +1,9 @@
+// Educator packages: HTTP handlers for the educator's own packages, dashboards and subscribers.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as epSql from "../../modules/educator-portal/educator-portal.service";
 
-// GET /api/v1/educator/packages
 export const listMyPackages = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -22,7 +22,6 @@ export const listMyPackages = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/packages/:id
 export const getMyPackageDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -44,7 +43,6 @@ export const getMyPackageDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/packages/:id/dashboard
 export const getPackageDashboard = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -66,7 +64,6 @@ export const getPackageDashboard = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/packages/:id/subscribers
 export const getPackageSubscribers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;

@@ -1,3 +1,4 @@
+// Jobs suggested products: Zod request schemas.
 import { z } from "zod";
 import { JOB_PRODUCT_TYPES, JOB_SUGGESTED_PLACEMENTS } from "./suggested-product.types";
 

@@ -1,15 +1,6 @@
-/**
- * Customer bank account — MySQL (Prisma) branch types.
- *
- * Table `ws_customer_bank_account`. The live DB has all columns the Prisma model
- * declares (account_holder_name, ifsc_code, account_number, bank_name,
- * branch_name, city) — no phantom-column mismatch, unlike the address table.
- *
- * Used by the referral withdrawal flow. The DTO returns string ids (Mongo
- * `_id`-shape compatible). `bankName`/`branchName`/`city` are derived server-side
- * from an IFSC lookup (not client input).
- */
+// Customer bank accounts: DTO and input types.
 
+/** `bankName`/`branchName`/`city` are resolved server-side from IFSC, not client input. */
 export interface BankAccountDto {
   _id: string;
   customerId: string;

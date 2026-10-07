@@ -1,3 +1,4 @@
+// Course/package orders: row to DTO mapping (response shape is frozen).
 import type {
   PackageCourseOrder,
   PackageCourseSubscription,
@@ -13,16 +14,15 @@ const ownerId = (v: number | null): string | null =>
   v != null && v > 0 ? String(v) : null;
 
 /**
- * Coerce the bigint `tracking` FK to a JS number. Values are ~1.19e11, far below
- * Number.MAX_SAFE_INTEGER, so this is lossless; the Mongo model typed
- * `trackingId` as Number. Returns null above 2^53 rather than losing precision.
+ * bigint `tracking` FK → number (clients expect a number). Values are ~1.19e11, so this is
+ * lossless; returns null above 2^53 rather than losing precision.
  */
 const trackingToNumber = (v: bigint | null): number | null => {
   if (v == null) return null;
   return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
 };
 
-/** SQL order.status enum → Mongo paymentStatus enum. */
+/** order.status enum → the paymentStatus enum clients parse. */
 export const orderStatusToPaymentStatus = (
   s: "cancel" | "complete" | "pending"
 ): OrderPaymentStatus =>
@@ -32,7 +32,6 @@ export const orderStatusToPaymentStatus = (
 const toNum = (v: unknown): number | null => {
   if (v == null) return null;
   if (typeof v === "number") return v;
-  // Prisma.Decimal
   const n = Number((v as { toString(): string }).toString());
   return Number.isFinite(n) ? n : null;
 };
@@ -54,18 +53,16 @@ export const toCourseOrderRow = (o: PackageCourseOrder): CourseOrderRow => ({
 });
 
 /**
- * MERGE the SQL order (payment facts) + subscription (entitlement facts) into the
- * single Mongo-shaped `PackageCourseSubscription` doc that the verify course
- * branch returns as `data.subscription`. This is the resolution of the
- * one-doc-vs-three-tables mismatch (see types.ts).
+ * Merges the order (payment facts) + subscription (entitlement facts) into the single
+ * `data.subscription` object the verify course flow returns (frozen client shape).
  *
  *  - _id            ← subscription.id (the entitlement is the doc identity)
  *  - paymentStatus  ← order.status (mapped)
  *  - paidAmount     ← order.discount_price
  *  - razorpay*      ← order row
  *  - courseId/startAt/endAt/status/trackingId ← subscription row
- *  - packageId (plan)        ← SQL pcb_id (subscription.planId)
- *  - targetPackageId (pkg)   ← SQL package_id (subscription.packageId)
+ *  - packageId (plan)        ← pcb_id (subscription.planId)
+ *  - targetPackageId (pkg)   ← package_id (subscription.packageId)
  */
 export const toVerifiedCourseSubscriptionDto = (
   order: PackageCourseOrder,

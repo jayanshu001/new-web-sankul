@@ -1,12 +1,6 @@
+// Educator details: Prisma queries for an educator's courses, packages, folders and sessions.
 import { prisma } from "../../config/prisma";
 
-/**
- * Prisma persistence for the admin educator-details aggregate (MySQL branch).
- * Read-only aggregation over already-migrated tables — no new tables. Each of the
- * educator's associations (courses / live courses / packages / video categories /
- * live sessions) is fetched by its `educator_id`, plus subscriber counts grouped
- * by the association id, so the transformer can emit the Mongo DTO shape.
- */
 export const educatorDetailsRepository = {
   coursesByEducator: (educatorId: number) =>
     prisma.course.findMany({
@@ -39,7 +33,6 @@ export const educatorDetailsRepository = {
       orderBy: { createdAt: "desc" },
     }),
 
-  // ── subscriber counts (active = status true), grouped by association id ──────
   courseSubCounts: (courseIds: number[]) =>
     courseIds.length
       ? prisma.packageCourseSubscription.groupBy({ by: ["courseId"], where: { courseId: { in: courseIds }, status: true }, _count: { _all: true } })
@@ -48,23 +41,17 @@ export const educatorDetailsRepository = {
     packageIds.length
       ? prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: packageIds }, status: true }, _count: { _all: true } })
       : Promise.resolve([]),
-  // ⚠ Counts ACTIVE SUBSCRIPTION ROWS, not distinct customers. Since 2026-08-25 a
-  // live-course renewal writes its own row (the continuation window starts when the
-  // current one ends, so both are `status: true`), which means one renewing customer
-  // can contribute 2. The package/course count directly above has always behaved this
-  // way — admin package/course extends have created new rows since long before this —
-  // so the two stay consistent. Switch both to a distinct-customer count together if
-  // that is wanted; doing it for live course alone would make them disagree.
+  // Counts active subscription ROWS, not distinct customers: a renewal writes its
+  // own active row, so one renewing customer can count twice. Package/course above
+  // behave the same; change both to distinct-customer together or they disagree.
   liveCourseSubCounts: (liveCourseIds: number[]) =>
     liveCourseIds.length
       ? prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: liveCourseIds }, status: true }, _count: { _all: true } })
       : Promise.resolve([]),
 
-  // live-course names for the recording-folder (video category) association
   liveCoursesByIds: (ids: number[]) =>
     ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : Promise.resolve([]),
 
-  // ── per-association paginated lists (server-side page/limit) ─────────────────
   countCoursesByEducator: (educatorId: number) =>
     prisma.course.count({ where: { courseEducatorId: educatorId } }),
   pageCoursesByEducator: (educatorId: number, skip: number, take: number) =>
@@ -92,8 +79,7 @@ export const educatorDetailsRepository = {
       orderBy: { created_at: "desc" }, skip, take,
     }),
 
-  // Root video categories only (folders — those linked to a live course — stay on
-  // the aggregate, matching the details endpoint's videoCategories/folders split).
+  // Root video categories only; live-course folders stay on the aggregate.
   countVideoCategoriesByEducator: (educatorId: number) =>
     prisma.videoCategory.count({ where: { educatorId, liveCourseId: null } }),
   pageVideoCategoriesByEducator: (educatorId: number, skip: number, take: number) =>

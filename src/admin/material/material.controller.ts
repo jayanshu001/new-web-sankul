@@ -1,3 +1,4 @@
+// Admin materials: HTTP handlers for material categories and study materials.
 import { Request, Response } from "express";
 import {
   createMaterialCategorySchema,
@@ -11,8 +12,6 @@ import {
 } from "./material.validation";
 import * as adminMaterial from "../../modules/admin-material/admin-material.service";
 import { parseListQuery } from "../../utils/listQuery";
-
-// ─── Categories ───────────────────────────────────────────────────────────────
 
 export const listCategories = async (req: Request, res: Response) => {
   try {
@@ -51,7 +50,7 @@ export const createCategory = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = createMaterialCategorySchema.parse(req.body);
-    // ⚠ childCategoryIds[] + ancestors[] are Mongo-only (single-parent SQL) — dropped.
+    // childCategoryIds[]/ancestors[] are not persisted; the tree is single-parent via `parent`.
     const created = await adminMaterial.createCategory(data);
     return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
@@ -68,7 +67,7 @@ export const updateCategory = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = updateMaterialCategorySchema.parse(req.body);
-    // ⚠ childCategoryIds[] reparenting + ancestors[] are Mongo-only — dropped.
+    // childCategoryIds[] reparenting and ancestors[] are not supported (single-parent tree).
     const res2 = await adminMaterial.updateCategory(numId, data);
     if (res2 === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
     if (res2 === "self_parent") return res.status(400).json({ success: false, message: "Category cannot be its own parent." });
@@ -120,9 +119,7 @@ export const reorderCategories = async (req: Request, res: Response) => {
   }
 };
 
-// Deep-clone a category subtree + its materials. Single-parent SQL tree walk over
-// `parent` (the Mongo ancestors[] DAG is not used); logic lives in the
-// admin-material SQL module.
+// Deep-clones a category subtree and its materials (tree walk over `parent`).
 export const duplicateCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -136,7 +133,6 @@ export const duplicateCategory = async (req: Request, res: Response) => {
   }
 };
 
-// Category detail sub-resources
 export const getCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -150,6 +146,7 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
   }
 };
 
+// Courses, packages and live courses linked to the category, tagged by type.
 export const getCategoryLinkedProducts = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -179,8 +176,6 @@ export const getCategoryMaterials = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Materials (leaf files) ───────────────────────────────────────────────────
-
 export const listMaterials = async (req: Request, res: Response) => {
   try {
     const {
@@ -195,7 +190,7 @@ export const listMaterials = async (req: Request, res: Response) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
 
-    // language/isPreview filters are Mongo-only (no SQL columns) → ignored.
+    // language/isPreview filters have no column and are ignored.
     const { data, total } = await adminMaterial.listMaterials({
       search,
       materialCategoryId: materialCategoryId ? adminMaterial.parseMaterialId(materialCategoryId) ?? undefined : undefined,
@@ -222,6 +217,7 @@ export const getMaterialById = async (req: Request, res: Response) => {
   }
 };
 
+// Copy the uploaded file's URL/name/size/mime into the body and coerce multipart strings.
 function applyUploadedFile(req: Request) {
   const file = req.file as any;
   if (file?.location) {
@@ -239,8 +235,7 @@ function applyUploadedFile(req: Request) {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPreview === "string") req.body.isPreview = req.body.isPreview === "true";
-  // Arrives as "true"/"false" in multipart (PDF upload) requests — coerce it
-  // the same way as isPreview/status so the Zod boolean validator passes.
+  // Multipart sends "true"/"false"; coerce so the Zod boolean validator passes.
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
 }
 
@@ -248,8 +243,8 @@ export const createMaterial = async (req: Request, res: Response) => {
   try {
     applyUploadedFile(req);
     const data = createMaterialSchema.parse(req.body);
-    // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/
-    // isPreview/downloadCount) are dropped — no SQL columns. isPaid is persisted.
+    // description/thumbnail/fileSize/fileMime/language/isPreview/downloadCount have
+    // no column and are dropped; isPaid is persisted.
     const res2 = await adminMaterial.createMaterial(data as any);
     if (res2 === "category") return res.status(404).json({ success: false, message: "Category not found." });
     return res.status(201).json({ success: true, data: res2 });

@@ -1,3 +1,4 @@
+// Async exports: job create, worker run, status polling, expiry and rehydrate.
 import { randomUUID } from "crypto";
 import { exportJobRepository as repo } from "./export-job.repository";
 import { getExportDef, extFor, contentTypeFor, ExportFormat } from "./export-job.registry";
@@ -16,9 +17,8 @@ export const EXPORT_RETENTION_MS = RETENTION_MS;
 const newRef = () => `exp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 const dateStamp = (d: Date) => d.toISOString().slice(0, 10);
 
-// FE `filters` may arrive with numeric/boolean values; the report parsers all read
-// Record<string,string>. Normalize to strings and drop empties so every parser
-// behaves exactly as it does for the sync ?query endpoints.
+// Report parsers read Record<string,string>; normalize FE values so they behave as
+// they do for the sync ?query endpoints.
 const stringifyFilters = (f: Record<string, any> | null | undefined): Record<string, string> =>
   Object.fromEntries(
     Object.entries(f ?? {})
@@ -33,6 +33,7 @@ export interface CreateExportInput {
   requestedBy: number | null;
 }
 
+// Persist a pending job; filters are stringified like the sync ?query endpoints.
 export const createExportJob = async (input: CreateExportInput) => {
   const now = new Date();
   return repo.create({
@@ -50,8 +51,7 @@ export const createExportJob = async (input: CreateExportInput) => {
 
 export const findExportJob = (jobRef: string) => repo.findByRef(jobRef);
 
-// Poll DTO. Signs a fresh short-lived download URL each call while the file is live
-// (status=ready, key present, not past expiry) — the object is private.
+// The object is private, so each poll signs a fresh short-lived URL while the file is live.
 export const toStatusDto = async (job: NonNullable<Awaited<ReturnType<typeof repo.findByRef>>>) => {
   const live = job.status === "ready" && !!job.fileKey && (!job.expiresAt || job.expiresAt > new Date());
   const downloadUrl = live && job.fileKey ? await getSignedDownloadUrl(job.fileKey, job.fileName ?? "export") : null;
@@ -67,9 +67,8 @@ export const toStatusDto = async (job: NonNullable<Awaited<ReturnType<typeof rep
   };
 };
 
-// Worker entrypoint: generate the file, upload private, mark ready. Idempotent —
-// a re-run of an already-finished job is a no-op. Throws on failure so BullMQ can
-// retry; the row is also flipped to failed so the poller stops.
+// Worker entrypoint. Idempotent: re-running a finished job is a no-op. Throws on
+// failure so BullMQ retries; the row is also flipped to failed so the poller stops.
 export const runExportJob = async (jobRef: string): Promise<void> => {
   const job = await repo.findByRef(jobRef);
   if (!job) return;
@@ -90,19 +89,14 @@ export const runExportJob = async (jobRef: string): Promise<void> => {
     const fileName = `${def.filenameBase}-${dateStamp(now)}.${ext}`;
     const key = `admin/exports/${job.type}/${job.jobRef}.${ext}`;
 
-    // Preferred path: stream the report straight into a multipart upload so a
-    // lakhs-of-rows file never materializes in memory. Buffer path (build) is only
-    // for the small non-keyset referral report.
     let rowCount: number | null = null;
     if (def.resolveSource) {
       const source = await def.resolveSource(params); // may throw on a bad filter
 
-      // Live progress: if the source can cheaply COUNT the filtered set, report true
-      // rowsWritten/total; otherwise ramp monotonically toward 0.95. Either way the
-      // bar moves during generation instead of sticking at the initial value. The
-      // final "ready" write below sets 100. Persist at most every PERSIST_EVERY rows
-      // so a 3s poll sees movement without hammering the DB. Progress writes are
-      // awaited inside the stream loop, so they all settle before the ready write.
+      // Progress is rows/total when the source can count, else a monotonic ramp
+      // toward 0.95; "ready" sets 100. Persisted every PERSIST_EVERY rows so polling
+      // sees movement without hammering the DB. Writes are awaited in the stream
+      // loop, so they all settle before the ready write.
       const total = source.countTotal ? await source.countTotal().catch(() => null) : null;
       if (total != null) {
         await repo.update(job.id, { rowCount: total, updatedAt: new Date() }); // seed "of N"
@@ -156,8 +150,7 @@ export const runExportJob = async (jobRef: string): Promise<void> => {
   }
 };
 
-// Retention GC: delete the stored object + null the key so a late poll returns no
-// downloadUrl. Status stays "ready" (the job did succeed — the file just expired).
+// Retention GC: a late poll gets no downloadUrl. Status stays "ready" (the job succeeded).
 export const expireExportJob = async (jobRef: string): Promise<void> => {
   const job = await repo.findByRef(jobRef);
   if (!job || !job.fileKey) return;
@@ -165,8 +158,7 @@ export const expireExportJob = async (jobRef: string): Promise<void> => {
   await repo.update(job.id, { fileKey: null, updatedAt: new Date() });
 };
 
-// Boot rehydrate: requeue jobs a crashed worker left in "processing". Returns the
-// refs to re-enqueue.
+// Boot rehydrate: returns refs of jobs a crashed worker left in "processing".
 export const rehydrateExportJobs = async (): Promise<string[]> => {
   const stuck = await repo.stuckProcessing();
   await Promise.all(stuck.map((j) => repo.update(j.id, { status: "pending", progress: 0, updatedAt: new Date() })));

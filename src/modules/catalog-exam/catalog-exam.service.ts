@@ -1,13 +1,4 @@
-/**
- * Catalog · Exam service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Module key: `catalog-exam` (flag OFF). Scoped to category navigation:
- * `getCategoryChildren` reproduces `listExamCategoryChildren` (parent → active
- * children + per-child UNCONDITIONAL exam count + has-grandchildren).
- *
- * Children resolve via the SQL `parent_id` self-FK (the Mongo `childCategoryIds[]`
- * embed has no SQL column). Active = status=true AND deleted=false. See types.ts.
- */
+// Exam categories: client directory reads and admin category CRUD.
 import { catalogExamRepository as repo } from "./catalog-exam.repository";
 import type { CategoryCourseType } from "./catalog-exam.repository";
 import { toExamCategoryDto } from "./catalog-exam.transformer";
@@ -17,24 +8,17 @@ import type {
   ExamCategoryDto,
 } from "./catalog-exam.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseExamCategoryId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Single exam category by id (the navigation `parent`). */
 export const findCategoryById = async (id: number): Promise<ExamCategoryDto | null> => {
   const row = await repo.findCategoryById(id);
   return row ? toExamCategoryDto(row) : null;
 };
 
-/**
- * The `listExamCategoryChildren` composition: parent + active children, each
- * with `count` (UNCONDITIONAL exam count) and `havingChildDirectory`. Returns
- * null if the parent is missing.
- */
+// Active children of a category, paged; null if the parent is missing.
 export const getCategoryChildren = async (
   parentId: number,
   search?: string,
@@ -54,14 +38,12 @@ export const getCategoryChildren = async (
     Promise.all(childIds.map((cid) => repo.countExams(cid))),
     repo.childCountsByParent(childIds),
   ]);
-  // child-folder count per category (0 when a leaf).
   const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
   const list = children.map((c, i) => {
     const folders = childFolderCount.get(c.id) ?? 0;
     const havingChildDirectory = folders > 0;
-    // Match the catalog contract: a directory node reports its child-folder count;
-    // a leaf reports its own test count.
+    // Catalog contract: a directory reports its child-folder count, a leaf its own test count.
     const count = havingChildDirectory ? folders : examCounts[i];
     return {
       category: { ...toExamCategoryDto(c), count, havingChildDirectory },
@@ -71,14 +53,8 @@ export const getCategoryChildren = async (
   return { parent: toExamCategoryDto(parentRow), list, total };
 };
 
-// ─── Admin / client category READ helpers (SQL parity) ──────────────────────
-//
-// The admin + client category list/tree/detail handlers historically returned
-// raw Mongo `ExamCategory` docs whose keys are `_id, name, image, parentId,
-// status, orderBy, createdAt, updatedAt`. These mappers reproduce that EXACT
-// shape from `ws_exam_category` rows so the JSON is identical either way. The
-// SQL root sentinel is `parent_id = 0`; Mongo roots have `parentId: null`, so
-// we translate 0 → null on the way out.
+// Admin/client category reads keep the legacy key names (`parentId`, `orderBy`).
+// The root sentinel `parent_id = 0` is emitted as `parentId: null`.
 
 type ExamCategoryRow = {
   id: number;
@@ -91,7 +67,6 @@ type ExamCategoryRow = {
   updated_at: Date | null;
 };
 
-/** SQL row → admin/client-facing ExamCategory doc (Mongo key names). */
 const toExamCategoryDoc = (row: ExamCategoryRow) => ({
   _id: String(row.id),
   name: row.name ?? null,
@@ -103,7 +78,6 @@ const toExamCategoryDoc = (row: ExamCategoryRow) => ({
   updatedAt: row.updated_at ?? null,
 });
 
-/** Filters shared by the admin/client list handlers. */
 export interface ListCategoriesInput {
   parentId?: string;
   search?: string;
@@ -121,7 +95,7 @@ const resolveParentFilter = (parentId?: string): { parentRoot?: boolean; parentN
   return {};
 };
 
-/** List exam categories (admin getCategories shape) — newest-created first. */
+/** Newest-created first. */
 export const listCategories = async (input: ListCategoriesInput) => {
   const { parentRoot, parentNum } = resolveParentFilter(input.parentId);
   const rows = await repo.listCategories({
@@ -133,13 +107,12 @@ export const listCategories = async (input: ListCategoriesInput) => {
     take: input.take,
     newestFirst: true,
   });
-  // Flag non-leaf rows so pickers can restrict selection to leaves even when the
-  // list is a search-filtered/paginated subset (a parent's children may be absent
-  // from this page).
+  // Flag non-leaf rows so pickers can restrict selection to leaves even when a
+  // parent's children are absent from this filtered/paginated page.
   const parents = await repo.childParentIds(rows.map((r) => r.id));
   const withChildren = new Set(parents.map((p) => p.parent));
-  // ancestors[{id,name}] root→immediate-parent, so a search-filtered picker can render
-  // the greyed parent rows for each match without holding the whole tree.
+  // ancestors[{id,name}] (root → immediate parent) let a search-filtered picker
+  // render the greyed parent rows without the whole tree.
   const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.categoriesByIds);
   return rows.map((row) => ({
     ...toExamCategoryDoc(row),
@@ -148,7 +121,6 @@ export const listCategories = async (input: ListCategoriesInput) => {
   }));
 };
 
-/** Count for client pagination (same filter as listCategories). */
 export const countCategories = (input: ListCategoriesInput): Promise<number> => {
   const { parentRoot, parentNum } = resolveParentFilter(input.parentId);
   return repo.countCategories({
@@ -159,11 +131,7 @@ export const countCategories = (input: ListCategoriesInput): Promise<number> => 
   });
 };
 
-/**
- * Client category list — same filter as `listCategories` but trimmed to the
- * fields the Mongo client handler `.select("_id name image parentId orderBy")`
- * returned, and always status=true. Paginated.
- */
+/** Always status=true; returns only the fields the client list renders. */
 export const listClientCategories = async (input: {
   parentId?: string;
   search?: string;
@@ -189,7 +157,6 @@ export const listClientCategories = async (input: {
   }));
 };
 
-/** Count for the client category list (status=true, same filter). */
 export const countClientCategories = (input: { parentId?: string; search?: string }): Promise<number> => {
   const parentNum =
     input.parentId && input.parentId !== "root" ? parseExamCategoryId(input.parentId) : null;
@@ -201,7 +168,7 @@ export const countClientCategories = (input: { parentId?: string; search?: strin
   });
 };
 
-/** Nested active-category tree (admin getCategoryTree shape: doc + children[]). */
+// Full active category tree, nested under `children`.
 export const getCategoryTree = async () => {
   const all = await repo.listAllActive();
   const byParent = new Map<string, any[]>();
@@ -219,7 +186,6 @@ export const getCategoryTree = async () => {
   return (byParent.get("root") ?? []).map(attachChildren);
 };
 
-/** Single category + resolved {id,name} parent (admin getCategoryById shape). */
 export const getCategoryByIdWithParent = async (id: number) => {
   const row = await repo.findCategoryById(id);
   if (!row) return null;
@@ -232,13 +198,10 @@ export const getCategoryByIdWithParent = async (id: number) => {
   return { ...doc, parent };
 };
 
-/** Does a category exist (admin package/course guards)? */
 export const categoryExists = async (id: number): Promise<boolean> =>
   Boolean(await repo.findCategoryById(id));
 
-// ─── category writes (admin) ────────────────────────────────────────────────
-// SQL is single-parent: the Mongo `childCategoryIds[]`/`ancestors[]` DAG has no
-// columns and is dropped. Root sentinel is parent_id = 0.
+// Single-parent tree; the root sentinel is parent_id = 0.
 
 export const createCategory = async (input: {
   name: string; image?: string | null; parentId?: string | null; orderBy?: number; status?: boolean;
@@ -250,8 +213,8 @@ export const createCategory = async (input: {
     image: input.image ?? null,
     parent,
     status: input.status ?? true,
-    // Default: after the last category overall — the admin list is flat across
-    // levels and legacy order_by is one table-wide sequence (same rule as quizzes).
+    // Defaults to after the last category overall: the admin list is flat across
+    // levels and order_by is one table-wide sequence.
     order_by: input.orderBy ?? (await repo.maxCategoryOrder()) + 1,
     deleted: false,
     created_at: now,
@@ -278,7 +241,7 @@ export const updateCategory = async (
     if (parent !== 0 && !(await repo.findCategoryById(parent))) return "parent_not_found";
     data.parent = parent;
   }
-  // null clears the image (+ orphans the old S3 object); a new URL replaces it.
+  // null clears the image (orphaning the old object); a new URL replaces it.
   if (input.image === null) {
     data.image = null;
     orphanImageUrl = existing.image ?? null;
@@ -291,6 +254,7 @@ export const updateCategory = async (
   return { data: toExamCategoryDoc(row as ExamCategoryRow), orphanImageUrl };
 };
 
+// Soft delete; refused while the category has children or exams.
 export const deleteCategory = async (id: number): Promise<"not_found" | "has_children" | "has_exams" | true> => {
   if (!(await repo.findCategoryById(id))) return "not_found";
   if ((await repo.childCount(id)) > 0) return "has_children";
@@ -299,7 +263,7 @@ export const deleteCategory = async (id: number): Promise<"not_found" | "has_chi
   return true;
 };
 
-/** Paginated packages linked to a category (admin getCategoryPackages shape). */
+// Linked packages, each priced by its default plan (else the lowest).
 export const getCategoryPackages = async (
   id: number,
   opts: { search?: string; status?: boolean; page: number; per_page: number; skip: number }
@@ -332,14 +296,8 @@ export const getCategoryPackages = async (
 };
 
 /**
- * Paginated Courses AND Live Courses linked to a category (admin Courses tab).
- *
- * WHY ONE ENDPOINT: two separately-paginated lists cannot be merged into a single
- * page client-side without lying about `total` and dropping rows at page edges —
- * so the union is built and paged in SQL (see the repository).
- *
- * Packages are deliberately NOT here: the exam-category detail page has its own
- * Package tab (GET .../packages), and including them would double-count.
+ * Courses and live courses as one set, paged in SQL so `total` and page edges
+ * stay correct. Packages are excluded: the category page has its own Package tab.
  */
 export const getCategoryCourses = async (
   id: number,
@@ -359,14 +317,12 @@ export const getCategoryCourses = async (
   ]);
 
   const items = rows.map((c) => ({
-    // `id` stays the id within its OWN table — course 7 and live course 7 both
-    // exist, and the FE keys rows by `type-id`. Deliberately NOT namespaced.
+    // The id within its own table: course 7 and live course 7 both exist; the FE keys rows by `type-id`.
     id: String(c.id),
     name: c.name,
-    // Required on EVERY row — the FE defaults a missing value to "course", so an
-    // unlabelled live course would render as (and link to) a recorded course.
+    // Required on every row: the FE defaults a missing type to "course".
     type: c.type,
-    // Raw SQL hands back TINYINT 0/1, not a JS boolean.
+    // Raw SQL returns TINYINT 0/1.
     status: Boolean(c.status),
     orderBy: c.order_by ?? 0,
   }));

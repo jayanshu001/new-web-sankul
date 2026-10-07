@@ -1,3 +1,4 @@
+// Live courses: admin management plus client listings, recordings, preview and live chat logic.
 import ExcelJS from "exceljs";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { PassThrough } from "node:stream";
@@ -11,17 +12,14 @@ import { andWhere, statusWhere, normalizeStatus, reportRow, blankStrToNull, decT
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCourseOrder, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
-// VALUE import (the type-only line above cannot supply the Decimal constructor).
+// Value import: the type-only line above cannot supply the Decimal constructor.
 import { Prisma as PrismaRuntime } from "@prisma/client";
-// The shared course/material money split — the same helper ws_package_course_subscription
-// has always used, so a live-course grant books the split identically.
+// Shared course/material money split, so a live-course grant books it like a package sub.
 import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 
 /**
- * A subscription row read WITH its order. Payment left the subscription on
- * 2026-08-25, so any DTO carrying amount / gateway ids / code snapshots needs this
- * shape, not a bare LiveCourseSubscription. `order` is nullable only because the FK
- * is — the backfill linked every historical row.
+ * A subscription row read with its order; any DTO carrying amount / gateway ids / code
+ * snapshots needs this shape. `order` is nullable only because the FK is.
  */
 type LiveSubWithOrder = LiveCourseSubscription & { order: LiveCourseOrder | null };
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
@@ -30,8 +28,7 @@ import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, buildPrismaPrefixSearch, matchesAllTokens } from "../../utils/searchFilter";
-// Folder hierarchy for the client recordings reads — same DAG source + ancestor
-// chain the admin category pickers use, so the FE maps one shape everywhere.
+// Same DAG source the admin category pickers use, so the FE maps one shape everywhere.
 import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { buildPreviewTrackingId } from "../../utils/previewTracking";
@@ -48,11 +45,10 @@ const idStrOrNull = (v: number | null | undefined): string | null => (v != null 
 const jArr = (v: any): any[] => (Array.isArray(v) ? v : []);
 
 
-// Synthetic ids for JSON schedule folders/entries (Mongo addresses subdoc _id).
+// Synthetic ids for JSON schedule folders/entries (addressed by `_id`).
 let _seq = 0;
 const synthId = (prefix: string): string => `${prefix}-${Date.now().toString(36)}${(_seq++).toString(36)}${Math.floor(performance.now()).toString(36)}`;
 
-// ── transformers ─────────────────────────────────────────────────────────────
 export const toCourseDto = (row: LiveCourse) => ({
   _id: String(row.id),
   name: row.name,
@@ -114,7 +110,6 @@ const toSessionDto = (s: LiveSession) => ({
   updatedAt: s.updatedAt ?? null,
 });
 
-// ── courses: CRUD ──────────────────────────────────────────────────────────────
 export interface ListLiveCoursesQuery { search?: string; status?: string; page?: string; limit?: string }
 
 export const listLiveCourses = async (q: ListLiveCoursesQuery) => {
@@ -136,9 +131,8 @@ export const getLiveCourseById = async (id: number): Promise<"not_found" | { liv
 
 export const createLiveCourse = async (v: any, createdById?: string) => {
   const now = new Date();
-  // Root-folder automation (VideoCategory{liveCourseId}) is Mongo-only — skipped.
-  // No explicit `ordered` → previous row + 1 (utils/listOrdering). The admin list
-  // sorts by recency and is unaffected.
+  // No explicit `ordered` → previous row + 1 (utils/listOrdering); the admin list sorts
+  // by recency and is unaffected.
   const ordered = v.ordered ?? nextOrder(await repo.prevOrdered());
   const created = await repo.create({
     name: v.name, subtitle: v.subtitle ?? null, description: v.description ?? null, image: v.image ?? null,
@@ -161,18 +155,14 @@ export const createLiveCourse = async (v: any, createdById?: string) => {
   if (v.materialCategories !== undefined) {
     await repo.syncMaterialCategoryPivot(created.id, parseMaterialCategoryRefs(v.materialCategories));
   }
-  // rootFolder is Mongo-only (no live_course_id on ws_video_category) → null.
+  // No root folder: ws_video_category has no live_course_id.
   return { liveCourse: toCourseDto(created), rootFolder: null };
 };
 
 /**
- * Bulk drag-and-drop reorder. Mirrors the banners contract
- * (banner-slider.service.reorderBanners): unparseable ids are skipped, the
- * returned count is how many rows were written, and 0 means "no valid ids" —
- * which the controller turns into a 400.
- *
- * One transaction for the whole batch: a 20-row drag must not be 20 independent
- * requests that can half-apply.
+ * Bulk drag-and-drop reorder, same contract as banner-slider.service.reorderBanners:
+ * unparseable ids are skipped, the count is rows written, and 0 ("no valid ids")
+ * becomes a 400 in the controller. One transaction so a drag can't half-apply.
  */
 export const reorderLiveCourses = async (
   orders: { id: string; ordered: number }[]
@@ -219,7 +209,7 @@ export const updateLiveCourse = async (id: number, v: any): Promise<"not_found" 
 
 export const deleteLiveCourse = async (id: number): Promise<"not_found" | "has_sessions" | { id: string; deletedFolders: number; deletedVideos: number; deletedRelations: number }> => {
   if (!(await repo.exists(id))) return "not_found";
-  // Block if sessions attached (mirror Mongo). Folders/videos are Mongo-only → 0.
+  // Block if sessions are attached.
   const sessions = await repo.sessionsForCourse(id, { now: new Date(), skip: 0, take: 1 });
   if (sessions.total > 0) return "has_sessions";
   await repo.delete(id);
@@ -233,7 +223,6 @@ export const togglePopular = async (id: number): Promise<"not_found" | { id: str
   return { id: String(id), isPopular: updated.isPopular };
 };
 
-// ── sessions for a course ────────────────────────────────────────────────────
 export const listSessionsForCourse = async (id: number, q: { status?: string; upcoming?: string; search?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
   if (!(await repo.exists(id))) return "not_found";
   const page = Math.max(1, parseInt(q.page as any) || 1);
@@ -246,7 +235,6 @@ export const listSessionsForCourse = async (id: number, q: { status?: string; up
   return { sessions: rows.map(toSessionDto), total, page, limit };
 };
 
-// ── plans ──────────────────────────────────────────────────────────────────────
 export const listPlans = async (
   liveCourseId: number,
   opts: { skip: number; take: number; page: number; limit: number }
@@ -255,8 +243,8 @@ export const listPlans = async (
     repo.listPlans(liveCourseId, opts.skip, opts.take),
     repo.countPlans(liveCourseId),
   ]);
-  // All-time, status-blind — a PENDING or FAILED order pins the plan just as a
-  // verified one does (utils/planUsage).
+  // All-time, status-blind: a pending or failed order pins the plan just as a verified
+  // one does (utils/planUsage).
   const usage = await countPlanUsage("livePlan", plans.map((pl) => pl.id));
   return {
     data: plans.map((pl) => ({ ...toPlanDto(pl), orderCount: usage.get(pl.id) ?? 0 })),
@@ -288,8 +276,8 @@ const LIVE_PLAN_FROZEN = ["duration", "price", "originalPrice", "withMaterial", 
 export const updatePlan = async (planId: number, v: any): Promise<"not_found" | "frozen_terms" | any> => {
   const plan = await repo.findPlanById(planId);
   if (!plan) return "not_found";
-  // Only an actual CHANGE is refused — the live-course product form re-sends the
-  // stored values (including `status`) on a paid→free switch and must keep working.
+  // Only an actual change is refused: the product form re-sends stored values (including
+  // `status`) on a paid→free switch and must keep working.
   const changesFrozen = LIVE_PLAN_FROZEN.some(
     (k) => v[k] !== undefined && (v[k] ?? 0) !== ((plan as any)[k] ?? 0)
   );
@@ -302,32 +290,25 @@ export const updatePlan = async (planId: number, v: any): Promise<"not_found" | 
   return toPlanDto(updated);
 };
 
+// Refuses while any order references the plan (returns { inUse }).
 export const deletePlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
   if (!(await repo.findPlanById(planId))) return "not_found";
-  // Widened from `verifiedSubCountForPlan` — a PENDING or FAILED order references
-  // the plan just as firmly, and ws_live_course_subscription is the only table
-  // (there is no separate live-course order table).
+  // Pending and failed orders reference the plan as firmly as verified ones.
   const inUse = await countPlanUsageOne("livePlan", planId);
   if (inUse > 0) return { inUse };
   await repo.deletePlan(planId);
   return true;
 };
 
-// ── subscriptions ──────────────────────────────────────────────────────────────
-
 /**
- * Read the redeemed code + who earns on it out of a subscription's purchase-time
- * snapshot columns (`promocode` / `refferalcode`, written by modules/order-code-snapshot
- * — same shape as ws_package_course_order).
+ * Redeemed code + earner from the subscription's purchase-time snapshot columns
+ * (`promocode` / `refferalcode`, written by modules/order-code-snapshot). The legacy
+ * referral shape overloads `promoter` to mean the referring customer:
  *
- * The two snapshot kinds spell both fields differently, and the legacy referral shape
- * OVERLOADS the key name `promoter` to mean the referring CUSTOMER, not a ws_promoter:
+ *   promocode    → code = $.promocode,             earner = $.promoter.full_name
+ *   refferalcode → code = $.promoter.referralCode, earner = $.promoter.fullName
  *
- *   promocode   → code = $.promocode,              earner = $.promoter.full_name
- *   refferalcode→ code = $.promoter.referralCode,  earner = $.promoter.fullName
- *
- * Rows predating the 2026-08-20 columns (and rows where the snapshot could not be
- * built) hold NULL and yield empty strings — exactly what the report rendered before.
+ * Rows without a snapshot yield empty strings.
  */
 const subCodeInfo = (r: {
   promocode?: unknown;
@@ -354,9 +335,8 @@ const subCodeInfo = (r: {
     return {
       code: (ref.promoter?.referralCode ?? "").trim(),
       promoterName: (ref.promoter?.fullName ?? "").trim(),
-      // A referral deliberately has NO promoterId: the earner is a CUSTOMER, not a
-      // ws_promoter. Reporting a promoter here would attribute customer referral
-      // rewards as promoter commission.
+      // A referral has no promoterId: the earner is a customer, and reporting a promoter
+      // would attribute customer referral rewards as promoter commission.
       promoterId: null,
       promocodeId: null,
       codeType: "referral",
@@ -365,19 +345,12 @@ const subCodeInfo = (r: {
   return { code: "", promoterName: "", promoterId: null, promocodeId: null, codeType: null };
 };
 
-/**
- * Payment for a subscription row. Since 2026-08-25 it lives on ws_live_course_order
- * and NOWHERE else — the subscription's own payment columns were dropped, so an
- * unlinked row simply has no payment to report.
- */
+/** Payment lives only on ws_live_course_order; an unlinked row has no payment. */
 const payOf = (row: any, orders: Map<number, LiveCourseOrder>): LiveCourseOrder | null =>
   (row.orderId != null ? orders.get(row.orderId) ?? null : null);
 
-/** Order "complete" ↔ the subscription vocabulary this DTO has always emitted. */
-// The order's enum → the shipped wire vocabulary. 'cancel' is the
-// ws_package_course_order spelling this table adopted on 2026-08-27 for what it used
-// to store as 'failed'; both keys map to "failed" so the response is unchanged and
-// rows written before the enum change still resolve.
+// Order enum → wire vocabulary. 'cancel' (current) and 'failed' (older rows) both map
+// to "failed" so the response is unchanged.
 const payStatusOf = (pay: any): string | null =>
   pay?.status === "complete" ? "verified"
   : pay?.status === "pending" ? "pending"
@@ -401,14 +374,11 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
       liveCourseId: course ? { _id: String(course.id), name: course.name, image: course.image ?? null } : idStrOrNull(r.liveCourseId),
       planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStrOrNull(r.planId),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, status: r.status,
-      // Payment fields come from the order now (2026-08-25); the DTO is unchanged.
-      // `amount` = ws_live_course_order.discount_price (the charged amount) and
-      // `updatedAt` is the order's paid-at since `paid_at` was dropped 2026-08-27 —
-      // verify wrote both with the same timestamp, so neither DTO value changes.
+      // `amount` = ws_live_course_order.discount_price (charged); `updatedAt` is the order's
+      // paid-at.
       paidAmount: pay?.amount ?? 0, paymentStatus: payStatusOf(pay), paidAt: pay?.updatedAt ?? null,
-      // The purchase-time snapshot OBJECTS, not the bare ids — same contract as
-      // ws_package_course_order. Exactly one is ever non-null. Additive: promocodeId /
-      // referrerId were never in this DTO, so nothing that existed here changed shape.
+      // Purchase-time snapshot objects, not bare ids (same contract as
+      // ws_package_course_order). At most one is non-null.
       promocode: (pay?.promocode as unknown) ?? null,
       refferalcode: (pay?.refferalcode as unknown) ?? null,
       createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
@@ -416,18 +386,15 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
   });
 };
 
-// ── subscription list (Reports contract) ─────────────────────────────────────
-// Shared contract across the 4 admin subscription reports — see
-// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
-// summary respects all filters but ignores pagination. `status` here is the
-// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
-// coarse online|backend (online = razorpay_order_id present). amount = paid_amount.
+// Reports contract shared by the 4 admin subscription reports
+// (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md): { summary, data, pagination }; summary respects
+// filters but not pagination. `status` is normalized active|expired|inactive;
+// paymentMethod is online|backend (online = razorpay_order_id present).
 
-// Param contract shared by the list + its CSV/Excel exports. All string-typed
-// (query params). ⚠ `startFrom`/`endTo` are half-open here (no startTo/endFrom) and
-// are parsed with a bare `new Date()` rather than parseDayBoundIst — a bare
-// YYYY-MM-DD would read as UTC midnight and drop the last 5.5h. Harmless while the
-// screen exposes neither filter; fix both before wiring them up.
+// Param contract shared by the list + its exports (all strings). `startFrom`/`endTo` are
+// half-open and parsed with a bare `new Date()`, not parseDayBoundIst, so a bare
+// YYYY-MM-DD reads as UTC midnight and drops the last 5.5h. Harmless while the screen
+// exposes neither filter; fix before wiring them up.
 export interface SubReportQuery {
   liveCourseId?: string; customerId?: string; status?: string; paymentMethod?: string;
   activationType?: string; dateFrom?: string; dateTo?: string; startFrom?: string; endTo?: string;
@@ -437,16 +404,14 @@ export interface SubReportQuery {
 const coercePayMethod = (v?: string): "online" | "backend" | undefined =>
   v === "online" ? "online" : v === "backend" ? "backend" : undefined;
 
-// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
-// 23:59:59.999 at Asia/Kolkata, +05:30); full timestamps pass through. The
-// createdAt date filter honors IST day boundaries (a naive UTC parse would drop
-// the last 5.5h of the day). Invalid → undefined (no bound). Mirrors the
-// Subscription + Test Series reports.
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to → 23:59:59.999
+// at +05:30) so a naive UTC parse doesn't drop the last 5.5h; full timestamps pass
+// through, invalid → undefined. Same as the Subscription + Test Series reports.
 const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
-  // "YYYY-MM-DDTHH:mm" (the report date-time picker) is IST wall-clock too; the
-  // to-bound covers the whole picked minute.
+  // "YYYY-MM-DDTHH:mm" (report date-time picker) is IST wall-clock too; the to-bound
+  // covers the whole picked minute.
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
     ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`)
     : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)
@@ -455,10 +420,9 @@ const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
-// Shared filter resolution for the subscriptions list + its CSV/Excel exports, so
-// all three honor an identical param contract. Returns the composed `where` (base
-// filters AND normalized-status fragment) + sort, or a discriminated string for a
-// bad id / a search that matched nothing.
+// Shared filter resolution for the list + its exports: the composed `where` (base
+// filters AND normalized-status fragment) + sort, or a string for a bad id / a search
+// that matched nothing.
 const resolveSubFilter = async (
   q: SubReportQuery,
   now: Date
@@ -480,8 +444,7 @@ const resolveSubFilter = async (
 
   const base = repo.buildSubBaseWhere({
     customerId, liveCourseId,
-    // activationType shares the online|backend semantics (razorpay_order_id
-    // presence); paymentMethod wins when both are sent.
+    // activationType has the same online|backend semantics; paymentMethod wins when both are sent.
     paymentMethod: coercePayMethod(q.paymentMethod) ?? coercePayMethod(q.activationType),
     fromDate: parseDayBoundIst(q.dateFrom, false),
     toDate: parseDayBoundIst(q.dateTo, true),
@@ -495,41 +458,24 @@ const resolveSubFilter = async (
   return { listWhere, sortBy, sortDir };
 };
 
-// ── Live Course Report: the columns the DTO used to drop ──────────────────────
-// Until 2026-08-27 this report emitted 13 fewer keys than the Subscription report,
-// so those columns rendered "—" on every row. They were never missing DATA: the
-// live-course tables adopted the package shape on 2026-08-25/27, and `listSubsByWhere`
-// already joins the order — ten of the thirteen were sitting in memory at the line
-// that built the DTO. The other three (educator / shipping / activated-by) take one
-// batched lookup each, exactly as admin-subscription does.
-//
-// list + export share these two helpers so the screen and the downloaded file can
-// never disagree.
+// Report columns shared by list + export so the screen and the download never disagree.
+// Educator / shipping / activated-by take one batched lookup each, as in admin-subscription.
 
 type ReportAddress = { id: number; userId: number | null; address: string | null; address_2: string | null; city: string | null; pincode: number | string | null; alternate_phone: any };
 type SubReportExtras = {
   educators: Map<number, { id: number; name: string | null }>;
-  /** keyed `<addressId>:<customerId>` — see resolveReportAddresses. */
+  /** Keyed `<addressId>:<customerId>` (see resolveReportAddresses). */
   shippings: Map<string, ReportAddress>;
   admins: Map<string, { firstName: string | null; lastName: string | null }>;
 };
 
 /**
- * Resolve the delivery address behind each subscription's `shipping` id.
- *
- * `shipping` is a ws_customer_shipping.id by contract — but the live-course checkout
- * never adopted `resolveShippingIdForAddress` the way the package path did: it
- * validates the id against the ADDRESS BOOK and stores it raw
- * (live-course-payment.controller `customerAddressRepository.findActiveOwned` →
- * `customerShippingId`). So live-course rows written to date point at
- * ws_customer_address instead, and a shipping-only lookup came back empty on exactly
- * the rows that HAVE an address. Try shipping first, fall back to the address book.
- *
- * Every hit is verified against the SUBSCRIPTION'S OWN customer before it is keyed.
- * The two id spaces are disjoint today and nothing enforces that; an unverified
- * fallback would be one collision away from printing another customer's address on
- * an admin report. A row that fails the check is dropped (column renders "—") rather
- * than guessed at.
+ * Delivery address behind each subscription's `shipping` id. By contract that is a
+ * ws_customer_shipping.id, but the live-course checkout stores a raw address-book id
+ * (live-course-payment.controller), so try shipping first, then ws_customer_address.
+ * Every hit is verified against the subscription's own customer: nothing enforces the
+ * two id spaces stay disjoint, and a collision must never print another customer's
+ * address. A failing row is dropped (renders "—") rather than guessed.
  */
 const resolveReportAddresses = async (
   wanted: { shippingId: number; customerId: number }[]
@@ -555,8 +501,8 @@ const hydrateSubReportExtras = async (
   courses: Map<number, { id: number; educatorId?: number | null }>
 ): Promise<SubReportExtras> => {
   const educatorIds = [...new Set(rows.map((r) => courses.get(r.liveCourseId)?.educatorId).filter((x): x is number => x != null && x > 0))];
-  // The subscription's own address wins; fall back to the order's (same column
-  // meaning on both tables — ws_customer_shipping.id, NEVER ws_customer_address.id).
+  // The subscription's own address wins; fall back to the order's (both are
+  // ws_customer_shipping.id by contract).
   const wantedAddresses = rows
     .map((r) => ({ shippingId: (r.shipping ?? r.order?.shipping) as number | null, customerId: r.customerId }))
     .filter((w): w is { shippingId: number; customerId: number } => w.shippingId != null && w.shippingId > 0);
@@ -569,12 +515,12 @@ const hydrateSubReportExtras = async (
   return {
     educators: new Map(educators.map((e) => [e.id, e])),
     shippings,
-    // ws_users PK is BigInt — key by string so the lookup can't miss on 1n !== 1.
+    // ws_users PK is BigInt; key by string so the lookup can't miss on 1n !== 1.
     admins: new Map(admins.map((a) => [String(a.id), a])),
   };
 };
 
-/** The report columns themselves. Key names + types mirror admin-subscription.service. */
+/** Key names + types mirror admin-subscription.service. */
 const subReportColumns = (r: LiveSubWithOrder, pay: LiveCourseOrder | null | undefined, x: SubReportExtras, course?: { educatorId?: number | null }) => {
   const educatorId = course?.educatorId ?? null;
   const educator = educatorId != null ? x.educators.get(educatorId) ?? null : null;
@@ -583,21 +529,19 @@ const subReportColumns = (r: LiveSubWithOrder, pay: LiveCourseOrder | null | und
   const admin = r.created_by != null ? x.admins.get(String(r.created_by)) ?? null : null;
   const adminName = admin ? `${admin.firstName ?? ""} ${admin.lastName ?? ""}`.trim() : "";
   return {
-    // courier tracking (allocated at verify for material subs); null until assigned
+    // Courier tracking (allocated at verify for material subs); null until assigned.
     trackingId: trackingToNumber(r.tracking),
     educatorName: educator?.name ?? null,
     educatorId: educator?.id ?? null,
-    // amounts / coins — the split the shared computeMaterialSplit books at verify
+    // The split computeMaterialSplit books at verify.
     courseAmount: decToNum(r.courseAmount),
     materialAmount: decToNum(r.materialAmount),
     wsCoin: pay?.wsCoin ?? null,
-    // ⚠ The GATEWAY (razorpay|bank|cash|free|…), lowercased — NOT online/backend.
-    // That is `paymentMethod`, which `base` already carries and which the table
-    // renders in its own Activation Type column. Conflating them makes the two
-    // columns duplicates and hides which gateway actually took the money.
+    // The gateway (razorpay|bank|cash|free|…), lowercased; not online/backend, which is
+    // `paymentMethod` and has its own Activation Type column.
     orderMethod: pay?.paymentMethod ? String(pay.paymentMethod).toLowerCase() : null,
     materialType: rowHasMaterial(r) ? "With Material" : "Without Material",
-    // No SQL source for "Activation Type" — same null the Subscription report emits.
+    // No source for "Activation Type"; same null the Subscription report emits.
     activationType: null as string | null,
     razorpayOrderId: pay ? blankStrToNull(pay.razorpayOrderId) : null,
     razorpayPaymentId: pay ? blankStrToNull(pay.razorpayPaymentId) : null,
@@ -642,9 +586,7 @@ export const listSubscriptions = async (q: SubReportQuery & {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null))])).map((p) => [p.id, p]));
-  // Payment is NOT re-fetched: `listSubsByWhere` already does include:{order:true},
-  // so the order row is in memory on `r.order` (the export path has always read it
-  // that way). The separate ordersByIds round-trip this used to make was redundant.
+  // Payment is not re-fetched: `listSubsByWhere` already includes the order (`r.order`).
   const extra = await hydrateSubReportExtras(rows, courses);
 
   const data = rows.map((r) => {
@@ -660,12 +602,9 @@ export const listSubscriptions = async (q: SubReportQuery & {
       status: normalizeStatus({ status: r.status, startAt: r.startAt, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
-    // Code attribution, read from the row's own snapshot columns — no extra query.
-    // Key names + types mirror the Subscription report (admin-subscription.service)
-    // so the two Reports screens stay interchangeable: `promocode` is the CODE
-    // STRING there, so it is the code string here too. The full frozen objects ride
-    // alongside under `promocodeSnapshot` / `refferalcodeSnapshot` for callers that
-    // want the promoter/plan/percentage detail without a second request.
+    // Code attribution from the row's own snapshot columns (no extra query). Keys and types
+    // match the Subscription report (admin-subscription.service): `promocode` is the code
+    // string; the full frozen objects ride under `promocodeSnapshot` / `refferalcodeSnapshot`.
     const code = subCodeInfo(pay ?? {});
     return {
       id: r.id,
@@ -677,10 +616,9 @@ export const listSubscriptions = async (q: SubReportQuery & {
       codeType: code.codeType,
       promocodeSnapshot: (pay?.promocode as unknown) ?? null,
       refferalcodeSnapshot: (pay?.refferalcode as unknown) ?? null,
-      // ── Report columns, key-for-key with the Subscription report ─────────────
-      // Both feed ONE frontend normalizer and ONE table, so a renamed or retyped
-      // key here surfaces as a silently blank column. Unknown is ALWAYS null,
-      // never "" and never 0 (the table prints a literal 0 for a zero amount).
+      // Report columns, key-for-key with the Subscription report: both feed one frontend
+      // normalizer and table, so a renamed or retyped key shows up as a silently blank
+      // column. Unknown is always null, never "" or 0 (the table prints a literal 0).
       ...subReportColumns(r, pay, extra, course),
     };
   });
@@ -692,23 +630,14 @@ export const listSubscriptions = async (q: SubReportQuery & {
   };
 };
 
-// ── subscription report export (CSV / Excel) ──────────────────────────────────
-// Entire filtered set (no pagination) and NO row cap — paged in keyset batches
-// (id DESC, no deep OFFSET) and mapped per batch so memory stays bounded (lakhs OK).
+// Exports cover the entire filtered set with no row cap, keyset-paged (no deep OFFSET)
+// and mapped per batch so memory stays bounded.
 const LIVE_SUB_EXPORT_BATCH = 5000;
 
-// One flat export row per subscription — the same 27 columns the screen renders,
-// built from the SAME `subReportColumns` helper so the download can never disagree
-// with the table.
-//
-// The old note here claimed educator/shipping/remarks/material-split/ws-coin had no
-// source on a live-course subscription. That stopped being true when the live-course
-// tables adopted the package shape (2026-08-25 order split, 2026-08-27 course_amount /
-// material_amount / pc_material_id / tracking): ten of those values ride on the row and
-// its included order, the other three cost one batched lookup per 5000-row batch.
-//
-// Promocode + Promoter Name are populated as of 2026-08-20: they come from the row's
-// own snapshot columns, so they still cost NO extra query.
+// One flat export row per subscription, built from the same `subReportColumns` helper
+// as the screen so the download can never disagree with the table. Most values ride on
+// the row and its included order; educator/shipping/activated-by cost one batched
+// lookup per batch; promocode + promoter come from snapshot columns.
 const buildSubExportRow = (
   r: LiveSubWithOrder,
   cust: { id: number; fullName: string | null; phoneNumber: string | null; emailAddress: string | null } | undefined,
@@ -716,8 +645,7 @@ const buildSubExportRow = (
   extra: SubReportExtras,
   now: Date
 ) => {
-  // Payment (amount, gateway ids, code snapshots) comes off the ORDER since
-  // 2026-08-25; the subscription no longer carries any of it.
+  // Payment (amount, gateway ids, code snapshots) comes from the order.
   const pay = r.order;
   const method = pay?.razorpayOrderId ? "online" : "backend";
   const code = subCodeInfo(pay ?? {});
@@ -744,18 +672,17 @@ const buildSubExportRow = (
   };
 };
 
-// Map one keyset batch of raw subscription rows to export rows (resolve the
-// customer/course maps for just that batch).
+// Maps one keyset batch to export rows, resolving customer/course maps for that batch only.
 const mapSubExportBatch = async (rows: LiveSubWithOrder[], now: Date) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
-  // Educator / shipping / activated-by, batched per 5000-row page like the rest.
+  // Educator / shipping / activated-by, batched per page.
   const extra = await hydrateSubReportExtras(rows, courses);
   return rows.map((r) => buildSubExportRow(r, r.customerId ? custs.get(r.customerId) : undefined, courses.get(r.liveCourseId), extra, now));
 };
 
-// Walk the entire filtered set in keyset batches (no cap). `filter` is the resolved
-// where+sort from resolveSubFilter (the caller handles bad-id/empty first).
+// Walks the entire filtered set in keyset batches. `filter` is the resolved where+sort
+// from resolveSubFilter (the caller handles bad-id/empty first).
 async function* iterateSubExportRows(filter: { listWhere: any }, now: Date) {
   let beforeId: number | undefined;
   for (;;) {
@@ -767,15 +694,11 @@ async function* iterateSubExportRows(filter: { listWhere: any }, now: Date) {
   }
 }
 
-// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
-// — unified with the Subscription / Test Series exports (was raw UTC ISO).
-
-// Column order mirrors the detailed subscription report table — the client reconciles
+// Column order mirrors the detailed subscription report table: the client reconciles
 // the two files column for column, so the 27 headers and their order are fixed.
-// `cell` turns the DTO's null (= unknown) into the blank a spreadsheet expects.
 const cell = (v: string | number | null | undefined): string | number => (v == null ? "" : v);
-// "Package Name" stays blank by design: a live course is not a package. The column
-// exists only because one table is shared across four reports.
+// "Package Name" stays blank by design: a live course is not a package, but one table
+// is shared across four reports.
 const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buildSubExportRow>) => string | number }[] = [
   { header: "Subscription ID", get: (i) => i._id },
   { header: "Customer Name", get: (i) => i.customerName },
@@ -793,10 +716,9 @@ const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buil
   { header: "Material Amount", get: (i) => cell(i.cols.materialAmount) },
   { header: "Ws Coin", get: (i) => cell(i.cols.wsCoin) },
   { header: "Material Type", get: (i) => cell(i.cols.materialType) },
-  // Activation channel (online|backend) — distinct from Order Method below.
+  // Activation channel (online|backend), distinct from Order Method below.
   { header: "Activation Type", get: (i) => i.activationType },
-  // The GATEWAY off the order. This used to repeat `paymentMethod`, which made
-  // Activation Type and Order Method duplicate columns in the downloaded file.
+  // The gateway off the order (not a repeat of `paymentMethod`).
   { header: "Order Method", get: (i) => cell(i.cols.orderMethod) },
   { header: "Order Id", get: (i) => i.razorpayOrderId },
   { header: "Payment Id", get: (i) => i.razorpayPaymentId },
@@ -849,7 +771,7 @@ export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<"bad_co
   return Buffer.concat(chunks);
 };
 
-// Streamed export source (async job path) — same rows/columns as the sync builders.
+// Streamed export source (async job path); same rows/columns as the sync builders.
 // Throws on a bad id filter (the worker marks the job failed with this message).
 export async function liveSubExportSource(q: SubReportQuery): Promise<ReportSource> {
   const now = new Date();
@@ -875,11 +797,12 @@ export const getSubscription = async (id: number): Promise<"not_found" | any> =>
   return (await hydrateSubs([row]))[0];
 };
 
+// Admin grant/extend: always a new order + subscription row; extend starts at the active endAt.
 export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId?: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean; actingAdminId?: number | null }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
   if (!(await repo.exists(liveCourseId))) return { ok: false, code: "course", msg: "Live course not found." };
   const customerId = parseLiveId(v.customerId);
-  // planId is optional: with a plan we derive the window (and validate it belongs
-  // to this course); without one, amount + duration/endAt drive the grant.
+  // planId is optional: with a plan the window is derived (and the plan validated against
+  // this course); without one, amount + duration/endAt drive the grant.
   const planId = v.planId ? parseLiveId(v.planId) : null;
   if (!customerId || !(await repo.customerExists(customerId))) return { ok: false, code: "customer", msg: "Customer not found." };
   const plan = planId ? await repo.findPlanById(planId) : null;
@@ -889,7 +812,7 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   const now = new Date();
   let startAt = now;
   if (v.startAt) { const dt = new Date(v.startAt); if (isNaN(dt.getTime())) return { ok: false, code: "startAt", msg: "startAt must be a valid date." }; startAt = dt; }
-  // plan.duration is DAYS (per the live-course controllers' computeEndAt asDays).
+  // plan.duration is in days (computeEndAt asDays).
   let endAt: Date;
   if (v.endAt) { const dt = new Date(v.endAt); if (isNaN(dt.getTime())) return { ok: false, code: "endAt", msg: "endAt must be a valid date." }; endAt = dt; }
   else if (v.durationDays != null) endAt = computeEndAt({ startAt, durationMonths: v.durationDays, asDays: true });
@@ -898,16 +821,12 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   else return { ok: false, code: "duration", msg: "durationDays is required (or supply planId)." };
   if (endAt.getTime() <= startAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
-  // ONE ORDER = ONE SUBSCRIPTION ROW (2026-08-25). An extension is read-only against
-  // the customer's current entitlement — it only decides where the new window starts
-  // — and then writes its own order + its own subscription row. Previously it bumped
-  // `end_at` on the existing row and accumulated `paid_amount` into it, because live
-  // course had no order table to record the second payment in.
+  // One order = one subscription row. An extension only reads the current entitlement to
+  // decide where the new window starts, then writes its own order and subscription row.
   const existing = v.extend === true ? await repo.findActiveSubscription(customerId, liveCourseId, now) : null;
   const grantStartAt =
     existing?.endAt && existing.endAt.getTime() > now.getTime() ? existing.endAt : startAt;
-  // Recompute the window off the continuation start. An explicit endAt from the
-  // admin still wins — it is an absolute instruction, not a duration.
+  // Recompute the window from the continuation start; an explicit admin endAt still wins.
   const grantEndAt = v.endAt
     ? endAt
     : v.durationDays != null
@@ -920,25 +839,21 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   if (grantEndAt.getTime() <= grantStartAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
   const shippingId = v.customerShippingId != null ? parseLiveId(v.customerShippingId) : null;
-  // The entitled material kit, copied off the live course — the twin of the package
-  // path's findCoursePcMaterialId / findPackagePcMaterialId.
+  // Entitled material kit from the live course (twin of the package path's
+  // findCoursePcMaterialId / findPackagePcMaterialId).
   const liveCourseForGrant = await repo.liveCourseMaterialKit(liveCourseId);
 
-  // The order carries the payment for THIS grant — its own amount, never a running
-  // total. The old extend path summed into the existing row's paid_amount precisely
-  // because that row was also the payment record; each order now owns its own.
-  // 2026-08-27: the order carries only the ws_package_course_order columns.
-  // `with_material`, `remarks`, `created_by` and `updated_by` are NOT on it — the
-  // subscription created just below already stores all four, which is where every
-  // reader takes them from. `paid_at` is gone too; `updated_at` is the paid-at.
+  // The order carries only this grant's payment, never a running total. It has only the
+  // ws_package_course_order columns: with_material, remarks, created_by and updated_by
+  // live on the subscription below; `updated_at` is the paid-at.
   const order = await repo.createOrder({
     customerId,
     liveCourseId,
     planId,
     orderType: "purchase",
     amount: v.amount ?? 0,
-    // A manual grant has no list price of its own — the granted amount IS the price,
-    // and no code was redeemed, so the discount is 0.
+    // A manual grant has no list price of its own and redeems no code: price = amount,
+    // discount 0.
     originalPrice: v.amount ?? 0,
     codeDiscount: 0,
     paymentMethod: v.paymentMethod ?? "cash",
@@ -951,10 +866,9 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
     updatedAt: now,
   });
 
-  // The ws_package_course_subscription columns (2026-08-27). A manual grant redeems
-  // no promocode, so there is no promoter to attribute; `payment_type` is "backend"
-  // unless the admin recorded a gateway id, which is the same rule the live-course
-  // report already uses for activationType.
+  // No promocode on a manual grant, so no promoter to attribute. `payment_type` is
+  // "backend" unless the admin recorded a gateway id (same rule as the report's
+  // activationType).
   const grantAmount = v.amount ?? 0;
   const grantMaterial = computeMaterialSplit(grantAmount, plan);
   const sub = await repo.createSubscription({
@@ -969,14 +883,13 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
     paidAmount: new PrismaRuntime.Decimal(grantAmount),
     payment_type: v.razorpayOrderId ? "online" : "backend",
     remarks: v.remarks ?? null,
-    // Admin-initiated manual grant → both audit columns = the acting admin.
+    // Manual grant → both audit columns = the acting admin.
     created_by: v.actingAdminId ?? null,
     updated_by: v.actingAdminId ?? null,
     createdAt: now, updatedAt: now,
   });
-  // `created` reports whether this STARTED a new entitlement or continued one, which
-  // is what the controller's "granted" vs "extended" message keys off. Both cases
-  // write a new row, so it can no longer be inferred from what was written.
+  // `created` says whether this started a new entitlement or continued one (the
+  // controller's "granted" vs "extended" message); both write a new row.
   return { ok: true, created: !existing, data: (await hydrateSubs([sub]))[0] };
 };
 
@@ -991,23 +904,16 @@ export const updateSubscription = async (id: number, v: { status?: boolean; paym
   if (v.endAt !== undefined) { const dt = new Date(v.endAt); if (isNaN(dt.getTime())) return "bad_end"; data.endAt = dt; }
 
   if (v.paymentStatus !== undefined) {
-    // `payment_status` used to live on this row AND gate access — marking a
-    // subscription "failed" revoked it. Payment moved to the order on 2026-08-25 and
-    // the entitlement reads no longer consult it, so writing the legacy column alone
-    // would silently stop revoking anything. Two things keep the old outcome:
-    //   1. the ORDER's status is corrected, so reports/receipts/history agree, and
-    //   2. `status` follows it — anything other than "verified" deactivates the row,
-    //      which IS the entitlement gate now.
-    // An explicit `status` in the same request still wins; it is the more specific
-    // instruction.
+    // Entitlement reads ignore `payment_status`, so writing it alone would revoke nothing.
+    // To keep "failed" revoking: (1) the order's status is corrected so reports/receipts
+    // agree, and (2) `status` follows it; anything but "verified" deactivates the row. An
+    // explicit `status` in the same request still wins.
     data.paymentStatus = v.paymentStatus;
     if (v.status === undefined) data.status = v.paymentStatus === "verified";
     if ((current as any).orderId != null) {
-      // The ORDER carries no audit columns — ws_package_course_order has none, so
-      // neither does this table since 2026-08-27. `updated_by` is stamped on the
-      // SUBSCRIPTION above (`data.updated_by`), which is where it was always read.
+      // The order has no audit columns; `updated_by` is stamped on the subscription above.
       await repo.updateOrder((current as any).orderId, {
-        // "failed" on the wire is 'cancel' in the column (package enum, 2026-08-27).
+        // "failed" on the wire is 'cancel' in the column.
         status: v.paymentStatus === "verified" ? "complete" : v.paymentStatus === "pending" ? "pending" : "cancel",
         updatedAt: new Date(),
       });
@@ -1020,11 +926,8 @@ export const updateSubscription = async (id: number, v: { status?: boolean; paym
 
 
 /**
- * The customer owning this subscription, or null if it doesn't exist.
- *
- * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
- * can flush that customer's per-user route cache. On delete the row is gone
- * afterwards, so the id cannot be resolved after the mutation.
+ * Read before an admin revoke (status flip / date change / delete) so the caller can
+ * flush that customer's route cache; after delete the row is gone.
  */
 export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
   (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;
@@ -1263,8 +1166,8 @@ const loadFolder = async (id: number, folderId: string) => {
   return { row: r.row, folders: r.folders, folder };
 };
 
-// Schedule entries live in the live-course JSON column (not a table), so pagination
-// is an in-memory slice of the order-sorted array; `total` is the full count.
+// Entries live in a JSON column, so pagination is an in-memory slice of the
+// order-sorted array; `total` is the full count.
 export const listScheduleEntries = async (
   id: number, folderId: string, opts?: { skip?: number; take?: number }
 ): Promise<"not_found" | "folder_not_found" | { data: any[]; total: number }> => {
@@ -1316,13 +1219,6 @@ export const reorderScheduleEntries = async (id: number, folderId: string, entry
   return { entries: [...entries].sort(sortByOrder) };
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// Reminders / Chat / Polls (client + admin live surfaces)
-// ════════════════════════════════════════════════════════════════════════════
-
-// ── reminders: READ only on SQL ─────────────────────────────────────────────
-// The set/remove WRITE path provisions Mongo Notification rows + BullMQ jobs, so
-// it stays on Mongo (the notification pipeline isn't migrated). Reads are SQL.
 const toReminderDto = (r: any, session?: any) => ({
   id: String(r.id),
   liveSessionId: idStrOrNull(r.liveSessionId),
@@ -1349,27 +1245,20 @@ export const getReminderForSession = async (customerId: number, liveSessionId: n
   return toReminderDto(r, s);
 };
 
-// ── chat ─────────────────────────────────────────────────────────────────────
-// `isAdmin` + `role` let the FE style admin/super-admin messages identically on
-// history reload and on the live `new_message` event. There is no stored role
-// column (ws_live_chat_message only has is_admin + admin_id), so `role` is
-// resolved from the admin's current spatie roles at read time; non-admin
-// (customer) rows get role: null.
+// `isAdmin` + `role` let the FE style admin messages identically on history reload and
+// live `new_message`. No stored role column (only is_admin + admin_id), so `role` is
+// resolved from the admin's current spatie roles at read time; customers get null.
 const toChatMessageDto = (m: any, role: string | null = null) => ({ _id: String(m.id), customerId: idStrOrNull(m.customerId), userName: m.userName ?? null, message: m.message ?? null, isAdmin: !!m.isAdmin, role: m.isAdmin ? role : null, isPrivate: !!m.isPrivate, targetCustomerId: idStrOrNull(m.targetCustomerId), createdAt: m.createdAt ?? null });
 
 /**
- * One live class's chat listing.
- *
- * `scope` selects ONE mode, which is what keeps public and private threads from
- * rendering as one mixed array:
- *   - omitted            → every message, both modes (admin history default)
- *   - { isPrivate:false} → the public timeline
- *   - { isPrivate:true } → the private thread, narrowed by `viewerId` for a
- *                          student (own messages, host replies addressed to them,
- *                          and host messages addressed to nobody) and unnarrowed
- *                          for the host.
- *
- * Always chronological, oldest→newest, so a late joiner can render it as-is.
+ * One live class's chat listing. `scope` selects one mode so public and private
+ * threads never render as one mixed array:
+ *   - omitted             → every message, both modes (admin history default)
+ *   - { isPrivate:false } → the public timeline
+ *   - { isPrivate:true }  → the private thread, narrowed by `viewerId` for a student
+ *                           (own messages, host replies to them, host messages to
+ *                           nobody) and unnarrowed for the host.
+ * Always chronological (oldest → newest).
  */
 export const getChatHistory = async (
   liveClassId: string,
@@ -1378,8 +1267,7 @@ export const getChatHistory = async (
   scope?: { isPrivate?: boolean; viewerId?: number | null }
 ) => {
   const rows = await repo.chatHistory(liveClassId, limit, before, scope);
-  // Batch-resolve the current role for every distinct admin author on this
-  // page (one pivot query, not one per message).
+  // Batch-resolve the current role of every admin author on this page (one pivot query).
   const adminIds = Array.from(
     new Set(rows.filter((r: any) => r.isAdmin && r.adminId != null).map((r: any) => String(r.adminId)))
   );
@@ -1394,7 +1282,7 @@ export const getChatHistory = async (
   }
   const roleFor = (m: any): string | null =>
     m.isAdmin ? (m.adminId != null ? roleByAdminId.get(String(m.adminId)) ?? "admin" : "admin") : null;
-  return rows.reverse().map((m: any) => toChatMessageDto(m, roleFor(m))); // chrono order (Mongo reverses too)
+  return rows.reverse().map((m: any) => toChatMessageDto(m, roleFor(m))); // chronological order
 };
 
 export const getChatBanStatus = async (customerId: number) => {
@@ -1403,29 +1291,27 @@ export const getChatBanStatus = async (customerId: number) => {
 };
 
 /**
- * Persist a CUSTOMER live-chat message (the socket `send_message` path).
- * Mirrors sendAdminChatMessage but writes customerId (not adminId) and
- * isAdmin:false. Returns the Mongo-ish shape the socket emits as `new_message`.
+ * Persist a customer live-chat message (socket `send_message`): like
+ * sendAdminChatMessage but writes customerId and isAdmin:false. Returns the shape the
+ * socket emits as `new_message`.
  */
 export const sendCustomerChatMessage = async (input: { liveClassId: string; customerId: number | null; userName?: string | null; message: string; isPrivate?: boolean }) => {
   const now = new Date();
-  // isPrivate is the mode active at SEND time. It is never rewritten when the
-  // host toggles later — that is what lets both histories coexist and be served
-  // one at a time.
+  // isPrivate is the mode active at send time and is never rewritten when the host
+  // toggles later, so both histories coexist and are served one at a time.
   const created = await repo.createChatMessage({ liveClassId: input.liveClassId, customerId: input.customerId, adminId: null, isAdmin: false, isPrivate: !!input.isPrivate, userName: input.userName ?? "", message: input.message, createdAt: now, updatedAt: now });
   return { _id: String(created.id), liveClassId: created.liveClassId, customerId: idStrOrNull(created.customerId), userName: created.userName, message: created.message, isPrivate: created.isPrivate, createdAt: created.createdAt };
 };
 
-/** True iff this customer currently has a chat ban (socket send_message guard). */
+/** Socket send_message guard. */
 export const isCustomerChatBanned = async (customerId: number): Promise<boolean> =>
   !!(await repo.chatBanForCustomer(customerId));
 
 export const sendAdminChatMessage = async (input: { liveClassId: string; adminId: number | null; userName?: string | null; message: string; isPrivate?: boolean; targetCustomerId?: number | null }) => {
   const now = new Date();
-  // targetCustomerId addresses a private reply to ONE student, so it reaches them
-  // and the admins and nobody else — a reply meant for one student must not land in
-  // another's thread. Left null, a private host message goes to the whole room:
-  // private mode hides students from each other, not the host from the class.
+  // targetCustomerId addresses a private reply to one student (they and the admins see
+  // it, nobody else). Left null, a private host message goes to the whole room: private
+  // mode hides students from each other, not the host from the class.
   const created = await repo.createChatMessage({ liveClassId: input.liveClassId, customerId: null, adminId: input.adminId, isAdmin: true, isPrivate: !!input.isPrivate, targetCustomerId: input.isPrivate ? input.targetCustomerId ?? null : null, userName: input.userName ?? "Admin", message: input.message, createdAt: now, updatedAt: now });
   return { _id: String(created.id), liveClassId: created.liveClassId, userName: created.userName, message: created.message, isAdmin: true, isPrivate: created.isPrivate, targetCustomerId: idStrOrNull(created.targetCustomerId), createdAt: created.createdAt };
 };
@@ -1442,7 +1328,7 @@ export const deleteChatMessage = async (id: number, deletedBy: number | null): P
 export const listChatBans = async () => {
   const bans = await repo.listChatBans();
   const custs = new Map((await repo.customersByIds([...new Set(bans.map((b) => b.customerId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  // liveClassId is a LiveSession Streamos streamId string — resolve to a session so the panel can show which live session the ban is from.
+  // liveClassId is a LiveSession StreamOS streamId; resolve it so the panel can show the session.
   const sessions = new Map((await repo.sessionsByStreamIds([...new Set(bans.map((b) => b.liveClassId).filter((x): x is string => !!x && x.trim() !== ""))])).map((s) => [s.streamId, s]));
   return bans.map((b) => {
     const c = b.customerId != null ? custs.get(b.customerId) : undefined;
@@ -1470,16 +1356,15 @@ export const unbanCustomerFromChat = async (customerId: number): Promise<boolean
   return r.count > 0;
 };
 
-// ── chat settings (per liveClassId) ─────────────────────────────────────────────
 export interface ChatSettings {
   chatEnabled: boolean;
   privateChat: boolean;
 }
 
-/** Defaults preserve today's behavior: chat on, public. */
+/** Defaults: chat on, public. */
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = { chatEnabled: true, privateChat: false };
 
-/** Current settings for a live class — defaults when no row saved. */
+/** Defaults when no row is saved. */
 export const getChatSettings = async (liveClassId: string): Promise<ChatSettings> => {
   const row = await repo.chatSettingFor(liveClassId);
   return row
@@ -1487,7 +1372,7 @@ export const getChatSettings = async (liveClassId: string): Promise<ChatSettings
     : { ...DEFAULT_CHAT_SETTINGS };
 };
 
-/** Persist a partial settings patch (upsert); returns the FULL updated object. */
+/** Upserts a partial patch; returns the full updated object. */
 export const updateChatSettings = async (
   liveClassId: string,
   patch: { chatEnabled?: boolean; privateChat?: boolean }
@@ -1496,7 +1381,6 @@ export const updateChatSettings = async (
   return { chatEnabled: row.chatEnabled, privateChat: row.privateChat };
 };
 
-// ── polls ──────────────────────────────────────────────────────────────────────
 const toPollDto = (p: any, options: any[]) => ({
   _id: String(p.id),
   liveClassId: p.liveClassId,
@@ -1521,15 +1405,11 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
 };
 
 /**
- * Record a student's vote (the socket `submit_vote` path). Validates the poll
- * exists, is active and the option index is in range, then records the vote and
- * bumps counters. Returns the FULL fresh poll DTO (`toPollDto`: _id, liveClassId,
- * question, options[{text,votes}], totalVotes, isActive, …) so the socket can
- * broadcast the complete current poll on `poll_update` and the panel re-renders
- * exact tallies in place. Discriminated string results map to the socket's
- * existing error emits. ONE vote per (poll, customer): a second submit returns
- * `"already_voted"` and changes nothing — the lock is server-side, so a modified
- * client cannot move its vote. A new poll is a new pollId, so it can be answered.
+ * Record a student's vote (socket `submit_vote`). Validates the poll is active and the
+ * option index in range, then returns the full fresh poll DTO so the socket can
+ * broadcast exact tallies on `poll_update`. String results map to the socket's error
+ * emits. One vote per (poll, customer), locked server-side: a second submit returns
+ * "already_voted" and changes nothing. A new poll is a new pollId.
  */
 export const submitPollVote = async (
   pollId: number,
@@ -1547,11 +1427,10 @@ export const submitPollVote = async (
   if (!poll.isActive) return "closed";
   const options = await repo.pollOptions(pollId);
   if (optionIndex < 0 || optionIndex >= options.length) return "invalid_option";
-  // Existence check + insert + counter bumps run in ONE transaction, so two
-  // concurrent submits from the same customer cannot both count.
+  // Check + insert + counter bumps run in one transaction, so two concurrent submits from
+  // the same customer cannot both count.
   if (!(await repo.recordPollVoteOnce(pollId, customerId, optionIndex))) return "already_voted";
   const fresh = await repo.findPoll(pollId);
-  // Re-read from the fresh row so totalVotes/options reflect the vote just cast.
   return loadPollWithOptions(fresh ?? poll);
 };
 
@@ -1566,7 +1445,7 @@ export const getPollResults = async (pollId: number): Promise<"not_found" | any>
 };
 
 export const createPoll = async (input: { liveClassId: string; question: string; options: string[]; createdBy: number | null; createdByName?: string | null }) => {
-  // Close any currently-active poll for the class first (mirror Mongo).
+  // Close any currently active poll for the class first.
   const existingActive = await repo.activePoll(input.liveClassId);
   if (existingActive) await repo.closePoll(existingActive.id);
   const now = new Date();
@@ -1587,10 +1466,9 @@ export const updatePoll = async (pollId: number, patch: { question?: string; isA
 };
 
 /**
- * Edit an active poll's question and/or options — only permitted while the poll
- * is active AND has zero votes (mirrors the Mongo guard). Returns discriminated
- * strings for the guard failures so the controller maps them to the exact same
- * HTTP codes/messages; otherwise returns the poll DTO with reloaded options.
+ * Only permitted while the poll is active with zero votes. Guard failures return
+ * strings the controller maps to HTTP codes/messages; otherwise the poll DTO with
+ * reloaded options.
  */
 export const updatePollWithOptions = async (
   pollId: number,
@@ -1618,29 +1496,24 @@ export const deletePoll = async (pollId: number): Promise<boolean> => {
   return true;
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// Client live-course reads (Groups A + B) — SQL entitlement + listing/schedule
-// ════════════════════════════════════════════════════════════════════════════
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import { signMediaToken } from "../../utils/mediaToken";
 import { formatScheduledAt } from "../../utils/displayTime";
 
-// Streamos sometimes appends stray quote chars to recording paths — strip them
-// (mirrors sanitizeRecordingPath in client/live-course.controller).
+// StreamOS sometimes appends stray quote chars to recording paths; strip them.
 const sanitizeRecPath = <T extends string | null | undefined>(p: T): T =>
   (typeof p === "string" ? (p.replace(/(?:"|%22|%2522)+$/i, "") as T) : p);
 
-// Pick the single best (highest-resolution) MP4 url from a per-quality list, for
-// the convenience `mp4Url` field. Falls back to the first entry, or null when none.
+// Best (highest-resolution) MP4 url for the convenience `mp4Url` field; falls back to
+// the first entry, or null.
 const pickBestMp4 = (recs: Array<{ quality: string | null; path: string }>): string | null => {
   if (!recs.length) return null;
   const heightOf = (q: string | null) => Number(String(q ?? "").match(/(\d+)/)?.[1] ?? 0);
   return [...recs].sort((a, b) => heightOf(b.quality) - heightOf(a.quality))[0]?.path ?? recs[0].path ?? null;
 };
 
-// ── entitlement (ported from src/client/live-course/entitlement.ts; SQL) ──────
 export const hasAccessToAnyLiveCourse = async (customerId: number | null, liveCourseIds: number[]): Promise<boolean> => {
   if (!customerId || !liveCourseIds.length) return false;
   const subs = await repo.activeSubsForCourses(customerId, liveCourseIds, new Date());
@@ -1648,11 +1521,9 @@ export const hasAccessToAnyLiveCourse = async (customerId: number | null, liveCo
 };
 
 /**
- * Which of `liveCourseIds` actually grants access — the same active+verified
- * check as hasAccessToAnyLiveCourse, but it reports the WINNER so the client can
- * be told `accessGrantedByLiveCourseId`. Resolves in the caller's id order so a
- * course-scoped call (single id) and a Live Now call (all linked ids, in link
- * order) both give a stable, explainable answer. `null` = no entitlement.
+ * Like hasAccessToAnyLiveCourse but reports the winning course for
+ * `accessGrantedByLiveCourseId`. Resolves in the caller's id order so course-scoped
+ * (single id) and Live Now (all linked ids) calls give a stable answer. null = none.
  */
 export const firstEntitledLiveCourseId = async (
   customerId: number | null,
@@ -1665,6 +1536,7 @@ export const firstEntitledLiveCourseId = async (
   return liveCourseIds.find((id) => entitled.has(id)) ?? null;
 };
 
+// Days left per course from active subs (null = lifetime); empty for guests.
 export const getDaysLeftMap = async (customerId: number | null, liveCourseIds: number[]): Promise<Map<string, number | null>> => {
   const out = new Map<string, number | null>();
   if (!customerId || !liveCourseIds.length) return out;
@@ -1693,7 +1565,7 @@ export const getPurchaseCounts = async (liveCourseIds: number[]): Promise<Map<st
   return new Map([...m].map(([k, v]) => [String(k), v]));
 };
 
-// plan DTO with originalPrice/discountPercent enrichment (matches client listing).
+// Plan DTO with originalPrice/discountPercent enrichment (matches the client listing).
 const toClientPlan = (p: LiveCoursePlan) => {
   const original = p.originalPrice != null && p.originalPrice > p.price ? p.originalPrice : null;
   return {
@@ -1705,8 +1577,7 @@ const toClientPlan = (p: LiveCoursePlan) => {
   };
 };
 
-// ⚠ packageCategoryId is surfaced as the bare id (no Mongo populate — no SQL
-// ws_package_category table). courseEducatorId likewise bare id.
+// packageCategoryId and courseEducatorId are surfaced as bare ids.
 export const plansGrouped = async (courseIds: number[]) => {
   const plans = await repo.activePlansForCourses(courseIds);
   const byCourse = new Map<number, any[]>();
@@ -1714,19 +1585,15 @@ export const plansGrouped = async (courseIds: number[]) => {
   return byCourse;
 };
 
-// Split a course's flat plan list into the { withMaterial, withoutMaterial }
-// shape the client/courses detail + live-course detail endpoints use, so the
-// live-course listing matches that contract.
+// { withMaterial, withoutMaterial } split used by the client course and live-course
+// detail endpoints.
 export const splitPlansByMaterial = (arr: any[]) => ({
   withMaterial: arr.filter((p) => p.withMaterial),
   withoutMaterial: arr.filter((p) => !p.withMaterial),
 });
 
-// ── getLiveCourseForClient (detail) — SQL ────────────────────────────────────
-// Mongo populates courseEducatorId (name/image/about) + packageCategoryId
-// (title/slug/image) — both tables exist in SQL so we populate them too.
-// subjectsCount = schedule folders under the course (JSON); materialsCount has no
-// SQL home on ws_live_course → 0 (documented drift). Playback URLs never here.
+// courseEducatorId and packageCategoryId are populated. subjectsCount = schedule
+// folders (JSON); materialsCount has no column → 0. Never returns playback URLs.
 export const getLiveCourseDetailForClient = async (
   id: number,
   customerId: number | null,
@@ -1743,16 +1610,16 @@ export const getLiveCourseDetailForClient = async (
     getDaysLeftMap(customerId, [id]),
   ]);
 
-  // Deactivated live course stays hidden from non-owners (browse/purchase), but existing
-  // active subscribers keep full access to its detail + content.
+  // A deactivated live course stays hidden from non-owners, but active subscribers keep
+  // full access to its detail and content.
   if (!row.status && !subscribed) return "not_found";
 
   const planList = plansRaw
     .filter((p) => p.status)
     .sort((a, b) => a.price - b.price)
     .map((p) => toClientPlan(p));
-  // Split by material variant — mirrors the package detail contract
-  // (catalog-package.detail.sql.ts): plans: { withMaterial, withoutMaterial }.
+  // Split by material variant, same as the package detail contract
+  // (catalog-package.detail.sql.ts).
   const plans = {
     withMaterial: planList.filter((p) => p.withMaterial),
     withoutMaterial: planList.filter((p) => !p.withMaterial),
@@ -1776,38 +1643,28 @@ export const getLiveCourseDetailForClient = async (
   return { liveCourse, scope: { kind: "liveCourse", id: String(id) }, stats, plans, subscribed, isPaid: row.isPaid, isPurchased: subscribed, daysLeft, shareableLink };
 };
 
-// ── listMyLiveCourses — SQL ──────────────────────────────────────────────────
-
 // endAt sort key: a lifetime entitlement (endAt null) never expires → Infinity.
 const subEndKey = (endAt: Date | null | undefined) => (endAt ? endAt.getTime() : Infinity);
 
 /**
- * Collapse a customer's live-course subscription rows to ONE row per live course.
- *
- * Extend/renew CREATES a new subscription row (one order = one row) — that is the
- * table's contract and it stays untouched. But "My live courses" is an
- * ENTITLEMENT view, not an order history: after an in-app Extend Validity the
- * student must still see a single card whose validity simply moved further out,
- * not a second copy of the same course.
- *
- * Merge rule per course: the winning row is the strongest entitlement
- * (currently-active beats lapsed, then furthest endAt) — it carries the plan and
- * subscriptionId — while the card's window is widened to the whole span: the
- * EARLIEST start of the group and the FURTHEST end among the equally-strong rows
- * (lifetime, endAt null, wins outright). Same "furthest endAt per course" collapse
- * getDaysLeftMap already does, so the card's daysLeft matches every other surface.
+ * Collapse a customer's live-course subscription rows to one card per course. Extend
+ * creates a new row (one order = one row), but "My live courses" is an entitlement
+ * view: after Extend Validity the student sees one card whose validity moved out.
+ * The winner is the strongest entitlement (currently active beats lapsed, then
+ * furthest endAt) and carries plan + subscriptionId; the window spans the group's
+ * earliest start and the furthest end among equally strong rows (lifetime wins).
+ * Same collapse as getDaysLeftMap, so daysLeft matches every other surface.
  */
 const mergeLiveSubsPerCourse = <
   T extends { id: number; liveCourseId: number | null; startAt: Date | null; endAt: Date | null; status: boolean | null }
 >(rows: T[], now: Date): T[] => {
-  // Rank: is this row a live entitlement right now? Only the "all" filter can mix
-  // ranks — the active/expired filters already return one kind.
+  // Is this row a live entitlement now? Only the "all" filter can mix ranks.
   const rank = (s: T) => (s.status === true && (s.endAt == null || s.endAt.getTime() >= now.getTime()) ? 1 : 0);
 
   const groups = new Map<string, T[]>();
   const order: string[] = []; // preserve the repository's createdAt-desc ordering
   for (const s of rows) {
-    // Rows with no course attached can't be merged into anything — keep them as-is.
+    // Rows with no course attached can't be merged; keep them as-is.
     const key = s.liveCourseId != null && s.liveCourseId > 0 ? `l:${s.liveCourseId}` : `s:${s.id}`;
     const g = groups.get(key);
     if (g) g.push(s);
@@ -1833,16 +1690,11 @@ const mergeLiveSubsPerCourse = <
 };
 
 /**
- * The "sessions" behind the My Live Batches card, as unit key → its video ids.
- *
- * A unit is ONE class, not one ws_video row: the same recording can be filed into
- * several folders (promotion dedupes per folder), and counting rows showed
- * "1 of 3" for a course with two recorded classes. Live-linked rows therefore
- * collapse per live session; a manually added video is its own unit.
- *
- * Only playable rows count: a source id is present, and a live-linked row's
- * session is READY with recordings stored. A scheduled / live / still-processing
- * stream has no such row, so it never reaches the total.
+ * Sessions behind the My Live Batches card: unit key → video ids. A unit is one class,
+ * not one ws_video row: a recording filed into several folders must count once, so
+ * live-linked rows collapse per live session and a manual video is its own unit. Only
+ * playable rows count (source id present; a live-linked session is READY with
+ * recordings), so scheduled / live / processing streams never reach the total.
  */
 const recordingSessionUnits = async (folderIds: number[]): Promise<Map<string, number[]>> => {
   const units = new Map<string, number[]>();
@@ -1890,12 +1742,10 @@ export const listMyLiveCoursesForClient = async (
     : [];
   const eduById = new Map(educators.map((e) => [e.id, e]));
 
-  // Per-course progress for the card's bar / "X of Y sessions completed" label.
-  // A "session" here = a recorded lecture (the unit progress heartbeats actually
-  // drive), so numerator and denominator share one universe and the ratio stays
-  // sane (<=100%). total = the playable classes under the course's folders (see
-  // recordingSessionUnits); completed = the classes among THOSE the customer has
-  // finished in this live-course container — any one copy of a recording counts.
+  // "X of Y sessions completed": a session is a recorded class (the unit progress
+  // heartbeats drive), so the ratio stays <= 100%. total = playable classes under the
+  // course's folders (recordingSessionUnits); completed = those finished in this
+  // live-course container, any copy of a recording counting.
   const totalByCourse = new Map<number, number>();
   const doneByCourse = new Map<number, number>();
   await Promise.all(courseIds.map(async (id) => {
@@ -1932,9 +1782,8 @@ export const listMyLiveCoursesForClient = async (
       plan: p ? { _id: String(p.id), name: p.name, duration: p.duration, price: p.price } : null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
-      // These rows are already gated to PURCHASED subscriptions by the query
-      // (LIVE_SUB_PURCHASED → order.status = "complete"), so the answer is always
-      // "verified". Kept as a literal field so the DTO shape is unchanged.
+      // Rows are already gated to purchased subscriptions (LIVE_SUB_PURCHASED), so this is
+      // always "verified"; kept so the DTO shape is unchanged.
       paymentStatus: "verified",
       active,
       daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
@@ -1945,8 +1794,7 @@ export const listMyLiveCoursesForClient = async (
       },
     };
   });
-  // Optional name search + pagination over the resolved cards (subscription rows
-  // are hydrated in-memory, so paginate the assembled array via slice).
+  // Rows are hydrated in memory, so search + pagination run over the assembled array.
   const filtered = q.search
     ? liveCourses.filter((c) => matchesAllTokens(q.search, [c.liveCourse?.name]))
     : liveCourses;
@@ -1955,7 +1803,7 @@ export const listMyLiveCoursesForClient = async (
   return { liveCourses: paged, total, page: q.page, limit: q.limit };
 };
 
-// ── purchase options (ported from entitlement.buildPurchaseOptions; SQL) ──────
+// Active courses with their active plans (cheapest first) for purchase pickers.
 export const buildPurchaseOptionsSql = async (courseIds: number[]) => {
   if (!courseIds.length) return [];
   const [courses, plans] = await Promise.all([
@@ -1970,9 +1818,8 @@ export const buildPurchaseOptionsSql = async (courseIds: number[]) => {
   }));
 };
 
-// ── listLiveCourseRecordings (folders + lectures + per-quality) — SQL ──────────
-// Recordings are immutable once StreamOS finishes producing them, so a longish
-// cache is safe; capped so a re-processed/late recording is picked up within the hour.
+// Recordings are immutable once StreamOS produces them; the TTL still picks up a
+// re-processed/late recording within the hour.
 const VOD_META_CACHE_TTL_SEC = 3600;
 
 type VodRec = { quality: string | null; file_size: number | null; path: string };
@@ -1982,12 +1829,6 @@ interface CachedVodMeta {
   mp4: VodRec[];
 }
 
-/**
- * Resolve a session's StreamOS recording (VOD) into playable URLs via
- * get-vod-stream-meta, Redis-cached per streamId. Returns null on ANY failure so
- * the caller falls back to the stored webhook recordings — the accessKey never
- * leaves the server; only the resolved CDN URLs reach the client.
- */
 /** What resolveVodMeta needs off a session row to know where to resolve. */
 type VodSessionRef = {
   streamId: string | null;
@@ -1995,19 +1836,23 @@ type VodSessionRef = {
   recordedAssetId?: string | null;
 };
 
+/**
+ * Resolve a session's StreamOS VOD into playable URLs via get-vod-stream-meta,
+ * Redis-cached per id. null on any failure so the caller falls back to stored webhook
+ * recordings. The accessKey never leaves the server; only CDN URLs reach the client.
+ */
 const resolveVodMeta = async (session: VodSessionRef): Promise<CachedVodMeta | null> => {
   const streamId = String(session.streamId ?? "");
   if (!streamId) return null;
 
   const isV1 = providerOf(session) === "v1";
-  // v1 recordings are library ASSETS, addressed by asset id rather than stream
-  // id. Without one there is nothing to resolve yet — the recording either
+  // v1 recordings are library assets addressed by asset id. Without one the recording
   // hasn't landed or is still transcoding; the caller falls back to stored recs.
   const assetId = session.recordedAssetId ?? null;
   if (isV1 && !assetId) return null;
 
-  // Namespaced per provider: the two platforms have independent id spaces, so a
-  // shared key could serve a legacy resolution for a v1 id.
+  // Namespaced per provider: independent id spaces, so a shared key could serve a
+  // legacy resolution for a v1 id.
   const cacheKey = isV1 ? `vodmeta:v1:${assetId}` : `vodmeta:${streamId}`;
   try {
     const cached = await redisClient.get(cacheKey);
@@ -2025,7 +1870,7 @@ const resolveVodMeta = async (session: VodSessionRef): Promise<CachedVodMeta | n
       path: sanitizeRecPath(r.path),
     });
     const out: CachedVodMeta = { hlsUrl: meta.hlsUrl ?? null, hls: meta.hls.map(norm), mp4: meta.mp4.map(norm) };
-    // Only cache a non-empty resolution so a transient blip doesn't get pinned.
+    // Only cache a non-empty resolution so a transient blip isn't pinned.
     if (out.hlsUrl || out.hls.length || out.mp4.length) {
       try {
         await redisClient.set(cacheKey, JSON.stringify(out), "EX", VOD_META_CACHE_TTL_SEC);
@@ -2051,12 +1896,9 @@ const shapeStoredRecs = (raw: unknown): VodRec[] =>
     }));
 
 /**
- * Turn a set of recording Videos into client lecture DTOs — per-session VOD
- * resolution (with the stored-webhook fallback), media token and resume progress.
- *
- * Shared by the three recordings reads (full tree / folder summary / folder detail)
- * so every one of them emits a BYTE-IDENTICAL lecture object. The FE maps them with
- * the same code, so this must never fork per endpoint.
+ * Recording Videos → client lecture DTOs (VOD resolution with stored-webhook fallback,
+ * media token, resume progress). Shared by all three recordings reads so they emit
+ * byte-identical lectures; never fork it per endpoint.
  */
 const shapeRecordingLectures = async (
   courseId: number,
@@ -2066,7 +1908,7 @@ const shapeRecordingLectures = async (
 ): Promise<any[]> => {
   if (!videos.length) return [];
 
-  // per-quality recordings from the source live session
+  // Per-quality recordings from the source live session.
   const sessionIds = [...new Set(videos.map((v) => v.liveSessionId).filter((n): n is number => n != null))];
   const recBySession = new Map<number, VodRec[]>();
   // VOD-meta-resolved playable URLs per session (get-vod-stream-meta, cached).
@@ -2084,9 +1926,8 @@ const shapeRecordingLectures = async (
       },
     });
     for (const s of sessions) recBySession.set(s.id, shapeStoredRecs(s.recordings));
-    // Resolve the actually-playable URLs for each session's recording via
-    // StreamOS get-vod-stream-meta (cached). Failure-isolated per session — a
-    // session that can't resolve falls back to its stored webhook recordings.
+    // Playable URLs via StreamOS get-vod-stream-meta (cached), failure-isolated per
+    // session: one that can't resolve falls back to its stored webhook recordings.
     await Promise.all(
       sessions
         .filter((s) => !!s.streamId)
@@ -2096,7 +1937,6 @@ const shapeRecordingLectures = async (
     );
   }
 
-  // per-video resume progress
   const progByVideo = new Map<number, any>();
   if (customerId) {
     const rows = await prisma.lectureProgress.findMany({
@@ -2109,15 +1949,14 @@ const shapeRecordingLectures = async (
   return videos.map((v) => {
     const canPlay = subscribed || v.priceType === "free";
     const p = progByVideo.get(v.id);
-    // Keep only the CLEARTEXT metadata the list screen needs (qualities picker,
-    // preferred stream hint). No playable URL / source id is emitted — the client
-    // exchanges `mediaToken` at /media/resolve for the real (short-lived) URLs.
+    // Only cleartext metadata the list screen needs (qualities, preferred stream hint).
+    // No playable URL / source id: the client exchanges `mediaToken` at /media/resolve.
     const vod = v.liveSessionId ? vodBySession.get(v.liveSessionId) ?? null : null;
     const storedHls = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
     const hlsList = vod?.hls?.length ? vod.hls : storedHls;
     const hasHls = !!(vod?.hlsUrl || hlsList.length);
-    // Locked (unpurchased paid) → no token at all. Free → free token; purchased →
-    // scoped to the live course so resolve can re-check entitlement.
+    // Locked (unpurchased paid) → no token. Free → free token; purchased → scoped to the
+    // live course so resolve can re-check entitlement.
     const mediaToken =
       !canPlay || customerId == null
         ? null
@@ -2136,9 +1975,8 @@ const shapeRecordingLectures = async (
 };
 
 /**
- * Course + entitlement preamble shared by the recordings reads. Owner-aware: a
- * deactivated live course still serves its recordings to existing active
- * subscribers, but 404s for everyone else (non-owner / browse).
+ * Course + entitlement preamble for the recordings reads. A deactivated live course
+ * still serves recordings to active subscribers but 404s for everyone else.
  */
 const loadRecordingsContext = async (
   courseId: number,
@@ -2159,24 +1997,13 @@ const RECORDING_FOLDER_SELECT = { id: true, title: true, image: true, order_by: 
 type RecordingFolderRow = { id: number; title: string | null; slug?: string | null; image?: string | null; order_by?: number | null; status?: boolean | null; created_at?: Date | null; updated_at?: Date | null };
 
 /**
- * Hierarchy overlay for the recordings folder rows.
- *
- * Live-course folders NEST — admin createFolder(parentFolderId) writes a
- * `ws_video_category_relation` edge (see lcCreateFolder) — but the client reads
- * used to emit a FLAT list with no parent link, so the app could not render a
- * parent/child view.
- *
- * The emitted fields are the catalog directory contract, NOT a new shape:
- * `parent` / `childCategoryIds` / `havingChildDirectory` / `count`, exactly as
- * `client-catalog.catalogMaterials` + `catalogVideos` and the
- * `/client/{material,video,exam}-categories/:id/children` drill-downs already emit
- * them. `count` is context-dependent the same way: a directory node reports its
- * CHILD-FOLDER count, a leaf reports its own lecture count — a folder's direct
- * lecture count is 0 when its lectures live in sub-folders, and reporting that was
- * the confusing bit.
- *
- * Edges are scoped to this course's folders on BOTH ends, so a folder that also
- * hangs under another course's tree never leaks a foreign parent or child.
+ * Hierarchy overlay for recording folder rows (folders nest via
+ * ws_video_category_relation, see lcCreateFolder). Emits the catalog directory
+ * contract: `parent` / `childCategoryIds` / `havingChildDirectory` / `count`, as
+ * client-catalog.catalogMaterials/catalogVideos and the /children drill-downs do.
+ * `count`: a directory reports its child-folder count, a leaf its subtree lecture count.
+ * Edges are scoped to this course's folders on both ends, so a folder shared with
+ * another course never leaks a foreign parent or child.
  */
 const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
   const ids = folders.map((f) => f.id);
@@ -2186,8 +2013,8 @@ const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
         select: { parent: true, child: true, order: true },
       })
     : [];
-  // The relation table is a DAG; collapse to ONE parent per folder so `parent`
-  // stays single-valued (same rule the admin pickers use).
+  // The relation table is a DAG; collapse to one parent per folder so `parent` stays
+  // single-valued (same rule as the admin pickers).
   const primaryParent = primaryParentMap(edges);
   const childrenOf = new Map<number, number[]>();
   for (const e of [...edges].sort((a, b) => a.order - b.order || a.child - b.child)) {
@@ -2198,7 +2025,7 @@ const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
     childrenOf.set(e.parent, arr);
   }
   const childIds = (id: number): number[] => childrenOf.get(id) ?? [];
-  /** self + every descendant, cycle-guarded (the edge table is a DAG, not a tree). */
+  /** Self + every descendant, cycle-guarded. */
   const subtree = (id: number): number[] => {
     const out: number[] = [];
     const seen = new Set<number>();
@@ -2215,7 +2042,7 @@ const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
   return {
     childIds,
     subtree,
-    /** Top-level folders of this course — the ones with no parent INSIDE the course. */
+    /** Top-level folders of this course: no parent inside the course. */
     isRoot: (id: number) => (primaryParent.get(id) ?? 0) <= 0,
     meta: (id: number) => {
       const parent = primaryParent.get(id) ?? null;
@@ -2229,10 +2056,7 @@ const buildRecordingFolderTree = async (folders: RecordingFolderRow[]) => {
   };
 };
 
-/**
- * `count` per the catalog directory contract: directory node → its child-folder
- * count, leaf → the lectures in its own subtree.
- */
+/** Catalog directory `count`: directory → child-folder count, leaf → lectures in its subtree. */
 const folderCatalogCount = (
   tree: { childIds: (id: number) => number[]; subtree: (id: number) => number[] },
   lecturesByFolder: Map<number, number>,
@@ -2272,16 +2096,14 @@ export const getRecordingsForClient = async (
   });
 
   const tree = await buildRecordingFolderTree(folders);
-  // Lectures per folder, for the catalog-contract `count`.
   const lecturesByFolder = new Map<number, number>();
   for (const v of videos) {
     const fid = v.videoCategoryId as number;
     lecturesByFolder.set(fid, (lecturesByFolder.get(fid) ?? 0) + 1);
   }
-  // This mode stays FLAT (every folder, sub-folders included) on purpose: it is the
-  // "everything inline" reader and it ships each folder's `lectures[]`, so hiding
-  // sub-folders would hide lectures. The hierarchy fields let a caller group by
-  // `parent` itself. The TREE screen uses ?summary=1, which is roots-only.
+  // Deliberately flat (sub-folders included): this reader ships each folder's
+  // `lectures[]`, so hiding sub-folders would hide lectures. Callers can group by
+  // `parent`. The tree screen uses ?summary=1, which is roots-only.
   const allFolders = folders.map((f) => ({
     folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
     ...tree.meta(f.id),
@@ -2289,9 +2111,8 @@ export const getRecordingsForClient = async (
     lectures: byFolder.get(f.id) ?? [],
   }));
 
-  // Optional lecture-title search drops non-matching lectures (and now-empty
-  // folders); pagination is over the FOLDER list (the recordings screen renders
-  // folder-by-folder). totalLectures reflects the search-filtered universe.
+  // Lecture-title search drops non-matching lectures (and now-empty folders);
+  // pagination is over folders. totalLectures reflects the filtered set.
   const filteredFolders = q.search
     ? allFolders
         .map((f) => ({ ...f, lectures: f.lectures.filter((l) => matchesAllTokens(q.search, [l.title])) }))
@@ -2310,10 +2131,8 @@ export const getRecordingsForClient = async (
 };
 
 /**
- * Hub variant of getRecordingsForClient: folder name + lecture COUNT only.
- * Counts come from a SQL groupBy, so no Video rows, no StreamOS VOD resolution and
- * no media-token signing happen for a screen that only renders folder rows.
- * Pagination is over FOLDERS, same as the full response.
+ * Hub variant of getRecordingsForClient: folder name + lecture count only, from a SQL
+ * groupBy (no Video rows, VOD resolution or token signing). Paginated over folders.
  */
 export const getRecordingFolderSummaryForClient = async (
   courseId: number,
@@ -2340,10 +2159,8 @@ export const getRecordingFolderSummaryForClient = async (
   const countByFolder = new Map(counts.map((c) => [c.videoCategoryId as number, c._count._all]));
 
   const tree = await buildRecordingFolderTree(folders);
-  // Roots only — a sub-folder is reached through GET /recordings/:folderId/children,
-  // exactly like a material category is reached through
-  // /client/material-categories/:id/children. Listing children next to their own
-  // parent is what made the tree unrenderable.
+  // Roots only: sub-folders are reached through GET /recordings/:folderId/children,
+  // like material categories. Listing children beside their parent broke the tree.
   const allFolders = folders
     .filter((f) => tree.isRoot(f.id))
     .map((f) => ({
@@ -2352,9 +2169,8 @@ export const getRecordingFolderSummaryForClient = async (
       count: folderCatalogCount(tree, countByFolder, f.id),
       lectureCount: countByFolder.get(f.id) ?? 0,
     }));
-  // Search drops folders with nothing matching anywhere in their SUBTREE — a hit
-  // inside a sub-folder keeps the path to it walkable. Without a search term EVERY
-  // root folder is kept, including empty ones (count 0).
+  // Search keeps a folder if anything in its subtree matches, so the path to a hit stays
+  // walkable. Without a search every root is kept, including empty ones (count 0).
   const matchCount = (f: { folderId: string }) =>
     tree.subtree(Number(f.folderId)).reduce((n, id) => n + (countByFolder.get(id) ?? 0), 0);
   const filteredFolders = q.search ? allFolders.filter((f) => matchCount(f) > 0) : allFolders;
@@ -2370,10 +2186,10 @@ export const getRecordingFolderSummaryForClient = async (
 };
 
 /**
- * One folder's lectures, paginated BY LECTURE — the "open folder" screen. Same
- * entitlement rules as the full recordings response: the lecture list is always
- * returned, but a locked lecture carries no media token.
- */
+ /**
+  * One folder's lectures, paginated by lecture (the "open folder" screen). Same
+  * entitlement rules as the full response: locked lectures carry no media token.
+  */
 export const getRecordingFolderDetailForClient = async (
   courseId: number,
   folderId: number,
@@ -2384,10 +2200,8 @@ export const getRecordingFolderDetailForClient = async (
   if (ctx === "not_found") return "not_found";
   const { course, subscribed, daysLeft } = ctx;
 
-  // The whole course folder set is needed for the hierarchy overlay (parent chain
-  // + direct children); it is a handful of rows, and it is also what proves the
-  // folder belongs to THIS course — otherwise any folder id would be readable
-  // through any course id.
+  // The whole course folder set feeds the hierarchy overlay and proves the folder
+  // belongs to this course; otherwise any folder id would be readable via any course.
   const allFolders = await prisma.videoCategory.findMany({
     where: recordingFolderWhere(courseId),
     orderBy: RECORDING_FOLDER_ORDER,
@@ -2410,9 +2224,8 @@ export const getRecordingFolderDetailForClient = async (
   return {
     liveCourse: { _id: String(course.id), name: course.name, image: course.image },
     folderId: String(folder.id), title: folder.title, image: folder.image, order: folder.order_by,
-    // Catalog directory contract. `havingChildDirectory` is the FE's cue to call
-    // GET /recordings/:folderId/children — sub-folders are NOT inlined here, for
-    // the same reason material categories are not: they page separately.
+    // `havingChildDirectory` cues the FE to call GET /recordings/:folderId/children;
+    // sub-folders are not inlined because they page separately.
     ...tree.meta(folder.id),
     count: folderCatalogCount(tree, countByFolder, folder.id),
     lectureCount: total,
@@ -2424,16 +2237,10 @@ export const getRecordingFolderDetailForClient = async (
 };
 
 /**
- * GET /:id/recordings/:folderId/children — sub-folders of one recording folder,
- * paginated by folder.
- *
- * Deliberately the SAME composition as the other directory drill-downs
- * (`catalog-material.getCategoryChildren`, `catalog-video.getVideoCategoryChildren`,
- * behind `/client/{material,video,exam}-categories/:id/children`): returns
- * `{ parent, list: [{ category }] }` where each category carries `count` +
- * `havingChildDirectory`. The live-course variant exists because those generic
- * endpoints are not course-scoped — a folder id from another course would resolve
- * there, and this one 404s instead.
+ * GET /:id/recordings/:folderId/children: sub-folders of one recording folder, paginated.
+ * Same `{ parent, list: [{ category }] }` composition as catalog-material.getCategoryChildren
+ * and catalog-video.getVideoCategoryChildren, but course-scoped: a folder id from another
+ * course 404s here instead of resolving.
  */
 export const getRecordingFolderChildrenForClient = async (
   courseId: number,
@@ -2455,15 +2262,14 @@ export const getRecordingFolderChildrenForClient = async (
   const tree = await buildRecordingFolderTree(allFolders);
 
   const byId = new Map(allFolders.map((f) => [f.id, f]));
-  // Children keep their admin order (RECORDING_FOLDER_ORDER), not the edge order,
-  // so a folder sorts the same here as it does on the hub.
+  // Children keep their admin order (RECORDING_FOLDER_ORDER), not the edge order, so a
+  // folder sorts the same here as on the hub.
   const orderedChildIds = allFolders.map((f) => f.id).filter((id) => tree.childIds(folder.id).includes(id));
   const matching = orderedChildIds.filter((id) => matchesAllTokens(q.search, [byId.get(id)?.title ?? ""]));
   const pageIds = matching.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit);
 
-  // One groupBy over every folder in the page's subtrees, PLUS the parent's own —
-  // leaf `count` is a subtree lecture count, so the descendants must be counted
-  // too, and the parent row reports its own `lectureCount` like any hub row.
+  // One groupBy over the page's subtrees plus the parent: leaf `count` is a subtree
+  // lecture count, and the parent row reports its own `lectureCount` like any hub row.
   const countIds = [...new Set([folder.id, ...pageIds.flatMap((id) => tree.subtree(id))])];
   const counts = countIds.length
     ? await prisma.video.groupBy({ by: ["videoCategoryId"], where: { videoCategoryId: { in: countIds }, status: true }, _count: { _all: true } })
@@ -2490,7 +2296,7 @@ export const getRecordingFolderChildrenForClient = async (
   };
 };
 
-// ── getLiveCourseLecture: ownership check (controller does encryptLecture) ─────
+// Ownership check only; the controller does encryptLecture.
 export const clientLectureVideoInCourse = async (
   courseId: number,
   videoId: number
@@ -2505,7 +2311,6 @@ export const clientLectureVideoInCourse = async (
 export const isLectureEntitled = async (courseId: number, customerId: number | null, priceType: "free" | "paid"): Promise<boolean> =>
   priceType === "free" ? true : hasAccessToAnyLiveCourse(customerId, [courseId]);
 
-// ── listLiveCourseSessionRecordings — SQL (SCHEDULED/CREATED sessions) ─────────
 export const listSessionRecordingsForClient = async (
   courseId: number,
   customerId: number | null,
@@ -2515,8 +2320,8 @@ export const listSessionRecordingsForClient = async (
 ): Promise<"not_found" | { liveCourse: any; subscribed: boolean; total: number; page: number; limit: number; lectures: any[] }> => {
   const course = await repo.findById(courseId);
   if (!course) return "not_found";
-  // Owner-aware: deactivated live course still serves its session recordings to existing
-  // active subscribers; 404 for non-owners / browse.
+  // A deactivated live course still serves its session recordings to active
+  // subscribers; 404 for everyone else.
   if (!course.status && !(await hasAccessToAnyLiveCourse(customerId, [courseId]))) return "not_found";
 
   const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: courseId }, select: { liveSessionId: true } });
@@ -2536,35 +2341,25 @@ export const listSessionRecordingsForClient = async (
   return { liveCourse: { _id: String(course.id), name: course.name, image: course.image }, subscribed, total, page, limit, lectures };
 };
 
-// ── live-session preview/trial (ported from entitlement.resolveLivePreviewState; SQL) ──
-// Live-session preview/trial window length, in seconds. Relocated here from the
-// retired Mongo client/live-course/entitlement.ts (was `PREVIEW_SECONDS`).
+// Live-session preview/trial window length, in seconds.
 export const PREVIEW_SECONDS = 180;
 const LIVE_PREVIEW_SECONDS = PREVIEW_SECONDS;
 
 /**
- * How often the app is asked to heartbeat while playback is active. Published to
- * the client in the join response so the interval is a server decision, not a
- * hardcoded app constant that would need a release to change.
- */
+ /**
+  * Heartbeat interval while playback is active, published in the join response so it
+  * is a server decision rather than an app constant.
+  */
 export const PREVIEW_HEARTBEAT_SECONDS = 10;
 
 /**
- * The staleness ceiling, and the single most important number here: **the most
- * watch time one heartbeat may ever charge.**
- *
- * Consumption is charged as (now − last_heartbeat_at) whenever a heartbeat lands,
- * so if the app dies mid-window and never calls /preview/stop, the cursor sits
- * frozen at the last heartbeat. Without a cap, coming back an hour later would
- * bill the entire hour. Capping the charge at one missed interval plus slack
- * means an abandoned window costs at most this many seconds — which is exactly
- * the "BE must automatically stop an active tracking window when heartbeats
- * become stale" requirement, implemented without needing a sweeper job: the
- * window self-limits instead of being closed on a timer.
- *
- * Must stay > PREVIEW_HEARTBEAT_SECONDS or ordinary jitter would under-charge
- * every single tick.
- */
+ /**
+  * The most watch time one heartbeat may ever charge. Consumption is charged as
+  * (now − last_heartbeat_at), so if the app dies without /preview/stop the cursor
+  * freezes; without a cap, returning an hour later would bill the hour. Capping at one
+  * missed interval plus slack makes an abandoned window self-limit, no sweeper needed.
+  * Must stay > PREVIEW_HEARTBEAT_SECONDS or ordinary jitter under-charges every tick.
+  */
 export const PREVIEW_STALE_SECONDS = 20;
 
 export type LivePreviewStateSql = {
@@ -2575,18 +2370,13 @@ export type LivePreviewStateSql = {
 };
 
 /**
- * Watch time owed by a still-open window but not yet committed to
- * `consumed_seconds`.
- *
- * A read (join, /media/resolve, the list feed) must include this or a client that
- * heartbeats and immediately re-joins would see its remaining time snap back up
- * by up to one interval. It is capped by PREVIEW_STALE_SECONDS exactly as the
- * heartbeat's own charge is, so a read and the heartbeat that follows it agree,
- * and an abandoned window stops growing rather than draining the trial.
- *
- * Reads stay READ-ONLY — this is computed, never persisted. Only a heartbeat or a
- * stop may advance `consumed_seconds`.
- */
+ /**
+  * Watch time owed by a still-open window but not yet committed to `consumed_seconds`.
+  * Reads include it, or a client that heartbeats and re-joins would see its remaining
+  * time snap back up. Capped by PREVIEW_STALE_SECONDS like the heartbeat charge, so the
+  * two agree and an abandoned window stops growing. Computed only, never persisted:
+  * only a heartbeat or stop advances `consumed_seconds`.
+  */
 const pendingPreviewCharge = (lastHeartbeatAt: Date | null | undefined, now: Date): number => {
   if (!lastHeartbeatAt) return 0; // window closed → nothing accruing
   const elapsed = Math.floor((now.getTime() - lastHeartbeatAt.getTime()) / 1000);
@@ -2603,31 +2393,22 @@ const previewRemainingFrom = (
   return Math.max(0, LIVE_PREVIEW_SECONDS - Math.min(LIVE_PREVIEW_SECONDS, consumed));
 };
 
-/** The trial row for one (customer, session), oldest-wins. See the note in resolveLivePreviewStateSql. */
+/** The trial row for one (customer, session), oldest wins (see resolveLivePreviewStateSql). */
 const oldestPreviewRow = (customerId: number, liveSessionId: number) =>
   prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId }, orderBy: { id: "asc" } });
 
 /**
- * Access decision for one live session, for one caller.
+ * Access decision for one live session and caller. `liveCourseIds` is the entitlement
+ * scope: opened from a course → `[thatCourseId]` only, so owning a different course
+ * linked to the same shared session does not unlock it; opened from Live Now → every
+ * linked course, any active one grants full access.
  *
- * `liveCourseIds` IS the entitlement scope and the caller owns that choice:
- *   - opened FROM a course → pass just `[thatCourseId]`, so owning a *different*
- *     course linked to the same shared session does NOT unlock it;
- *   - opened from Live Now (no course selected) → pass every linked course, and
- *     any active one grants full access.
+ * The trial row is keyed on (customer, session), not course, so re-entering via another
+ * unpurchased course, device or reinstall continues the same window.
  *
- * The preview (trial) row is keyed on `(customer, session)` — NOT on the course —
- * so re-entering the same shared session through another unpurchased course, a
- * new device, or a reinstall continues the SAME 180s window instead of minting a
- * fresh one.
- *
- * `track` means "the student can actually watch right now" (the session is not
- * SCHEDULED). It gates ROW CREATION only, and creation is now cheap: a new row
- * starts at `consumed_seconds = 0` with no open window, so it reserves the trial
- * without spending any of it. Consumption begins at the first heartbeat, never
- * here — READS NEVER CHARGE. That is what makes "time does not continue
- * decreasing after leaving the stream" true: with no heartbeats arriving, no
- * amount of re-joining moves the number.
+ * `track` (session is not SCHEDULED) gates row creation only. A new row starts at
+ * consumed_seconds = 0 with no open window; consumption begins at the first heartbeat.
+ * Reads never charge, so re-joining without heartbeats never moves the number.
  */
 export const resolveLivePreviewStateSql = async (
   customerId: number | null,
@@ -2635,31 +2416,27 @@ export const resolveLivePreviewStateSql = async (
   liveCourseIds: number[],
   track: boolean
 ): Promise<LivePreviewStateSql> => {
-  // A session linked to no course is gated by nothing — nothing to purchase.
+  // A session linked to no course is ungated.
   if (!liveCourseIds.length) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
   const grantedBy = await firstEntitledLiveCourseId(customerId, liveCourseIds);
-  // Full access short-circuits BEFORE any preview row is touched, so a paying
-  // student never gets a tracking record.
+  // Full access short-circuits before any preview row is touched, so a paying student
+  // never gets a tracking record.
   if (grantedBy != null) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: grantedBy };
   if (!customerId) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
 
   const now = new Date();
-  // Always the EARLIEST row: should a race (or a pre-unique-index duplicate) have
-  // written two, the first one still bounds the window — a second concurrent
-  // request can never restart the clock.
+  // Always the earliest row: if a race (or a pre-unique-index duplicate) wrote two, the
+  // first still bounds the window, so a concurrent request can never restart the clock.
   let preview = await oldestPreviewRow(customerId, liveSessionId);
 
   if (!preview) {
-    // Nothing watched yet. Don't create a row for a session that cannot be played
-    // (SCHEDULED): report the untouched allowance read-only.
+    // Nothing watched yet. Don't create a row for a SCHEDULED (unplayable) session; report
+    // the untouched allowance read-only.
     if (!track) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
-    // createMany({ skipDuplicates }) → `INSERT IGNORE`, so losing the race against
-    // uq_live_session_preview_customer_session is a no-op instead of a thrown
-    // P2002 that Prisma's `log: ["warn","error"]` would print on every concurrent
-    // open. It leans on the DB constraint rather than a schema.prisma @@unique, so
-    // no Prisma client regeneration is needed and an environment where the index
-    // is not applied yet still behaves correctly — it just inserts a duplicate,
-    // which the oldest-row-wins read below renders harmless.
+    // createMany({ skipDuplicates }) → INSERT IGNORE, so losing the race against
+    // uq_live_session_preview_customer_session is a no-op rather than a logged P2002. It
+    // relies on the DB constraint, not a schema.prisma @@unique; where the index is missing
+    // a duplicate is inserted, which oldest-row-wins renders harmless.
     await prisma.liveSessionPreview.createMany({
       data: [{ customerId, liveSessionId, startedAt: now, consumedSeconds: 0, lastHeartbeatAt: null, createdAt: now }],
       skipDuplicates: true,
@@ -2674,29 +2451,22 @@ export const resolveLivePreviewStateSql = async (
     : { accessLevel: "preview_ended", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
 };
 
-// ── preview heartbeat / stop (watch-time accounting) ──────────────────────────
-
 export type LivePreviewTickSql = LivePreviewStateSql & { previewTrackingId: string | null };
 
 /**
- * Commit the watch time owed by an open window, then leave the window open
- * (`keepOpen`, a heartbeat) or closed (a stop / pause).
- *
- * **Why a compare-and-swap rather than a read-modify-write.** Two devices — or a
- * heartbeat racing the retry of a dropped one — can read the same cursor, both
- * compute the same charge, and both add it: the trial would drain at 2× on two
- * devices, which is precisely the "multiple concurrent heartbeats must not
- * multiply preview consumption" failure. Guarding the UPDATE on the cursor value
- * we read makes the pair atomic: exactly one writer wins, the loser observes
- * `count === 0` and re-reads WITHOUT charging. Since every writer advances the
- * one shared cursor, total consumption can never exceed the wall-clock time in
- * which at least one device was playing, no matter how many devices there are.
- *
- * A single conditional UPDATE also keeps this correct under the IST middleware —
- * it shifts `where` args and `data` args alike, so the cursor round-trips
- * consistently. Hand-written raw SQL would bypass that shift and mis-compare by
- * 5.5 hours.
- */
+ /**
+  * Commit the watch time owed by an open window, leaving it open (`keepOpen`, a
+  * heartbeat) or closed (stop / pause).
+  *
+  * Compare-and-swap, not read-modify-write: two devices (or a heartbeat racing a retry)
+  * can read the same cursor and both add the same charge, draining the trial at 2×.
+  * Guarding the UPDATE on the cursor value read makes exactly one writer win; the loser
+  * sees `count === 0` and re-reads without charging. Total consumption therefore never
+  * exceeds the wall-clock time at least one device was playing.
+  *
+  * A single conditional UPDATE also stays correct under the IST middleware (it shifts
+  * `where` and `data` alike); raw SQL would bypass the shift and mis-compare by 5.5h.
+  */
 const commitPreviewTick = async (
   customerId: number,
   liveSessionId: number,
@@ -2706,9 +2476,8 @@ const commitPreviewTick = async (
   let preview = await oldestPreviewRow(customerId, liveSessionId);
 
   if (!preview) {
-    // First heartbeat with no prior join (or a SCHEDULED session that never made
-    // a row). Open the window charging NOTHING — there is no cursor to measure
-    // from, and inventing one would bill time we never observed.
+    // First heartbeat with no prior join (or a SCHEDULED session that never made a row).
+    // Open the window charging nothing: there is no cursor to measure from.
     if (!keepOpen) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
     await prisma.liveSessionPreview.createMany({
       data: [{ customerId, liveSessionId, startedAt: now, consumedSeconds: 0, lastHeartbeatAt: now, createdAt: now }],
@@ -2716,27 +2485,26 @@ const commitPreviewTick = async (
     });
     preview = await oldestPreviewRow(customerId, liveSessionId);
     if (!preview) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
-    // Lost the insert race: fall through and treat the winner's row as ours.
+    // Lost the insert race: treat the winner's row as ours.
   }
 
   const charge = pendingPreviewCharge(preview.lastHeartbeatAt, now);
   const consumed = Math.min(LIVE_PREVIEW_SECONDS, Math.max(0, preview.consumedSeconds) + charge);
-  // Once the allowance is gone the window is closed regardless of `keepOpen`:
-  // there is nothing left to meter, and leaving a cursor behind would make the
-  // next read compute a phantom pending charge against an already-empty trial.
+  // Once the allowance is gone the window closes regardless of `keepOpen`; a leftover
+  // cursor would make the next read compute a phantom pending charge.
   const exhausted = consumed >= LIVE_PREVIEW_SECONDS;
   const nextCursor = keepOpen && !exhausted ? now : null;
 
   const written = await prisma.liveSessionPreview.updateMany({
-    // CAS: `lastHeartbeatAt: <value read>` compiles to `= ?` or `IS NULL`, so a
-    // concurrent writer that already moved the cursor makes this match 0 rows.
+    // CAS: `lastHeartbeatAt: <value read>` compiles to `= ?` or `IS NULL`, so a concurrent
+    // writer that already moved the cursor makes this match 0 rows.
     where: { id: preview.id, lastHeartbeatAt: preview.lastHeartbeatAt ?? null },
     data: { consumedSeconds: consumed, lastHeartbeatAt: nextCursor },
   });
 
   if (written.count === 0) {
-    // Someone else committed first. Their charge covers this same interval — the
-    // cursor is shared — so report their result instead of double-billing.
+    // Someone else committed first; their charge covers this interval (shared cursor), so
+    // report their result instead of double-billing.
     const fresh = await oldestPreviewRow(customerId, liveSessionId);
     const remaining = fresh
       ? previewRemainingFrom(fresh.consumedSeconds, fresh.lastHeartbeatAt, now)
@@ -2753,16 +2521,11 @@ const commitPreviewTick = async (
 };
 
 /**
- * POST /client/live-sessions/:id/preview/heartbeat — "still watching".
- *
- * `isPlaying: false` is treated as a stop: the app telling us playback paused is
- * the same fact as the app telling us it left, and honouring it here means a
- * pause is metered correctly even when the app never gets to send /preview/stop.
- *
- * `liveCourseIds` is the entitlement scope, exactly as on the join endpoint — a
- * heartbeat from an unpurchased course entry point must NOT be judged against
- * every linked course, or owning one linked course would silently report `full`
- * and stop metering a trial the student is genuinely consuming.
+ * POST /client/live-sessions/:id/preview/heartbeat ("still watching").
+ * `isPlaying: false` is treated as a stop, so a pause is metered even if the app never
+ * sends /preview/stop. `liveCourseIds` is the entitlement scope as on join: judging a
+ * heartbeat from an unpurchased entry point against every linked course would report
+ * `full` and stop metering a trial the student is consuming.
  */
 export const previewHeartbeatSql = async (
   customerId: number,
@@ -2781,13 +2544,10 @@ export const previewHeartbeatSql = async (
 };
 
 /**
- * POST /client/live-sessions/:id/preview/stop — pause, background, navigate away.
- *
- * Idempotent by construction: it commits whatever the open window owes and clears
- * the cursor. A second call finds `last_heartbeat_at` already NULL, so
- * `pendingPreviewCharge` returns 0 and the CAS rewrites the same values — the
- * remaining time it reports is identical. Stopping a trial that was never started
- * is likewise a no-op.
+ * POST /client/live-sessions/:id/preview/stop (pause, background, navigate away).
+ * Idempotent: commits what the open window owes and clears the cursor; a second call
+ * finds `last_heartbeat_at` NULL, so `pendingPreviewCharge` is 0 and the CAS rewrites
+ * the same values. Stopping a never-started trial is a no-op.
  */
 export const previewStopSql = async (
   customerId: number,
@@ -2804,10 +2564,9 @@ export const previewStopSql = async (
 };
 
 /**
- * Read-only batch preview lookup for LIST endpoints (Live Now): the accessLevel
- * a non-owner would get, WITHOUT starting anyone's clock. Only
- * resolveLivePreviewStateSql(track=true) — i.e. actually opening the player —
- * may create a preview row.
+ * Read-only batch preview lookup for list endpoints (Live Now): the accessLevel a
+ * non-owner would get, without starting anyone's clock. Only
+ * resolveLivePreviewStateSql(track=true), i.e. opening the player, may create a row.
  */
 export const previewLevelMapSql = async (
   customerId: number | null,
@@ -2823,16 +2582,14 @@ export const previewLevelMapSql = async (
   const now = new Date();
   for (const r of rows) {
     if (r.liveSessionId == null || out.has(r.liveSessionId)) continue; // first (oldest) row wins
-    // Same watch-time rule as the detail endpoint, including any open window's
-    // uncommitted time — a card must not advertise "preview" for a trial the
-    // player would immediately end. Still strictly read-only: nothing is charged.
+    // Same watch-time rule as the detail endpoint, including an open window's uncommitted
+    // time, so a card never advertises a trial the player would end at once. Never charges.
     const remaining = previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now);
     out.set(r.liveSessionId, { accessLevel: remaining > 0 ? "preview" : "preview_ended", previewSecondsRemaining: remaining });
   }
   return out;
 };
 
-// ── recording auto-promote (ported from recording.promote.maybeAutoPromoteRecording; SQL) ──
 const normalizeSubjectKey = (s?: string | null): string | null => {
   if (typeof s !== "string") return null;
   const k = s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -2847,10 +2604,9 @@ const pickRecording = (recs: any[]): any | null => {
   return recs[0] ?? null;
 };
 /**
- * Silent best-effort (never throws): file the best recording into each linked
- * course's CHOSEN folder (ws_live_session_course.folder_id, picked at
- * create/update). Courses with no folder chosen are skipped. Idempotent per
- * folder (dedupe by aws_id=path).
+ * Best-effort, never throws: files the best recording into each linked course's chosen
+ * folder (ws_live_session_course.folder_id). Courses without a folder are skipped.
+ * Idempotent per folder (dedupe by aws_id = path).
  */
 export const maybeAutoPromoteRecordingSql = async (session: {
   id: number; title: string | null; recordings: any;
@@ -2881,7 +2637,7 @@ export const maybeAutoPromoteRecordingSql = async (session: {
   } catch { /* non-fatal */ }
 };
 
-// ── listLiveCoursesForClient ────────────────────────────────────────────────
+// Client listing with daysLeft/isPurchased/plans; top-2 upcoming by sales get hero card variants.
 export const listClient = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   const now = Date.now();
   const [rows, total] = await Promise.all([
@@ -2890,7 +2646,7 @@ export const listClient = async (customerId: number | null, q: { search?: string
   ]);
   const ids = rows.map((r) => r.id);
   const [daysLeft, counts, owned, plans] = await Promise.all([getDaysLeftMap(customerId, ids), getPurchaseCounts(ids), getOwnedCourseIds(customerId), plansGrouped(ids)]);
-  // hero ranking: top-2 upcoming by purchase count
+  // Hero ranking: top-2 upcoming by purchase count.
   const upcoming = rows.filter((r) => r.startTime && r.startTime.getTime() > now).map((r) => ({ id: String(r.id), score: counts.get(String(r.id)) ?? 0 })).sort((a, b) => b.score - a.score);
   const featuredId = upcoming[0]?.id ?? null, comingSoonId = upcoming[1]?.id ?? null;
   const liveCourses = rows.map((r) => {
@@ -2900,11 +2656,9 @@ export const listClient = async (customerId: number | null, q: { search?: string
   return { liveCourses, total, page: q.page, limit: q.limit };
 };
 
-// ── Recently Added Live Courses (standalone API) ─────────────────────────────
-// Newest active live courses (pure createdAt desc — NOT the listing's
-// ordered-first sort), decorated with the SAME plans / daysLeft / isPurchased
-// contract as listClient so a card here and the /client/live-courses listing
-// agree. No hero ranking (that's listing-only). Paginated.
+// Newest active live courses (createdAt desc, not the listing's ordered-first sort),
+// with the same plans / daysLeft / isPurchased contract as listClient so cards agree.
+// No hero ranking.
 export const listRecentLiveCourses = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   const where: Prisma.LiveCourseWhereInput = { status: true };
   const nameSearch = buildPrismaSearch(q.search, ["name"]);
@@ -2932,7 +2686,6 @@ export const listRecentLiveCourses = async (customerId: number | null, q: { sear
   return { liveCourses, total, page: q.page, limit: q.limit };
 };
 
-// ── listUpcomingLiveBatches ──────────────────────────────────────────────────
 export const listUpcomingBatches = async (customerId: number | null, q: { search?: string; categoryId?: number; page: number; limit: number }) => {
   const now = new Date();
   const [rows, total, catCounts] = await Promise.all([
@@ -2943,8 +2696,8 @@ export const listUpcomingBatches = async (customerId: number | null, q: { search
   const ids = rows.map((r) => r.id);
   const [daysLeft, counts, owned] = await Promise.all([getDaysLeftMap(customerId, ids), getPurchaseCounts(ids), getOwnedCourseIds(customerId)]);
   const liveBatches = rows.map((r) => { const key = String(r.id); return { ...toCourseDto(r), daysLeft: daysLeft.has(key) ? daysLeft.get(key) ?? null : null, isPurchased: owned.has(key), purchaseCount: counts.get(key) ?? 0 }; });
-  // category tab bar: resolve PackageCategory (ws_package_category) for title/slug/
-  // image; unknown ids fall back to nulls. The "All" count is the sum.
+  // Category tab bar from ws_package_category; unknown ids fall back to nulls. The
+  // "All" count is the sum.
   const catRows = await repo.packageCategoriesByIds([...catCounts.keys()]);
   const catById = new Map(catRows.map((c) => [c.id, c]));
   const categories = [...catCounts].map(([catId, count]) => {
@@ -2955,7 +2708,7 @@ export const listUpcomingBatches = async (customerId: number | null, q: { search
   return { liveBatches, total, page: q.page, limit: q.limit, categories, allCount, selectedCategoryId: q.categoryId ? String(q.categoryId) : null };
 };
 
-// ── listMyLiveCourses ────────────────────────────────────────────────────────
+// Courses the customer currently owns, with daysLeft and plans.
 export const listMyCourses = async (customerId: number | null) => {
   if (!customerId) return { liveCourses: [], total: 0 };
   const ownedIds = await repo.ownedCourseIds(customerId, new Date());
@@ -2964,15 +2717,11 @@ export const listMyCourses = async (customerId: number | null) => {
   return { liveCourses, total: liveCourses.length };
 };
 
-// ── cross-course session feeds (all-upcoming / live-now / my-upcoming) ────────
 /**
- * One row per PHYSICAL session — a session shared by several courses appears
- * exactly once (repo dedupes on session id), carrying ALL of its linked courses.
- *
- * Per-row entitlement fields (`liveCourses[].isPurchased`, `subscribed`,
- * `accessLevel`) are resolved in two batched queries for the whole page, not one
- * pair per row. They are UI HINTS ONLY — tapping through re-runs the real gate in
- * GET /client/live-sessions/:id, which is the sole authority.
+ * One row per physical session (repo dedupes shared sessions), carrying all linked
+ * courses. Entitlement fields (`liveCourses[].isPurchased`, `subscribed`, `accessLevel`)
+ * are resolved in two batched queries per page and are UI hints only; GET
+ * /client/live-sessions/:id re-runs the real gate.
  */
 const sessionFeed = async (
   courseIds: number[],
@@ -3001,8 +2750,8 @@ const sessionFeed = async (
       .map((id) => courseById.get(id))
       .filter((c): c is NonNullable<typeof c> => Boolean(c))
       .map((c) => ({ _id: String(c.id), name: c.name, image: c.image ?? null, isPurchased: owned.has(String(c.id)) }));
-    // Live Now semantics: owning ANY linked course is full access. A session with
-    // no linked course is ungated (nothing to buy), matching the detail endpoint.
+    // Owning any linked course is full access. A session with no linked course is
+    // ungated, matching the detail endpoint.
     const subscribed = ids.length === 0 || liveCourses.some((c) => c.isPurchased);
     return {
       ...toSessionDto(s),
@@ -3010,8 +2759,8 @@ const sessionFeed = async (
       liveCourseIds: ids.map(String),
       liveCourses,
       subscribed,
-      // Same numbers the detail endpoint reports: full → 0, untouched trial → the
-      // whole allowance, partly-used trial → what is left (read-only, never charged).
+      // Same numbers as the detail endpoint: full → 0, untouched trial → the whole
+      // allowance, partly used → what is left (read-only).
       accessLevel: subscribed ? "full" : previewLevels.get(s.id)?.accessLevel ?? "preview",
       previewSecondsRemaining: subscribed ? 0 : previewLevels.get(s.id)?.previewSecondsRemaining ?? LIVE_PREVIEW_SECONDS,
     };
@@ -3020,7 +2769,7 @@ const sessionFeed = async (
 };
 
 export const listAllUpcomingSessions = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
-  // All visible courses' upcoming sessions (discovery feed) — every active course.
+  // Discovery feed: upcoming sessions of every active course.
   const all = await repo.listClientCourses({ now: new Date(), sort: "ordered", skip: 0, take: 1000 });
   return sessionFeed(all.map((c) => c.id), customerId, "upcoming", q.search, q.page, q.limit);
 };
@@ -3036,7 +2785,6 @@ export const listMyUpcomingSessions = async (customerId: number | null, q: { sea
   return sessionFeed(owned, customerId, "upcoming", q.search, q.page, q.limit);
 };
 
-// ── sessions for one course (client) ──────────────────────────────────────────
 export const listSessionsForCourseClient = async (id: number, q: { status?: string; upcoming?: string; search?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
   return listSessionsForCourse(id, q); // same shape as the admin sessions-for-course
 };
@@ -3049,10 +2797,9 @@ export const getScheduleFolderForClient = async (id: number, folderId: string): 
   return { scheduleFolder: { _id: folder._id, title: folder.title, image: folder.image ?? null, order: folder.order ?? 0, status: folder.status !== false, entries: [...(folder.entries ?? [])].sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)) } };
 };
 
-// ── GET /:id/schedule (timetable + scheduleFolders) — SQL ─────────────────────
-// Mirrors the Mongo getLiveCourseSchedule contract: timetable = sessions with a
-// scheduledAt (educator populated), scheduleFolders = the course's active folder
-// JSON, plus daysLeft. Session educator comes from ws_live_session.educator_id.
+// timetable = sessions with a scheduledAt (session educator from
+// ws_live_session.educator_id, populated), scheduleFolders = the course's active
+// folder JSON, plus daysLeft.
 export const getScheduleForClient = async (
   courseId: number,
   customerId: number | null,
@@ -3074,7 +2821,6 @@ export const getScheduleForClient = async (
         return Math.abs(a.scheduledAt!.getTime() - now.getTime()) - Math.abs(b.scheduledAt!.getTime() - now.getTime());
       });
 
-  // Populate session-level educator ({ _id, name, image } | null).
   const eduIds = [...new Set(ordered.map((s) => s.educatorId).filter((n): n is number => n != null))];
   const eduById = new Map<number, { _id: string; name: string | null; image: string | null }>();
   if (eduIds.length) {
@@ -3116,18 +2862,10 @@ export const getScheduleForClient = async (
   return { liveCourse: { _id: String(course.id), name: course.name }, timetable, scheduleFolders, total: timetable.length, daysLeft };
 };
 
-// ── GET /my/schedule (owned courses' schedule folders) — SQL ──────────────────
-// Mirrors the Mongo listMyScheduleByCategory contract: for every owned live
-// course (active/lifetime verified sub), its active schedule folders + daysLeft.
-//
-// ONLY courses that actually have a timetable are listed. This is a home-screen
-// NAVIGATION list: every row here must lead somewhere, and the nav DTO strips
-// `entryCount` (see the controller), so the app cannot tell an empty folder from
-// a full one and would render a dead end. A folder counts as a real timetable
-// only when it is visible (status !== false) AND holds at least one entry — an
-// entry-less folder is an admin shell, not a schedule. A course with no such
-// folder is dropped entirely, and empty folders are dropped from the courses
-// that stay, so `scheduleFolders` is never a list of dead ends.
+// For every owned live course, its active schedule folders + daysLeft. This is a
+// home-screen navigation list and the nav DTO strips `entryCount`, so every row must
+// lead somewhere: a folder counts only when visible (status !== false) and holding at
+// least one entry. Empty folders are dropped, and a course with none is dropped.
 export const listMyScheduleForClient = async (customerId: number) => {
   const now = new Date();
   const ownedIds = await repo.ownedCourseIds(customerId, now);
@@ -3162,30 +2900,15 @@ export const listMyScheduleForClient = async (customerId: number) => {
         daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
       };
     })
-    // No timetable → not a schedule row. `totalLiveCourses` counts what is
-    // returned, so the FE's empty state fires on 0 instead of on a list of
-    // courses that open nothing.
+    // `totalLiveCourses` counts what is returned, so the FE's empty state fires on 0
+    // instead of on courses that open nothing.
     .filter((c) => c.scheduleFolders.length > 0);
   return { liveCourses, totalLiveCourses: liveCourses.length };
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// Live-course FOLDER + VIDEO persistence (ws_video_category + ws_video)
-//   SQL mirror of src/admin/live-course/live-course.folder.controller.ts and
-//   src/admin/live-course/live-course.video.controller.ts.
-//
-// Gated behind the SEPARATE `admin-live-course` flag (the rest of this file is
-// `live-course`) so folders/videos can be flipped independently. The legacy
-// controllers branch on `isAdminLiveCourseMysql()` BEFORE the ObjectId guard.
-//
-// SCOPING DRIFT: ws_video_category has NO `live_course_id` column (Mongo-only
-// field). So a folder "belongs to" a live course iff it is reachable from the
-// course's root folder (ws_live_course.video_category_id) via the relation DAG.
-// We reuse the catalog-category-tree resolver (descendantsOf) for that walk; the
-// course root itself counts. listFolders therefore returns root + descendants.
-// Videos have no live-session backlink column, so from-recording stores the mp4
-// path as aws_id + platform="aws" and dedupes per folder by (vcategory_id,aws_id).
-// ════════════════════════════════════════════════════════════════════════════
+// Live-course folder + video persistence (ws_video_category + ws_video). Videos have no
+// live-session backlink column, so from-recording stores the mp4 path as aws_id +
+// platform "aws" and dedupes per folder by (vcategory_id, aws_id).
 import { prisma } from "../../config/prisma";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 
@@ -3194,7 +2917,7 @@ function lcSlugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-// ── DTOs (Mongo-shaped: `_id` is the stringified int) ─────────────────────────
+// `_id` is the stringified int.
 export const folderDto = (f: any) => ({
   _id: String(f.id),
   title: f.title,
@@ -3237,18 +2960,16 @@ const lcVideoSelect = {
   order: true, status: true, created_at: true, updated_at: true,
 } as const;
 
-// ── scope helpers (course ↔ folder reachability via the relation DAG) ─────────
-/** The live course's root folder id (ws_live_course.video_category_id), or null. */
+/** ws_live_course.video_category_id, or null. */
 const lcRootFolderId = async (liveCourseId: number): Promise<number | null> => {
   const lc = await prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { videoCategoryId: true } });
   return lc ? lc.videoCategoryId ?? null : null;
 };
 
-/** Does a live course row exist? */
 export const lcCourseExists = async (liveCourseId: number): Promise<boolean> =>
   !!(await prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { id: true } }));
 
-/** Folder ids reachable from the course root (INCLUSIVE). Empty if no root set. */
+/** Folder ids reachable from the course root (inclusive). Empty if no root set. */
 const lcReachableFolderIds = async (liveCourseId: number): Promise<number[]> => {
   const root = await lcRootFolderId(liveCourseId);
   if (!root) return [];
@@ -3256,20 +2977,16 @@ const lcReachableFolderIds = async (liveCourseId: number): Promise<number[]> => 
 };
 
 /**
- * Folder belongs to course iff its `live_course_id` column matches. We key on the
- * flat column (not the root/DAG) so that admin folder ops and the client recordings
- * reader (getRecordingsForClient, which also filters by liveCourseId) agree — a
- * folder created via the API is consistently visible to both. lcCreateFolder stamps
- * liveCourseId on every folder it creates.
+ * Keyed on the flat `live_course_id` column (not the root/DAG) so admin folder ops and
+ * the client recordings reader (getRecordingsForClient) agree; lcCreateFolder stamps it
+ * on every folder.
  */
 export const lcFolderBelongsToCourse = async (folderId: number, liveCourseId: number): Promise<boolean> =>
   !!(await prisma.videoCategory.findFirst({ where: { id: folderId, liveCourseId }, select: { id: true } }));
 
-// ── folder handlers ───────────────────────────────────────────────────────────
 /**
- * listFolders: every folder owned by the course (by liveCourseId) + relation rows.
- * Optional `search` filters by folder title (case-insensitive `contains`, per the
- * table's default CI collation) — used by the admin folder picker.
+ * Every folder owned by the course (by liveCourseId) + relation rows. Optional
+ * `search` filters by title (used by the admin folder picker).
  */
 export const lcListFolders = async (
   liveCourseId: number,
@@ -3288,7 +3005,7 @@ export const lcListFolders = async (
   return { folders: folders.map(folderDto), relations: relations.map(relationDto) };
 };
 
-/** createFolder. Inserts a relation row when parentFolderId is given. */
+/** Inserts a relation row when parentFolderId is given. */
 export const lcCreateFolder = async (
   liveCourseId: number,
   input: { title: string; image?: string; parentFolderId?: number; order_by?: number; educatorId?: number; status?: boolean }
@@ -3302,15 +3019,12 @@ export const lcCreateFolder = async (
       title: input.title,
       slug: `${lcSlugify(input.title)}-${Date.now().toString(36)}`,
       image: input.image ?? fallbackImage,
-      // `ws_video_category.parent` is NOT NULL in the DB (0 = top-level), even
-      // though the introspected model types it `Int?`. Default to 0 so a folder
-      // with no parent saves instead of throwing a null-constraint error.
+      // ws_video_category.parent is NOT NULL in the DB (0 = top-level) though the model
+      // types it `Int?`; default to 0 to avoid a null-constraint error.
       parent: input.parentFolderId ?? 0,
-      // Stamp the owning live course so the folder is reachable by the recordings
-      // reader (getRecordingsForClient filters by liveCourseId). Mirrors the Mongo path.
+      // Stamp the owning course so the recordings reader (filters by liveCourseId) sees it.
       liveCourseId,
-      // `educator_id` is also NOT NULL (default 0) in the DB despite the model
-      // typing it `Int?`. Default to 0 ("no educator") rather than null.
+      // educator_id is also NOT NULL (default 0) despite the `Int?` model type.
       educatorId: input.educatorId ?? 0,
       order_by: input.order_by ?? 0,
       status: input.status ?? true,
@@ -3324,7 +3038,7 @@ export const lcCreateFolder = async (
   return { folder: folderDto(created) };
 };
 
-/** updateFolder. Returns the DTO, or null if the folder is not in this course. */
+/** Returns the DTO, or null if the folder is not in this course. */
 export const lcUpdateFolder = async (
   liveCourseId: number,
   folderId: number,
@@ -3342,8 +3056,8 @@ export const lcUpdateFolder = async (
 };
 
 /**
- * deleteFolder. Refuses the course root folder. Cascades: deletes all videos in
- * the folder + relations referencing it, then the folder itself.
+ * Refuses the course root folder. Cascades: the folder's videos and relations
+ * referencing it, then the folder itself.
  */
 export const lcDeleteFolder = async (
   liveCourseId: number,
@@ -3360,9 +3074,7 @@ export const lcDeleteFolder = async (
   return { ok: true, deletedVideos: videos.count, deletedRelations: relations.count };
 };
 
-// ── video handlers ────────────────────────────────────────────────────────────
-/** listVideosInFolder: videos in a folder ordered by order asc; DB-paginated.
- *  Each row carries its global `order` (reorder stays page-independent). */
+/** Ordered by `order` asc, DB-paginated; each row carries its global `order` so reorder is page-independent. */
 export const lcListVideosInFolder = async (
   folderId: number,
   opts?: { skip?: number; take?: number }
@@ -3380,7 +3092,7 @@ export const lcListVideosInFolder = async (
   return { data: rows.map(videoDto), total };
 };
 
-/** createVideoInFolder: add a manual video (youtube/aws/vimeo). */
+/** Manual video (youtube/aws/vimeo). */
 export const lcCreateVideoInFolder = async (
   folderId: number,
   input: { title: string; topic?: string; platform: "youtube" | "aws" | "vimeo"; priceType?: "free" | "paid"; youtube_id?: string; aws_id?: string; vimeo_id?: string; order?: number; status?: boolean }
@@ -3407,7 +3119,7 @@ export const lcCreateVideoInFolder = async (
   return videoDto(created);
 };
 
-/** Resolve a recording from the JSON array by quality → index → best quality. */
+/** Picks a recording by quality → index → best quality. */
 const lcResolveRecording = (recordings: any[], opts: { recordingIndex?: number; quality?: string }): any | null => {
   if (!recordings.length) return null;
   if (opts.quality) {
@@ -3423,9 +3135,9 @@ const lcResolveRecording = (recordings: any[], opts: { recordingIndex?: number; 
 };
 
 /**
- * createVideoFromRecording. Reads the live session's recordings JSON, picks one
- * by index/quality, files its mp4 path into the folder as an aws video. Dedupes
- * per folder by (vcategory_id, aws_id) — same key as the Mongo promote helper.
+ * Picks a recording from the live session's recordings JSON by index/quality and
+ * files its mp4 path into the folder as an aws video, deduped per folder by
+ * (vcategory_id, aws_id).
  */
 export const lcCreateVideoFromRecording = async (
   folderId: number,
@@ -3463,19 +3175,19 @@ export const lcCreateVideoFromRecording = async (
   return { video: videoDto(created), alreadyExisted: false };
 };
 
-/** deleteVideoInFolder. Scoped to the folder. Returns whether a row was deleted. */
+/** Scoped to the folder. Returns whether a row was deleted. */
 export const lcDeleteVideoInFolder = async (folderId: number, videoId: number): Promise<boolean> => {
   const res = await prisma.video.deleteMany({ where: { id: videoId, videoCategoryId: folderId } });
   return res.count > 0;
 };
 
-/** getVideoInFolder. Returns the DTO, or null if not in this folder. */
+/** Returns the DTO, or null if not in this folder. */
 export const lcGetVideoInFolder = async (folderId: number, videoId: number): Promise<any | null> => {
   const row = await prisma.video.findFirst({ where: { id: videoId, videoCategoryId: folderId }, select: lcVideoSelect });
   return row ? videoDto(row) : null;
 };
 
-/** updateVideoInFolder. Scoped to the folder. Returns DTO or null (not found). */
+/** Scoped to the folder. Returns the DTO or null (not found). */
 export const lcUpdateVideoInFolder = async (
   folderId: number,
   videoId: number,
@@ -3497,10 +3209,7 @@ export const lcUpdateVideoInFolder = async (
   return videoDto(updated);
 };
 
-/**
- * reorderVideosInFolder. Only videos that actually live in this folder are
- * touched (ids from elsewhere are silently ignored). Returns matched/modified.
- */
+/** Only videos in this folder are touched (other ids are ignored). Returns matched/modified. */
 export const lcReorderVideosInFolder = async (
   folderId: number,
   orders: { id: number; order: number }[]

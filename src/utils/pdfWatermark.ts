@@ -1,16 +1,7 @@
-// src/utils/pdfWatermark.ts
-//
-// Stamps the websankul.com watermark on every page of a PDF before it is
-// uploaded (govt-jobs documents + previous papers — opt-in per route, see
-// `watermarkPdfs` in middlewares/upload.ts). Two marks per page:
-//
-//   1. the official WebSankul logo, large and very faint, along the page
-//      diagonal, and
-//   2. a small "Downloaded from websankul.com" badge with the site icon,
-//      bottom-right, that is also a clickable link to the site.
-//
-// Everything is drawn in the page's *visual* space (crop box, after /Rotate),
-// so landscape scans and rotated pages get an upright watermark too.
+// PDF watermark: stamps a faint diagonal logo plus a clickable "Downloaded from websankul.com"
+// badge on every page before upload (opt-in per route via `watermarkPdfs` in
+// middlewares/upload.ts). Drawing happens in the page's visual space (crop box
+// after /Rotate) so rotated and landscape pages get an upright watermark.
 
 import {
   PDFDict,
@@ -32,9 +23,9 @@ import { ICON_PNG, LOGO_PNG } from "./pdfWatermark.assets";
 const SITE_URL = "https://websankul.com";
 const WATERMARK_TEXT = "websankul.com";
 
-// Brand palette — same tokens as the storefront (websankul-jobs globals.css).
-const BRAND = rgb(0x36 / 255, 0x76 / 255, 0xbb / 255); // --color-primary
-const BRAND_DARK = rgb(0x24 / 255, 0x5a / 255, 0x96 / 255); // --color-primary-dark
+// Same tokens as the storefront (websankul-jobs globals.css).
+const BRAND = rgb(0x36 / 255, 0x76 / 255, 0xbb / 255);
+const BRAND_DARK = rgb(0x24 / 255, 0x5a / 255, 0x96 / 255);
 const MUTED = rgb(0x6b / 255, 0x72 / 255, 0x80 / 255);
 const WHITE = rgb(1, 1, 1);
 
@@ -46,7 +37,6 @@ type Box = { x: number; y: number; width: number; height: number };
 type Matrix = readonly [number, number, number, number, number, number];
 type Brand = { regular: PDFFont; bold: PDFFont; logo: PDFImage; icon: PDFImage };
 
-/** /Rotate normalised to 0 | 90 | 180 | 270. */
 const pageRotation = (page: PDFPage): number => {
   const angle = Math.round(page.getRotation().angle / 90) * 90;
   return ((angle % 360) + 360) % 360;
@@ -78,7 +68,7 @@ const applyMatrix = (m: Matrix, px: number, py: number): [number, number] => [
   m[1] * px + m[3] * py + m[5],
 ];
 
-/** Rounded "pill" outline in SVG path syntax (y-down, origin top-left). */
+/** SVG path syntax: y-down, origin top-left. */
 const pillPath = (w: number, h: number): string => {
   const r = h / 2;
   return `M ${r} 0 H ${w - r} A ${r} ${r} 0 0 1 ${w - r} ${h} H ${r} A ${r} ${r} 0 0 1 ${r} 0 Z`;
@@ -89,7 +79,6 @@ const drawDiagonal = (page: PDFPage, brand: Brand, vw: number, vh: number) => {
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
 
-  // Logo spans ~55% of the diagonal, centred on the page.
   const width = Math.hypot(vw, vh) * 0.55;
   const height = (width * brand.logo.height) / brand.logo.width;
   const hx = width / 2;
@@ -104,7 +93,7 @@ const drawDiagonal = (page: PDFPage, brand: Brand, vw: number, vh: number) => {
   });
 };
 
-/** Draws the corner badge; returns its visual-space rect for the link. */
+/** Returns the badge's visual-space rect for the link annotation. */
 const drawBadge = (page: PDFPage, brand: Brand, vw: number, vh: number): Box => {
   // A4 is the reference size; scale the badge for posters / small slips.
   const s = Math.min(2.5, Math.max(0.75, Math.min(vw, vh) / 595));
@@ -133,7 +122,6 @@ const drawBadge = (page: PDFPage, brand: Brand, vw: number, vh: number): Box => 
     borderWidth: 0.6 * s,
   });
 
-  // Official site icon.
   const midY = y + height / 2;
   page.drawImage(brand.icon, {
     x: x + padX,
@@ -156,7 +144,6 @@ const drawBadge = (page: PDFPage, brand: Brand, vw: number, vh: number): Box => 
   return { x, y, width, height };
 };
 
-/** Adds a URI link annotation over a visual-space rect. */
 const addLink = (doc: PDFDocument, page: PDFPage, matrix: Matrix, rect: Box) => {
   const corners = [
     applyMatrix(matrix, rect.x, rect.y),

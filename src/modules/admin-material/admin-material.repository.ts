@@ -1,21 +1,17 @@
+// Admin materials: Prisma queries for material categories, materials and linked products.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-material MySQL branch.
- *  - categories → ws_material_category (single `parent` int FK; NO ancestors[]/
- *    childCategoryIds[] — that DAG is Mongo-only). roots use parent = 0 sentinel.
- *  - materials  → ws_material (leaf; minimal columns — most Mongo fields absent).
- *
- * ⚠ Drift: ws_material_category.parent is NOT NULL (0 = root). ws_material has NO
- * column for description/thumbnail/fileSize/fileMime/language/isPreview/isPaid/
- * downloadCount — dropped on write, synthesized on read.
+ * - categories → ws_material_category: single `parent` int FK, NOT NULL, 0 = root.
+ * - materials  → ws_material: has no column for description/thumbnail/fileSize/
+ *   fileMime/language/isPreview/isPaid/downloadCount — dropped on write, synthesized
+ *   on read.
  */
 const ROOT = 0;
 
 export const adminMaterialRepository = {
-  // ── categories ────────────────────────────────────────────────────────────
   listAllCategories: (status?: boolean) =>
     prisma.materialCategory.findMany({ where: status === undefined ? {} : { status }, orderBy: [{ order_by: "asc" }, { name: "asc" }] }),
 
@@ -93,12 +89,11 @@ export const adminMaterialRepository = {
     return Number(rows[0]?.total ?? 0);
   },
 
-  // ── materials (leaf) ──────────────────────────────────────────────────────
   listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean; skip: number; take: number }) =>
     // Recency is the contract on admin lists — see utils/listOrdering.
     prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
-  // Same Materials list as above, scoped to one category → same recency contract.
+  // Same recency contract as listMaterials.
   materialsForCategory: (categoryId: number, skip: number, take: number, search?: string) =>
     prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ created_at: "desc" }, { id: "desc" }], skip, take }),
 
@@ -118,16 +113,10 @@ export const adminMaterialRepository = {
   bulkDelete: (ids: number[]) => prisma.material.deleteMany({ where: { id: { in: ids } } }),
 
   /**
-   * Deep-clone a category subtree (single-parent `parent` tree — the Mongo
-   * `ancestors[]` DAG is not used here) plus all `ws_material` rows under it, in
-   * one interactive transaction.
-   *   1. Walk children via `where parent = <id>` to collect the subtree.
-   *   2. Create the root clone (new title, same parent as source).
-   *   3. Create each descendant clone, remapping old parent id → new id via an
-   *      id-map (one-by-one so create() returns the new id — createMany does not).
-   *   4. Clone every material whose category is in the cloned set, remapping the
-   *      category id.
-   * Returns null when the source category does not exist.
+   * Deep-clone a category subtree (via the single-parent `parent` column) plus all
+   * `ws_material` rows under it, in one interactive transaction. Descendants are
+   * created one by one so create() returns the new id for the old→new parent map
+   * (createMany does not). Returns null when the source category does not exist.
    */
   cloneCategoryTree: async (sourceId: number) => {
     const source = await prisma.materialCategory.findUnique({ where: { id: sourceId } });
@@ -137,7 +126,6 @@ export const adminMaterialRepository = {
       const now = new Date();
       const newTitle = await nextAvailableCopyTitle(tx, source.name, source.parent);
 
-      // old category id → new category id
       const idMap = new Map<number, number>();
 
       const root = await tx.materialCategory.create({
@@ -213,8 +201,7 @@ export const adminMaterialRepository = {
 
 /**
  * Next free "<title> (Copy)" / "<title> (Copy N)" among siblings sharing the same
- * `parent`. Mirrors the Mongo helper: prefilter by prefix in SQL, disambiguate the
- * suffix number in JS.
+ * `parent`: prefilter by prefix in SQL, disambiguate the suffix number in JS.
  */
 async function nextAvailableCopyTitle(
   tx: Prisma.TransactionClient,
@@ -246,8 +233,8 @@ function slugify(input: string): string {
 
 export { ROOT };
 
-// RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
-// both mean newest-first; `dir` is ignored for them on purpose.
+// Recency is the contract (utils/listOrdering): "order" and the no-sort default both
+// mean newest-first; `dir` is ignored for them on purpose.
 function catOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): Prisma.MaterialCategoryOrderByWithRelationInput[] {
   if (sortBy === "title" || sortBy === "name") return [{ name: dir }, { id: "desc" }];
   if (sortBy === "createdAt") return [{ created_at: dir }, { id: "desc" }];
@@ -256,7 +243,7 @@ function catOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): Prisma.Mat
 
 function buildCatWhere(opts: { parent?: number | "root"; search?: string; status?: boolean }): Prisma.MaterialCategoryWhereInput {
   const where: Prisma.MaterialCategoryWhereInput = {};
-  // Unanchored `contains` (not buildPrismaPrefixSearch): no index on ws_material_category.title, so a
+  // Unanchored `contains` (not prefix search): no index on ws_material_category.title, so a
   // prefix anchor only dropped mid-title matches. See pcmWhere in admin-master.repository.
   if (opts.parent === "root") where.parent = ROOT;
   else if (typeof opts.parent === "number") where.parent = opts.parent;
@@ -323,7 +310,7 @@ function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.M
 
 function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }): Prisma.MaterialWhereInput {
   const where: Prisma.MaterialWhereInput = {};
-  // Unanchored `contains` (not buildPrismaPrefixSearch): no index on ws_material.title, so a
+  // Unanchored `contains` (not prefix search): no index on ws_material.title, so a
   // prefix anchor only dropped mid-title matches. See pcmWhere in admin-master.repository.
   const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) Object.assign(where, search);

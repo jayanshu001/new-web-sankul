@@ -1,20 +1,4 @@
-/**
- * catalog-package — SQL composition for the package detail + list endpoints.
- *
- * Reproduces the Mongo `buildPackageDetail` / `enrichPackages` DTO from SQL:
- *   - video groups   ← ws_package_specific_subject  → ws_video_category (DAG count)
- *   - material groups ← ws_material_category_package → ws_material_category (CTE count)
- *   - exam groups     ← ws_exam_category_package     → ws_exam_category (CTE count)
- *   - plans           ← commerce-price (split by withMaterial)
- *   - promo           ← ws_promo_code (public + active window + appliesTo=package)
- *   - subscription    ← commerce-subscription (active → isPurchased + daysLeft)
- *   - packageType/goal populates ← ws_package_type / ws_goal
- *
- * Functional parity with the Mongo contract: the consumer-facing fields are
- * identical. Incidental Mongo-only doc fields not stored in SQL (e.g. __v,
- * isMagazine, notificationTopic, the per-category slug/parent spread) are not
- * reproduced — documented drift, mirrors the other catalog sub-modules.
- */
+// Package catalog: package detail and cached list pages with per-customer purchase state.
 import type { Package } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
@@ -35,7 +19,6 @@ const descendantIds = async (table: string, parentCol: string, rootId: number): 
   return rows.map((r) => Number(r.id));
 };
 
-// ── category groups ──────────────────────────────────────────────────────────
 const videoGroups = async (packageId: number) => {
   const subs = await prisma.packageSpecificSubject.findMany({
     where: { packageId, status: true },
@@ -99,7 +82,6 @@ const examGroups = async (packageId: number) => {
   );
 };
 
-// ── plans / promo / populates ────────────────────────────────────────────────
 const splitPlans = async (packageId: number) => {
   const plans = await listActivePricesByPackage(packageId); // active, duration-asc
   return {
@@ -111,8 +93,7 @@ const splitPlans = async (packageId: number) => {
 const availablePromo = async (packageId: number) => {
   const now = new Date();
   const rows = await prisma.promocode.findMany({
-    // Single-type "package" rows + multi-type "mixed" rows; coverage resolved
-    // via appliesToGroups so mixed codes covering this package are included.
+    // "mixed" rows are included; appliesToGroups resolves whether they cover this package.
     where: { type: "public", status: true, promo_start_at: { lte: now }, promo_expire_at: { gte: now }, appliesToType: { in: ["package", "mixed"] } },
     select: { promocode: true, title: true, description: true, appliesToType: true, appliesToIds: true },
   });
@@ -132,18 +113,12 @@ const populateGoal = async (id: number | null) => {
   return g ? { _id: String(g.id), title: g.name } : null;
 };
 
-// ── detail ───────────────────────────────────────────────────────────────────
-// Everything below is customer-independent — video/material/test groups (with
-// their counts), plans, promo codes, packageType/goal populates. Cached.
-// isPurchased/daysLeft is the ONLY per-customer field and is always computed
-// live by buildPackageDetailSql, never cached — see catalog-course's identical
-// split (course-detail.sql.ts) for the full reasoning, including the live
-// route-cache pitfall to avoid (package.routes.ts must not wrap this in an
-// outer cacheRoute({ scope: CacheScope.User }) either).
+// Everything here is customer-independent and cached. isPurchased/daysLeft is the
+// only per-customer field and is always computed live in buildPackageDetailSql;
+// package.routes.ts must not wrap this in a user-scoped cacheRoute either.
 const buildPackageDetailShared = async (packageId: number) => {
-  // No `active` filter here: this entry is shared across callers, and an inactive
-  // package must stay reachable for its subscribers. The per-caller gate is in
-  // buildPackageDetailSql below.
+  // No `active` filter: the entry is shared and an inactive package must stay
+  // reachable for its subscribers. The per-caller gate is in buildPackageDetailSql.
   const pkg = await prisma.package.findFirst({ where: { id: packageId } });
   if (!pkg) return null;
 
@@ -170,6 +145,7 @@ const buildPackageDetailShared = async (packageId: number) => {
   };
 };
 
+// Cached shared detail plus live purchase state; an inactive package shows only to subscribers.
 export const buildPackageDetailSql = async (packageId: number, customerId: number | null, baseUrl?: string) => {
   const shared = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogPackage, `detail:${packageId}`),
@@ -180,7 +156,7 @@ export const buildPackageDetailSql = async (packageId: number, customerId: numbe
   const { pkg, packageType, goal, videos, materials, tests, plans, availablePromoCode } = shared;
 
   const activeSub = customerId ? await getActivePackageSubscription(customerId, packageId) : null;
-  // Inactive package → hidden, except for customers with an active subscription.
+  // An inactive package stays visible only to customers with an active subscription.
   if (!pkg.active && !activeSub) return null;
   const isPurchased = !!activeSub;
   const daysLeft = isPurchased ? computeDaysLeft(activeSub?.endAt ?? null) : null;
@@ -213,10 +189,7 @@ export const buildPackageDetailSql = async (packageId: number, customerId: numbe
   };
 };
 
-// ── list enrichment ──────────────────────────────────────────────────────────
-// Shared, per-package enrichment (plans/subscriberCount/packageType/goal) — no
-// customerId. `shareableLink` is derived from `baseUrl` (request-dependent) so
-// it's deliberately NOT included here; callers add it after the cache read.
+// No customerId here; `shareableLink` depends on the request's baseUrl, so callers add it after the cache read.
 const enrichPackagesShared = async (rows: Package[]) => {
   return Promise.all(
     rows.map(async (p) => {
@@ -253,12 +226,9 @@ const enrichPackagesShared = async (rows: Package[]) => {
 };
 
 /**
- * Cached list+enrich wrapper shared by every `list*Sql` variant below: fetch
- * the filtered page of packages + their shared enrichment as ONE cached unit
- * (keyed by `cacheKeyId`, which each caller builds from its own filter args),
- * then merge live per-customer isPurchased/daysLeft + the request's
- * shareableLink on top. Tagged CacheEntity.CatalogPackage — already flushed by
- * admin package/plan/price writes (see flushGroups.ts).
+ * Caches the filtered page plus its shared enrichment as one unit under
+ * CacheEntity.CatalogPackage (keyed by `cacheKeyId`), then merges the live
+ * per-customer isPurchased/daysLeft and the request's shareableLink.
  */
 export const listPackagesCached = async (
   cacheKeyId: string,
@@ -292,6 +262,7 @@ export const listPackagesCached = async (
   return { rows, total, data };
 };
 
+// Uncached variant of listPackagesCached's per-customer merge.
 export const enrichPackagesSql = async (rows: Package[], customerId: number | null, baseUrl?: string) => {
   const now = new Date();
   const shared = await enrichPackagesShared(rows);
@@ -309,7 +280,6 @@ export const enrichPackagesSql = async (rows: Package[], customerId: number | nu
   );
 };
 
-// ── list queries (filters mirror the Mongo controller) ───────────────────────
 export const listPackagesPaginatedSql = async (opts: {
   search?: string; packageTypeId?: number; goalId?: number; isPaid?: boolean; isPopular?: boolean; skip: number; take: number;
 }) => {
@@ -327,9 +297,6 @@ export const listPackagesPaginatedSql = async (opts: {
   return { rows, total };
 };
 
-// Optional name search + pagination. All list variants return `{ rows, total }`
-// so callers can build a uniform pagination envelope; the `count()` mirrors the
-// exact same `where` as `findMany` (Promise.all).
 type ListOpts = { search?: string; skip?: number; take?: number };
 const withSearch = (where: any, opts?: ListOpts) =>
   ({ ...where, ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}) });
@@ -352,9 +319,8 @@ export const listPackagesByGoalLabelSql = async (goalLabelId: number, opts: List
   return { rows, total };
 };
 
-// Goal-scoped label lookup. Label ids are per-goal (they restart at 1 per goal),
-// so filtering on goalLabelId alone leaks packages across goals that share the id.
-// Scope by BOTH goalId + goalLabelId to get the packages for exactly one label.
+// Label ids restart at 1 per goal, so filtering on goalLabelId alone leaks
+// packages across goals; scope by both goalId and goalLabelId.
 export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabelId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, goalId, goalLabelId }, opts);
   const [rows, total] = await Promise.all([
@@ -364,7 +330,6 @@ export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabel
   return { rows, total };
 };
 
-// Goal-level ("individual") packages for a label-less goal: goalId set, is_individual=true.
 export const listPackagesByGoalIndividualSql = async (goalId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, goalId, isIndividual: true }, opts);
   const [rows, total] = await Promise.all([

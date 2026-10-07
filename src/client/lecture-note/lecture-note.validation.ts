@@ -1,11 +1,10 @@
+// Client lecture notes: Zod request schemas.
 import { z } from "zod";
 
-// Accept a 24-hex Mongo ObjectId OR a numeric MySQL id: this module runs on MySQL,
-// so ids like "33141" (ws_video / ws_live_session ints) are valid.
+// Accepts legacy 24-hex ids as well as numeric ids.
 const objectId = z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id");
 
-// Sanity cap matches LectureProgress's 24h ceiling. Notes taken inside a
-// player can't realistically be past that.
+// Capped at 24h, matching LectureProgress.
 const timestampSec = z.number().int().min(0).max(60 * 60 * 24);
 
 const content = z.string().trim().min(1, "Note cannot be empty").max(5000);
@@ -69,9 +68,8 @@ export const listNotesQuerySchema = z
 
 export const noteIdParamSchema = z.object({ id: objectId });
 
-// Bulk-delete a saved-material group (all text + audio notes). Mirrors the
-// `kind` + id fields a saved-materials row carries. Exactly one id is required,
-// matching the kind. Accepts body OR query-string (see controller).
+// Bulk-delete a saved-material group (all text + audio notes). Exactly one id, matching
+// `kind`, is required. Accepts body or query string (see controller).
 export const deleteSavedMaterialSchema = z
   .object({
     kind: z.enum(["recorded", "live", "course", "live_course"]),

@@ -1,10 +1,4 @@
-// src/admin/package/package.service.ts
-//
-// Domain logic for admin package endpoints. Reads/writes go through the
-// admin-package SQL module; package-chat and promo-code reads route to their
-// own SQL modules. Errors thrown as `HttpError(code, message)` for the global
-// handler.
-
+// Admin packages: package, plan, relation and chat logic over the admin-package module.
 import { HttpError } from "../../middlewares/errorHandler";
 import { planInUseMessage } from "../../utils/planUsage";
 import {
@@ -17,22 +11,11 @@ import {
 import * as adminPackage from "../../modules/admin-package/admin-package.service";
 import * as promoCode from "../../modules/promo-code/promo-code.service";
 
-// Re-exported so the thin controllers can branch validation if needed.
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────────────
-
-// On the SQL branch ids are numeric.
 const assertPkgSqlId = (id: string, label: string): number => {
   const n = adminPackage.parsePackageId(id);
   if (!n) throw new HttpError(400, `Invalid ${label} id.`);
   return n;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Package types (small master)
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listPackageTypes = async () => {
   return adminPackage.listPackageTypes();
@@ -55,10 +38,6 @@ export const deletePackageType = async (id: string) => {
   return;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Packages CRUD
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface ListPackagesQuery {
   search?: string;
   active?: string;
@@ -80,9 +59,7 @@ export const getPackageById = async (id: string) => {
 };
 
 export const createPackage = async (validated: any) => {
-  // isPaid/packageCategoryId/examCountdown* DO
-  // persist on SQL (ws_package columns), as do goalId/goalLabelId. Embedded
-  // arrays → pivot tables. Goal-label validation runs inside adminPackage.
+  // Embedded arrays go to pivot tables; goal-label validation runs inside adminPackage.
   return adminPackage.createPackage(validated);
 };
 
@@ -92,6 +69,7 @@ export const updatePackage = async (id: string, validated: any) => {
   return res;
 };
 
+// Refuses while the package has active subscribers (archive instead).
 export const deletePackage = async (id: string) => {
   const res = await adminPackage.deletePackage(assertPkgSqlId(id, "package"));
   if (res === "not_found") throw new HttpError(404, "Package not found.");
@@ -113,10 +91,7 @@ export const reorderPackages = async (
   return;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Reorder embedded category arrays
-// ──────────────────────────────────────────────────────────────────────────────
-
+// Reorder one embedded list: specific subjects, material or exam categories.
 export const reorderEmbedded = async (
   pkgId: string,
   field: "specificSubjects" | "materialCategories" | "examCategories",
@@ -128,11 +103,6 @@ export const reorderEmbedded = async (
   return res;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Plans
-// ──────────────────────────────────────────────────────────────────────────────
-
-/** Plans list accepts an optional `status` filter that the subscribers list does not. */
 export interface PlanListQuery {
   page?: string;
   limit?: string;
@@ -153,15 +123,12 @@ export const attachPlansToPackage = async (packageId: string, planIds: string[])
   return res;
 };
 
+// Refuses (409) while subscriptions still use the plan.
 export const detachPlan = async (packageId: string, planId: string) => {
   const res = await adminPackage.detachPlan(assertPkgSqlId(packageId, "package"), assertPkgSqlId(planId, "plan"));
   if (res === "not_found") throw new HttpError(404, "Pricing plan not found on this package.");
   if (typeof res === "object") throw new HttpError(409, planInUseMessage(res.inUse));
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Subscribers / Promoted codes / Video relations
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface PaginationQuery {
   page?: string;
@@ -192,8 +159,7 @@ export const listSpecificSubjects = async (packageId: string, query: PaginationQ
   return res;
 };
 
-// MySQL promo-code read. On SQL the package id is numeric. Paginated via the
-// shared scope helper (supports optional `search` on the promocode).
+// Package ids are numeric; paginated via the shared scope helper (optional `search`).
 export const listPromotedCodes = async (
   packageId: string,
   query: { search?: string; page: number; limit: number; skip: number }
@@ -201,10 +167,8 @@ export const listPromotedCodes = async (
   return promoCode.listPromocodesForScope("package", assertPkgSqlId(packageId, "package"), query);
 };
 
-// The Book↔Package many-to-many link (`Book.packageIds`) was Mongo-only — ws_book
-// has no package-link column and admin-book synthesizes `packageIds: []`. With no
-// SQL representation of the relationship, no book can belong to a package, so this
-// always returns an empty (but correctly-shaped, paginated) list.
+// ws_book has no package-link column (admin-book synthesizes `packageIds: []`), so no
+// book can belong to a package; always returns an empty, correctly-shaped page.
 export const listBooks = async (packageId: string, query: PaginationQuery) => {
   assertPkgSqlId(packageId, "package");
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
@@ -247,10 +211,6 @@ export const expandSubjectsToRelations = async (packageId: string) => {
   return res;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Chat
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const listChatMessages = async (packageId: string, query: PaginationQuery) => {
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
@@ -281,7 +241,7 @@ export const postChatMessage = async (
     text: validated.text,
     mediaUrl: validated.mediaUrl,
     mediaType: validated.mediaType,
-    senderId: adminId ?? null, // admin ObjectId string → varchar sender_id
+    senderId: adminId ?? null,
     senderType: "admin",
   });
 };

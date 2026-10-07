@@ -1,13 +1,7 @@
 /**
- * Free listings (free-tests / free-materials / free-videos / free-ebooks /
- * free-courses) — SQL (Prisma) branch. Gated behind `isMysqlModule("client-free")`.
+ * Client free listings: tests, materials, videos, ebooks and courses.
  *
- * Mirrors src/client/free/free.controller.ts response shapes + status codes,
- * built on the already-migrated SQL catalog tables (ws_course / ws_package /
- * ws_exam / ws_material(_category) / ws_video(_category) / ws_ebook) and the
- * category-tree DAG resolver (catalog-category-tree).
- *
- * Two gates per listing (same as Mongo):
+ * Two gates per listing:
  *   (1) ASSIGNMENT — the category must be attached to SOME active product
  *       (course / package / live-course); orphan categories never surface.
  *   (2) FREE — the item itself is free:
@@ -16,21 +10,11 @@
  *         exam      → isPaid = false                (ws_exam.is_paid)
  *         ebook     → min active plan price == 0    (ws_ebook has no isPaid col)
  *         course    → purchase = "no"               (CourseFlag01 '0' = free)
- *         package   → (no isPaid col on ws_package → free-package set is empty;
- *                      documented catalog drift)
+ *         package   → ws_package has no isPaid column, so the free-package set is empty
  *
- * Documented SQL drift vs Mongo (kept on Mongo / degraded, never invented):
- *  - MaterialCategory tree parent col = `parent`; ExamCategory parent = `parent_id`
- *    (mapped `parent`); VideoCategory tree walked via ws_video_category_relation
- *    through the catalog-category-tree DAG.
- *  - LiveCourse has NO material/exam category pivots on SQL and ws_video_category
- *    has no live_course_id column (Wave-6 drift). LiveCourse contributes ONLY its
- *    scalar `videoCategoryId` to the video-assignment gate; it can never be a
- *    free-materials or free-tests product on SQL.
- *  - ws_package has no isPaid col → free-courses' free package set is always
- *    empty (matches client-trending/client-search documented behaviour).
- *  - Exam category-image populate: Mongo populated categoryId{_id,title,image};
- *    SQL ExamCategory has `name` (not title) + image → mapped to {_id,title,image}.
+ * Material tree parent = `parent`; exam = `parent_id`; video categories are walked via the
+ * ws_video_category_relation DAG. LiveCourse has no material/exam category pivots, so it only
+ * contributes its `videoCategoryId` to the video gate. ExamCategory `name` is emitted as `title`.
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -41,7 +25,7 @@ import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where
 import { searchTokens, buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 
-// Recursive descendant ids for a self-referencing category table (material/exam).
+// For self-referencing category tables (material/exam).
 const descendantIds = async (table: string, parentCol: string, rootIds: number[]): Promise<number[]> => {
   const roots = [...new Set(rootIds.filter((n) => Number.isInteger(n) && n > 0))];
   if (!roots.length) return [];
@@ -54,11 +38,8 @@ const descendantIds = async (table: string, parentCol: string, rootIds: number[]
   return [...out];
 };
 
-// ── ASSIGNMENT resolver ───────────────────────────────────────────────────────
-// Category ids assigned to ANY active product (paid OR free) — the assignment
-// gate used by free-materials / free-videos / free-tests. Mirrors Mongo
-// resolveAssignedCategoryIds. Video roots are expanded to their full subtree via
-// the DAG; material/exam roots stay roots here (each endpoint expands its own).
+// Category ids assigned to ANY active product (paid or free). Video roots are expanded to
+// their full subtree; material/exam roots stay roots (each endpoint expands its own).
 const resolveAssignedCategoryIds = async () => {
   const [courses, liveCourses, matCourseRefs, matPkgRefs, examCourseRefs, examPkgRefs, pkgSubjects, pkgRels] =
     await Promise.all([
@@ -91,7 +72,7 @@ const resolveAssignedCategoryIds = async () => {
     for (const r of rels) { if (r.parent) videoRootIds.add(r.parent); if (r.child) videoRootIds.add(r.child); }
   }
 
-  // Expand video roots to full subtree (videos live on leaves).
+  // Videos live on leaves, so expand to the full subtree.
   const videoCategoryIds = videoRootIds.size ? new Set(await descendantsOf([...videoRootIds])) : new Set<number>();
 
   return {
@@ -101,9 +82,8 @@ const resolveAssignedCategoryIds = async () => {
   };
 };
 
-// ── FREE-TESTS ───────────────────────────────────────────────────────────────
-// Year → month → week drill-down bucketed on Exam.startAt. SUBJECT tests only,
-// free (isPaid=false), in an assigned exam category, startAt <= endOfDay.
+// Year → month → week drill-down bucketed on Exam.startAt. Subject tests only,
+// free, in an assigned exam category, startAt <= endOfDay.
 export const freeTests = async (opts: {
   customerId: number | null;
   search: string | null;
@@ -112,7 +92,6 @@ export const freeTests = async (opts: {
 }) => {
   const { examCategoryIds } = await resolveAssignedCategoryIds();
   if (!examCategoryIds.length) {
-    // No assigned categories → empty at every level (matches Mongo empty $in).
     return emptyTestsLevel(opts);
   }
 
@@ -129,7 +108,6 @@ export const freeTests = async (opts: {
 
   const { year, month, week } = opts;
 
-  // ── Level 1: years ──
   if (year === undefined) {
     const rows = await prisma.exam.findMany({ where: baseWhere, select: { startAt: true } });
     const counts = new Map<number, number>();
@@ -138,7 +116,6 @@ export const freeTests = async (opts: {
     return { level: "years" as const, items };
   }
 
-  // ── Level 2: months in a year ──
   if (month === undefined) {
     const yearStart = new Date(year, 0, 1, 0, 0, 0, 0);
     const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
@@ -151,7 +128,6 @@ export const freeTests = async (opts: {
     return { level: "months" as const, year, items };
   }
 
-  // ── Level 3: weeks in a month ──
   if (week === undefined) {
     const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
@@ -167,7 +143,6 @@ export const freeTests = async (opts: {
     return { level: "weeks" as const, year, month, items };
   }
 
-  // ── Level 4: tests in a week (paginated) ──
   const { weekRange } = await import("../../utils/dateBuckets");
   const { start: weekStart, end: weekEnd } = weekRange(year, month, week);
   const upper = weekEnd < endOfDay ? weekEnd : endOfDay;
@@ -183,7 +158,6 @@ export const freeTests = async (opts: {
     prisma.exam.count({ where }),
   ]);
 
-  // Per-customer attempt stats (status=true valid results), scoped to this page.
   const statsByExam = new Map<number, { attemptsCount: number; bestScore: number; lastResult: any }>();
   if (opts.customerId && exams.length) {
     const examIds = exams.map((e) => e.id);
@@ -204,7 +178,7 @@ export const freeTests = async (opts: {
       } else {
         prev.attemptsCount += 1;
         if (score > prev.bestScore) prev.bestScore = score;
-        // results already ordered created_at desc → first seen is latest; keep it.
+        // Ordered created_at desc, so the first seen is the latest; keep it.
       }
     }
   }
@@ -248,19 +222,13 @@ const emptyTestsLevel = (opts: { year?: number; month?: number; week?: number; p
   return { level: "tests" as const, year, month, week, items: [] as any[], pagination: { total: 0, page: opts.page, limit: opts.limit, totalPages: 0 } };
 };
 
-// ── FREE-MATERIALS ─────────────────────────────────────────────────────────────
-// Recursive tree TOP-grouped by product; only FREE (isPaid=false) materials.
-// LiveCourse omitted (no SQL material-category pivot — documented drift).
-//
-// The app has no separate free-materials section — a free material (isPaid=false)
-// is served inside its course / package / live-course listing instead. So this
-// discovery listing stays an empty page.
+// Always an empty page: the app has no free-materials section; a free material is served
+// inside its course / package / live-course listing instead.
 export const freeMaterials = async (_opts: { customerId: number | null; search: string | null; page: number; limit: number; skip: number }) => {
   return { data: [] as any[], total: 0 };
 };
 
-// ── FREE-VIDEOS ─────────────────────────────────────────────────────────────
-// Recursive tree TOP-grouped by product; only FREE (priceType="free") videos.
+// Recursive category tree grouped by product; free videos only.
 export const freeVideos = async (opts: { search: string | null; page: number; limit: number; skip: number; customerId?: number | null }) => {
   const [courses, liveCourses, packages, pkgRels] = await Promise.all([
     prisma.course.findMany({ where: { status: true }, select: { id: true, name: true, image: true, videoCategoryId: true } }),
@@ -274,7 +242,6 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   for (const c of courses) products.push({ _id: c.id, name: c.name ?? "", image: c.image ?? null, type: "course", rootIds: c.videoCategoryId ? [c.videoCategoryId] : [] });
   for (const lc of liveCourses) products.push({ _id: lc.id, name: lc.name, image: lc.image ?? null, type: "live-course", rootIds: lc.videoCategoryId ? [lc.videoCategoryId] : [] });
 
-  // Packages reach video roots through their relations (parent + child).
   const rootIdsByPkg = new Map<number, Set<number>>();
   if (pkgRels.length) {
     const relIds = [...new Set(pkgRels.map((r) => r.videoCategoryRelationId))];
@@ -293,8 +260,6 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   const allRootIds = [...new Set(products.flatMap((p) => p.rootIds))];
   if (!allRootIds.length) return { data: [] as any[], total: 0 };
 
-  // Expand every root to its subtree via the DAG; build catById + childrenOf
-  // from ws_video_category_relation edges (restricted to the reachable set).
   const allIds = await descendantsOf(allRootIds);
   const [cats, edges] = await Promise.all([
     prisma.videoCategory.findMany({ where: { id: { in: allIds }, status: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], select: { id: true, title: true, image: true } }),
@@ -306,7 +271,6 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   const childrenOf = new Map<number, number[]>();
   for (const e of edges) (childrenOf.get(e.parent) ?? childrenOf.set(e.parent, []).get(e.parent)!).push(e.child);
 
-  // Free videos across the whole set, grouped by category.
   const catIds = [...catById.keys()];
   const videos = catIds.length
     ? await prisma.video.findMany({ where: { videoCategoryId: { in: catIds }, status: true, priceType: "free" as any }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
@@ -317,7 +281,7 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
     (videosByCat.get(v.videoCategoryId) ?? videosByCat.set(v.videoCategoryId, []).get(v.videoCategoryId)!).push(shapeVideo(v, opts.customerId ?? null));
   }
 
-  // Cycle-safe recursive node build (DAG may contain shared/multi-parent nodes).
+  // Cycle-safe: the DAG may contain shared/multi-parent nodes.
   const buildNode = (catId: number, seen: Set<number>): any | null => {
     const cat = catById.get(catId);
     if (!cat || seen.has(catId)) return null;
@@ -342,18 +306,14 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   return { data, total };
 };
 
-// ── FREE-EBOOKS ─────────────────────────────────────────────────────────────
-// ws_ebook has no isPaid col → free = min active plan price == 0. Response shape
-// mirrors /client/ebooks: plans / details / isPurchased / daysLeft / isNew /
-// shareableLink.
+// Free = min active plan price == 0 (ws_ebook has no isPaid). Shape mirrors /client/ebooks.
 export const freeEbooks = async (opts: { customerId: number | null; search: string | null; language: string | null; page: number; limit: number; skip: number; shareBase: string }) => {
   const where: any = { active: true };
   const ebookSearch = buildPrismaSearch(opts.search, ["name", "author"]);
   if (ebookSearch) where.AND = ebookSearch.AND;
   if (opts.language) where.language = opts.language as any;
 
-  // Free is price-derived, so we can't paginate at the DB. Load active ebooks,
-  // filter by min-plan-price==0, then paginate in memory.
+  // Free is price-derived, so pagination happens in memory.
   const allEbooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }] });
   const allIds = allEbooks.map((e) => e.id);
   const allPlans = allIds.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: allIds }, status: true }, orderBy: { duration: "asc" } }) : [];
@@ -400,13 +360,10 @@ export const freeEbooks = async (opts: { customerId: number | null; search: stri
   return { data, total };
 };
 
-// ── FREE-COURSES ─────────────────────────────────────────────────────────────
-// Combined Courses + Packages; free by default (?type=paid for paid). Course
-// free = purchase="no". Package has no isPaid col → free-package set empty (so
-// the free listing returns courses only); paid listing returns all packages.
+// Courses + packages; free by default (?type=paid for paid). Packages have no isPaid,
+// so the free listing returns courses only and the paid listing returns all packages.
 export const freeCourses = async (opts: { customerId: number | null; search: string | null; wantPaid: boolean; page: number; limit: number; skip: number; shareBase: string }) => {
   const courseWhere: any = { status: true, purchase: opts.wantPaid ? ("yes" as any) : ("no" as any) };
-  // Package: no isPaid col. Free request → no packages; paid request → all active.
   const packageWhere: any | null = opts.wantPaid ? { active: true } : null;
   const courseSearch = buildPrismaSearch(opts.search, ["name"]);
   if (courseSearch) { courseWhere.AND = courseSearch.AND; if (packageWhere) packageWhere.AND = courseSearch.AND; }
@@ -431,15 +388,13 @@ export const freeCourses = async (opts: { customerId: number | null; search: str
     enrichPackages(packages, opts.customerId, opts.shareBase),
   ]);
 
-  // Courses (`ordered`) and packages (`order_by`) are interleaved into one list;
-  // the shared comparator applies the client catalog rule across both spellings.
+  // Courses (`ordered`) and packages (`order_by`) interleave; the shared comparator handles both spellings.
   const merged = [...enrichedCourses, ...enrichedPackages].sort(byOrderThenCreatedAt);
   const total = merged.length;
   const data = merged.slice(opts.skip, opts.skip + opts.limit);
   return { data, total };
 };
 
-// ── enrich helpers (mirror enrichCoursesForList / enrichPackagesForList) ────────
 const enrichCourses = async (courses: any[], customerId: number | null, baseUrl: string) => {
   const courseIds = courses.map((c) => c.id);
   const now = new Date();
@@ -491,7 +446,7 @@ const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[],
   if (!customerId || (!courseIds.length && !packageIds.length)) return { courseDaysLeft, packageDaysLeft };
   const now = new Date();
 
-  // plan-id → owning course / package (a sub can point at a plan rather than the entity).
+  // A sub can point at a plan rather than the entity.
   const [coursePlans, packagePlans] = await Promise.all([
     courseIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { courseId: { in: courseIds } }, select: { id: true, courseId: true } }) : [],
     packageIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds } }, select: { id: true, packageId: true } }) : [],
@@ -537,15 +492,10 @@ const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[],
   return { courseDaysLeft, packageDaysLeft };
 };
 
-// ── shaping helpers ────────────────────────────────────────────────────────────
 const daysBetween = (from: Date, to: Date) => computeDaysLeft(to, from) ?? 0;
 
-// NOTE: the former free-material shaper was removed — study materials are always
-// paid, so freeMaterials() now returns an empty page (see its definition above).
-
 const shapeVideo = (v: any, customerId: number | null) => {
-  // Free videos: no raw id/url. A `free` media token (bound to the customer) is
-  // exchanged at /media/resolve for the real URL. Null when unauthenticated.
+  // No raw URL: a customer-bound `free` media token is exchanged at /media/resolve. Null when unauthenticated.
   const mediaToken = customerId != null ? signMediaToken({ k: "video", id: v.id, free: true, cust: customerId }) : null;
   return {
   _id: String(v.id),

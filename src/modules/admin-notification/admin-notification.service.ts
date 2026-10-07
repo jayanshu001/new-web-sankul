@@ -1,23 +1,13 @@
 /**
- * Admin notification WRITE subsystem — MySQL (Prisma) branch.
+ * Admin notifications: audience, FCM dispatch, scheduling, admin log and image banners.
  *
- * SQL mirror of the Mongo `src/admin/notification/{audience,dispatcher}.ts` write
- * path, enabling the `client-notification` flag. The legacy files branch on
- * `isAdminNotificationMysql()` and delegate here when on.
- *
- * Coupling resolved vs Mongo:
- *  - tokens: read from the single ws_customer.device (firebaseToken) column —
- *    one token per customer (last device wins), NOT Customer.firebaseTokens[].
- *  - audience: SQL customer ids (int). Course-targeting uses
- *    ws_package_course_subscription — which has NO payment_status column, so the
- *    entitlement signal is status=true (+ endAt null/future), per the migration's
- *    documented drift.
- *  - claim-lock / fanout / persistence: prisma.notification (ws_notification).
- *  - id type: SQL ints; the BullMQ jobId is `notif-${id}` (numeric-only ids are
- *    rejected by BullMQ), namespaced in the scheduler — see jobIdFor().
- *
- * Runtime ids ARE SQL ints (customer-auth + catalog-* make req ids SQL), so the
- * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
+ *  - tokens: the single ws_customer.device (firebaseToken) column — one token per
+ *    customer (last device wins).
+ *  - audience: customer ids (int). Course-targeting uses ws_package_course_subscription,
+ *    which has no payment_status column, so the entitlement signal is status=true
+ *    (+ endAt null/future).
+ *  - BullMQ jobId is `notif-${id}` (numeric-only ids are rejected by BullMQ),
+ *    namespaced in the scheduler — see jobIdFor().
  */
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter";
@@ -57,10 +47,9 @@ export interface DispatchResult {
 }
 
 /**
- * Resolve a targeted audience to SQL customer ids. Empty filter → isAll.
- * Only customers that (a) match platform/user/course filters AND (b) have a
- * device token in ws_customer.device are returned (token-owning gate mirrors
- * Mongo's `firebaseTokens.0 $exists`).
+ * Resolve a targeted audience to customer ids. Empty filter → isAll. Only customers
+ * that match the platform/user/course filters and have a device token in
+ * ws_customer.device are returned.
  */
 export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedAudience> {
   const platforms = filter.platforms ?? [];
@@ -93,7 +82,6 @@ export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedA
     if (courseCustomerIds.length === 0) return { isAll: false, customerIds: [] };
   }
 
-  // Intersect user + course id sets when both present.
   let idIn: number[] | undefined;
   if (hasUsers && courseCustomerIds) {
     const set = new Set(courseCustomerIds);
@@ -105,10 +93,8 @@ export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedA
     idIn = courseCustomerIds;
   }
 
-  // Token-owning gate + platform + live-account filters against ws_customer.
-  // A device token lives in the single `device` column (firebaseToken); only
-  // customers with a non-null token can receive a push (mirrors Mongo's
-  // `firebaseTokens.0 $exists`).
+  // Token-owning gate + platform + live-account filters. Only customers with a non-null
+  // `device` token can receive a push.
   const customers = await prisma.customer.findMany({
     where: {
       ...(idIn ? { id: { in: idIn } } : {}),
@@ -132,15 +118,10 @@ const TOKEN_ID_CHUNK = 1_000;
 /**
  * All device tokens for the given customers (broadcast → all live accounts).
  *
- * Read in PK-ordered pages rather than one findMany. A broadcast on a ~600k-row
- * ws_customer previously materialised every row object in a single result set
- * (and, for large targeted audiences, bound every id into one `IN (...)` big
- * enough to threaten max_allowed_packet). Paging keeps peak memory to one page
- * of rows plus the deduped token strings.
- *
- * Dedup is global across pages — identical to the previous single-query
- * behaviour, so the same device is never pushed twice when two accounts share a
- * token. Result order is PK order, as before.
+ * Read in PK-ordered pages: a single findMany over ~600k ws_customer rows materialised
+ * every row at once, and a large targeted audience bound every id into one `IN (...)`
+ * big enough to threaten max_allowed_packet. Dedup is global across pages, so a device
+ * shared by two accounts is never pushed twice. Result order is PK order.
  */
 async function collectTokens(audience: ResolvedAudience): Promise<string[]> {
   const seen = new Set<string>();
@@ -180,8 +161,8 @@ async function collectTokens(audience: ResolvedAudience): Promise<string[]> {
 }
 
 /**
- * Resolve audience, push via FCM, and (for targeted sends) fan out per-recipient
- * feed rows into ws_notification. Mirrors the Mongo dispatchAudience contract.
+ * Resolve audience, push via FCM, and (for targeted sends) fan out per-recipient feed
+ * rows into ws_notification.
  */
 export async function dispatchAudience(
   payload: {
@@ -200,11 +181,9 @@ export async function dispatchAudience(
   const isBroadcast = resolved.isAll;
   const tokens = await collectTokens(resolved);
 
-  // Content can be deactivated between an admin picking it (searchTargetOptions
-  // already excludes inactive rows) and this send actually firing — most
-  // relevant for scheduled notifications. Recheck here so a stale target
-  // degrades to "notification with no destination" instead of the app
-  // rendering "not found" on tap.
+  // Content can be deactivated between an admin picking it and a (scheduled) send
+  // firing. Recheck so a stale target degrades to "notification with no destination"
+  // instead of the app rendering "not found" on tap.
   let deepLink = payload.deepLink;
   let data = payload.data;
   const target = parseContentDeepLink(deepLink);
@@ -238,9 +217,8 @@ export async function dispatchAudience(
   if (!isBroadcast && resolved.customerIds.length && status === "sent") {
     try {
       const now = new Date();
-      // Chunk the per-recipient feed insert to bound memory/packet size for
-      // large targeted audiences. Each row is independent, so the set of rows
-      // inserted is identical regardless of batch boundaries (order-independent).
+      // Chunked to bound memory/packet size for large audiences; rows are independent,
+      // so batch boundaries don't change what is inserted.
       const FEED_INSERT_BATCH_SIZE = 500;
       const ids = resolved.customerIds;
       for (let i = 0; i < ids.length; i += FEED_INSERT_BATCH_SIZE) {
@@ -294,20 +272,20 @@ function audienceFromSnapshot(audience: any): AudienceFilter {
 }
 
 /**
- * Dispatch a single scheduled SQL notification by int id (BullMQ worker path).
- * Atomic claim "scheduled" → "sent" via conditional updateMany count, so retries
- * / multi-instance can't double-send. Returns null if already claimed/cancelled
- * OR if the id is not a SQL row (lets the worker fall back to the Mongo path).
+ * Dispatch a single scheduled notification by int id (BullMQ worker path). Atomic
+ * claim "scheduled" → "sent" via conditional updateMany count, so retries /
+ * multi-instance can't double-send. Returns null if already claimed/cancelled or the
+ * id is not numeric.
  */
 export async function dispatchScheduledById(
   notificationId: string,
   now: Date = new Date()
 ): Promise<DispatchResult | null> {
   const id = parseIntId(notificationId);
-  if (id == null) return null; // not a SQL id → caller falls back to Mongo
+  if (id == null) return null;
 
-  // Atomic claim. count===0 → already sent/cancelled by another worker (no-op);
-  // the worker only calls this after existsSql() confirmed a SQL row.
+  // count===0 → already sent/cancelled by another worker (no-op). The worker only
+  // calls this after existsSql() confirmed the row.
   const claim = await prisma.notification.updateMany({
     where: { id, status: "scheduled" },
     data: { status: "sent", sentAt: now, updatedAt: now },
@@ -351,7 +329,7 @@ export async function dispatchScheduledById(
   }
 }
 
-/** Does a SQL ws_notification row exist for this id? (worker dual-read routing) */
+/** Does a ws_notification row exist for this id? (worker routing) */
 export async function existsSql(notificationId: string): Promise<boolean> {
   const id = parseIntId(notificationId);
   if (id == null) return false;
@@ -369,7 +347,7 @@ export async function markFailed(notificationId: string, reason: string): Promis
   });
 }
 
-/** Boot rehydrate source: ids of all still-"scheduled" SQL notifications. */
+/** Boot rehydrate source: ids of all still-"scheduled" notifications. */
 export async function listScheduledForRehydrate(): Promise<{ id: string; scheduledAt: Date }[]> {
   const rows = await prisma.notification.findMany({
     where: { status: "scheduled", scheduledAt: { not: null } },
@@ -377,8 +355,6 @@ export async function listScheduledForRehydrate(): Promise<{ id: string; schedul
   });
   return rows.map((r) => ({ id: String(r.id), scheduledAt: r.scheduledAt as Date }));
 }
-
-// ─── Admin controller persistence (ws_notification parent rows) ──────────────────
 
 /** Create a scheduled parent row; returns its int id (BullMQ jobId = `notif-${id}`). */
 export async function createScheduled(input: {
@@ -525,11 +501,9 @@ export async function deleteOne(
   return { existed: true, wasScheduled: row.status === "scheduled" };
 }
 
-// ─── Deep-link target options (searchable picker source) ─────────────────────
-// Powers the admin panel's server-side searchable dropdown: given a content
-// entity + query, return {id,label} rows so the admin picks an item instead of
-// typing a numeric id. Label field per model: TestSeries uses `title`, the rest
-// use `name` (Course.name is nullable → coalesced to "" for display).
+// Deep-link target options: the admin panel's server-side searchable dropdown returns
+// {id,label} rows so the admin picks an item instead of typing a numeric id. Label
+// field: TestSeries uses `title`, the rest `name` (Course.name nullable → "").
 export type TargetEntity =
   | "course"
   | "package"
@@ -559,6 +533,7 @@ const TARGET_ENTITY_STATUS_FIELD: Record<TargetEntity, string> = {
   "test-series": "status",
 };
 
+// Searchable deep-link target picker; only active rows are offered.
 export async function searchTargetOptions(opts: {
   entity: TargetEntity;
   q?: string;
@@ -567,13 +542,10 @@ export async function searchTargetOptions(opts: {
 }): Promise<{ data: { id: number; label: string }[]; total: number }> {
   const q = opts.q?.trim();
 
-  // Each branch keeps its Prisma delegate + label field explicit (delegates are
-  // not structurally compatible, so a generic helper can't type-check cleanly).
-  //
-  // `statusField` is always ANDed in as `true` — an admin must never be able to
-  // pick an inactive/unpublished item as a notification target: the resulting
-  // deeplink would point at content the app can't render (404 / hidden), which
-  // is how a broadcast notification "breaks" on tap.
+  // Each branch keeps its Prisma delegate + label field explicit (delegates are not
+  // structurally compatible, so a generic helper can't type-check cleanly).
+  // `statusField` is always ANDed in as `true`: an inactive target would produce a
+  // deeplink the app can't render, which is how a broadcast "breaks" on tap.
   const run = async <T extends { id: number }>(
     findMany: (args: any) => Promise<T[]>,
     count: (args: any) => Promise<number>,
@@ -611,10 +583,8 @@ export async function searchTargetOptions(opts: {
 }
 
 /**
- * Re-check, right before a notification actually goes out, that a "content"
- * target's deeplink still points at an active row. Content can be deactivated
- * between an admin picking it and a scheduled job firing, so this is defense
- * in depth on top of `searchTargetOptions` already excluding inactive rows.
+ * Re-check, right before a notification goes out, that a "content" target's deeplink
+ * still points at an active row (defense in depth on top of searchTargetOptions).
  */
 export async function isTargetContentActive(entity: TargetEntity, id: number): Promise<boolean> {
   const statusField = TARGET_ENTITY_STATUS_FIELD[entity];
@@ -635,10 +605,8 @@ export async function isTargetContentActive(entity: TargetEntity, id: number): P
   }
 }
 
-// ─── ImageNotification CRUD (in-app banner images; ws_image_notification) ────────
-// Same `client-notification` flag. DTO mirrors the Mongo shape (`_id`,
-// `redirectUrl`). The SQL table has no timestamps, so the Mongo `sort by
-// createdAt desc` becomes `id desc` (newest first — equivalent for autoincrement).
+// ImageNotification CRUD (in-app banner images; ws_image_notification). DTO keeps the
+// `_id` / `redirectUrl` shape. The table has no timestamps, so newest-first is `id desc`.
 const imageDto = (r: any) => ({
   _id: String(r.id),
   image: r.image,
@@ -652,9 +620,8 @@ export async function listImageNotifications() {
 }
 
 /**
- * Client feed: active in-app banner images, newest first. Same DTO/flag.
- * Paginated (skip/take) with a sibling count over the identical where. Banner
- * rows have no natural text field, so there is no `search` support here.
+ * Client feed: active in-app banner images, newest first, paginated with a sibling
+ * count over the same where. No natural text field, so no `search`.
  */
 export async function listActiveImageNotifications(
   opts: { skip?: number; take?: number } = {}

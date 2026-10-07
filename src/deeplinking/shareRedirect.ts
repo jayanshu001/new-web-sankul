@@ -1,3 +1,4 @@
+// Share links: share-id cipher, share URLs and the app-redirect page renderer.
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";

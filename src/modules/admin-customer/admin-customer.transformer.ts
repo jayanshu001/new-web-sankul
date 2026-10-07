@@ -1,3 +1,4 @@
+// Admin customers: row to DTO mapping (response shape is frozen).
 import type {
   Customer,
   CustomerState,
@@ -5,11 +6,6 @@ import type {
   CustomerEducation,
 } from "@prisma/client";
 
-/**
- * A Customer row with its lookup relations eager-loaded (the shape the
- * repository returns for list/detail). Prisma's generated relation types are
- * loosened here to the fields we actually project.
- */
 export type CustomerWithLookups = Customer & {
   state?: Pick<CustomerState, "id" | "name"> | null;
   district?: Pick<CustomerDistict, "id" | "name"> | null;
@@ -22,9 +18,8 @@ interface RefDto {
 }
 
 /**
- * SQL `ws_customer` stores a single `full_name`; the Mongo API contract
- * exposes firstName/middleName/lastName. Split best-effort: first token →
- * firstName, last token → lastName (when >1 token), middle tokens → middleName.
+ * ws_customer stores a single full_name; the API exposes firstName/middleName/lastName.
+ * Split best-effort: first token → firstName, last token (when >1) → lastName, rest → middleName.
  */
 const splitFullName = (
   full: string | null | undefined,
@@ -47,7 +42,6 @@ const splitFullName = (
   };
 };
 
-/** Compose a single full_name from the API's name parts (create/update). */
 export const composeFullName = (parts: {
   firstName?: string | null;
   middleName?: string | null;

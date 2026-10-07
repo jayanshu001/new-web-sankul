@@ -1,39 +1,14 @@
-/**
- * Catalog · Package service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Two independently-gated sub-modules share this dir:
- *
- *  - `catalog-package-type`  (Phase A — ENABLED): `ws_package_type` lookup. Zero
- *    coupling, 6 rows, pure metadata. Safe to flip on its own.
- *
- *  - `catalog-package`       (Phase B — flag OFF): `ws_package` reads. Built
- *    dual-path but kept OFF because the full `/client/packages` contract cannot
- *    be reproduced from `ws_package` alone this wave — the SQL table lacks the
- *    Mongo-only catalog fields and every endpoint joins commerce-wave tables
- *    (plans/subscriptions/promo/chat). Flips WITH the commerce wave.
- *    See docs/migration/CATALOG_MODULE_SCOPE.md.
- */
+// Package catalog: package types and active package lookups.
 import { catalogPackageRepository as repo } from "./catalog-package.repository";
 import { toPackageDto, toPackageTypeDto } from "./catalog-package.transformer";
 import type { PackageDto, PackageTypeDto } from "./catalog-package.types";
 
-
-/** Phase A — the package-type lookup branch (enabled). */
-
-/** Phase B — the ws_package read branch (kept OFF until commerce wave). */
-
-/** Parse a string id to a positive int, else null. */
 export const parsePackageId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ── Phase A: package_type ───────────────────────────────────────────────────
-
-/**
- * All package types in the Mongo `listPackageTypes` order/shape. The SQL table
- * has no `order`/`active`, so all rows are returned (active) ordered by name.
- */
+/** `ws_package_type` has no `order`/`active`, so every row is returned, ordered by name. */
 export const listPackageTypes = async (
   opts: { search?: string; skip?: number; take?: number } = {}
 ): Promise<{ data: PackageTypeDto[]; total: number }> => {
@@ -43,8 +18,6 @@ export const listPackageTypes = async (
   ]);
   return { data: rows.map(toPackageTypeDto), total };
 };
-
-// ── Phase B: package (flag OFF) ─────────────────────────────────────────────
 
 export const findPackageById = async (id: number): Promise<PackageDto | null> => {
   const row = await repo.findPackageById(id);

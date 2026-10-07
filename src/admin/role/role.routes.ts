@@ -1,3 +1,4 @@
+// Admin roles: role and role-permission routes behind strict catalog RBAC.
 import { Router } from "express";
 import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
 import {
@@ -12,10 +13,9 @@ import {
 
 const router = Router();
 
-// Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC (`roles.*`
-// in rbacRouteMap) is HARD-enforced here regardless of RBAC_ENFORCE — this
-// router is the security boundary itself. Replaced the old
-// requireRole("super_admin") floor 2026-09-11.
+// Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC (`roles.*`)
+// is hard-enforced here regardless of RBAC_ENFORCE because this router is itself
+// the security boundary.
 router.use(enforceRbacStrict);
 
 router.get("/", listRoles);

@@ -1,8 +1,6 @@
-/**
- * Maps ws_* association rows into the exact DTO shape the legacy Mongo educator
- * -details handler returned, so the admin UI is identical on either backend.
- * `purchase`/`is_featured` are CourseFlag01 enums ("yes" = '1') → booleans.
- */
+// Educator details: association row to DTO mapping (response shape is frozen).
+
+/** `purchase`/`is_featured` are CourseFlag01 enums ("yes" = '1') → booleans. */
 
 type CountMap = Map<number, number>;
 type NameMap = Map<number, { name: string | null }>;

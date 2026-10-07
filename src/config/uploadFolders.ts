@@ -1,51 +1,42 @@
-// src/config/uploadFolders.ts
-//
-// SINGLE source of truth for where every upload lands in the Spaces bucket.
-// Change a folder here and every route that uses it follows — routes never
-// hard-code a path, they pick a key: `uploadTo(UPLOAD_FOLDERS.package)` (or a
-// field→folder map for multi-file forms) right before the multer middleware.
-//
-// Why these exact paths: they mirror the old Laravel admin
-// (websankul-mobile-app-admin-panel, `Storage::disk('spaces')->put('uploads/…')`).
-// The old mobile app prepends its own `<cdn>/uploads/<folder>/` base to a bare
-// filename, and the old API (websankul-api `api_response.js` KNOWN_UPLOAD_PATHS)
-// strips our full URLs back down to that filename. So a file MUST sit directly
-// inside its legacy folder (no extra sub-folders) or the old app 404s.
-// Do not rename a LEGACY entry unless the old app/API change with it.
-//
-// No trailing slash — the uploader appends `/<timestamp>-<random>.<ext>`.
+// Upload folders: the Spaces key prefix for every upload kind.
+// Where every upload lands in Spaces; routes pick a key via `uploadTo(...)`, never
+// a hard-coded path. Legacy entries mirror the old Laravel admin: the old mobile
+// app prepends `<cdn>/uploads/<folder>/` to a bare filename (and the old API strips
+// our URLs back to it), so files must sit directly in their legacy folder. Do not
+// rename a legacy entry unless the old app/API change with it.
+// No trailing slash: the uploader appends `/<timestamp>-<random>.<ext>`.
 
 export const UPLOAD_FOLDERS = {
-  // ── Legacy folders (match Laravel admin 1:1) ─────────────────────────────
-  package: "uploads/package", // courses + packages (Courses/Packages/EducatorCourses.php)
-  educator: "uploads/educator", // educators (Educators.php)
+  // Legacy folders (match Laravel admin 1:1)
+  package: "uploads/package", // courses + packages
+  educator: "uploads/educator",
   qcategory: "uploads/qcategory", // subject / video / material categories
-  quizCategory: "uploads/quiz_category", // exam categories (Quizscategorys.php)
-  quizSolution: "uploads/quizs", // exam solution PDF (Quizs.php)
+  quizCategory: "uploads/quiz_category", // exam categories
+  quizSolution: "uploads/quizs", // exam solution PDF
   questions: "uploads/questions", // question / solution / option images
-  materials: "uploads/materials", // material files (Materials.php)
-  bookImages: "uploads/book_images", // book image (Books.php)
-  bookThumbnail: "uploads/books/thumbnail", // book thumbnail
+  materials: "uploads/materials",
+  bookImages: "uploads/book_images",
+  bookThumbnail: "uploads/books/thumbnail",
   bookDemo: "uploads/books/demo_copy", // book demo PDF
-  ebookImages: "uploads/e-books/images", // ebook image (Ebooks.php)
+  ebookImages: "uploads/e-books/images",
   ebookThumbnail: "uploads/e-books/thumbnail",
   ebookDemo: "uploads/e-books/demo_book",
   ebookFull: "uploads/e-books/full_book",
-  popup: "uploads/popup_notification", // popups (PopupNotifications.php)
-  banner: "uploads/banner_images", // banners + live banners (BannerSliders.php)
-  customers: "uploads/customers", // customer profile picture (Customers.php)
-  users: "uploads/users", // admin users (UserController.php)
-  promoters: "uploads/promoters", // promoters (Promoters.php)
+  popup: "uploads/popup_notification",
+  banner: "uploads/banner_images", // banners + live banners
+  customers: "uploads/customers", // customer profile picture
+  users: "uploads/users",
+  promoters: "uploads/promoters",
   offlineCenters: "uploads/websankul_static/offline_centers",
   offlineBatches: "uploads/websankul_static/offline_batches",
-  jobsOrganizations: "uploads/govt-jobs/organizations", // GovtJobFileService.php
+  jobsOrganizations: "uploads/govt-jobs/organizations",
   jobsOgImages: "uploads/govt-jobs/og-images", // featured + OG images
   jobsEditor: "uploads/govt-jobs/editor", // inline editor images
   jobsContentFiles: "uploads/govt-jobs/content-files", // editor document attachments
   jobsPapers: "uploads/govt-jobs/papers",
   jobsPaperPreviews: "uploads/govt-jobs/paper-previews",
 
-  // ── New-admin-only resources (no Laravel equivalent) ─────────────────────
+  // New-admin-only resources
   liveCourse: "uploads/live_course",
   testSeries: "uploads/test_series", // thumbnails + content-category icons
   pcMaterial: "uploads/pc_material", // master › materials

@@ -1,15 +1,6 @@
-/**
- * Inquiry — MySQL (Prisma) branch. Wave 8. ws_website_inquiry ALTERed to add
- * customer_id / description / message / source (DDL 2026-06-18_create_wave8_misc_tables.sql).
- *
- * Admin list/get/delete + client submit.
- * customer populate hydrates from ws_customer (full_name split → first/last,
- * phoneNumber, emailAddress) to mirror the Mongo .populate("customerId",
- * "_id firstName lastName phoneNumber email").
- */
+// Inquiries: admin list/detail/delete and app or web enquiry submission.
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
-
 
 export const parseInquiryId = (id: string): number | null => {
   const n = Number(id);
@@ -43,7 +34,7 @@ const dto = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
-/** Hydrate customer refs (full_name → first/last split) for a set of rows. */
+/** Customer refs with full_name split into first/last. */
 const hydrateCustomers = async (rows: any[]) => {
   const ids = [...new Set(rows.map((r) => r.customerId).filter((x): x is number => x != null && x > 0))];
   if (!ids.length) return rows.map((r) => ({ ...r, customer: null }));
@@ -60,6 +51,7 @@ const hydrateCustomers = async (rows: any[]) => {
   return rows.map((r) => ({ ...r, customer: r.customerId != null ? byId.get(r.customerId) ?? null : null }));
 };
 
+// Admin list, newest first; unknown course/mode filters are ignored.
 export const listInquiries = async (opts: {
   search?: string; course?: string; mode?: string; from?: Date; to?: Date; page: number; limit: number;
 }): Promise<{ data: any[]; total: number }> => {
@@ -96,11 +88,10 @@ export const deleteInquiry = async (id: number): Promise<boolean> => {
   return true;
 };
 
-/** Client submit: { customerId, description } (matches the Mongo client path).
- *  Snapshots the submitter's profile (name/mobile/email/city) onto the row so the
- *  admin list shows who inquired without a customer join — previously these
- *  columns were left NULL. `new Date()` is a UTC instant; Prisma persists it as
- *  UTC for the DATETIME columns regardless of the DB session timezone. */
+/**
+ * Snapshots the submitter's name/mobile/email/city onto the row so the admin list
+ * needs no customer join.
+ */
 export const submitInquiry = async (customerId: number, description: string): Promise<any> => {
   const now = new Date();
   const customer = await prisma.customer.findUnique({
@@ -124,7 +115,7 @@ export const submitInquiry = async (customerId: number, description: string): Pr
   return dto(h);
 };
 
-/** Public (pre-login) lead-capture form on the marketing site — no customer row. */
+/** Public (pre-login) marketing-site lead form; no customer row. */
 export const submitPublicEnquiry = async (input: {
   name: string; mobile: string; email?: string; city: string; mode: "online" | "offline"; course: string;
 }): Promise<any> => {

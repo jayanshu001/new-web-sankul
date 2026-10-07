@@ -1,3 +1,4 @@
+// Admin uploads: presigned upload URL route.
 import { Router } from "express";
 import { createPresignedUpload } from "./uploads.controller";
 

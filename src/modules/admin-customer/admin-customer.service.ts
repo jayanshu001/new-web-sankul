@@ -1,3 +1,4 @@
+// Admin customers: customer CRUD, status, uniqueness checks and form lookups.
 import type { Prisma } from "@prisma/client";
 import { adminCustomerRepository as repo } from "./admin-customer.repository";
 import {
@@ -6,7 +7,6 @@ import {
   type CustomerDto,
 } from "./admin-customer.transformer";
 
-/** Parse a positive integer id from a string; null if invalid. */
 export const parseCustomerId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -18,7 +18,6 @@ const parseIntId = (v?: string | null): number | undefined => {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 };
 
-/** Shared input shape from the admin customer validation (Mongo-style names). */
 export interface CustomerWriteInput {
   firstName?: string | null;
   middleName?: string | null;
@@ -58,8 +57,8 @@ export const listCustomers = async (opts: {
   };
   const skip = (opts.page - 1) * opts.limit;
   const rows = await repo.list({ ...where, skip, take: opts.limit });
-  // A short first page IS the total — skip the COUNT, which is a full index scan
-  // for every search term (see 2026-09-14_customer_search_covering_index.sql).
+  // A short first page is the total; skip the COUNT, which is a full index scan per
+  // search term.
   const total = opts.page === 1 && rows.length < opts.limit ? rows.length : await repo.count(where);
   return { items: rows.map(toCustomerDto), total };
 };
@@ -76,14 +75,12 @@ export const emailInUse = async (email: string, exceptId?: number): Promise<bool
   !!(await repo.emailInUse(email, exceptId));
 
 /**
- * Build the scalar/FK fields shared by update. Uses the UNCHECKED update input
- * (raw FK columns) because state/district are NOT NULL in MySQL — clearing them
- * means writing 0 (the legacy sentinel), never NULL.
+ * Uses the unchecked update input (raw FK columns) because state/district are
+ * NOT NULL in MySQL: clearing them writes 0 (the legacy sentinel), never NULL.
  */
 const buildScalars = (input: CustomerWriteInput): Prisma.CustomerUncheckedUpdateInput => {
   const data: Prisma.CustomerUncheckedUpdateInput = {};
 
-  // Name parts → single full_name (only when at least one part is supplied).
   if (
     input.firstName !== undefined ||
     input.middleName !== undefined ||
@@ -104,8 +101,7 @@ const buildScalars = (input: CustomerWriteInput): Prisma.CustomerUncheckedUpdate
   if (input.goals !== undefined) data.goal = input.goals as Prisma.InputJsonValue;
   if (input.status !== undefined) data.status = input.status;
 
-  // Lookup FKs (Int). state/district are NOT NULL → default to 0 when cleared;
-  // education is nullable → may be set NULL.
+  // state/district are NOT NULL → 0 when cleared; education is nullable.
   if (input.stateId !== undefined) data.stateId = parseIntId(input.stateId) ?? 0;
   if (input.districtId !== undefined) data.districtId = parseIntId(input.districtId) ?? 0;
   if (input.educationId !== undefined) data.educationId = parseIntId(input.educationId) ?? null;
@@ -116,9 +112,8 @@ const buildScalars = (input: CustomerWriteInput): Prisma.CustomerUncheckedUpdate
 export const createCustomer = async (
   input: CustomerWriteInput
 ): Promise<CustomerDto> => {
-  // Use the UNCHECKED create input (raw FK columns) so we can default the
-  // NOT-NULL state/district columns to 0 — matching the legacy dump + the
-  // customer-auth createStub. NULL on these columns is rejected by MySQL.
+  // Unchecked create input so the NOT NULL state/district columns default to 0
+  // (matches the legacy dump and customer-auth createStub); MySQL rejects NULL here.
   const data: Prisma.CustomerUncheckedCreateInput = {
     phoneNumber: input.phoneNumber!,
     fullName: composeFullName(input),
@@ -150,7 +145,7 @@ export const updateCustomer = async (
   input: CustomerWriteInput
 ): Promise<CustomerDto> => {
   const data = buildScalars(input);
-  // Changing the phone forces re-verification, matching the Mongo branch.
+  // Changing the phone forces re-verification.
   if (input.phoneNumber !== undefined && input.phoneNumber !== null) {
     data.isPhoneVerified = false;
   }
@@ -165,15 +160,9 @@ export const setCustomerStatus = (id: number, status: boolean) =>
   repo.setStatus(id, status);
 
 /**
- * Is this educationId a real, ACTIVE ws_customer_education row?
- *
- * Called before create/update because the column has no FK — writing an unknown
- * id "succeeds" and then silently reads back as null. Inactive rows are rejected
- * too: `getPreRequisites` only offers `status: true` options, so an inactive id
- * can only come from a stale form or a hand-made request.
- *
- * `undefined`/`null` (field omitted, or education cleared) is always allowed —
- * the column is nullable.
+ * Is this educationId a real, active ws_customer_education row? The column has no FK,
+ * so an unknown id "succeeds" and reads back as null. Inactive ids are rejected since
+ * getPreRequisites only offers active ones. null/undefined is allowed (nullable column).
  */
 export const educationIdIsValid = async (
   educationId?: string | null
@@ -185,7 +174,7 @@ export const educationIdIsValid = async (
   return !!row && row.status === true;
 };
 
-// ─── Pre-requisites ────────────────────────────────────────────────────────
+// Customer form dropdowns: states and educations.
 export const getPreRequisites = async () => {
   const [states, educations] = await Promise.all([
     repo.listStates(),

@@ -1,3 +1,4 @@
+// Client payments: package create-order (promo, wallet, shipping snapshot, Razorpay).
 import { Request, Response } from "express";
 import { z, ZodError } from "zod";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
@@ -16,7 +17,6 @@ import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { queueCRMLead } from "../../utils/crm";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 
-// SQL planId is numeric (migrated id-space).
 const createPackageOrderSqlSchema = z.object({
   packageId: z.coerce
     .number({ invalid_type_error: "Please select a valid plan." })
@@ -35,10 +35,8 @@ const createPackageOrderSqlSchema = z.object({
     .optional(),
 });
 
-// POST /api/v1/client/payment/create-order/package
-// Mirror of /create-order/course but for plan rows whose `packageId` (target
-// Package) is set instead of `courseId`. Creates a PackageCourseSubscription
-// in paymentStatus="pending" and a Razorpay order. /verify flips it to verified.
+// Like /create-order/course but for plan rows with `packageId` set. Writes only the
+// pending ws_package_course_order row + Razorpay order; /payment/verify creates the subscription.
 export const createPackageOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -56,10 +54,6 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       });
     }
 
-    // ── MySQL package write path (commerce-order tables) ─────────────────────
-    // 3-table pattern (order → sub+tracking at verify), mirroring the course path.
-    // Writes only the pending ws_package_course_order row here; /payment/verify
-    // creates/extends the subscription.
     {
       const customerIdInt = Number(customerId);
       if (!Number.isInteger(customerIdInt)) {
@@ -67,11 +61,9 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         return res.status(400).json({ success: false, message: "Invalid customer id." });
       }
       const body = createPackageOrderSqlSchema.parse(req.body);
-      // The request carries an ADDRESS-BOOK id (ws_customer_address) — that is the
-      // only list the app shows. `ws_package_course_order.shipping` is a foreign
-      // key to ws_customer_shipping, so snapshot the address into a real shipping
-      // row and persist THAT id. Resolving also proves ownership, replacing the
-      // old addressBelongsToCustomerSql gate.
+      // The request carries an address-book id (ws_customer_address), but
+      // `ws_package_course_order.shipping` is an FK to ws_customer_shipping, so the
+      // address is snapshotted into a shipping row. Resolving also proves ownership.
       let shippingIdSql: number | null = null;
       if (body.customerShippingId) {
         const resolved = await resolveShippingIdForAddress(customerIdInt, body.customerShippingId);
@@ -92,8 +84,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         logger.warn("createPackageOrderPayment[mysql] plan invalid/not-package/zero/inactive", { traceId, customerId, packageId: body.packageId });
         return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       }
-      // Gate on the parent package being active — a disabled/removed package must
-      // not be purchasable even if a stale plan row still points at it.
+      // A disabled package must not be purchasable even if a stale plan row points at it.
       const pkgSql = await prisma.package.findFirst({ where: { id: planSql.packageId, active: true }, select: { id: true, name: true } });
       if (!pkgSql) {
         logger.warn("createPackageOrderPayment[mysql] package inactive/missing", { traceId, customerId, targetPackageId: planSql.packageId });
@@ -117,17 +108,15 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         referrerIdNum = result.referrerId ?? null;
       }
 
-      // Freeze the redeemed code into the order as the legacy snapshot OBJECT,
-      // routed to exactly ONE column (promocode vs refferalcode). promoter-data
-      // attributes commission by JSON path over these columns, so the object — not
-      // the bare code — is what the promoter dashboard can actually see.
+      // Freeze the redeemed code as the snapshot OBJECT in exactly one column
+      // (promocode vs refferalcode); promoter-data attributes commission by JSON path over it.
       const codeSnapshot = await buildOrderCodeSnapshots({
         promocodeId: promocodeIdNum,
         referrerId: referrerIdNum,
         planId: body.packageId,
       });
 
-      // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
+      // Wallet ("coin") redemption reduces the charge here; the debit happens at verify.
       const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
       if (walletUsage.error) {
         logger.warn("createPackageOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
@@ -143,7 +132,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
         notes: { kind: "package", targetPackageId: String(planSql.packageId), packageId: String(body.packageId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
       });
-      // The order row keeps the full money breakdown, not just the charged amount:
+      // Order row keeps the full breakdown:
       //   price (list) − code_discount (promo/referral) − ws_coin = discount_price (paid)
       const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: codeSnapshot.promocode, referralCode: codeSnapshot.refferalcode, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: shippingIdSql, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });

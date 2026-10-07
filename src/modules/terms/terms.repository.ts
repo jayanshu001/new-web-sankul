@@ -1,9 +1,9 @@
+// Terms and conditions: Prisma queries.
 import { prisma } from "../../config/prisma";
 import type { TermsCreateInput, TermsUpdateInput } from "./terms.types";
 import { toPrismaTermsCreate, toPrismaTermsUpdate } from "./terms.transformer";
 
 export const termsRepository = {
-  /** Admin list (all). Optional `activeOnly` + `module` filter for client reads. */
   findMany: (opts?: { activeOnly?: boolean; module?: string }) =>
     prisma.termsAndConditions.findMany({
       where: {
@@ -13,15 +13,10 @@ export const termsRepository = {
       orderBy: { id: "asc" },
     }),
 
-  /** Client single-module read: first active row for that module. */
   findActiveByModule: (module: string) =>
     prisma.termsAndConditions.findFirst({ where: { module, status: true } }),
 
-  /**
-   * Any row for this module, active or not. One row per module is the model the
-   * client read assumes (`findActiveByModule` is a findFirst), so this backs the
-   * create/update duplicate guard.
-   */
+  /** Any row for this module, active or not; backs the one-row-per-module duplicate guard. */
   findAnyByModule: (module: string) =>
     prisma.termsAndConditions.findFirst({ where: { module }, select: { id: true, module: true } }),
 

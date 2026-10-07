@@ -1,3 +1,4 @@
+// Jobs portal lifecycle: BullMQ queue for scheduled publish and hourly job-expiry sweep.
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import { setContentStatus } from "../../modules/jobs-content/content.service";
@@ -7,7 +8,7 @@ import logger from "../../utils/logger";
 
 // Two clock-driven transitions nothing else triggers: flipping a scheduled
 // post to published at its publishedAt time, and expiring a job posting past
-// its application deadline. Modeled on admin/exports/export.scheduler.ts.
+// its application deadline.
 
 const QUEUE_NAME = "jobs-content-lifecycle";
 

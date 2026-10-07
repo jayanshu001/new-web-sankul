@@ -1,12 +1,10 @@
+// Bootstrap: env validation, DB connect, schedulers, HTTP + socket servers and graceful shutdown.
 import dotenv from "dotenv";
 // dotenv must load BEFORE env validation runs.
 dotenv.config();
 
-// JSON.stringify cannot serialize BigInt → "Do not know how to serialize a BigInt".
-// Prisma returns BigInt for columns like ws_*.tracking (AWB) and unsigned-bigint
-// ids, which can reach res.json() on raw-row endpoints (e.g. /admin/dashboard
-// recent subscriptions carry PackageCourseSubscription.trackingId). Serialize all
-// BigInt as strings globally so those responses are safe.
+// JSON.stringify throws on BigInt, which Prisma returns for columns like ws_*.tracking
+// (AWB) and unsigned-bigint ids that reach res.json(). Serialize BigInt as a string globally.
 (BigInt.prototype as any).toJSON = function () {
   return this.toString();
 };
@@ -55,12 +53,9 @@ const workersEnabled = process.env.WORKER_ENABLED !== "false";
 const bootMs = (label: string, startedAt: number) =>
   logger.info(`[boot] ${label}`, { ms: Date.now() - startedAt });
 
-// HTTP server keep-alive tuning. Node's default keepAliveTimeout is 5s and
-// headersTimeout is 60s; we set keepAliveTimeout > the typical AWS ELB / GCP
-// LB idle timeout (60s) so the server keeps connections open until the LB
-// closes them — never the other way around (which would surface as
-// intermittent ECONNRESET on the client). headersTimeout must be strictly
-// greater than keepAliveTimeout per the http module contract.
+// keepAliveTimeout must exceed the load balancer's idle timeout (typically 60s) so the
+// LB closes idle connections first; otherwise clients see intermittent ECONNRESET.
+// headersTimeout must be strictly greater than keepAliveTimeout.
 const KEEP_ALIVE_TIMEOUT_MS = Number(process.env.KEEP_ALIVE_TIMEOUT_MS) || 65_000;
 const HEADERS_TIMEOUT_MS =
   Number(process.env.HEADERS_TIMEOUT_MS) || KEEP_ALIVE_TIMEOUT_MS + 5_000;
@@ -81,6 +76,7 @@ const closeCameraIngest = async (wss: WebSocketServer): Promise<void> => {
   await new Promise<void>((resolve) => wss.close(() => resolve()));
 };
 
+// Shutdown hook before the HTTP server closes: stops schedulers, sockets and the PDF browser.
 const buildPreClose =
   (sockets?: { io?: SocketIOServer; wss?: WebSocketServer }) => async (): Promise<void> => {
     if (workersEnabled) {
@@ -136,6 +132,7 @@ const buildPreClose =
     }
   };
 
+// Starts every background scheduler (notifications, PDF upload, exports, jobs, ...).
 const startWorkers = async (): Promise<void> => {
   const t0 = Date.now();
   await initNotificationScheduler();

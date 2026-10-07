@@ -1,3 +1,4 @@
+// Client rank predictor: HTTP handlers for papers, submissions, ranks and profile.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { HttpError } from "../../middlewares/errorHandler";
@@ -30,6 +31,7 @@ const examIdOf = (req: Request): bigint => BigInt(req.params.examId as string);
 
 const submissionIdOf = (req: Request): bigint => BigInt(req.params.submissionId as string);
 
+// Inactive papers answer 404, same as a missing one.
 const requireActiveExam = async (req: Request): Promise<RankExamDto> => {
   const exam = await rankPredictorService.getExam(examIdOf(req));
   if (!exam.is_active) {
@@ -96,6 +98,7 @@ export const getSubmission = asyncHandler(async (req: Request, res: Response) =>
   success(res, await rankPredictorService.getSubmission(submissionIdOf(req), customerIdOf(req)))
 );
 
+// Redirects to a signed URL for the owner's uploaded sheet PDF.
 export const getSubmissionFile = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.getSubmission(
     submissionIdOf(req),

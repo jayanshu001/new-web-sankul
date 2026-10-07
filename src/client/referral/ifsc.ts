@@ -1,6 +1,4 @@
-// Razorpay's free, no-auth IFSC lookup. Returns bank/branch/city metadata
-// when the IFSC corresponds to a real branch, otherwise 404.
-// Docs: https://razorpay.com/docs/api/ifsc/
+// IFSC lookup: Razorpay public IFSC API (https://razorpay.com/docs/api/ifsc/); 404 for unknown codes.
 
 import { callOutbound } from "../../libs/outbound";
 
@@ -15,16 +13,14 @@ export type IfscDetails = {
   city: string;
 };
 
+// Null for an unknown IFSC; test codes short-circuit without a network call.
 export async function lookupIfsc(ifsc: string): Promise<IfscDetails | null> {
   if (TEST_IFSC_CODES.has(ifsc.toUpperCase())) {
     return { bankName: "Test Bank", branchName: "Test Branch", city: "Test City" };
   }
 
-  // callOutbound provides the timeout + retry + circuit breaker uniformly.
-  // 404 is a legitimate "no such IFSC" response from Razorpay, so we
-  // surface it as `null` rather than throwing — the wrapper would otherwise
-  // count 404s toward the breaker, which would be wrong (404 isn't a
-  // dependency failure).
+  // 404 means "no such IFSC", so it maps to null instead of throwing: callOutbound
+  // would otherwise count it toward the circuit breaker.
   return callOutbound(
     async () => {
       const res = await fetch(`${IFSC_LOOKUP_URL}/${encodeURIComponent(ifsc)}`);

@@ -1,3 +1,4 @@
+// Educator details: admin view of an educator's associations, summary and paged tables.
 import { educatorDetailsRepository as repo } from "./educator-details.repository";
 import {
   toCourseDto,
@@ -12,12 +13,7 @@ const uniqIds = (xs: (number | null | undefined)[]): number[] =>
 
 const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0);
 
-/**
- * Builds the admin educator-details aggregate (associations + summary) from MySQL,
- * matching the legacy Mongo handler's response shape exactly. Video categories are
- * split into recording "folders" (those linked to a live course) vs root video
- * categories, mirroring the Mongo liveCourseId split.
- */
+/** Video categories split into recording "folders" (linked to a live course) vs root categories. */
 export const getEducatorAssociations = async (educatorId: number) => {
   const [courses, liveCourses, packages, videoCats, liveSessions] = await Promise.all([
     repo.coursesByEducator(educatorId),
@@ -45,7 +41,6 @@ export const getEducatorAssociations = async (educatorId: number) => {
   const vcatDtos = videoCats.map((v) => toVideoCategoryDto(v, liveCourseNames));
   const liveSessionDtos = liveSessions.map(toLiveSessionDto);
 
-  // Split: live-course folders (linked to a live course) vs root video categories.
   const liveCourseFolders = vcatDtos.filter((v) => v.liveCourseId);
   const videoCategories = vcatDtos.filter((v) => !v.liveCourseId);
 
@@ -82,9 +77,7 @@ export const getEducatorAssociations = async (educatorId: number) => {
   return { associations, summary };
 };
 
-// ─── Per-association paginated lists ──────────────────────────────────────────
-// Each returns { data, total } for one table of the admin educator-detail page,
-// paging the DB query server-side. DTO shapes match the aggregate's associations.
+// Per-association pages for the admin educator-detail tables; DTO shapes match the aggregate.
 
 type ListArgs = { skip: number; take: number };
 

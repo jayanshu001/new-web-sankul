@@ -1,3 +1,4 @@
+// Admin plan popularity: HTTP handler to recompute the "Most Popular" plan badge.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -8,14 +9,10 @@ import {
   type PopularityScope,
 } from "../../modules/plan-popularity/plan-popularity.service";
 
-// NOTE: `pinMostPopular` (POST /pin) was removed 2026-08-05 with the
-// `most_popular_pinned` column — the "Most Popular" badge is fully automatic and
-// has no admin override. See docs/admin/MOST_POPULAR_PLAN_PIN.md.
+// The "Most Popular" badge is fully automatic; there is no admin pin override.
 
-// POST /api/v1/admin/plan-popularity/recompute   body: { scope? }
-// Force a recompute of the effective is_most_popular flags (one scope or all).
-// The scheduler already sweeps every PLAN_POPULARITY_REFRESH_HOURS; this is the
-// manual "don't wait for tonight" trigger.
+// Manual recompute of is_most_popular (one scope or all) without waiting for the
+// scheduler's PLAN_POPULARITY_REFRESH_HOURS sweep.
 export const recomputeMostPopular = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {

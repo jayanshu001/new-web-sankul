@@ -1,17 +1,14 @@
+// StreamOS legacy: HTTP client for the legacy streamapi.streamos.co API.
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import logger from "../../utils/logger";
 
 const STREAMOS_BASE = "https://streamapi.streamos.co/streamos";
-// VOD (recording) metadata lives at the API ROOT, NOT under /streamos — the
-// /streamos-prefixed variant 404s. This is what resolves a finished recording
-// into its playable master HLS + per-quality mp4/m3u8 URLs.
+// VOD metadata lives at the API root; the /streamos-prefixed variant 404s.
 const STREAMOS_ROOT = "https://streamapi.streamos.co";
 
-// Only transient gateway blips are retried inline (fast, small backoff).
-// 429 is deliberately excluded: per the Streamos docs it means the org has
-// exceeded its stream capacity and they ask for a ~30s back-off — far too
-// long to hold an admin HTTP request open. We fail fast on 429 instead and
-// return an actionable error so the admin can retry shortly.
+// Only transient gateway errors are retried inline. 429 is excluded: it means the
+// org exceeded stream capacity and StreamOS asks for a ~30s back-off, too long to
+// hold an admin request open, so we fail fast with an actionable error.
 const RETRY_STATUSES = new Set([502, 503, 504]);
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 500;
@@ -44,6 +41,7 @@ function getCreds(): { accessKey: string; accessSecret: string } {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Axios call with jittered retry on 502/503/504; any other error becomes a StreamosError.
 async function request<T = any>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
   let lastError: unknown;
 
@@ -89,8 +87,8 @@ async function request<T = any>(config: AxiosRequestConfig): Promise<AxiosRespon
 
 function mapHttpError(res: AxiosResponse): StreamosError {
   const { status, data } = res;
-  // The upstream body is the ONLY place Streamos says *why* it refused. Callers
-  // log err.upstreamStatus but not the body, so log it once here for all of them.
+  // The upstream body is the only place StreamOS says why it refused; callers
+  // don't log it, so log it once here.
   logger.error("Streamos upstream error", { status, url: res.config?.url, body: data });
   if (status === 403) {
     return new StreamosError("Streamos rejected credentials (403).", 502, status, data);
@@ -99,7 +97,6 @@ function mapHttpError(res: AxiosResponse): StreamosError {
     return new StreamosError("Streamos service unavailable (404).", 502, status, data);
   }
   if (status === 429) {
-    // Per Streamos docs: exceeded stream capacity / servers overloaded.
     return new StreamosError(
       "Streamos is at capacity or rate-limiting (429). Please wait ~30s and try again.",
       429,
@@ -136,11 +133,8 @@ function normalizeRecordings(raw: unknown): StreamosRecording[] {
     }));
 }
 
-// Populate `file_size` (bytes) on MP4 entries by reading Content-Length via a HEAD
-// request. Best-effort + concurrent; never throws — an entry keeps its existing
-// file_size (or null) on any failure. Only MP4 is sized: an m3u8's Content-Length
-// is just the manifest text, not the video, so HLS entries are skipped. Generic so
-// it works on both StreamosRecording and the controller's ILiveSessionRecording.
+// Fills `file_size` (bytes) on MP4 entries from a HEAD Content-Length. Best-effort,
+// never throws. HLS entries are skipped: an m3u8's Content-Length is only the manifest.
 export async function enrichMp4Sizes<T extends { path?: string; file_size?: number | null }>(
   recs: T[]
 ): Promise<T[]> {
@@ -160,9 +154,8 @@ export async function enrichMp4Sizes<T extends { path?: string; file_size?: numb
   );
 }
 
-// Picks per-quality HLS URLs out of a createStream payload — Streamos returns
-// them as `hls{240,360,480,720}pURL` fields. Returns an object keyed by the
-// numeric resolution (matches the shape of streamDetails.hlsUrls).
+// createStream returns per-quality URLs as `hls{240..1080}pURL` fields; key them by
+// resolution to match streamDetails.hlsUrls.
 function pickQualityHlsUrls(payload: any): QualityHlsUrls | undefined {
   const out: QualityHlsUrls = {};
   const mapping: Array<[string, string]> = [
@@ -189,9 +182,9 @@ function normalizeQualityHlsUrls(raw: unknown): QualityHlsUrls | undefined {
 }
 
 export interface CreateStreamResult {
-  // Canonical Streamos stream id — a STRING, e.g. "T_17787583234029".
+  // e.g. "T_17787583234029"
   streamId: string;
-  // Full RTMP push URL (base + the push-token-carrying streamId string).
+  // Base URL + the push-token-carrying streamId string.
   rtmpUrl: string;
   hlsUrl: string;
   hlsUrls?: QualityHlsUrls;
@@ -214,11 +207,9 @@ export async function createStream(title: string): Promise<CreateStreamResult> {
   const body = res.data ?? {};
   const payload = body.data ?? body;
 
-  // Streamos returns `streamId` as a STRING that carries the RTMP push token:
-  //   "T_17787583234029?txSecret=...&txTime=..."
-  // The part before "?" is the canonical id used for streamDetails / endStream
-  // lookups and stored on the session; the whole string is appended to the
-  // base rtmpURL to form the URL an encoder pushes to.
+  // `streamId` carries the RTMP push token: "T_17787583234029?txSecret=...&txTime=...".
+  // The part before "?" is the canonical id; the whole string is appended to the
+  // base rtmpURL to form the encoder push URL.
   const rawStreamId = String(payload.streamId ?? payload.streamID ?? payload.id ?? "").trim();
   const streamId = rawStreamId.split("?")[0];
   const rtmpBase = String(payload.rtmpURL ?? payload.rtmpUrl ?? "").replace(/\/+$/, "");
@@ -248,9 +239,7 @@ export interface StreamDetailsResult {
   hlsUrl?: string;
   hlsUrls?: QualityHlsUrls;
   recordings: StreamosRecording[];
-  // Plain (un-DRM'd) MP4 variants StreamOS produces per recording — served to
-  // the client alongside the DRM-HLS `recordings`. Same {quality,file_size,path}
-  // shape; `path` is a .mp4. Empty when StreamOS produced no mp4.
+  // Plain (non-DRM) MP4 variants served alongside the DRM-HLS `recordings`.
   mp4Recordings: StreamosRecording[];
   raw: any;
 }
@@ -324,20 +313,17 @@ export async function getUploadedVideoDetails(recordingId: string): Promise<Uplo
 }
 
 export interface VodStreamMetaResult {
-  // Master HLS playlist for the whole recording (adaptive ladder).
+  // Master (adaptive) HLS playlist.
   hlsUrl?: string;
   duration: number | null;
-  // Per-quality entries split by container. `path` is the playable URL.
-  hls: StreamosRecording[]; // type === "m3u8"
-  mp4: StreamosRecording[]; // type === "mp4"
+  hls: StreamosRecording[];
+  mp4: StreamosRecording[];
   raw: any;
 }
 
-// GET https://streamapi.streamos.co/get-vod-stream-meta?id=<streamId>&accessKey=…
-// Resolves a FINISHED recording (VOD) into its playable URLs. Returns
+// Resolves a finished recording into playable URLs. Upstream returns
 // `{ data: { hls_url, duration, meta: [{ label, url, type, height, width }] } }`.
-// We split `meta[]` into m3u8 (`hls`) and mp4 (`mp4`) per-quality lists. accessKey
-// stays server-side — only the resolved URLs are ever handed to the client.
+// accessKey stays server-side; only resolved URLs reach the client.
 export async function getVodStreamMeta(streamId: string): Promise<VodStreamMetaResult> {
   const { accessKey } = getCreds();
 
@@ -376,7 +362,7 @@ export interface OrgDetailsResult {
   raw: any;
 }
 
-// Note: Streamos echoes `accessSecret` back; we do NOT pass it through.
+// StreamOS echoes `accessSecret` back; it is deliberately not passed through.
 export async function getOrgDetails(): Promise<OrgDetailsResult> {
   const { accessKey, accessSecret } = getCreds();
 

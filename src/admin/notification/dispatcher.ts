@@ -1,3 +1,4 @@
+// Admin notifications: FCM dispatch entry points for the controller and scheduler worker.
 import { AudienceFilter } from "./audience";
 import {
   dispatchAudience as sqlDispatchAudience,
@@ -11,14 +12,12 @@ export interface DispatchResult {
   invalidTokensPruned: number;
   failureReason: string | null;
   isBroadcast: boolean;
-  // SQL row ids. Callers only read `.length`.
   targetCustomerIds: number[];
 }
 
 /**
- * Resolve the audience, send via FCM, and (for targeted sends) fan out
- * per-recipient feed rows. Returns the outcome; persisting the parent
- * notification row is the caller's responsibility.
+ * Sends via FCM and, for targeted sends, fans out per-recipient feed rows.
+ * Persisting the parent notification row is the caller's responsibility.
  */
 export async function dispatchAudience(
   payload: {
@@ -37,21 +36,16 @@ export async function dispatchAudience(
 }
 
 /**
- * Dispatch a single scheduled notification by id. Used by the BullMQ worker.
- * Atomically flips status "scheduled" → "sent" so re-deliveries of the same
- * job (BullMQ retry, multi-instance) cannot double-send. Throws on dispatch
- * failure so BullMQ can apply its retry policy; on final failure the caller
- * is responsible for setting status="failed".
- *
- * Returns null if the row was already claimed/cancelled (no-op).
+ * Used by the BullMQ worker. Atomically flips "scheduled" → "sent" so job
+ * re-deliveries cannot double-send. Throws on dispatch failure so BullMQ retries;
+ * on final failure the caller sets status="failed". Returns null if the row was
+ * already claimed/cancelled.
  */
 export async function dispatchScheduledById(
   notificationId: string,
   now: Date = new Date()
 ): Promise<DispatchResult | null> {
-  // Admin-supplied scheduled ids are numeric (SQL row ids). A non-numeric id has
-  // no SQL row, so there is nothing to dispatch — treat it as a no-op (null),
-  // matching the "already claimed/cancelled" contract.
+  // A non-numeric id has no row; treat it as already claimed (null).
   const id = Number(notificationId);
   if (Number.isInteger(id) && id > 0) {
     return sqlDispatchScheduledById(notificationId, now);

@@ -1,3 +1,4 @@
+// Admin RBAC: role and permission CRUD, assignment and category tree.
 import { adminRbacRepository as repo } from "./admin-rbac.repository";
 import { invalidateAllAdminPermissions } from "../admin-auth/admin-permission-resolver";
 
@@ -32,7 +33,6 @@ const toRoleDetail = (r: any, permissions: { id: bigint; name: string; guardName
   updated_at: r.updatedAt ?? null,
 });
 
-// ─── Roles ────────────────────────────────────────────────────────────────────
 export const listRoles = async (opts: {
   guard?: string; search?: string; page: number; per_page: number; sort_by: string; sort_dir: string;
 }) => {
@@ -41,9 +41,8 @@ export const listRoles = async (opts: {
     repo.listRoles({ guard: opts.guard, search: opts.search, sortBy: opts.sort_by, sortDir, skip: (opts.page - 1) * opts.per_page, take: opts.per_page }),
     repo.countRoles({ guard: opts.guard, search: opts.search }),
   ]);
-  // Embed each role's assigned permissions ({id, name} where name == catalog key)
-  // so the Edit Role modal can preselect without a second call; `permission_count`
-  // is derived from the same data. See roles-list-include-permissions.md.
+  // Embed each role's permissions ({id, name}, name = catalog key) so the Edit Role
+  // modal can preselect without a second call; `permission_count` derives from it.
   const permsByRole = rows.length ? await repo.permissionsForRoles(rows.map((r) => r.id)) : new Map();
   const items = rows.map((r) => {
     const permissions = permsByRole.get(String(r.id)) ?? [];
@@ -52,7 +51,7 @@ export const listRoles = async (opts: {
       name: r.name,
       guard_name: r.guardName,
       permission_count: permissions.length,
-      permissions, // [{ id, name }] — name is the catalog key
+      permissions,
       created_at: r.createdAt ?? null,
       updated_at: r.updatedAt ?? null,
     };
@@ -103,6 +102,7 @@ export const updateRole = async (
 export const roleInUse = (id: bigint) => repo.roleInUse(id);
 export const deleteRole = (id: bigint) => repo.deleteRole(id);
 
+// A role with its assigned and unassigned permissions (same guard).
 export const getRolePermissions = async (id: bigint, guard?: string) => {
   const role = await repo.findRole(id);
   if (!role || (guard && role.guardName !== guard)) return null;
@@ -117,6 +117,7 @@ export const getRolePermissions = async (id: bigint, guard?: string) => {
   };
 };
 
+// Replace a role's permissions and bust every admin's cached permission set.
 export const syncRolePermissions = async (id: bigint, permissionIds: bigint[]) => {
   await repo.setRolePermissions(id, permissionIds);
   // A role's permission set can change access for every admin holding that role,
@@ -127,7 +128,6 @@ export const syncRolePermissions = async (id: bigint, permissionIds: bigint[]) =
   return toRoleDetail(role, perms);
 };
 
-// ─── Permissions ────────────────────────────────────────────────────────────
 export const listPermissions = async (opts: { guard?: string; search?: string; category_id?: string; page?: number; per_page?: number }) => {
   const categoryId = opts.category_id ? Number(opts.category_id) : undefined;
   const catId = Number.isInteger(categoryId) ? categoryId : undefined;
@@ -160,6 +160,7 @@ export const updatePermission = async (id: bigint, data: { name?: string; guard?
   return { ...toPermissionDto(p), category: permissionCategory(p.name) };
 };
 
+// Detach from every role, then delete.
 export const deletePermission = async (id: bigint) => {
   await repo.removePermissionFromAllRoles(id);
   await repo.deletePermission(id);

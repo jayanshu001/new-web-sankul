@@ -1,3 +1,4 @@
+// Video catalog: row to DTO mapping (response shape is frozen).
 import type { Video, VideoCategory } from "@prisma/client";
 import type {
   VideoCategoryDto,
@@ -7,7 +8,6 @@ import type {
   VideoPriceType,
 } from "./catalog-video.types";
 
-/** `ws_video` row → DTO. Carries the encryption-source fields verbatim. */
 export const toVideoDto = (row: Video): VideoDto => ({
   _id: String(row.id),
   title: row.title,
@@ -26,24 +26,20 @@ export const toVideoDto = (row: Video): VideoDto => ({
 });
 
 /**
- * THE URL CONTRACT — produce the exact object `encryptVideoSource` consumes,
- * from a migrated row (or its DTO). Field names are identical to the Mongo path,
- * so the SAME util yields an identical videoURL for any fixed token. NEVER
- * reimplement the encryption — only feed this into the shared util.
+ * Builds the exact input `encryptVideoSource` consumes. Never reimplement the
+ * encryption; only feed this into the shared util.
  */
 export const toVideoEncryptInput = (
   row: Pick<Video, "platform" | "youtube_id" | "aws_id" | "vimeo_id">
 ): VideoEncryptInput => ({
   platform: row.platform as VideoPlatform,
-  // Coerce ""/null to undefined so a blank non-active-platform id is never
-  // mistaken for a source (the live data stores "" rather than NULL for the
-  // unused platform columns). The URL is still driven solely by `platform`.
+  // Coerce ""/null to undefined: live data stores "" for unused platform columns,
+  // which must never be mistaken for a source. The URL is driven solely by `platform`.
   youtube_id: row.youtube_id || undefined,
   aws_id: row.aws_id || undefined,
   vimeo_id: row.vimeo_id || undefined,
 });
 
-/** `ws_video_category` row → DTO (the columns Prisma maps). */
 export const toVideoCategoryDto = (row: VideoCategory): VideoCategoryDto => ({
   _id: String(row.id),
   title: row.title,

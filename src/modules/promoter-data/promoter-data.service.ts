@@ -1,7 +1,7 @@
+// Promoter data: customers, subscriptions, dashboard, overview and promocodes.
 import { promoterDataRepository as repo } from "./promoter-data.repository";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-
 
 export const parsePromoterId = (id: string): number | null => {
   const n = Number(id);
@@ -18,7 +18,7 @@ const splitName = (full: string | null | undefined) => {
   return { firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1] : "" };
 };
 
-// ─── Customers attributed to a promoter ──────────────────────────────────────
+// Customers attributed to this promoter (search + paged).
 export const listPromoterCustomers = async (
   promoterId: number,
   opts: { search?: string; page: number; limit: number }
@@ -57,7 +57,6 @@ export const listPromoterCustomers = async (
   return { items, total };
 };
 
-// ─── Subscriptions (course / ebook) attributed to a promoter ─────────────────
 export const listPromoterSubscriptions = async (
   promoterId: number,
   opts: { type: "course" | "ebook"; from?: Date; to?: Date; page: number; limit: number }
@@ -100,7 +99,7 @@ export const listPromoterSubscriptions = async (
   };
 };
 
-// ─── Dashboard summary (mirrors src/promoter/dashboard getDashboard) ─────────
+// Summary counts, revenue, commission and the 10 latest course subscriptions.
 export const buildPromoterDashboard = async (promoterId: number) => {
   const now = new Date();
   const [courseAll, courseActive, ebook, recentRows, activePromo, totalPromo] = await Promise.all([
@@ -137,7 +136,6 @@ export const buildPromoterDashboard = async (promoterId: number) => {
   };
 };
 
-/** Count this promoter's promocodes (ws_promocode.promoter_id). */
 const countPromoterPromocodes = async (promoterId: number, activeOnly: boolean, now: Date): Promise<number> => {
   const where: any = { promoterId };
   if (activeOnly) {
@@ -147,7 +145,6 @@ const countPromoterPromocodes = async (promoterId: number, activeOnly: boolean, 
   return prisma.promocode.count({ where });
 };
 
-// ─── Dashboard overview (date-range bucketed time series) ────────────────────
 type RangeKey = "today" | "week" | "month" | "year" | "all" | "custom";
 const ALLOWED: RangeKey[] = ["today", "week", "month", "year", "all", "custom"];
 
@@ -190,6 +187,7 @@ const bucketFmt = (key: RangeKey, w: { start: Date | null; end: Date }): { fmt: 
   }
 };
 
+// Range-windowed totals plus a chart bucketed by hour, day or month.
 export const buildPromoterOverview = async (
   promoterId: number,
   rangeRaw?: string,
@@ -231,10 +229,7 @@ export const buildPromoterOverview = async (
   };
 };
 
-// ─── Promocodes owned by a promoter (+ usage) ────────────────────────────────
-// ⚠ SQL-faithful only: ws_promocode has NO appliesTo/discountValue (same limit
-// as commerce-promocode). We list the promoter's codes + derived usage; appliesTo
-// is returned empty (the Mongo client-side appliesTo model isn't reproducible).
+// ws_promocode has no appliesTo/discountValue columns, so `appliesTo` is always empty.
 const toPromocodeDto = (p: any, usage?: { count: number; revenue: number }) => ({
   _id: String(p.id),
   promocode: p.promocode ?? null,
@@ -244,7 +239,7 @@ const toPromocodeDto = (p: any, usage?: { count: number; revenue: number }) => (
   status: p.status,
   promoStartAt: p.promo_start_at ?? null,
   promoExpireAt: p.promo_expire_at ?? null,
-  appliesTo: { type: null, ids: [] as unknown[] }, // not representable from SQL
+  appliesTo: { type: null, ids: [] as unknown[] },
   usageCount: usage?.count ?? 0,
   revenue: usage?.revenue ?? 0,
   createdAt: p.created_at ?? null,

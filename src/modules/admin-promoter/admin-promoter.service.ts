@@ -1,3 +1,4 @@
+// Admin promoters: promoter CRUD, attributed subscriptions, promocodes and dashboards.
 import bcrypt from "bcryptjs";
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
@@ -10,29 +11,13 @@ import {
 } from "../../promoter/dashboard/overview.service";
 
 /**
- * Admin promoter management on MySQL (ws_promoter).
- *
- * Mirrors the Mongo `src/admin/promoter/promoter.controller` CRUD handlers,
- * returning the SAME response shape the Mongo `.lean()` docs produced so the
- * admin API contract is unchanged:
+ * Admin promoter management (ws_promoter). The promoter DTO shape is frozen:
  *   { _id, fullName, email, phone, image, status, isDelete, createdAt, updatedAt,
  *     lastLoginDate, lastLoginIp }
  *
- * SCOPE — the full promoter admin surface is now SQL-portable:
- *   • CRUD (list/get/create/update/delete/toggle) on ws_promoter.
- *   • getPromoterPromocodes → ws_promo_code / PromoCodeRule carries promoterId +
- *     appliesToType/appliesToIds + discountType/discountValue (appliesTo refs
- *     resolved the same way as promo-code.service).
- *   • getPromoterSubscriptions → ws_package_course_subscription now has the
- *     promoter_id / promoter_percentage / paid_amount columns, so attribution is
- *     a direct `where: { promoterId }` query.
- *   • getPromoterDashboard / getAllPromotersDashboard → totals (earnings = SUM
- *     paid_amount, commission = SUM paid_amount*pct/100), chart buckets, and
- *     recents computed off those same columns, mirroring overview.service's shape.
- *
- * Known SQL degradations (no equivalent column):
- *   • ws_promoter has NO last_login_date / last_login_ip → surfaced as null.
- *   • ws_package_course_subscription has NO promocode_id → the dashboard's
+ * Known gaps (no column):
+ *   • ws_promoter has no last_login_date / last_login_ip → surfaced as null.
+ *   • ws_package_course_subscription has no promocode_id → the dashboard's
  *     `promocodeId` scope filter is ignored and recent rows' `promocode` is null.
  */
 
@@ -55,7 +40,7 @@ interface PromoterRow {
   updated_at: Date | null;
 }
 
-/** Map a ws_promoter row to the Mongo `.lean()` doc shape (no password). */
+/** ws_promoter row → promoter DTO (no password). */
 const toPromoterDto = (r: PromoterRow) => ({
   _id: String(r.id),
   fullName: r.full_name ?? "",
@@ -82,7 +67,6 @@ const promoterSelect = {
   updated_at: true,
 } as const;
 
-// ─── GET /admin/promoters ────────────────────────────────────────────────────
 export const listPromoters = async (opts: {
   search?: string;
   status?: boolean;
@@ -107,7 +91,7 @@ export const listPromoters = async (opts: {
   return { data: rows.map((r) => toPromoterDto(r as PromoterRow)), total };
 };
 
-// ─── GET /admin/promoters/:id ────────────────────────────────────────────────
+// Promoter with promocode and attributed-subscription counts.
 export const getPromoter = async (promoterId: number): Promise<any | null> => {
   const row = await prisma.promoter.findFirst({
     where: { id: promoterId, is_delete: false },
@@ -117,15 +101,13 @@ export const getPromoter = async (promoterId: number): Promise<any | null> => {
 
   const [promocodeCount, subscriptionCount] = await Promise.all([
     prisma.promocode.count({ where: { promoterId } }),
-    // No promoter_id col on the subscription table — reuse the blessed
-    // order-JSON attribution count from promoter-data.
+    // Reuse the order-JSON attribution count from promoter-data.
     promoterDataRepository.countCourseSubs(promoterId, {}),
   ]);
 
   return { ...toPromoterDto(row as PromoterRow), stats: { promocodeCount, subscriptionCount } };
 };
 
-// ─── POST /admin/promoters ───────────────────────────────────────────────────
 /** Returns { conflict: true } when email already in use, else the created DTO. */
 export const createPromoter = async (data: {
   fullName: string;
@@ -158,7 +140,6 @@ export const createPromoter = async (data: {
   return { conflict: false, data: toPromoterDto(row as PromoterRow) };
 };
 
-// ─── PUT /admin/promoters/:id ────────────────────────────────────────────────
 export const updatePromoter = async (
   promoterId: number,
   data: {
@@ -192,7 +173,7 @@ export const updatePromoter = async (
   return toPromoterDto(row as PromoterRow);
 };
 
-// ─── DELETE /admin/promoters/:id (soft delete) ───────────────────────────────
+// Soft delete: sets is_delete and deactivates.
 export const deletePromoter = async (promoterId: number): Promise<boolean> => {
   const existing = await prisma.promoter.findUnique({
     where: { id: promoterId },
@@ -206,7 +187,6 @@ export const deletePromoter = async (promoterId: number): Promise<boolean> => {
   return true;
 };
 
-// ─── PATCH /admin/promoters/:id/status ───────────────────────────────────────
 /** Toggles status; returns the new status, or null if not found. */
 export const togglePromoterStatus = async (promoterId: number): Promise<boolean | null> => {
   const row = await prisma.promoter.findFirst({
@@ -228,14 +208,11 @@ const numOf = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// ─── GET /admin/promoters/:id/subscriptions ──────────────────────────────────
-// Promoter-attributed subscriptions are now first-class on SQL via the new
-// ws_package_course_subscription.promoter_id / promoter_percentage / paid_amount
-// columns. Mirror the Mongo handler's populated `.lean()` doc shape:
-//   - customerId → { _id, firstName, lastName, phoneNumber }   (Customer maps
-//     full_name → firstName; lastName has no SQL column → "")
+// Attribution via ws_package_course_subscription.promoter_id. Frozen shape:
+//   - customerId → { _id, firstName, lastName, phoneNumber } (firstName = full_name;
+//     lastName has no column → "")
 //   - courseId   → { _id, name }
-// No pagination (the Mongo handler returns the full array under `data`).
+// No pagination: the full array is returned under `data`.
 export const getPromoterSubscriptions = async (promoterId: number): Promise<any[]> => {
   const rows = await prisma.packageCourseSubscription.findMany({
     where: { promoterId },
@@ -291,12 +268,9 @@ export const getPromoterSubscriptions = async (promoterId: number): Promise<any[
   }));
 };
 
-// ─── GET /admin/promoters/:id/promocodes ─────────────────────────────────────
-// The active promocode system lives on SQL as ws_promo_code / PromoCodeRule,
-// which carries promoterId + appliesToType/appliesToIds + discountType/
-// discountValue. Shape each row like the Mongo PromoCode `.lean()` doc, reusing
-// the appliesTo populate contract from promo-code.service (type + populated
-// { _id, name, image } refs). No pagination (Mongo handler returns full array).
+// ws_promocode rows carry promoterId + appliesToType/appliesToIds + discount fields.
+// Reuses the appliesTo populate contract from promo-code.service (type + populated
+// { _id, name, image } refs). No pagination: the full array is returned.
 const PROMO_APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 type PromoAppliesToType = (typeof PROMO_APPLIES_TO_TYPES)[number];
 
@@ -384,18 +358,12 @@ export const getPromoterPromocodes = async (promoterId: number): Promise<any[]> 
   );
 };
 
-// ─── GET /admin/promoters/:id/dashboard  &  /admin/promoters/dashboard ───────
-// Reproduces the Mongo overview.service `buildOverview` shape directly off the
-// new promoter columns on ws_package_course_subscription (promoter_id /
-// promoter_percentage / paid_amount), so no order-JSON snapshot is needed:
+// Dashboard off the promoter columns on ws_package_course_subscription:
 //   earnings   = SUM(paid_amount)
 //   commission = SUM(paid_amount * promoter_percentage / 100)
-// `promoterId === null` ⇒ aggregate over ALL promoter-attributed rows (the
-// "all promoters" view). Range presets + custom window reuse the Mongo helpers.
-//
-// ⚠ The SQL subscription table has NO promocode_id column, so the Mongo
-// `promocodeId` scope filter cannot be honoured and the recent rows' `promocode`
-// is always null. The filter is ignored (would otherwise silently widen).
+// `promoterId === null` ⇒ aggregate over all promoter-attributed rows.
+// There is no promocode_id column, so the `promocodeId` scope filter is ignored and
+// recent rows' `promocode` is always null.
 type DashboardScope = { promoterId: number | null; rangeRaw?: string; promocodeId?: string; startDate?: string; endDate?: string };
 
 const buildPromoterDashboardSql = async (scope: DashboardScope) => {
@@ -407,8 +375,8 @@ const buildPromoterDashboardSql = async (scope: DashboardScope) => {
   const { unit } = bucketFormatFor(range, { start, end });
 
   const where: any = {};
-  // Scope to one promoter, or to ALL promoter-attributed rows (exclude the
-  // null-promoterId regular purchases) — mirrors the Mongo `$ne: null`.
+  // One promoter, or all promoter-attributed rows (excludes regular purchases with a
+  // null promoterId).
   where.promoterId = scope.promoterId != null ? scope.promoterId : { not: null };
   if (start || end) {
     where.createdAt = {};
@@ -461,8 +429,7 @@ const buildPromoterDashboardSql = async (scope: DashboardScope) => {
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([bucket, v]) => ({ bucket, subscriptions: v.subscriptions, earnings: v.earnings }));
 
-  // Recents: most-recent 5 with populated customer/course; promocode is null
-  // (no promocode linkage column on SQL).
+  // Recents: most-recent 5; promocode is null (no linkage column).
   const recent = rows.slice(0, 5);
   const rCustIds = [...new Set(recent.map((r) => r.customerId).filter((v): v is number => v != null))];
   const rCourseIds = [...new Set(recent.map((r) => r.courseId).filter((v): v is number => v != null))];

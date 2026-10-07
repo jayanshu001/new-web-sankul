@@ -1,3 +1,4 @@
+// Client careers: public job openings and application routes.
 import { Router } from "express";
 import { validate } from "../../middlewares/validate";
 import { applicationCreateSchema } from "../../modules/careers/careers.validation";

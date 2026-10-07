@@ -1,17 +1,8 @@
-// src/utils/streamosSignature.ts
-//
-// Verifies the `X-Streamos-Signature` header on StreamOS v1 webhook deliveries.
-//
-// Header format:  t=<unix-seconds>,v1=<hex hmac-sha256>
-// The HMAC is computed with the `signing_secret` returned once by POST /webhooks/.
-//
-// CONFIRMED 2026-09-09 from https://streamos.in/docs/webhooks: the signed payload
-// is the Stripe-style `{timestamp}.{rawBody}` — "compute an HMAC-SHA256 digest
-// using your signing secret and the raw request body in format {timestamp}.{rawBody}".
-// The body-only branch is kept as a fallback until a real delivery has verified
-// against "timestamped" in production (the matched scheme is logged on every
-// delivery). Accepting both is not a weakening — neither can be forged without
-// the secret. Drop the fallback once the logs show "timestamped".
+// StreamOS webhook signature: HMAC check for v1 webhook deliveries.
+// Verifies `X-Streamos-Signature: t=<unix-seconds>,v1=<hex hmac-sha256>` on
+// StreamOS v1 webhooks. Per StreamOS docs the payload is `{timestamp}.{rawBody}`;
+// the body-only fallback stays until production logs show "timestamped"
+// (neither can be forged without the secret).
 
 import crypto from "crypto";
 
@@ -19,7 +10,6 @@ export type SignatureScheme = "timestamped" | "body-only";
 
 export interface VerifyResult {
   ok: boolean;
-  /** Which payload construction matched — log it, then pin the scheme. */
   scheme?: SignatureScheme;
   reason?: string;
 }
@@ -48,7 +38,6 @@ function parseHeader(header: string): { t: number; v1: string } | null {
   return t !== null && v1 ? { t, v1 } : null;
 }
 
-/** Constant-time hex compare that tolerates length mismatch without throwing. */
 function hexEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "hex");
   const bufB = Buffer.from(b, "hex");
@@ -84,7 +73,6 @@ export function verifyStreamosSignature(
 
   const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody, "utf8");
 
-  // Stripe-style: HMAC over "<t>.<body>".
   const timestamped = Buffer.concat([Buffer.from(`${parsed.t}.`, "utf8"), body]);
   if (hexEquals(hmac(secret, timestamped), parsed.v1)) {
     return { ok: true, scheme: "timestamped" };

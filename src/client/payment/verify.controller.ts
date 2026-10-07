@@ -1,3 +1,4 @@
+// Client payments: Razorpay signature verify and order fulfilment.
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { z } from "zod";
@@ -32,9 +33,7 @@ const verifySchema = z.object({
   razorpay_signature: z.string().min(1),
 });
 
-// Razorpay signs `${order_id}|${payment_id}` with HMAC-SHA256 keyed by the
-// merchant's key_secret. We must compare hex-encoded; mismatched signatures
-// mean the request is forged or replayed against a different order.
+// Razorpay signs `${order_id}|${payment_id}` with HMAC-SHA256 keyed by key_secret.
 const verifySignature = (
   orderId: string,
   paymentId: string,
@@ -51,11 +50,8 @@ const verifySignature = (
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 };
 
-// POST /api/v1/client/payment/verify
-// Called by the app after Razorpay's checkout succeeds. We HMAC-verify the
-// signature, then dispatch fulfillment based on which local row holds this
-// razorpay_order_id (BookOrder vs PackageCourseSubscription). Idempotent:
-// re-running on an already-verified order returns 200 with the existing row.
+// HMAC-verifies the signature, then fulfils whichever local order owns this
+// razorpay_order_id. Idempotent: re-verifying an already-paid order returns 200.
 export const verifyPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -76,12 +72,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // ── MySQL course write path (commerce-order) ─────────────────────────────
-    // Look for a MySQL course order owning this razorpay id; if found, fulfill.
-    // If not, fall through to the next order-type check below.
+    // Each block below claims the order if its table owns this razorpay id, else falls through.
     {
-      // C3 seam: req.user.id is the int customer id in the migrated id-space;
-      // coerce the string-typed token subject to int at this boundary.
+      
       const customerIdInt = Number(userId);
       const mysqlCourseOrder = Number.isInteger(customerIdInt)
         ? await findCourseOrderForVerify(razorpay_order_id, customerIdInt)
@@ -114,12 +107,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL package write path (commerce-order tables) ─────────────────────
-    // Twin of the course branch; findPackageOrderForVerify only matches PACKAGE
-    // orders (plan has packageId, no courseId).
+    // findPackageOrderForVerify only matches package orders (plan has packageId, no courseId).
     {
       const customerIdInt = Number(userId);
       const mysqlPackageOrder = Number.isInteger(customerIdInt)
@@ -138,12 +128,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL ebook write path (ebook-order) ─────────────────────────────────
-    // Returns the EbookOrder DTO as data.order (the ebook branch returns the
-    // ORDER, not the subscription).
+    
     {
       const customerIdInt = Number(userId);
       const mysqlEbookOrder = Number.isInteger(customerIdInt)
@@ -167,11 +154,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL book write path (book-order) ───────────────────────────────────
-    // Returns the BookOrder DTO as data.order.
+    
     {
       const customerIdInt = Number(userId);
       const mysqlBookOrder = Number.isInteger(customerIdInt)
@@ -195,12 +180,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL live-course write path (live-course-order) ─────────────────────
-    // The pending ws_live_course_order owns the razorpay id; verifying it creates
-    // the subscription row (2026-08-25 — live course used to be single-table).
+    // The pending ws_live_course_order owns the razorpay id; verifying it creates the subscription.
     {
       const customerIdInt = Number(userId);
       const mysqlLiveOrder = Number.isInteger(customerIdInt)
@@ -219,11 +201,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL test-series write path (test-series-order) ─────────────────────
-    // Single order table; verify folds-or-fresh into ws_test_series_subscription.
+    // Verify folds-or-fresh into ws_test_series_subscription.
     {
       const customerIdInt = Number(userId);
       const mysqlTsOrder = Number.isInteger(customerIdInt)
@@ -242,7 +222,6 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }
-      // miss → no MySQL order owns this razorpay id → not found.
     }
 
     logger.warn("verifyPayment no local order", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });

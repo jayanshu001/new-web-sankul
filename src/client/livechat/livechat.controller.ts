@@ -1,8 +1,10 @@
+// Client live chat: HTTP handlers for chat history and ban status.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
+// Paged chat history for a class; private mode shows only the viewer's own thread.
 export const getChatHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -16,18 +18,16 @@ export const getChatHistory = async (req: Request, res: Response) => {
     if (!userId) { logger.warn("getChatHistory unauthorized", { traceId }); return failure(res, "Unauthorized", 401); }
     if (!liveClassId) { logger.warn("getChatHistory missing liveClassId", { traceId, userId }); return failure(res, "liveClassId is required", 400); }
 
-    // Which listing to return. `?private=true|false` is explicit; omitted follows
-    // whatever mode the host has the class in right now, so a client that just
-    // asks for "the history" never gets the other mode's thread mixed in.
+    // `?private=true|false` is explicit; omitted follows the class's current mode, so a
+    // plain "history" request never mixes in the other mode's thread.
     const priv = req.query.private;
     const isPrivate =
       priv === undefined
         ? (await liveSql.getChatSettings(String(liveClassId))).privateChat
         : priv === "true" || priv === "1";
 
-    // A viewer sees their own private messages plus host replies addressed to
-    // them — never another student's thread. The public listing is the same for
-    // everyone, so it carries no viewer scope.
+    // A viewer sees their own private messages plus host replies to them, never another
+    // student's thread. The public listing carries no viewer scope.
     const viewerId = isPrivate ? liveSql.parseLiveId(String(userId)) : null;
     if (isPrivate && viewerId == null) return success(res, { messages: [], privateChat: true }, "Chat history fetched", 200);
 

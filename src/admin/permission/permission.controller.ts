@@ -1,9 +1,6 @@
-// src/admin/permission/permission.controller.ts
-//
-// Thin controllers. Validation responses keep the existing 422 + `errors` map
-// shape that the admin React dashboard already consumes (see legacy
-// controller); switching to the centralized failure() envelope would be a
-// client-facing breaking change.
+// Admin permissions: HTTP handlers for permission list, detail, update, delete and roles.
+// Validation responses keep the 422 + `errors` map shape the admin dashboard
+// consumes; switching to the failure() envelope would break that client.
 
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
@@ -28,9 +25,7 @@ export const listPermissions = asyncHandler(async (req: Request, res: Response) 
   }
   const { page, per_page } = parsed.data;
   const { items, total } = await permissionService.listPermissions(parsed.data);
-  // House-standard list envelope: `data` is the page array, `pagination` a sibling
-  // with total + totalPages (same as roles/books). See permissions-categories-list-
-  // server-side.md.
+  // House-standard list envelope: `data` is the page array, `pagination` a sibling.
   return res.status(200).json({
     success: true,
     data: items,

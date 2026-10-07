@@ -1,5 +1,4 @@
-// TeleCRM lead push — port of the old Mongo backend's GenerateCRMLead
-// (docs/old-telecrm-integration.md), extended with live-course/test-series.
+// TeleCRM leads: builds and sends app-activity leads, skipping active subscribers.
 import axios from "axios";
 import logger from "./logger";
 import { prisma } from "../config/prisma";
@@ -120,8 +119,8 @@ async function resolveProductAndSkip(
   return { product: null, skip: false, planName: null };
 }
 
-// Old backend always sent this literal (never the real course name) for
-// course-context leads — kept as-is since TeleCRM automations may filter on it.
+// Course leads always send this literal, never the course name: TeleCRM
+// automations may filter on it.
 const COURSE_APPLICATION_LABEL = "Subject Wise Course";
 
 function buildApplicationCourse(
@@ -185,6 +184,7 @@ async function sendToTeleCrm(payload: TeleCrmPayload): Promise<void> {
   );
 }
 
+// Production only; silently skips test numbers and already-subscribed customers. Never throws.
 export async function GenerateCRMLead(args: GenerateCRMLeadArgs): Promise<void> {
   const { params, leadType } = args;
 
@@ -226,10 +226,7 @@ export async function GenerateCRMLead(args: GenerateCRMLeadArgs): Promise<void> 
   }
 }
 
-/**
- * Fire-and-forget entry point — the only way call sites should invoke a lead.
- * Hides setImmediate/void/catch so callers are a single line.
- */
+/** Fire-and-forget; the only way call sites should invoke a lead. */
 export function queueCRMLead(args: GenerateCRMLeadArgs, logContext: Record<string, unknown> = {}): void {
   setImmediate(() => {
     GenerateCRMLead(args).catch((err) => {

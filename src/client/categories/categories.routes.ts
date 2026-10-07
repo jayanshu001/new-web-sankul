@@ -1,3 +1,4 @@
+// Client categories: category item listings, child drill-downs and exam-countdown product routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -23,15 +24,13 @@ const router = Router();
 
 router.use(authenticate);
 
-// Tier-1 (fully shared): category tree `/children` drill-downs + the package-
-// categories list carry no per-user state. scope: CacheScope.Shared, 5-min TTL.
+// `/children` drill-downs and the package-categories list carry no per-user state.
 const SHARED_CAT = { ttl: CACHE_TTL.DAY, entity: CacheEntity.Categories as const, scope: CacheScope.Shared as const };
 
-// Video listings = Tier-3 (per-user progress + minted media tokens) → never cached.
-// Other listings embed isPurchased/isCompleted → Tier-2, cached per-user + short
-// TTL (ebook precedent) with the entity their admin writes flush.
+// Video listings embed per-user progress and minted media tokens, so they are never
+// cached. Other listings embed isPurchased/isCompleted and are cached per user.
 router.get("/video-categories/:id/videos", listVideosByCategory);
-router.get("/video-categories/:id/videos/:videoId", getVideoByCategory); // Tier-3 (per-request tokens)
+router.get("/video-categories/:id/videos/:videoId", getVideoByCategory);
 router.get("/video-categories/:id/children", cacheRoute(SHARED_CAT), listVideoCategoryChildren);
 router.get("/material-categories/:id/materials", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material, scope: CacheScope.User }), listMaterialsByCategory);
 router.get("/material-categories/:id/children", cacheRoute(SHARED_CAT), listMaterialCategoryChildren);

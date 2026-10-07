@@ -1,3 +1,4 @@
+// Admin subject categories: HTTP handlers for course subject category CRUD.
 import { Request, Response } from "express";
 import { createSubjectCategorySchema, updateSubjectCategorySchema } from "./master.validation";
 import * as master from "../../modules/admin-master/admin-master.service";

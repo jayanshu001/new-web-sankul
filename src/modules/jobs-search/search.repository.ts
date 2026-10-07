@@ -1,3 +1,4 @@
+// Jobs search index: Prisma queries for search documents.
 import { prisma } from "../../config/prisma";
 
 export interface SearchDocumentWrite {

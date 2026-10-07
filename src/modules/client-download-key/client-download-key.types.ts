@@ -1,15 +1,9 @@
-
-
-/** Canonical validation for the key material. Case-insensitive hex. */
+// Download encryption key: DTO type and key format.
 export const DOWNLOAD_KEY_HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 
 /**
- * Stable API shape for both GET and PUT.
- *
- * Deliberately just `{ key }` — no `_id`, no timestamps, no `customerId`.
- * Echoing back the owner id would only invite the client to key its local cache
- * on a server-supplied value, and every extra field is one more place a secret
- * can leak into a log or a crash report.
+ * Shared by GET and PUT. Deliberately just `{ key }`: no owner id or timestamps,
+ * so nothing extra can leak into logs or crash reports.
  */
 export interface DownloadEncryptionKeyDto {
   key: string;

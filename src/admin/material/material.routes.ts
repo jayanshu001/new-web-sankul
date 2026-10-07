@@ -1,3 +1,4 @@
+// Admin materials: material category and material routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadS3Mixed, uploadTo } from "../../middlewares/upload";
@@ -34,9 +35,7 @@ const router = Router();
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Route-level response cache + autoFlushGroup on writes (see docs/CACHING.md).
-// Category writes flush "material-category"; leaf-material writes flush "material".
 
-// Categories
 router.get("/categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.MaterialCategory }), listCategories);
 router.post("/categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.MaterialCategory), createCategory);
 router.post("/categories/reorder", autoFlushGroup(CacheEntity.MaterialCategory), reorderCategories);
@@ -49,7 +48,6 @@ router.get("/categories/:id/courses", getCategoryCourses);
 router.get("/categories/:id/products", getCategoryLinkedProducts);
 router.get("/categories/:id/materials", getCategoryMaterials);
 
-// Leaf materials
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material }), listMaterials);
 router.post("/", uploadTo(UPLOAD_FOLDERS.materials), uploadS3Mixed.single("file"), autoFlushGroup(CacheEntity.Material), createMaterial);
 router.post("/reorder", autoFlushGroup(CacheEntity.Material), reorderMaterials);

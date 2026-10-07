@@ -1,7 +1,4 @@
-/**
- * Recent Search History — Prisma row → stable DTO. Keeps `_id` (string) for
- * shape-consistency with the rest of the client search responses.
- */
+// Search history: row to DTO mapping (response shape is frozen).
 import type { SearchHistory } from "@prisma/client";
 import type { SearchHistoryDto } from "./client-search-history.types";
 

@@ -1,3 +1,4 @@
+// Admin ebooks: ebook, plan and subscription management plus subscription report/exports.
 import ExcelJS from "exceljs";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { nextOrder } from "../../utils/listOrdering";
@@ -22,21 +23,21 @@ export const parseEbookId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// Case-insensitive map to the PaymentMethod enum so the UI can send "backend"/"Backend".
+// Case-insensitive map so the UI can send "backend"/"Backend".
 const PAYMENT_METHOD_BY_LOWER: Record<string, PaymentMethod> = Object.fromEntries(
   Object.values(PaymentMethod).map((v) => [v.toLowerCase(), v])
 );
 export const coercePaymentMethod = (v?: string): PaymentMethod | undefined =>
   v ? PAYMENT_METHOD_BY_LOWER[v.trim().toLowerCase()] : undefined;
 
-// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
-// 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's calendar pick includes the
-// full IST day (a naive UTC parse drops the last 5.5h); full timestamps pass through.
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to → 23:59:59.999
+// at +05:30) so a calendar pick covers the full IST day; a naive UTC parse drops the
+// last 5.5h. Full timestamps pass through.
 export const parseDateBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
-  // "YYYY-MM-DDTHH:mm" (the report date-time picker) is IST wall-clock too; the
-  // to-bound covers the whole picked minute.
+  // "YYYY-MM-DDTHH:mm" (report date-time picker) is IST wall-clock too; the to-bound
+  // covers the whole picked minute.
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
     ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`)
     : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)
@@ -45,25 +46,12 @@ export const parseDateBound = (v: string | undefined, end: boolean): Date | unde
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
-// ── transformers ─────────────────────────────────────────────────────────────
 /**
- * `ws_ebook` row → admin Ebook DTO (Mongo `Ebook` shape). Field renames:
- * terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl,
- * book_url→bookUrl, link→link, book_file_name→bookFileName,
- * demo_file_name→demoFileName (original PDF upload names). SQL-absent fields
- * read from ws_ebook.is_trending.
- *
- * PDF-upload status (book/demoUploadStatus + Progress) IS exposed — the async
- * pipeline persists it onto ws_ebook precisely so the admin list/edit screens can
- * render queued → in_progress → completed after a refresh, without depending on
- * the per-session Socket.io room. (These were previously dropped here as
- * "Mongo-only"; the columns are real SQL columns and always were populated.)
- *
- * examCountdown* are stored as JSON int-arrays on ws_ebook (C6). DETAIL reads
- * pass the resolved DTOs as `ec` to get the Mongo `.populate()` shape; without
- * `ec` the raw ID ARRAYS are emitted instead of nothing — the columns are already
- * on the row, so list rows carry the ids at no extra query cost (matches
- * ws_package, see admin-package.service.ts `jsonIdsToStrings`).
+ * PDF-upload status is persisted on ws_ebook so list/edit screens render queued →
+ * in_progress → completed after a refresh, independent of the Socket.io room.
+ * examCountdown*: detail reads pass the resolved DTOs as `ec` for the populated
+ * shape; without `ec` the raw id arrays are emitted (as ws_package does via
+ * admin-package.service.ts `jsonIdsToStrings`).
  */
 const jsonIdsToStrings = (v: unknown): string[] =>
   Array.isArray(v) ? v.map((x) => String(x)) : [];
@@ -92,14 +80,12 @@ export const toEbookDto = (
   order: row.orderby,
   demoUrl: row.bookDemoUrl,
   bookUrl: row.bookUrl,
-  // Original upload filenames (persisted by the PDF-upload pipeline) so edit can
-  // show the same name. Columns: book_file_name / demo_file_name.
+  // Original upload filenames (persisted by the PDF-upload pipeline) so edit can show them.
   demoFileName: row.demoFileName ?? null,
   bookFileName: row.bookFileName ?? null,
-  // Async PDF-upload progress, written by the BullMQ pipeline (pdfUpload.scheduler).
-  // status ∈ queued | in_progress | completed | failed; null = never uploaded here.
-  // Clearing a URL resets its whole slot (url + fileName + status + progress) in
-  // updateEbook, so "completed" here always means the matching url IS set.
+  // Written by the BullMQ pipeline (pdfUpload.scheduler); queued | in_progress |
+  // completed | failed, null = never uploaded. updateEbook resets the whole slot when a
+  // URL is cleared, so "completed" always means the matching url is set.
   bookUploadStatus: row.bookUploadStatus ?? null,
   bookUploadProgress: row.bookUploadProgress ?? 0,
   demoUploadStatus: row.demoUploadStatus ?? null,
@@ -134,7 +120,6 @@ const toCustomerDto = (c: { id: number; fullName: string | null; phoneNumber: st
 const toEbookRefDto = (e: { id: number; name: string; image?: string | null; thumbnail?: string | null; author?: string | null } | null) =>
   e ? { _id: String(e.id), name: e.name, ...(e.image !== undefined ? { image: e.image ?? null } : {}), ...(e.thumbnail !== undefined ? { thumbnail: e.thumbnail ?? null } : {}), ...(e.author !== undefined ? { author: e.author ?? null } : {}) } : null;
 
-// ── ebooks: list / get ─────────────────────────────────────────────────────────
 export interface ListEbooksQuery { search?: string; author?: string; publisher?: string; language?: string; status?: string; page?: string; limit?: string }
 
 export const listEbooks = async (query: ListEbooksQuery) => {
@@ -151,9 +136,8 @@ export const listEbooks = async (query: ListEbooksQuery) => {
     repo.list({ ...opts, skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.count(opts),
   ]);
-  // NB: wrap (not bare `rows.map(toEbookDto)`) so Array.map's index arg can't be
-  // mistaken for the optional `ec` populate param. List rows carry the raw
-  // examCountdown* ids (no populate fan-out); only detail resolves names.
+  // Wrapped (not bare `rows.map(toEbookDto)`) so Array.map's index arg can't be
+  // mistaken for the optional `ec` param. List rows carry raw examCountdown* ids.
   return { data: rows.map((r) => toEbookDto(r)), pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
@@ -162,14 +146,12 @@ export const getEbookById = async (id: number) => {
   if (!row) return null;
   const [plans, ec] = await Promise.all([
     repo.listPlans(id, { activeOnly: true }),
-    // C6: resolve the stored JSON int-arrays to the Mongo .populate() shape.
     populateExamCountdowns(row),
   ]);
   return { ...toEbookDto(row, ec), plans: plans.map(toPlanDto) };
 };
 
-// ── ebooks: write ────────────────────────────────────────────────────────────
-// ws_ebook NOT-NULL columns with no DB default → write-time sentinels.
+// ws_ebook NOT NULL columns with no DB default → write-time sentinels.
 export const createEbook = async (d: any) => {
   const now = new Date();
   // No explicit order → previous row + 1 (see utils/listOrdering).
@@ -186,14 +168,12 @@ export const createEbook = async (d: any) => {
     language: d.language,
     bookDemoUrl: d.demoUrl ?? "",
     bookUrl: d.bookUrl ?? "",
-    // Keep the original PDF names the controller lifted off the multipart parts;
-    // an empty slot must not carry a name (same rule as updateEbook).
+    // An empty slot must not carry a file name (same rule as updateEbook).
     demoFileName: d.demoUrl ? d.demoFileName ?? null : null,
     bookFileName: d.bookUrl ? d.bookFileName ?? null : null,
     shareableLink: d.link ?? "",
     active: d.status ?? true,
     isTrending: d.isTrending ?? false,
-    // C6: persist attached countdown/category ids (SQL ints) as JSON arrays.
     examCountdownIds: parseIdArray(d.examCountdownIds),
     examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
     createdAt: now,
@@ -214,13 +194,9 @@ export const updateEbook = async (id: number, d: any): Promise<ReturnType<typeof
   if (d.publisher !== undefined) data.publisher = d.publisher;
   if (d.order !== undefined) data.orderby = d.order;
   if (d.language !== undefined) data.language = d.language;
-  // Clearing a PDF slot resets the WHOLE slot in one write — url, file name,
-  // upload status and progress — so the stored state can never contradict
-  // itself (e.g. bookUrl:"" with bookUploadStatus:"completed", which made every
-  // consumer trusting the status believe a PDF was attached). `null` and `""`
-  // both mean "cleared": the admin UI sends JSON null (no File in the payload →
-  // not multipart) and the multipart form sends "". Mirrors
-  // admin-book.service.ts's demoUrl handling, which has no status columns.
+  // Clearing a PDF slot resets the whole slot in one write (url, file name, upload
+  // status, progress) so stored state can't contradict itself (e.g. bookUrl "" with
+  // status "completed"). `null` (JSON) and `""` (multipart) both mean cleared.
   if (d.demoUrl !== undefined) {
     data.bookDemoUrl = d.demoUrl ?? "";
     if (!d.demoUrl) {
@@ -237,14 +213,14 @@ export const updateEbook = async (id: number, d: any): Promise<ReturnType<typeof
       data.bookUploadProgress = 0;
     }
   }
-  // Only ever written here and by the async upload pipeline (pdfUpload.scheduler).
+  // Written only here and by the async upload pipeline (pdfUpload.scheduler).
   if (d.demoFileName !== undefined) data.demoFileName = d.demoFileName ?? null;
   if (d.bookFileName !== undefined) data.bookFileName = d.bookFileName ?? null;
   if (d.link !== undefined) data.shareableLink = d.link ?? "";
   if (d.status !== undefined) data.active = d.status;
   if (d.isTrending !== undefined) data.isTrending = d.isTrending;
-  // C6: only touch the JSON arrays when the payload carries them (an update that
-  // omits countdowns must not wipe the stored ids).
+  // Only touch the JSON arrays when the payload carries them, so an update that omits
+  // countdowns doesn't wipe the stored ids.
   if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
   const updated = await repo.update(id, data);
@@ -257,7 +233,6 @@ export const deleteEbook = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// Flip ws_ebook.is_trending. Returns the updated DTO, or null if not found.
 export const toggleEbookTrending = async (id: number): Promise<ReturnType<typeof toEbookDto> | null> => {
   const row = await repo.findById(id);
   if (!row) return null;
@@ -272,7 +247,6 @@ export const reorderEbooks = async (orders: Array<{ id: string; order: number }>
   }));
 };
 
-// ── plans ──────────────────────────────────────────────────────────────────────
 export const listEbookPlans = async (
   ebookId: number,
   opts: { skip: number; take: number; page: number; limit: number }
@@ -282,8 +256,7 @@ export const listEbookPlans = async (
     repo.listPlans(ebookId, { skip: opts.skip, take: opts.take }),
     repo.countPlans(ebookId),
   ]);
-  // All-time, status-blind order count → the panel's Delete lock. One grouped
-  // query per page (utils/planUsage).
+  // All-time, status-blind order count → the panel's Delete lock (one grouped query per page).
   const usage = await countPlanUsage("price", plans.map((pl) => pl.id));
   return {
     data: plans.map((pl) => ({ ...toPlanDto(pl), orderCount: usage.get(pl.id) ?? 0 })),
@@ -295,7 +268,7 @@ export const createEbookPlan = async (ebookId: number, d: { name?: string | null
   if (!(await repo.exists(ebookId))) return "not_found";
   const now = new Date();
   const created = await repo.createPlan({
-    // ebook-owned: ebook_id set; course/package 0 sentinel (matches admin-plan).
+    // Ebook-owned: ebook_id set; course/package 0 sentinel (matches admin-plan).
     ebookId, courseId: 0, packageId: 0,
     name: d.name ?? null,
     duration: d.duration,
@@ -317,8 +290,8 @@ export const getEbookPlanById = async (planId: number) => {
 export const updateEbookPlan = async (planId: number, d: { name?: string | null; duration?: number; price?: number; isDefault?: boolean; status?: boolean }): Promise<"not_found" | "frozen_terms" | any> => {
   const existing = await repo.findPlanBare(planId);
   if (!existing) return "not_found";
-  // Commercial terms are frozen once saved; only a real CHANGE is refused, so a
-  // form re-sending the stored values still saves.
+  // Commercial terms are frozen once saved; only a real change is refused, so a form
+  // re-sending the stored values still saves.
   if (
     (d.duration !== undefined && d.duration !== existing.duration) ||
     (d.price !== undefined && d.price !== existing.price)
@@ -331,12 +304,12 @@ export const updateEbookPlan = async (planId: number, d: { name?: string | null;
   return toPlanDto(updated);
 };
 
+// Refuses while any order references the plan (returns { inUse }).
 export const deleteEbookPlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
   if (!(await repo.findPlanBare(planId))) return "not_found";
-  // Ebook plans live in ws_package_course_ebook_price and are referenced by
-  // ws_ebook_order.plan_id. NOTE: ws_ebook_subscription has NO plan_id column, so an
-  // order-less legacy ebook subscription cannot be attributed to a plan — see
-  // utils/planUsage. Every real purchase writes an order, so this holds in practice.
+  // Usage is counted via ws_ebook_order.plan_id. ws_ebook_subscription has no plan_id,
+  // so an order-less legacy subscription can't be attributed (see utils/planUsage);
+  // every real purchase writes an order.
   const inUse = await countPlanUsageOne("price", planId);
   if (inUse > 0) return { inUse };
   await repo.deletePromotedForPlan(planId);
@@ -344,14 +317,13 @@ export const deleteEbookPlan = async (planId: number): Promise<"not_found" | { i
   return true;
 };
 
-// prices-for-subscription dropdown (active plans, minimal fields)
+// Prices-for-subscription dropdown (active plans, minimal fields).
 export const getEbookPricesForSubscription = async (ebookId: number): Promise<"not_found" | any[]> => {
   if (!(await repo.exists(ebookId))) return "not_found";
   const plans = await repo.listPlans(ebookId, { activeOnly: true });
   return plans.map((p) => ({ _id: String(p.id), name: p.name ?? null, price: p.price, duration: p.duration }));
 };
 
-// ── subscriptions ────────────────────────────────────────────────────────────
 const toSubListItem = (r: any) => ({
   _id: String(r.id),
   customerId: toCustomerDto(r.customer),
@@ -364,7 +336,7 @@ const toSubListItem = (r: any) => ({
         _id: String(r.eBookOrder.id),
         paymentMethod: r.eBookOrder.paymentMethod,
         status: r.eBookOrder.status,
-        // Razorpay identifiers for the report; empty gateway id (non-razorpay grant) → null.
+        // Empty gateway id (non-razorpay grant) → null.
         razorpayOrderId: r.eBookOrder.gatewayOrderId ? r.eBookOrder.gatewayOrderId : null,
         razorpayPaymentId: r.eBookOrder.gatewayPaymentId ?? null,
       }
@@ -391,9 +363,8 @@ export interface SubReportQuery {
   sortOrder?: string;
 }
 
-// Shared filter resolution for the subscriptions list + its CSV/Excel exports, so
-// all three honor the identical param contract. Returns null when a search matched
-// nothing (force empty result, mirrors Mongo's $or over empty sets).
+// Shared filter resolution for the subscriptions list + its exports. Returns null when
+// a search matched nothing (force empty result).
 const resolveSubOpts = async (q: SubReportQuery) => {
   let customerIdsIn: number[] | undefined;
   let ebookIdsIn: number[] | undefined;
@@ -420,11 +391,10 @@ export const listSubscriptions = async (q: SubReportQuery & { page: number; limi
   return { items: rows.map(toSubListItem), total };
 };
 
-// Entire filtered set (no pagination) and NO row cap — keyset-paged (id DESC, no deep
-// OFFSET) and mapped per batch so memory stays bounded (lakhs OK).
+// Exports cover the entire filtered set with no row cap, keyset-paged (no deep OFFSET)
+// and mapped per batch so memory stays bounded.
 const EBOOK_SUB_EXPORT_BATCH = 5000;
 
-// Walk the whole filtered set in keyset batches; yields mapped export items per batch.
 async function* iterateSubExportRows(opts: any) {
   let beforeId: number | undefined;
   for (;;) {
@@ -436,10 +406,8 @@ async function* iterateSubExportRows(opts: any) {
   }
 }
 
-// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
-// — unified with the Subscription / Test Series exports (was raw UTC ISO).
-// Display status shown by the report table: mirrors the statusFilter semantics
-// (inactive = not active; expired = active but endAt past; active = active & current).
+// Mirrors statusFilter: inactive = not active; expired = active but endAt past;
+// active = active and current.
 const displaySubStatus = (i: ReturnType<typeof toSubListItem>, now: Date): string => {
   if (!i.status) return "inactive";
   if (i.endAt && new Date(i.endAt) < now) return "expired";
@@ -499,7 +467,7 @@ export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<Buffer>
   return Buffer.concat(chunks);
 };
 
-// Streamed export source (async job path) — same rows/columns as the sync builders.
+// Streamed export source (async job path); same rows/columns as the sync builders.
 export async function ebookSubExportSource(q: SubReportQuery): Promise<ReportSource> {
   const now = new Date();
   const opts = await resolveSubOpts(q);
@@ -550,13 +518,14 @@ export interface CreateSubInput {
   ipAddress?: string | null;
   remarks?: string | null;
   status?: boolean;
-  // extend=true → top up the customer's existing active subscription for this
-  // ebook instead of creating a fresh row (falls back to create if none).
+  // extend=true → the new row continues from the customer's active subscription for
+  // this ebook (fresh grant if none).
   extend?: boolean;
-  // Acting admin id (resolved server-side from the JWT) → audit columns.
+  // Acting admin id (from the JWT) → audit columns.
   actingAdminId?: number | null;
 }
 
+// Admin grant/extend: always a new order + subscription row; extend starts at the active endAt.
 export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false; reason: "ebook" | "plan" } | { ok: true; data: any }> => {
   if (!(await repo.exists(d.ebookId))) return { ok: false, reason: "ebook" };
 
@@ -571,18 +540,15 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
 
   const now = new Date();
 
-  // Subscription Type = Extend: read the customer's current active subscription so
-  // the new row can continue from where it ends. ONE ORDER = ONE SUBSCRIPTION ROW —
-  // the existing row is NOT modified (it was previously updated in place, which
-  // repointed its order_id at the extension order and orphaned the original
-  // purchase). No active sub → this is a plain fresh grant starting now.
+  // Extend: the new row starts where the current active subscription ends. One order =
+  // one subscription row; the existing row is never modified (updating it in place
+  // orphaned the original purchase). No active sub → fresh grant starting now.
   const existing = d.extend ? await repo.findActiveSubscription(d.customerId, resolvedEbookId, now) : null;
   const startAt = existing?.endAt && existing.endAt.getTime() > now.getTime() ? new Date(existing.endAt) : now;
-  // `duration` is in DAYS (see [[project_plan_duration_unit]]) — endAt via the
-  // planDuration helper (asDays), NOT raw ms math.
+  // `duration` is in days; endAt via the planDuration helper (asDays), not raw ms math.
   const endAt = computeEndAt({ startAt, durationMonths: durationDays ?? 0, asDays: true });
 
-  // unique_id business key (mirrors the client ebook-order key shape).
+  // unique_id business key (same shape as the client ebook-order key).
   const uniqueId = `ebook-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 
   const orderInput = {
@@ -591,17 +557,14 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     ebookId: resolvedEbookId,
     planId: d.planId ?? null,
     paymentMethod: d.paymentMethod,
-    // Order row always carries a number (0 for a free extend) — it is the
-    // purchase record.
+    // The order row always carries a number (0 for a free extend); it is the purchase record.
     orderPrice: d.orderPrice ?? 0,
     razorpayOrderId: d.razorpayOrderId ?? null,
     razorpayPaymentId: d.razorpayPaymentId ?? null,
     transactionId: d.transactionId ?? null,
     ipAddress: d.ipAddress ?? null,
-    // The new row's OWN price. A free "Add Days" extension is genuinely worth 0 to
-    // this row; the customer's earlier row keeps whatever it was paid, because we no
-    // longer write to it. (The old fold had to skip this field entirely to avoid
-    // zeroing a real price — that hazard is gone with one row per order.)
+    // The new row's own price; a free "Add Days" extension is worth 0. The earlier row
+    // keeps what it was paid since it is never written.
     price: d.orderPrice ?? 0,
     startAt,
     endAt,
@@ -610,8 +573,7 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     actingAdminId: d.actingAdminId ?? null,
   };
 
-  // One path for both cases: a fresh order + a fresh subscription row. Whether this
-  // is a first grant or an extension only changed `startAt` above.
+  // First grant or extension differ only in `startAt`.
   const { order, subscription } = await repo.createBackendSubscription(orderInput);
 
   return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };
@@ -654,9 +616,8 @@ export const updateSubscription = async (
     const data: any = {};
     if (d.status !== undefined) data.status = d.status;
     if (d.remarks !== undefined) data.remarks = d.remarks ?? null;
-    // Date edits are how an admin ends a subscription on a chosen day (as opposed to
-    // status:false, which kills it outright). Invalid input is rejected rather than
-    // dropped — silently ignoring it is the bug this path used to have.
+    // Date edits end a subscription on a chosen day (status:false ends it outright).
+    // Invalid input is rejected, never silently dropped.
     if (d.startAt !== undefined) {
       const dt = new Date(d.startAt);
       if (isNaN(dt.getTime())) return "bad_start";
@@ -688,7 +649,6 @@ export const updateSubscription = async (
   const subData: any = {};
   if (d.status !== undefined) subData.status = d.status;
   if (d.remarks !== undefined) subData.remarks = d.remarks ?? null;
-  // Verifying an order is an admin edit → stamp updated_by on the sub too.
   if (d.actingAdminId != null) subData.updated_by = d.actingAdminId;
   const subscription = Object.keys(subData).length ? await repo.updateSubscription(id, subData) : sub;
 
@@ -697,11 +657,8 @@ export const updateSubscription = async (
 
 
 /**
- * The customer owning this subscription, or null if it doesn't exist.
- *
- * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
- * can flush that customer's per-user route cache. On delete the row is gone
- * afterwards, so the id cannot be resolved after the mutation.
+ * Read before an admin revoke (status flip / date change / delete) so the caller can
+ * flush that customer's route cache; after delete the row is gone.
  */
 export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
   (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;

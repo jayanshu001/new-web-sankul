@@ -1,17 +1,8 @@
-// src/admin/live/streamos.provider.ts
-//
-// One provider-agnostic surface over BOTH StreamOS platforms.
-//
-// Why a facade instead of swapping the client out: the choice is PER SESSION,
-// not per deploy. Existing ws_live_session rows hold legacy stream ids and
-// legacy CDN URLs; resolving one against the v1 API just 404s. So a row's own
-// `streamProvider` decides where it resolves, and the STREAMOS_PROVIDER env flag
-// only decides where NEW streams are created. Flipping the flag therefore never
-// strands the back catalogue.
-//
-// Consumers should import from here, never from either client directly.
-//
-// Old→new comparison: docs/migration/STREAMOS_V1_CHANGE_MATRIX.md
+// StreamOS provider: one facade over both StreamOS platforms. The choice is per session:
+// legacy rows hold legacy stream ids that 404 against v1, so a row's own
+// `streamProvider` decides where it resolves and STREAMOS_PROVIDER only picks where
+// new streams are created. Consumers import from here, never from either client.
+// See docs/migration/STREAMOS_V1_CHANGE_MATRIX.md.
 
 import logger from "../../utils/logger";
 import { isStreamosV1, streamosEnvTag } from "../../config/streamos";
@@ -30,7 +21,6 @@ export type { StreamosRecording, QualityHlsUrls };
 
 export type Provider = "legacy" | "v1";
 
-/** Minimal shape the facade needs off a session row. */
 export interface SessionRef {
   id?: number;
   status?: string | null;
@@ -39,18 +29,11 @@ export interface SessionRef {
   recordedAssetId?: string | null;
 }
 
-/**
- * Which API a session's `streamId` belongs to.
- * NULL/absent reads as "legacy" — every row predating the v1 platform is legacy,
- * which is what makes the column backfill-free.
- */
+/** NULL reads as "legacy" (every pre-v1 row), which makes the column backfill-free. */
 export const providerOf = (row: SessionRef | null | undefined): Provider =>
   row?.streamProvider === "v1" ? "v1" : "legacy";
 
-/** Which API a NEW stream should be created against. */
 export const providerForNewStreams = (): Provider => (isStreamosV1() ? "v1" : "legacy");
-
-// ── Provisioning ────────────────────────────────────────────────────────────
 
 export interface ProvisionResult {
   provider: Provider;
@@ -71,16 +54,10 @@ const toDate = (iso: string | null): Date | null => {
 };
 
 /**
- * Tags stamped on every v1 stream.
- *
- *  - `wsSessionId` — our session id, so a recording traces back to its class
- *    even on an event whose `stream` object is absent.
- *  - `wsEnv` — which deployment created the stream. Staging and production share
- *    ONE StreamOS organisation (confirmed by StreamOS), so both environments'
- *    streams sit in the same account and a webhook can receive the other's
- *    recordings. This is what lets the handler ignore what isn't its own.
- *
- * Always returns tags: `wsEnv` is worth stamping even without a session id.
+ * Tags stamped on every v1 stream. `wsSessionId` traces a recording back to its
+ * class even when the event has no `stream` object. `wsEnv` lets the webhook ignore
+ * the other environment's recordings, since staging and production share one
+ * StreamOS organisation.
  */
 const sessionTags = (sessionId?: number): Record<string, string> => ({
   wsEnv: streamosEnvTag(),
@@ -88,12 +65,9 @@ const sessionTags = (sessionId?: number): Record<string, string> => ({
 });
 
 /**
- * Prepare a stream ahead of go-live.
- *
- * legacy → mints full ingest credentials immediately (they never expire).
- * v1     → reserves the stream only; `rtmpUrl` stays null because v1 ingest
- *          credentials expire ~24h after minting, so handing them out days
- *          early would guarantee a dead URL at go-live. `startStream` mints them.
+ * Prepares a stream ahead of go-live. Legacy mints non-expiring ingest credentials
+ * now; v1 only reserves the stream (`rtmpUrl` null) because its credentials expire
+ * ~24h after minting, and `startStream` mints them.
  */
 export async function provisionStream(input: {
   title: string;
@@ -101,15 +75,10 @@ export async function provisionStream(input: {
   scheduledAt?: Date | null;
 }): Promise<ProvisionResult> {
   if (providerForNewStreams() === "v1") {
-    // v1 requires a FUTURE ISO timestamp to schedule — `POST /livestreams/schedule/`
-    // rejects a past one with `400 SCHEDULE_IN_PAST`. Without a usable timestamp
-    // there is nothing to reserve against, so fall back to an immediately-pushable
-    // stream.
-    //
-    // A past scheduledAt is normal, not an error: "Go Live" has no start window, so
-    // an admin may start a class minutes or days after its scheduled slot, and a
-    // session provisioned at go-live time reaches this with its slot already gone.
-    // The 60s margin keeps a timestamp that is about to lapse from failing in flight.
+    // v1 scheduling rejects a past timestamp (400 SCHEDULE_IN_PAST), so without a
+    // future one fall back to an immediately-pushable stream. A past scheduledAt is
+    // normal since Go Live has no start window. The 60s margin keeps a timestamp
+    // about to lapse from failing in flight.
     const scheduledAt = input.scheduledAt ?? null;
     const schedulable = scheduledAt !== null && scheduledAt.getTime() > Date.now() + 60_000;
     const stream = schedulable
@@ -151,12 +120,8 @@ export const pushCredentialsExpired = (pushExpiresAt: Date | null | undefined): 
   pushExpiresAt instanceof Date && pushExpiresAt.getTime() - 60_000 <= Date.now();
 
 /**
- * Go live.
- *
- * legacy → nothing to mint; credentials were issued at provision time and do not
- *          expire, so this returns null and the caller keeps what it has.
- * v1     → mints ingest credentials now. Also re-mints for an already-started
- *          stream whose 24h window lapsed.
+ * Go live. Legacy returns null (provision-time credentials never expire). v1 mints
+ * ingest credentials now, re-minting if a started stream's 24h window lapsed.
  */
 export async function startStream(session: SessionRef & { title?: string | null }): Promise<ProvisionResult | null> {
   if (providerOf(session) !== "v1") return null;
@@ -184,13 +149,10 @@ export async function endStream(session: SessionRef): Promise<void> {
   await legacyEndStream(session.streamId);
 }
 
-// ── Details / recordings ────────────────────────────────────────────────────
-
 export interface UnifiedDetails {
   isLive: boolean;
   hlsUrl?: string;
   hlsUrls?: QualityHlsUrls;
-  /** Per-quality HLS ladder. */
   recordings: StreamosRecording[];
   /** Plain MP4 variants. Always empty on v1 — it produces no MP4 ladder. */
   mp4Recordings: StreamosRecording[];
@@ -201,14 +163,9 @@ export interface UnifiedDetails {
 }
 
 /**
- * v1 exposes NO liveness signal — the docs state a stream in progress still
- * reads READY_TO_STREAM because nothing reports when an encoder connects. The
- * closest honest approximation: an admin pressed Go Live (our status is CREATED)
- * and StreamOS has not ended the stream.
- *
- * This is intentionally optimistic. It can show "live" for a session whose
- * encoder never connected or already dropped; only a provider-side signal or an
- * HLS manifest probe can do better. Tracked as Q5.
+ * v1 has no liveness signal (an in-progress stream still reads READY_TO_STREAM),
+ * so approximate: Go Live was pressed (CREATED) and StreamOS hasn't ended it.
+ * Optimistic: may report live for an encoder that never connected or dropped.
  */
 const deriveIsLiveV1 = (session: SessionRef, providerStatus: string): boolean =>
   session.status === "CREATED" && providerStatus !== "ENDED";
@@ -218,7 +175,7 @@ const rendsToRecordings = (rends: v1.AssetRendition[]): StreamosRecording[] =>
     .map((r) => ({ quality: r.quality, path: String(r.url ?? r.dashUrl ?? "") }))
     .filter((r) => r.path.length > 0);
 
-/** Liveness + playback URLs + any finished recording, in one provider-agnostic shape. */
+// Liveness and playable recordings for a session, resolved on the session's own provider.
 export async function getDetails(session: SessionRef): Promise<UnifiedDetails> {
   if (!session.streamId) {
     return { isLive: false, recordings: [], mp4Recordings: [], raw: null };
@@ -252,15 +209,13 @@ export async function getDetails(session: SessionRef): Promise<UnifiedDetails> {
 
   if (!assetId) return base;
 
-  // Recording exists — resolve it. A failure here must not sink the liveness
-  // answer, so it degrades to "no recording yet" rather than throwing.
+  // A failure here must not sink the liveness answer; degrade to "still processing".
   try {
     const asset = await v1.getAsset(assetId);
     const ready = String(asset.status).toUpperCase() === "COMPLETED";
     const ladder = rendsToRecordings(asset.renditions);
 
-    // The master playlist is the playable URL; renditions are per-quality.
-    // Prepend the master so callers that take recordings[0] get the ABR stream.
+    // Prepend the master playlist so callers taking recordings[0] get the ABR stream.
     const recordings: StreamosRecording[] = ready
       ? [
           ...(asset.hlsManifestUrl ? [{ quality: "auto", path: asset.hlsManifestUrl }] : []),
@@ -279,7 +234,6 @@ export async function getDetails(session: SessionRef): Promise<UnifiedDetails> {
   }
 }
 
-/** Resolves a finished recording (VOD) directly by asset id. */
 export async function getRecordingByAssetId(assetId: string): Promise<{
   hlsUrl: string | null;
   durationSeconds: number | null;

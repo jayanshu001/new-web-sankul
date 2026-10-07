@@ -1,24 +1,4 @@
-/**
- * Catalog · Video service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Gated behind `isMysqlModule("catalog-video")` — currently **flag OFF**.
- *
- * Built dual-path but NOT enabled. Reasons (same OFF-flag pattern as
- * package/course, D3):
- *  1. Video/category ids are int (MySQL) vs ObjectId (Mongo); still-Mongo
- *     consumers (lecture, free, dashboard resume, progress, catalog browse) join
- *     those ids — flipping one read splits the id space → broken FE.
- *  2. lecture.controller course-membership check reads `VideoCategory.courseId`,
- *     and catalog browse reads `Package.specificSubjects[]` / `childCategoryIds`
- *     — all Mongo-only fields absent from `ws_video_category`.
- *  3. Paid-lecture access checks PackageCourseSubscription (commerce-wave).
- * ⇒ `catalog-video` flips WITH the commerce/dashboard wave.
- *
- * THE URL CONTRACT: `videoEncryptInput()` returns the exact object
- * `encryptVideoSource` consumes; field names match the Mongo path so the SAME
- * util yields an identical URL for a fixed token. NEVER reimplement encryption.
- * See docs/migration/CATALOG_MODULE_SCOPE.md.
- */
+// Video catalog: video lookups, encryption input and category children.
 import { catalogVideoRepository as repo } from "./catalog-video.repository";
 import {
   toVideoCategoryDto,
@@ -31,20 +11,15 @@ import type {
   VideoEncryptInput,
 } from "./catalog-video.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseVideoId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Numeric video-category id guard (SQL ids are ints). */
 export const parseVideoCategoryId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
-
-// ── videos ──────────────────────────────────────────────────────────────────
 
 export const findVideoById = async (id: number): Promise<VideoDto | null> => {
   const row = await repo.findVideoById(id);
@@ -61,11 +36,7 @@ export const listActiveVideosByCategory = async (
 export const countActiveVideosByCategory = (videoCategoryId: number): Promise<number> =>
   repo.countActiveVideosByCategory(videoCategoryId);
 
-/**
- * Fetch a video and return the exact `encryptVideoSource` input object (the URL
- * contract). Returns null if the video is missing/disabled. The CALLER feeds
- * this into the shared `encryptVideoSource` util — encryption is never done here.
- */
+/** Returns the `encryptVideoSource` input; the caller does the encryption. Null if missing/disabled. */
 export const getVideoEncryptInput = async (
   id: number
 ): Promise<{ video: VideoDto; encrypt: VideoEncryptInput } | null> => {
@@ -75,13 +46,8 @@ export const getVideoEncryptInput = async (
 };
 
 /**
- * Children-nav drill-down for a video category (client `categories` controller).
- * Returns { parent, list } where each list[].category = { ...categoryDto, count
- * (active videos), havingChildDirectory (≥1 active grandchild) }. Returns null if
- * the parent is missing. Children are resolved from ws_video_category_relation (the
- * DAG edge table) — matching the Mongo `childCategoryIds[]` semantics.
- * The parent is fetched WITHOUT a status gate, matching the Mongo `findById`
- * (an inactive parent still renders its children).
+ * Children are resolved from ws_video_category_relation. The parent is fetched
+ * without a status gate, so an inactive parent still renders its children.
  */
 export const getVideoCategoryChildren = async (
   parentId: number,
@@ -101,15 +67,12 @@ export const getVideoCategoryChildren = async (
     Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
     repo.childCountsByParent(childIds),
   ]);
-  // child-folder count per category (0 when a leaf).
   const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
   const list = children.map((c, i) => {
     const folders = childFolderCount.get(c.id) ?? 0;
     const havingChildDirectory = folders > 0;
-    // Match the catalog contract: a directory node reports its child-folder count;
-    // a leaf reports its own video count. (Its videos live in the sub-folders, so a
-    // folder's direct video count is 0 — reporting that was the confusing bit.)
+    // Catalog contract: a directory reports its child-folder count, a leaf its own video count.
     const count = havingChildDirectory ? folders : videoCounts[i];
     return { category: { ...toVideoCategoryDto(c), count, havingChildDirectory } };
   });

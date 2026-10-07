@@ -1,3 +1,4 @@
+// Ebook orders: Prisma queries for orders, plans and subscriptions.
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
 import type {
@@ -6,73 +7,49 @@ import type {
 } from "../order-code-snapshot/order-code-snapshot.types";
 
 /**
- * Prisma persistence for the ebook · order WRITE branch (Phase 3b). Tables:
- * `ws_ebook_order` (order-of-record) + `ws_ebook_subscription` (entitlement).
- * NO tracking table (unlike course). Mirrors commerce-order.repository.
- *
- * `customer_id` TYPE SPLIT: order table VARCHAR, subscription table INT. Callers
- * pass the int customer id; we cast to number for the order-row queries (the
- * VARCHAR column holds the numeric customer id, confirmed in staging).
+ * `ws_ebook_order` (order of record) + `ws_ebook_subscription` (entitlement).
+ * `customer_id` is VARCHAR on the order table and INT on the subscription table;
+ * the order column holds the numeric customer id.
  */
 export const ebookOrderRepository = {
-  // ── reads ──────────────────────────────────────────────────────────────────
-
-  /** The ebook order owning this Razorpay id, scoped to the customer. */
   findOrderByRazorpay: (razorpayOrderId: string, customerIdStr: string) =>
     prisma.eBookOrder.findFirst({
       where: { gatewayOrderId: razorpayOrderId, userId: Number(customerIdStr) },
     }),
 
-  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
+  /** Webhook context: the payload carries no customer. */
   findOrderByRazorpayOnly: (razorpayOrderId: string) =>
     prisma.eBookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
 
-  /** A plan row — to read its ebook_id + duration + price. */
   findPlan: (planId: number) =>
     prisma.packageCourseEbookPrice.findUnique({
       where: { id: planId },
       select: { id: true, ebookId: true, duration: true, price: true, status: true },
     }),
 
-  /**
-   * The customer's existing ACTIVE, unexpired ebook subscription (for
-   * upsert-extend). Mirrors the Mongo filter
-   *   {customerId, ebookId, status:true, endAt:{$gt:now}}.
-   */
   findActiveEbookSub: (customerId: number, ebookId: number, now: Date) =>
     prisma.eBookSubscription.findFirst({
       where: { customerId, ebookId, status: true, endAt: { gt: now } },
       orderBy: { endAt: "desc" },
     }),
 
-  /** The subscription created for a given order (idempotency re-entry). */
+  /** Idempotency re-entry. */
   findSubByOrder: (orderId: number) =>
     prisma.eBookSubscription.findFirst({ where: { orderId } }),
 
-  // ── write: create the pending order row (create-order endpoint) ────────────
-
-   /**
-   * CODE COLUMN: `promocode` is a `json` column that no code ever wrote — every
-   * ebook order read as "no code redeemed" even when one was. We write the
-   * purchase-time SNAPSHOT object built by `modules/order-code-snapshot`, the same
-   * shape `ws_package_course_order` carries.
+  /**
+   * `promocode` (json) stores the purchase-time snapshot from
+   * `modules/order-code-snapshot`, the same shape `ws_package_course_order` uses.
+   * It is required, not cosmetic: `modules/promoter-data` attributes ebook
+   * commission via `$.promoterId` and
+   * `$.promotedPackageCourseEbook[0].promoterPercentage`.
    *
-   * ⚠ The object is required, not cosmetic: `modules/promoter-data` attributes
-   * ebook commission off THIS column via `JSON_EXTRACT(o.promocode,'$.promoterId')`
-   * and `$.promotedPackageCourseEbook[0].promoterPercentage` (see listEbookSubs /
-   * ebookTotals). A bare code string matches neither path.
+   * This table has no `refferalcode` column, so a referral snapshot goes in the
+   * same column; `referrer_id` discriminates (only one code per order), and a
+   * referral snapshot has no `promoterId`, so it never counts as promoter revenue.
    *
-   * Unlike `ws_package_course_order`, this table has NO `refferalcode` column, so a
-   * referral snapshot goes into the SAME `promocode` column — `referrer_id` remains
-   * the discriminator (set for referrals, null for promocodes). Only one code can be
-   * applied per order, so the single column is unambiguous. A referral snapshot
-   * carries no `promoterId` key, so it can never be mistaken for promoter-driven
-   * revenue by the queries above.
-   *
-   * ⚠ `order_price` stays the CHARGED amount. This table has no list-price /
-   * discount split (no `price` + `code_discount` pair like the course/package order
-   * table), so the breakdown cannot be persisted here without DDL — deliberately
-   * out of scope. The code itself needs no schema change, which is why it's fixed.
+   * `order_price` is the charged amount; there is no list-price/discount split
+   * on this table.
    */
   createPendingOrder: (input: {
     customerId: number;
@@ -80,7 +57,6 @@ export const ebookOrderRepository = {
     orderPrice: number;
     razorpayOrderId: string;
     uniqueId: string;
-    /** Promo OR referral snapshot object → `promocode`. Null when none applied. */
     code?: PromocodeSnapshot | ReferralSnapshot | null;
     referrerId?: number | null;
     coin?: number | null;
@@ -98,26 +74,16 @@ export const ebookOrderRepository = {
         referrerId: input.referrerId ?? null,
         walletCoin: input.coin ?? null,
         status: "pending",
-        // Explicit stamps: the ws_ebook_order columns have no DB default and older
-        // deploys may predate the schema @default(now())/@updatedAt — set them here
-        // so created_at/updated_at are never NULL on new rows.
+        // No DB default on these columns; stamp explicitly so they are never NULL.
         createdAt: new Date(),
         updatedAt: new Date(),
       },
     }),
 
-  // ── write: verify fulfillment (ONE transaction) ───────────────────────────
-
   /**
-   * Transactional ebook fulfillment. Within one $transaction:
-   *  1. flip the order → complete + razorpay_payment_id
-   *  2. create THIS order's subscription row.
-   *
-   * ONE ORDER = ONE SUBSCRIPTION ROW. A renewal writes its own row starting where
-   * the previous one ends instead of folding onto it, so `price` stays the price
-   * actually paid for that row and `order_id` keeps pointing at the order that
-   * bought it (the fold used to repoint it at the newest order, orphaning the
-   * original purchase). The window is computed by the service (DAYS planDuration).
+   * One order = one subscription row: a renewal writes its own row starting where
+   * the previous one ends, so `price` and `order_id` stay those of the order that
+   * bought it. The window is computed by the service.
    */
   verifyEbookTx: (input: {
     orderId: number;
@@ -131,9 +97,8 @@ export const ebookOrderRepository = {
     extended: boolean;
   }) =>
     prisma.$transaction(async (tx) => {
-      // Claim the order: only a still-pending row flips. The loser of a concurrent
-      // /verify + webhook matches 0 rows, writes nothing and returns null (see
-      // commerce-order verifyCourseTx).
+      // Claim: only a still-pending row flips. The loser of a concurrent /verify +
+      // webhook matches 0 rows, writes nothing and returns null.
       const claim = await tx.eBookOrder.updateMany({
         where: { id: input.orderId, status: "pending" },
         data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId, updatedAt: input.now },

@@ -1,12 +1,8 @@
+// Admin ebooks: Zod request schemas.
 import { z } from "zod";
 import { EBookLanguage, PaymentMethod } from "../../shared/enums";
 
 const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-// On the SQL (MySQL) branch the attached countdown/category ids are numeric
-// strings, not 24-hex ObjectIds. Accept either form for the id-ARRAY fields so
-// the SQL write isn't rejected at validation; the service coerces via
-// parseIdArray (ints) on SQL and stores ObjectId strings on Mongo. Keeps the
-// strict single legacy `examCountdownCategoryId` (Mongo-only writer) untouched.
 const objectIdOrIntRegex = /^(?:[0-9a-fA-F]{24}|[1-9][0-9]*)$/;
 
 const zBool = z.preprocess(
@@ -14,10 +10,9 @@ const zBool = z.preprocess(
   z.boolean()
 );
 
-// Accepts an array of ids, a single id string, or a JSON-stringified array
-// (multipart form-data flattens arrays — the controller also reassembles the
-// bracketed `field[]` keys before this runs), and normalizes to string[].
-// Empty string / empty array clears the links; each entry must be an ObjectId.
+// Accepts an array, a single id string, or a JSON-stringified array (multipart
+// flattens arrays; the controller reassembles bracketed `field[]` keys first).
+// Empty string / empty array clears the links.
 const zObjectIdArray = z.preprocess((v) => {
   if (v === undefined) return undefined;
   if (Array.isArray(v)) return v.filter((s) => s !== "");
@@ -56,10 +51,8 @@ export const createEbookSchema = z.object({
   bookUrl: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
   demoFileName: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
   bookFileName: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
-  // Optional on both create and update (the admin Add/Edit modal no longer
-  // requires it). An empty string is accepted and clears an existing link — no
-  // URL-format check here, the frontend validates non-empty values. Stored as ""
-  // because ws_ebook.link is NOT NULL; `link` is always present in responses.
+  // "" clears the link (stored as "" since ws_ebook.link is NOT NULL). No URL
+  // check here; the frontend validates non-empty values.
   link: z.string().optional().nullable(),
   termsAndConditions: z.string().optional().nullable(),
   isTrending: zBool.optional().default(false),
@@ -96,25 +89,18 @@ export const createEbookSubscriptionSchema = z.object({
   { message: "Either planId or durationInDays is required", path: ["planId"] }
 );
 
-// All fields optional so the endpoint can serve both flows:
-//  - verify a pending order  → send razorpayOrderId + razorpayPaymentId
-//  - toggle the subscription → send just { status }
-// The controller decides which path to run based on which fields are present.
+// Serves two flows, chosen by which fields are present: verify a pending order
+// (razorpayOrderId + razorpayPaymentId) or toggle the subscription ({ status }).
 export const updateEbookSubscriptionSchema = z.object({
   razorpayOrderId: z.string().min(1, "razorpayOrderId is required").optional(),
   razorpayPaymentId: z.string().min(1, "razorpayPaymentId is required").optional(),
   remarks: z.string().optional().nullable(),
   status: zBool.optional(),
-  // Dates were MISSING here until 2026-08-18. Because a bare z.object() STRIPS unknown
-  // keys instead of rejecting them, an admin "end this subscription on <date>" was
-  // silently discarded and the endpoint still answered 200/success — the row never
-  // changed. Course/package (subscription.validation.ts) and test-series both accept
-  // these; ebook was the only one that did not.
+  // z.object() strips unknown keys, so omitting these silently drops admin date edits.
   startAt: z.string().optional(),
   endAt: z.string().optional(),
 });
 
-// SQL branch: ids are numeric (the Mongo schema enforces ObjectId). Same shape.
 export const reorderEbooksSqlSchema = z.object({
   orders: z.array(
     z.object({
@@ -124,11 +110,9 @@ export const reorderEbooksSqlSchema = z.object({
   ).min(1, "orders array must not be empty"),
 });
 
-// SQL-side subscription create (numeric ids; the Mongo schema enforces ObjectId).
-// The standardized Add-Subscription form sends `amount` / `bankTransactionId` /
-// `durationDays`; the original SQL contract used `orderPrice` / `transactionId` /
-// `durationInDays`. Both are accepted and coalesced to the canonical keys so
-// existing callers keep working while the form needs no change.
+// The Add-Subscription form sends amount / bankTransactionId / durationDays;
+// older callers send orderPrice / transactionId / durationInDays. Both are
+// accepted and coalesced to the latter.
 export const createEbookSubscriptionSqlSchema = z
   .object({
     customerId: z.coerce.number().int().positive(),
@@ -145,7 +129,8 @@ export const createEbookSubscriptionSqlSchema = z
     bankTransactionId: z.string().optional().nullable(), // Add-Subscription alias
     remarks: z.string().optional().nullable(),
     status: z.boolean().optional().default(true),
-    // Subscription Type = Extend: top up the existing sub instead of a fresh row.
+    // Subscription Type = Extend.
+
     extend: z.boolean().optional(),
   })
   .transform((d) => ({

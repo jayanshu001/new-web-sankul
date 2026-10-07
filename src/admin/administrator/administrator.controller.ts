@@ -1,3 +1,4 @@
+// Admin administrators: HTTP handlers for staff account CRUD, roles and status.
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { AdminRole } from "../../shared/enums";
@@ -14,7 +15,6 @@ const SALT_ROUNDS = 10;
 
 const ADMIN_ROLE_VALUES = Object.values(AdminRole) as string[];
 
-/** Coerce the `status` query param to a boolean filter (or undefined). */
 const parseStatusFilter = (status?: string): boolean | undefined => {
   if (status === "true" || status === "active") return true;
   if (status === "false" || status === "inactive") return false;
@@ -22,16 +22,13 @@ const parseStatusFilter = (status?: string): boolean | undefined => {
 };
 
 /**
- * On the SQL branch the only persistable role is a numeric spatie role id
- * (ws_roles.id). The legacy built-in enum roles (super_admin/admin/editor)
- * have no SQL column, so they are ignored for storage and derived on read.
+ * Only a numeric spatie role id (ws_roles.id) is persistable. The built-in enum
+ * roles (super_admin/admin/editor) have no column: ignored on write, derived on read.
  */
 const resolveSqlRoleId = (role?: string | null): bigint | undefined => {
   if (!role || ADMIN_ROLE_VALUES.includes(role)) return undefined;
   return adminSql.parseAdminBigId(role) ?? undefined;
 };
-
-// ─── List ─────────────────────────────────────────────────────────────────────
 
 export const getAdministrators = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -75,8 +72,6 @@ export const getAdministrators = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Get by ID ────────────────────────────────────────────────────────────────
-
 export const getAdministratorById = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -101,8 +96,7 @@ export const getAdministratorById = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Pre-requisites (roles dropdown) ─────────────────────────────────────────
-
+// Role options for the admin form: built-in enum roles plus ws_roles.
 export const getAdministratorPreRequisites = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getAdministratorPreRequisites invoked", { traceId, path: _req.originalUrl });
@@ -118,8 +112,6 @@ export const getAdministratorPreRequisites = async (_req: Request, res: Response
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── Create ───────────────────────────────────────────────────────────────────
 
 export const createAdministrator = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -169,8 +161,6 @@ export const createAdministrator = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Update ───────────────────────────────────────────────────────────────────
-
 export const updateAdministrator = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -207,7 +197,7 @@ export const updateAdministrator = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid role id." });
     }
 
-    // Replace the old S3 image when a new one is supplied (best-effort).
+    // Best-effort cleanup of the replaced image.
     if (data.image !== undefined && existing.image && existing.image !== data.image) {
       deleteFromS3FileUrl(existing.image).catch(() => {});
     }
@@ -232,8 +222,7 @@ export const updateAdministrator = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Delete ───────────────────────────────────────────────────────────────────
-
+// Hard delete; refuses deleting your own account.
 export const deleteAdministrator = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -273,8 +262,7 @@ export const deleteAdministrator = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Toggle Status ────────────────────────────────────────────────────────────
-
+// Flip active status; refuses disabling your own account.
 export const toggleAdministratorStatus = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;

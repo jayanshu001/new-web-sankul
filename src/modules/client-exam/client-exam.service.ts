@@ -1,7 +1,7 @@
+// Client exams: listings, attempt lifecycle, results, solutions and daily tests.
 import { clientExamRepository as repo } from "./client-exam.repository";
 import { descendantExamCategoryIds } from "../catalog-exam/exam-category-pivot.where";
 import { MONTH_LABELS, weekOfMonth, weekRange } from "../../utils/dateBuckets";
-
 
 export const parseExamId = (id: string): number | null => {
   const n = Number(id);
@@ -31,7 +31,6 @@ export const detailsForAttempt = async (r: { id: number; customerId: number | nu
   return repo.legacyDetailsForExam(r.customerId, r.examId);
 };
 
-// Exam → the Mongo-shaped client DTO (matches the controller's .select fields).
 const toExamDto = (e: any) => ({
   _id: String(e.id),
   title: e.name,
@@ -50,8 +49,8 @@ const toExamDto = (e: any) => ({
 const toResultDto = (r: any) => ({
   _id: String(r.id),
   examId: r.examId != null ? String(r.examId) : null,
-  // FE reads attemptNumber/inProgress on my-attempts, daily lastResult and the
-  // solution analytics header (confirmed by RN client) — keep them on the DTO.
+  // The RN client reads attemptNumber/inProgress on my-attempts, daily lastResult
+  // and the solution analytics header.
   attemptNumber: r.attemptNumber ?? null,
   inProgress: r.inProgress ?? false,
   total: r.total,
@@ -72,12 +71,8 @@ const toCategoryDto = (c: any) => ({
   orderBy: c.order_by,
 });
 
-// ─── listExamsByCategory ──────────────────────────────────────────────────────
-// `subjects` and `completedTests` are whole-category summaries, so they are
-// computed over the FULL (search-filtered) exam set; only `exams` is windowed.
-// The list is sliced in JS (rather than pushing skip/take into Prisma) so the
-// two summaries keep their original, page-independent semantics. `total` is the
-// full filtered count for the pagination envelope.
+// `subjects` and `completedTests` summarise the full (search-filtered) exam set, so
+// only `exams` is sliced (in JS) to the page; `total` is the full filtered count.
 export const listExamsByCategory = async (
   categoryId: number,
   customerId: number | null,
@@ -113,10 +108,7 @@ export const listExamsByCategory = async (
   return { subjects: subjects.map(toCategoryDto), exams: pagedExams, completedTests, total };
 };
 
-// ─── listExamsByCategoryPaged ─────────────────────────────────────────────────
-// Paginated variant for GET /client/exam-categories/:id/exams — returns the
-// category header + decorated exam list + total (Mongo parity: status published,
-// non-daily, optional title search). Each row carries isCompleted + lastResult.
+// Status published, non-daily, optional title search.
 export const listExamsByCategoryPaged = async (
   categoryId: number,
   customerId: number | null,
@@ -149,7 +141,6 @@ export const listExamsByCategoryPaged = async (
   return { category: toCategoryDto(category), list, total };
 };
 
-// ─── getExamQuestions ─────────────────────────────────────────────────────────
 export const getExamQuestions = async (examId: number) => {
   const exam = await repo.findPublishedExam(examId);
   if (!exam) return null;
@@ -157,10 +148,9 @@ export const getExamQuestions = async (examId: number) => {
   const opts = questions.length ? await repo.optionsForQuestions(questions.map((q) => q.id)) : [];
   const byQ: Record<string, any[]> = {};
   for (const o of opts) {
-    // Legacy "Skip" options are NOT choices any more — the client sends
-    // `answerId: null` instead. Emitting them would render a bogus extra answer on
-    // every question that still carries one. The row stays in the DB (historical
-    // results reference it) and is still accepted on submit.
+    // Legacy "Skip" options are no longer choices (clients send `answerId: null`);
+    // the rows stay because historical results reference them, and are still
+    // accepted on submit.
     if (isLegacySkipOptionName(o.name)) continue;
     (byQ[String(o.question)] ||= []).push({ _id: String(o.id), name: o.name, image: null, isSelect: false });
   }
@@ -174,13 +164,11 @@ export const getExamQuestions = async (examId: number) => {
   return { exam: toExamDto(exam), questions: decorated };
 };
 
-// ─── getExamDetail (meta only) ───────────────────────────────────────────────
 export const getExamDetail = async (examId: number) => {
   const exam = await repo.findPublishedExam(examId);
   return exam ? toExamDto(exam) : null;
 };
 
-// ─── listMyResults ────────────────────────────────────────────────────────────
 export const listMyResults = async (customerId: number, page: number, limit: number, search?: string | null) => {
   const [rows, total] = await Promise.all([
     repo.myResults(customerId, (page - 1) * limit, limit, search ?? null),
@@ -193,7 +181,6 @@ export const listMyResults = async (customerId: number, page: number, limit: num
   return { items, total };
 };
 
-// Full ExamResult → Mongo-document-shaped DTO (mirrors models/exam/ExamResult.model).
 const toFullResultDto = (r: any) => ({
   _id: String(r.id),
   customerId: r.customerId != null ? String(r.customerId) : null,
@@ -215,13 +202,12 @@ const toFullResultDto = (r: any) => ({
   createdAt: r.created_at ?? null,
 });
 
-// ─── getMyOverallAnalytics ────────────────────────────────────────────────────
 export const getOverallAnalytics = async (customerId: number) => {
   const row = await repo.overallAnalytics(customerId);
-  // No submitted attempt = no analytics (same null the missing rollup row gave).
+  // No submitted attempt means no analytics.
   if (!row.exams) return null;
   return {
-    // No rollup row anymore; `_id` kept for the frozen shape, one per customer.
+    // `_id` is kept for the frozen shape; one per customer.
     _id: String(customerId),
     customerId: String(customerId),
     exams: row.exams,
@@ -234,7 +220,6 @@ export const getOverallAnalytics = async (customerId: number) => {
   };
 };
 
-// ─── rateExamResult ───────────────────────────────────────────────────────────
 export const rateResult = async (customerId: number, examId: number, ratting: string) => {
   const existing = await repo.findResultByExam(customerId, examId);
   if (!existing) return null;
@@ -242,7 +227,6 @@ export const rateResult = async (customerId: number, examId: number, ratting: st
   return toFullResultDto(updated);
 };
 
-// ─── listMyPastDailyResults ───────────────────────────────────────────────────
 export const listPastDailyResults = async (customerId: number, page: number, limit: number, search?: string | null) => {
   const [rows, total] = await Promise.all([
     repo.pastDailyResults(customerId, (page - 1) * limit, limit, search ?? null),
@@ -275,23 +259,19 @@ export const listPastDailyResults = async (customerId: number, page: number, lim
   return { items, total };
 };
 
-// ─── daily-exam drill-down ───────────────────────────────────────────────────
-// Bucketing helpers are shared with the free-tests drill-down so the two
-// endpoints cannot drift (see utils/dateBuckets).
+// Bucketing helpers are shared with the free-tests drill-down (utils/dateBuckets).
 
 export const getDailyExams = async (opts: { year?: number; month?: number; week?: number; customerId: number | null; skip?: number; take?: number; search?: string | null }) => {
   const now = new Date();
-  // Level 1: years
   if (!opts.year) {
     const rows = await repo.dailyYears(now);
     return { level: "years", data: rows.map((r) => ({ year: num(r.year), testsCount: num(r.testsCount) })) };
   }
-  // Level 2: months
   if (!opts.month) {
     const rows = await repo.dailyMonths(opts.year);
     return { level: "months", data: rows.map((r) => ({ year: opts.year, month: num(r.month), label: MONTH_LABELS[num(r.month) - 1], testsCount: num(r.testsCount) })) };
   }
-  // Level 3: weeks (derived in JS from the month's exams)
+  // Weeks are derived in JS from the month's exams.
   if (!opts.week) {
     const from = new Date(opts.year, opts.month - 1, 1, 0, 0, 0, 0);
     const to = new Date(opts.year, opts.month, 0, 23, 59, 59, 999);
@@ -309,7 +289,6 @@ export const getDailyExams = async (opts: { year?: number; month?: number; week?
     });
     return { level: "weeks", data };
   }
-  // Level 4: tests in the week, decorated per-customer (paginated + name search)
   const { start, end } = weekRange(opts.year, opts.month, opts.week);
   const search = opts.search ?? null;
   const skip = opts.skip ?? 0;
@@ -330,34 +309,20 @@ export const getDailyExams = async (opts: { year?: number; month?: number; week?
   return { level: "tests", data, total };
 };
 
-// ─── saveAnswers (scoring WRITE) ──────────────────────────────────────────────
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 
 /**
- * ── Skip: two representations, one meaning ───────────────────────────────────
+ * Skip has two representations: legacy rows point answer_id at an option named
+ * "Skip"; current clients send `answerId: null`. Both are accepted on write, and
+ * reads normalise the legacy form (see `selectedOptionId`). Legacy option rows are
+ * never deleted because historical result details reference them.
  *
- * BEFORE: skipping was a real row in ws_exam_question_option titled "Skip". The
- * client selected it like any other choice, so the stored answer_id points at an
- * option and `result` is 'skip'.
- *
- * NOW: the client sends `answerId: null` and no option row is involved.
- *
- * Both are still accepted on WRITE — an older app build that still selects the
- * legacy option keeps scoring correctly. On READ the legacy form is normalised to
- * the new one (see `selectedOptionId`) so results, solutions and resumed attempts
- * render identically whichever way the answer was recorded. Legacy option rows are
- * never deleted: historical ws_exam_result_detail rows still reference them.
- *
- * `result` ('true' | 'false' | 'skip') is the canonical field and is correct for
- * both forms — anything counting skips should read it, never the answer id.
+ * `result` ('true' | 'false' | 'skip') is canonical for both forms; count skips
+ * from it, never from the answer id.
  */
 export const isLegacySkipOptionName = (name: string | null | undefined): boolean => norm(name) === "skip";
 
-/**
- * The option the customer actually chose, with a legacy "Skip" selection collapsed
- * to null — i.e. exactly what a new-style skip stores. `skipOptionIds` is the set of
- * legacy skip option ids in scope.
- */
+/** The chosen option, with a legacy "Skip" selection collapsed to null (what a new-style skip stores). */
 const selectedOptionId = (answerId: number | null | undefined, skipOptionIds: Set<number>): number | null =>
   answerId == null || skipOptionIds.has(answerId) ? null : answerId;
 
@@ -365,8 +330,7 @@ export interface SaveAnswersInput {
   examId: number;
   timing: string;
   ratting?: string | null;
-  // `answerId: null` = skipped. A legacy "Skip" option id is still accepted and
-  // scores identically, so an older app build keeps working unchanged.
+  // `answerId: null` means skipped; a legacy "Skip" option id is still accepted.
   test: Array<{ questionId: number; answerId: number | null }>;
 }
 
@@ -374,6 +338,7 @@ export type SaveAnswersResult =
   | { ok: false; status: number; message: string }
   | { ok: true; examResult: any; rank: string };
 
+// One-shot submit of a full answer sheet; returns the result and rank.
 export const saveAnswers = async (customerId: number, data: SaveAnswersInput): Promise<SaveAnswersResult> => {
   const exam = await repo.findExam(data.examId);
   if (!exam) return { ok: false, status: 404, message: "Exam is not found." };
@@ -389,7 +354,7 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
     const question = await repo.findQuestion(item.questionId, data.examId);
     if (!question) return { ok: false, status: 400, message: "Sorry, Question are not match with their exam." };
 
-    // Mirrors saveSingleAnswer: no answer id at all = skipped, nothing to look up.
+    // No answer id means skipped.
     if (!item.answerId) {
       details.push({ questionId: item.questionId, answerId: null, result: "skip", point: 0 });
       continue;
@@ -399,14 +364,13 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
     if (!option) return { ok: false, status: 400, message: "Sorry, Answer is not match with their exam and question." };
 
     let result: "true" | "false" | "skip";
-    // Back-compat: an older build still selects the legacy "Skip" option row.
+    // Older builds may still select the legacy "Skip" option row.
     if (isLegacySkipOptionName(option.name)) result = "skip";
     else if (norm(option.name) === norm(question.answer)) result = "true";
     else result = "false";
 
     const point = result === "skip" ? 0 : result === "true" ? posMarks : -Math.abs(negMarks);
-    // A legacy skip is persisted as a NEW-style skip (answer_id NULL) so all
-    // freshly-written rows share one representation from here on.
+    // A legacy skip is persisted as a new-style skip (answer_id NULL).
     details.push({ questionId: item.questionId, answerId: result === "skip" ? null : item.answerId, result, point });
   }
 
@@ -425,8 +389,7 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
     score: Math.round(score * 100) / 100, timing: data.timing, ratting: data.ratting ?? null, details,
   });
 
-  // Rank by best score per customer (ties share a rank; higher = better).
-  // Counted in SQL — see repo.rankForExam.
+  // Rank by best score per customer; ties share a rank.
   const myBest = Math.max(
     num(result.score),
     await repo.myBestScoreForExam(customerId, data.examId)
@@ -437,7 +400,6 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
   return { ok: true, examResult: toResultDto(result), rank };
 };
 
-// ─── Solution view ────────────────────────────────────────────────────────────
 export const getSolution = async (customerId: number, examId: number, attemptId?: number) => {
   const target = attemptId
     ? await repo.findResultById(attemptId, customerId, examId)
@@ -450,9 +412,8 @@ export const getSolution = async (customerId: number, examId: number, attemptId?
   const qById = new Map(questions.map((q) => [q.id, q]));
   const opts = qIds.length ? await repo.optionsForQuestions(qIds) : [];
   const optsByQ: Record<string, any[]> = {};
-  // Legacy "Skip" options are hidden from `answers[]` (same as the question list) and
-  // collected here so a pre-cutover attempt that selected one reads back as "nothing
-  // selected" — identical to a new-style skip. `result` already says 'skip' for both.
+  // Legacy "Skip" options are hidden from `answers[]` and collected so a
+  // pre-cutover attempt that selected one reads back as nothing selected.
   const skipOptionIds = new Set<number>();
   for (const o of opts) {
     if (isLegacySkipOptionName(o.name)) { skipOptionIds.add(o.id); continue; }
@@ -471,8 +432,7 @@ export const getSolution = async (customerId: number, examId: number, attemptId?
         isSelect: selected === o.id,
         isCorrect: norm(q.answer) === norm(o.name),
       }));
-      // solutionText = ws_exam_question.solution_text (HTML explanation shown on
-      // TestResultScreen). solution_image stays dropped — FE does not read it.
+      // solution_image is deliberately not emitted; the FE does not read it.
       return { _id: String(q.id), title: q.name, image: q.image ?? null, solutionText: q.solutionDescription ?? null, answers, result: d.result, point: num(d.point) };
     });
 };
@@ -489,10 +449,8 @@ export const getSolutionAnalytics = async (customerId: number, examId: number, a
   };
 };
 
-// ─── attempt lifecycle (resumable attempts) ──────────────────────────────────
-// SQL port of the Mongo attempt flow in client/exam/exam.controller.ts. An
-// in-progress attempt is a ws_exam_result row with status=false/inProgress=true;
-// submit flips it to status=true. Scoring mirrors saveAnswers above.
+// An in-progress attempt is a ws_exam_result row with status=false/inProgress=true;
+// submit flips it to status=true. Scoring mirrors saveAnswers.
 const toAttemptDto = (r: any) => ({
   _id: String(r.id),
   examId: r.examId != null ? String(r.examId) : null,
@@ -525,13 +483,13 @@ const computeTimingFromStart = (startedAt: Date | null | undefined): string => {
   return `${m}:${s}`;
 };
 
+// Resumes the in-progress attempt or opens the next numbered one.
 export const startAttempt = async (customerId: number, examId: number) => {
   const exam = await repo.findPublishedExam(examId);
   if (!exam) return { ok: false as const, status: 404, message: "Exam not found or not published." };
   const now = new Date();
-  // Only scheduled exams have a real start window; `subject` exams are treated
-  // as always-available everywhere else (catalog/questions/saveAnswers), so the
-  // "not started yet" gate must not apply to them.
+  // Only scheduled exams have a real start window; `subject` exams are always
+  // available elsewhere, so the "not started yet" gate must not apply to them.
   if (exam.type !== "subject" && exam.startAt && now < new Date(exam.startAt)) {
     return { ok: false as const, status: 400, message: "Exam has not started yet." };
   }
@@ -557,15 +515,15 @@ export const startAttempt = async (customerId: number, examId: number) => {
   };
 };
 
+// In-progress attempt with its saved answers; data is null when none.
 export const getActiveAttempt = async (customerId: number, examId: number) => {
   const exam = await repo.findExam(examId);
   if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
   const attempt = await repo.findInProgressAttempt(customerId, examId);
   if (!attempt) return { ok: true as const, data: null };
   const details = await repo.detailsForResult(attempt.id);
-  // An attempt started before the cutover may have stored a legacy "Skip" option id.
-  // Resolve those and hand back `answerId: null`, so the app resumes showing the
-  // question as unanswered instead of an id it can no longer match to any option.
+  // A pre-cutover attempt may hold a legacy "Skip" option id; return it as
+  // `answerId: null` so the app shows the question as unanswered.
   const savedIds = [...new Set(details.map((d) => d.answerId).filter((x): x is number => x != null))];
   const skipOptionIds = new Set(
     (await repo.optionsByIds(savedIds)).filter((o) => isLegacySkipOptionName(o.name)).map((o) => o.id)
@@ -617,8 +575,8 @@ export const saveSingleAnswer = async (
     const option = await repo.findOption(input.answerId, input.questionId);
     if (!option) return { ok: false as const, status: 400, message: "Answer does not belong to question." };
     answerId = option.id;
-    // Back-compat: an older build still selects the legacy "Skip" option row. Stored
-    // as a new-style skip (answer_id NULL) so writes are uniform from here on.
+    // Older builds may still select the legacy "Skip" option; it is stored as a
+    // new-style skip (answer_id NULL).
     if (isLegacySkipOptionName(option.name)) { result = "skip"; answerId = null; }
     else if (norm(option.name) === norm(question.answer)) { result = "true"; point = num(exam.positiveMarks); }
     else { result = "false"; point = -Math.abs(num(exam.negativeMarks)); }
@@ -628,6 +586,7 @@ export const saveSingleAnswer = async (
   return { ok: true as const, data: { saved: true } };
 };
 
+// Scores saved answers (unanswered = skip), finalizes the attempt and returns the rank.
 export const submitAttempt = async (
   customerId: number,
   examId: number,
@@ -699,6 +658,7 @@ export const listAttempts = async (
   };
 };
 
+// Totals across all of the customer's attempts, plus rank by best score.
 export const getAttemptsAggregate = async (customerId: number, examId: number) => {
   const exam = await repo.findExam(examId);
   if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };

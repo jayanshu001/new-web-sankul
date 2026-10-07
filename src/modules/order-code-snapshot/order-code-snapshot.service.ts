@@ -1,24 +1,14 @@
 /**
- * Order · code snapshot service.
+ * Order code snapshot: builds the purchase-time object every checkout path writes into an order's
+ * `promocode` / `refferalcode` columns.
  *
- * Builds the purchase-time JSON object that create-order writes into an order's
- * `promocode` / `refferalcode` columns. One builder shared by every checkout
- * path (course, package, ebook) so all order tables carry the same shape.
+ * An object, not the code string: `modules/promoter-data` computes the promoter
+ * dashboard by JSON-path querying the order row; a bare string matches none of
+ * those paths and pays out nothing. A snapshot, not a join: percentages and plan
+ * prices are editable, and commission must use the terms in force at purchase.
  *
- * WHY AN OBJECT AND NOT THE CODE STRING: the columns are a read contract, not
- * storage. `modules/promoter-data` computes the entire promoter dashboard —
- * attributed subscriptions, revenue and commission — by JSON-path querying the
- * order row (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`).
- * A bare string satisfies the column type but matches none of those paths, so a
- * flattened order is invisible to promoter attribution and pays out nothing.
- *
- * WHY A SNAPSHOT AND NOT A JOIN: the promocode's percentages are editable and
- * plans get repriced. Commission must be computed against the terms in force at
- * purchase, so the row is frozen into the order rather than resolved live.
- *
- * Failure policy: a snapshot is reporting metadata, never a reason to fail a
- * payment. Every builder returns null when its source rows are missing, and the
- * caller stores null rather than blocking checkout.
+ * A snapshot never fails a payment: builders return null when source rows are
+ * missing and the caller stores null.
  */
 import { orderCodeSnapshotRepository as repo } from "./order-code-snapshot.repository";
 import {
@@ -36,12 +26,7 @@ import type {
   SnapshotPlanKind,
 } from "./order-code-snapshot.types";
 
-
-/**
- * The purchased plan, read from whichever table `planKind` names, in the one
- * SnapshotPlan shape. Centralised so a new plan kind can never be half-wired: every
- * builder resolves its plan through here.
- */
+/** Every builder resolves its plan here, so a new plan kind cannot be half-wired. */
 const resolvePlan = async (
   planId: number,
   planKind: SnapshotPlanKind
@@ -52,11 +37,8 @@ const resolvePlan = async (
 };
 
 /**
- * Snapshot a redeemed promocode against the purchased plan. Returns null if the
- * promocode row has since been deleted.
- *
- * `planKind` selects both the link row and the plan table — see
- * repository.findPlanLink for why matching on the plan id alone is unsafe.
+ * Returns null if the promocode row has since been deleted. `planKind` selects both
+ * the link row and the plan table (see repository.findPlanLink).
  */
 export const buildPromocodeSnapshot = async (
   promocodeId: number,
@@ -68,9 +50,8 @@ export const buildPromocodeSnapshot = async (
     repo.findPlanLink(promocodeId, planId, planKind),
   ]);
   if (!promo) return null;
-  // A "price" link carries its plan on the relation already loaded; a "livePlan" or
-  // "testSeriesPrice" link cannot (its FK points at the wrong table), so read that
-  // plan separately. No link at all → a global-discount promocode → no plan to embed.
+  // Only a "price" link carries its plan on the loaded relation; other kinds' FK points
+  // at the wrong table. No link → global-discount promocode → no plan to embed.
   const linkPlan = !link
     ? null
     : planKind !== "price"
@@ -79,10 +60,7 @@ export const buildPromocodeSnapshot = async (
   return toPromocodeSnapshot(promo, link, linkPlan);
 };
 
-/**
- * Snapshot a redeemed customer referral code against the purchased plan.
- * Returns null if the program or the referring customer can't be resolved.
- */
+/** Returns null if the program or the referring customer can't be resolved. */
 export const buildReferralSnapshot = async (
   referrerId: number,
   planId: number,
@@ -98,24 +76,15 @@ export const buildReferralSnapshot = async (
 };
 
 /**
- * The single call a create-order path makes. Exactly one snapshot is ever
- * produced: `referrerId` is set only by the referral branch of
- * `resolvePromoForPlanSql` (which returns an empty `promo._id`), so the two
- * inputs are mutually exclusive by construction — the referral case is checked
- * first regardless, so a malformed pair can never yield two snapshots.
- *
- * Both null (no code redeemed) is the common case and costs no queries.
+ * The single call a create-order path makes. `referrerId` and `promocodeId` are
+ * mutually exclusive by construction (`resolvePromoForPlanSql`); referral is checked
+ * first anyway, so at most one snapshot is produced. Both null costs no queries.
  */
 export const buildOrderCodeSnapshots = async (input: {
   promocodeId: number | null;
   referrerId: number | null;
   planId: number;
-  /**
-   * Which plan table `planId` belongs to. Defaults to "price"
-   * (ws_package_course_ebook_price) — the course / package / ebook checkouts — so
-   * those callers are unaffected. Live-course checkout MUST pass "livePlan" and
-   * test-series checkout MUST pass "testSeriesPrice".
-   */
+  /** Defaults to "price"; live-course checkout must pass "livePlan", test-series "testSeriesPrice". */
   planKind?: SnapshotPlanKind;
 }): Promise<OrderCodeSnapshots> => {
   const planKind = input.planKind ?? "price";
@@ -135,20 +104,12 @@ export const buildOrderCodeSnapshots = async (input: {
 };
 
 /**
- * Promoter attribution for a subscription's `promoter_id` / `promoter_percentage`
- * columns, denormalised out of the ORDER's frozen promocode snapshot.
+ * Promoter attribution for a subscription's `promoter_id` / `promoter_percentage`,
+ * read from the order's promocode snapshot. Kept next to the writer because these
+ * are the same JSON paths promoter-data filters on.
  *
- * Lives here because this module owns the snapshot shape: the two JSON paths read
- * below (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`) are
- * the same ones `modules/promoter-data` filters the package promoter dashboard on,
- * and they are documented as load-bearing in order-code-snapshot.types.ts. Keeping
- * the reader next to the writer is what stops the two drifting apart.
- *
- * Shared by live-course (2026-08-27) and test-series (2026-08-31) verify.
- *
- * ⚠ A REFERRAL snapshot deliberately yields nothing. In the legacy referral shape the
- * key `promoter` holds the referring CUSTOMER, not a `ws_promoter` — attributing one
- * as the other would book customer referral rewards as promoter commission.
+ * A referral snapshot yields nothing: its `promoter` key is the referring customer,
+ * and attributing it would book referral rewards as promoter commission.
  */
 export const extractPromoterAttribution = (row: {
   promocode?: unknown;

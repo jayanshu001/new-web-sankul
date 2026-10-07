@@ -1,3 +1,4 @@
+// Customer lookups: state, district (city), education and target-goal reads and CRUD.
 import { customerLookupsRepository as repo } from "./customer-lookups.repository";
 import {
   toStateDto,
@@ -5,8 +6,7 @@ import {
   toEducationDto,
   toTargetGoalDto,
 } from "./customer-lookups.transformer";
-// /address/cities is sourced from districts (ws_customer_distict) but must keep
-// the exact offline-city response contract — reuse that module's transformer/type.
+// /address/cities is sourced from districts but keeps the offline-city response contract.
 import { toCityDto } from "../offline-city/offline-city.transformer";
 import type { CityDto } from "../offline-city/offline-city.types";
 import type {
@@ -25,7 +25,6 @@ export const parseLookupId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ─── States ────────────────────────────────────────────────────────────────
 export const listStates = async (opts?: {
   activeOnly?: boolean;
   search?: string;
@@ -38,6 +37,7 @@ export const createState = async (input: StateInput): Promise<StateDto> => {
   return toStateDto(await repo.createState(input));
 };
 
+// Null on a bad id or a failed update; same contract for every lookup update.
 export const updateState = async (
   id: string,
   input: Partial<StateInput>
@@ -62,7 +62,6 @@ export const deleteState = async (id: string): Promise<boolean> => {
   }
 };
 
-// ─── Districts ───────────────────────────────────────────────────────────────
 export const listDistrictsByState = async (
   stateId: string,
   opts?: { activeOnly?: boolean }
@@ -72,10 +71,8 @@ export const listDistrictsByState = async (
   return rows.map(toDistrictDto);
 };
 
-// Map a district row (± included state) into the offline-city response contract.
-// Districts have no image/order/timestamps → default (image "", order 0, null);
-// `status` ← `active`; parent state populates `stateId`. Reuses offline-city's
-// `toCityDto` so the JSON stays byte-identical to the old city shape.
+// Districts have no image/order/timestamps, so those default; reusing `toCityDto`
+// keeps the JSON byte-identical to the city shape.
 const districtToCity = (d: {
   id: number;
   name: string;
@@ -95,11 +92,7 @@ const districtToCity = (d: {
       : null,
   });
 
-/**
- * Active districts (ws_customer_distict) mapped into the offline-city response
- * contract — backs GET /client/address/cities. Conditions match the old city
- * list: active-only, name search, optional state scope, name order.
- */
+/** Backs GET /client/address/cities. */
 export const listActiveCitiesFromDistricts = async (
   search?: string,
   stateId?: number
@@ -108,9 +101,8 @@ export const listActiveCitiesFromDistricts = async (
   return rows.map(districtToCity);
 };
 
-// ─── Districts as admin "cities" (/admin/address/cities → ws_customer_distict) ──
-// Full CRUD in the offline-city response contract. `image`/`order` are ignored
-// (no district columns); `stateId` is REQUIRED on create (district FK NOT NULL).
+// Admin "cities" CRUD over districts. `image`/`order` are ignored (no such
+// columns); `stateId` is required on create (FK NOT NULL).
 type CityEnvelope = { ok: true; data: CityDto } | { ok: false; status: number; message: string };
 type CityDeleteEnvelope = { ok: true } | { ok: false; status: number; message: string };
 
@@ -135,7 +127,6 @@ export const createCityDistrict = async (input: {
   stateId: number;
   status?: boolean;
 }): Promise<CityEnvelope> => {
-  // Parent state must exist (district FK NOT NULL).
   if (!(await repo.findState(input.stateId))) return { ok: false, status: 400, message: "Invalid stateId." };
   const row = await repo.createDistrictWithState({ name: input.name, stateId: input.stateId, active: input.status ?? true });
   return { ok: true, data: districtToCity(row) };
@@ -156,6 +147,7 @@ export const updateCityDistrict = async (
   return { ok: true, data: districtToCity(row) };
 };
 
+// 409 while any customer still references the district.
 export const deleteCityDistrict = async (id: number): Promise<CityDeleteEnvelope> => {
   if (!(await repo.findDistrict(id))) return { ok: false, status: 404, message: "City not found." };
   const refs = await repo.countCustomersInDistrict(id);
@@ -192,7 +184,6 @@ export const deleteDistrict = async (id: string): Promise<boolean> => {
   }
 };
 
-// ─── Educations ──────────────────────────────────────────────────────────────
 export const listEducations = async (opts?: {
   activeOnly?: boolean;
 }): Promise<EducationDto[]> => {
@@ -228,7 +219,6 @@ export const deleteEducation = async (id: string): Promise<boolean> => {
   }
 };
 
-// ─── Target Goals ────────────────────────────────────────────────────────────
 export const listTargetGoals = async (opts?: {
   activeOnly?: boolean;
 }): Promise<TargetGoalDto[]> => {

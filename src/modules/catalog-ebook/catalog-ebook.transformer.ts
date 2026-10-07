@@ -1,24 +1,18 @@
+// Ebook catalog: row to DTO mapping (response shape is frozen).
 import type { EBook } from "@prisma/client";
 import type { EbookDto, EbookPlanDto } from "./catalog-ebook.types";
 import type { PriceDto } from "../commerce-price/commerce-price.types";
 import { signMediaToken } from "../../utils/mediaToken";
 
-/**
- * `ws_ebook` row → DTO, shape-compatible with the Mongo `Ebook` document.
- * Field renames: terms_and_conditions→termsAndConditions, order_by→order,
- * demo_url→demoUrl, book_url→bookUrl, link→link (kept; the handler overrides
- * shareableLink per-request). `isTrending` is synthesized false (no SQL column).
- */
+/** `isTrending` has no column and is always false; the handler overrides `link` per request. */
 export const toEbookDto = (
   row: EBook,
   opts: { customerId?: number | null; entitled?: boolean } = {}
 ): EbookDto => {
-  // No raw PDF URL. The FREE sample gets a media token for any logged-in user;
-  // the BOOK PDF gets one only when the customer has purchased it (else null).
-  // Both are exchanged at /media/resolve for a short-lived presigned URL.
+  // No raw PDF URL: the free sample gets a media token for any logged-in user,
+  // the book PDF only when purchased. Both are exchanged at /media/resolve.
   const cust = opts.customerId ?? null;
-  // `book_url` is NOT NULL in SQL, so "no PDF attached" is stored as "" (admin
-  // create writes `d.bookUrl ?? ""`). Treat empty as absent.
+  // `book_url` is NOT NULL, so "no PDF attached" is stored as "".
   const hasBookFile = !!row.bookUrl;
   const demoMediaToken = cust != null && row.bookDemoUrl ? signMediaToken({ k: "ebookDemo", id: row.id, free: true, cust }) : null;
   const bookMediaToken = cust != null && opts.entitled && hasBookFile ? signMediaToken({ k: "ebook", id: row.id, scope: { kind: "ebook", id: row.id }, cust }) : null;
@@ -44,11 +38,6 @@ export const toEbookDto = (
   };
 };
 
-/**
- * A shared-price row (PriceDto, ebook-owned) → the Mongo `EbookPrice` subset.
- * The ebook listing only needs {_id, ebookId, name, duration, price, isDefault,
- * status, timestamps} — the commerce-price PriceDto is a superset.
- */
 export const toEbookPlanDto = (p: PriceDto): EbookPlanDto => ({
   _id: p._id,
   ebookId: p.ebookId,

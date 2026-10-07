@@ -1,3 +1,4 @@
+// Client tracking: analytics event ingest handler.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -15,7 +16,7 @@ const trackSchema = z.object({
   metadata: z.record(z.any()).optional(),
 });
 
-// POST /api/v1/client/tracking
+// Records an analytics event; anonymous when no valid token is sent.
 export const trackEvent = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id || null;
@@ -24,7 +25,6 @@ export const trackEvent = async (req: Request, res: Response) => {
   try {
     const data = trackSchema.parse(req.body);
 
-    // ─── SQL branch (int id-space) — gated on `tracking` (flag already ON) ───
     const cidNum = customerId ? parseTrackingId(String(customerId)) : null;
     const entId = data.entityId ? parseTrackingId(String(data.entityId)) : null;
     await createActivity({

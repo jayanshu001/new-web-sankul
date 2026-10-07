@@ -1,3 +1,4 @@
+// Client courses: order shipping upsert and subscription order detail logic.
 import { prisma } from "../../config/prisma";
 import { customerAddressRepository } from "../../modules/customer-address/customer-address.repository";
 import { buildTrackingUrl } from "../../config/courier";
@@ -6,22 +7,13 @@ import { ShippingBody } from "./course.validation";
 import logger from "../../utils/logger";
 import { computeDaysLeft } from "../../utils/planDuration";
 
-// ───────────────────────────────────────────────────────────────────────────
-// Shipping
-// ───────────────────────────────────────────────────────────────────────────
-
 /**
- * Normalized shipping values in the SQL (`ws_customer_address` /
- * `ws_customer_shipping`) column TYPES: phone/alternate_phone are BIGINT,
- * pincode is INT, state is an INT FK, userId is the int customer id.
- *
- * Mirrors the pre-migration Mongo normalizer: phone/pincode coerced through
- * `Number()` (defaulting to 0), alternate_phone left null when absent.
- * `email` becomes "" when absent because the SQL column is NOT NULL (the DTO
- * re-derives null from "" so the response shape is unchanged).
- * `state` is only kept when it is a numeric FK — the input contract still
- * accepts a 24-hex Mongo ObjectId (see course.validation.ts), which has no SQL
- * FK, so such a value normalizes to null.
+ * Shipping input coerced to the `ws_customer_address` / `ws_customer_shipping`
+ * column types (phone/alternate_phone BIGINT, pincode INT, state INT FK).
+ * phone/pincode default to 0; alternate_phone stays null when absent.
+ * `email` becomes "" when absent because the column is NOT NULL (the DTO maps "" back to null).
+ * `state` is kept only when numeric: validation still accepts a 24-hex ObjectId,
+ * which has no FK, so it normalizes to null.
  */
 interface NormalizedShipping {
   userId: number;
@@ -65,7 +57,7 @@ function normalizeShipping(userId: string, body: ShippingBody): NormalizedShippi
   };
 }
 
-/** Populated `state` object (Mongo `CustomerState` populate shape) or null. */
+/** Populated `state` object or null. */
 function toStateObject(
   s: { id: number; name: string; state_code: string; active: boolean } | null | undefined
 ) {
@@ -75,15 +67,11 @@ function toStateObject(
 }
 
 /**
- * Find-or-create the customer's shipping address, then return the shipping row
- * with its `state` populated — identical response shape to the pre-migration
- * Mongo path (`state` object, stringified numeric fields).
- *
- * Mirrors the Mongo find-or-create semantics faithfully: a matching row is one
- * whose owner + every address field (name/phone/alternate_phone/email/address/
- * address_2/city/state/pincode) equals the normalized input, so re-submitting
- * the same address never creates a duplicate. The CustomerAddress write is a
- * side-effect (the address book); the CustomerShipping row is what's returned.
+ * Find-or-create the customer's shipping address and return the shipping row with
+ * `state` populated and numeric fields stringified. A row matches only when the
+ * owner and every address field equal the normalized input, so re-submitting the
+ * same address never duplicates. The CustomerAddress write is an address-book
+ * side effect; the CustomerShipping row is what's returned.
  */
 export async function upsertCourseOrderShipping(
   userId: string,
@@ -93,8 +81,7 @@ export async function upsertCourseOrderShipping(
   logger.info("upsertCourseOrderShipping service invoked", { traceId, userId });
   const n = normalizeShipping(userId, body);
 
-  // Exact-field match predicate shared by the address + shipping lookups (mirrors
-  // the Mongo `findOne(matchQuery)`; `alternate_phone`/`state` null match null).
+  // Exact-field match shared by both lookups; null `alternate_phone`/`state` match null.
   const match = {
     userId: n.userId,
     name: n.name,
@@ -108,13 +95,10 @@ export async function upsertCourseOrderShipping(
     pincode: n.pincode,
   };
 
-  // ── CustomerAddress (address book side-effect) ──
-  // Only an ACTIVE row counts as "already in the book". Without `status: true` a
-  // previously soft-deleted address matches here, create is skipped, and the address
-  // never comes back into the customer's list.
+  // Only an active row counts as "already in the book"; otherwise a soft-deleted
+  // address would match, create would be skipped, and it would never reappear.
   const address = await prisma.customerAddress.findFirst({ where: { ...match, status: true } });
   if (!address) {
-    // Reuse the customer-address repo's create (owns the address-column write).
     await customerAddressRepository.create({
       customerId: n.userId,
       name: n.name,
@@ -130,7 +114,6 @@ export async function upsertCourseOrderShipping(
     });
   }
 
-  // ── CustomerShipping (the returned row) ──
   let shipping = await prisma.customerShipping.findFirst({ where: match });
   if (!shipping) {
     shipping = await prisma.customerShipping.create({
@@ -172,9 +155,8 @@ export async function upsertCourseOrderShipping(
     shippingId: shipping.id,
   });
 
-  // Match source response: `state` object, stringified numeric fields, `email`
-  // null when unset (SQL stores "" for the NOT-NULL column), `alternate_phone`
-  // "" when unset.
+  // `email` is null when unset (stored as "" in the NOT NULL column);
+  // `alternate_phone` is "" when unset.
   return {
     _id: String(populated.id),
     name: populated.name,
@@ -196,10 +178,6 @@ export async function upsertCourseOrderShipping(
   };
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// Order details / invoice
-// ───────────────────────────────────────────────────────────────────────────
-
 /** Prisma Decimal | number | null → number | null. */
 function toNum(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -208,7 +186,7 @@ function toNum(v: unknown): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-/** Populated plan (Mongo `PackageCourseEbookPrice`) sub-object. */
+/** Populated plan (`PackageCourseEbookPrice`) sub-object. */
 function toPlanDto(p: {
   id: number;
   courseId: number | null;
@@ -242,10 +220,9 @@ function toPlanDto(p: {
 }
 
 /**
- * Populated `customerShipping` sub-object — the RAW shipping doc (Mongo does NOT
- * further-populate its `stateId` here), using the Mongo field names
- * (`alternatePhone`/`stateId`/`address2`). Optional fields are omitted when
- * unset so the JSON matches the Mongo lean doc.
+ * Raw `customerShipping` sub-object: `stateId` is not populated, field names are
+ * `alternatePhone`/`stateId`/`address2`, and unset optional fields are omitted
+ * (frozen client contract).
  */
 function toShippingSubDto(s: {
   id: number;
@@ -283,6 +260,7 @@ function toShippingSubDto(s: {
   };
 }
 
+// Package/course subscription detail for its owner, with tracking and daysLeft; null if not theirs.
 export async function getOrderDetailsForUser(orderId: string, userId: string, traceId?: string) {
   logger.info("getOrderDetailsForUser service invoked", { traceId, orderId, userId });
 
@@ -296,7 +274,7 @@ export async function getOrderDetailsForUser(orderId: string, userId: string, tr
   const sub = await prisma.packageCourseSubscription.findFirst({
     where: { id: idNum, customerId: custNum },
     include: {
-      packageCourseEbookPrice: true, // Mongo `packageId` populate = the plan row
+      packageCourseEbookPrice: true,
       course: true,
       customerShipping: true,
     },
@@ -312,8 +290,7 @@ export async function getOrderDetailsForUser(orderId: string, userId: string, tr
   const result: Record<string, unknown> = {
     _id: String(sub.id),
     customerId: sub.customerId !== null && sub.customerId !== undefined ? String(sub.customerId) : null,
-    // SQL name mapping (see commerce-subscription): pcb_id (planId) → Mongo
-    // `packageId` (the plan), package_id → Mongo `targetPackageId` (the package).
+    // Contract names: pcb_id (the plan) → `packageId`, package_id → `targetPackageId`.
     courseId: sub.courseId !== null ? String(sub.courseId) : null,
     targetPackageId: sub.packageId !== null ? String(sub.packageId) : null,
     packageId: sub.planId !== null ? String(sub.planId) : null,
@@ -326,7 +303,6 @@ export async function getOrderDetailsForUser(orderId: string, userId: string, tr
     paidAmount: toNum(sub.paidAmount),
     createdAt: sub.createdAt ?? null,
     updatedAt: sub.updatedAt ?? null,
-    // Renamed populated refs to the source contract names.
     package: sub.packageCourseEbookPrice ? toPlanDto(sub.packageCourseEbookPrice) : null,
     course: sub.course ? toCourseDto(sub.course) : null,
     customerShipping: sub.customerShipping ? toShippingSubDto(sub.customerShipping) : null,

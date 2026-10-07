@@ -1,3 +1,4 @@
+// Admin notifications: BullMQ scheduler for delayed pushes (queue, worker, DLQ, rehydrate).
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import { dispatchScheduledById } from "./dispatcher";
@@ -11,18 +12,10 @@ import {
 
 const QUEUE_NAME = "notification-scheduler";
 const DLQ_NAME = "notification-scheduler-dlq";
-// Sample queue depth this often. Cheap (4 LRANGEs) and infrequent enough
-// not to be its own load source.
 const QUEUE_DEPTH_SAMPLE_MS = 15_000;
 
-// Backpressure: refuse new schedules when the queue is already this deep.
-// Why this matters: with no upper bound, a bug that schedules notifications
-// in a tight loop (or a real surge: 100k students × a "system maintenance"
-// blast) would push BullMQ's waiting list into hundreds of MB of Redis
-// memory and degrade every other tenant of the same Redis instance. The
-// limit is a soft ceiling — operators can override per-call with the
-// `bypassBackpressure` option, which is what the boot-time rehydrate uses
-// because that's not new work, it's recovery of work that already existed.
+// Refuse new schedules past this depth so a runaway loop or surge can't bloat the
+// shared Redis. Soft ceiling: `bypassBackpressure` skips it (boot rehydrate).
 const QUEUE_DEPTH_LIMIT = Number(process.env.NOTIFICATION_QUEUE_DEPTH_LIMIT) || 10_000;
 
 const REDIS_HOST = process.env.REDIS_HOST || "localhost";
@@ -34,13 +27,9 @@ interface NotificationJobData {
 }
 
 /**
- * BullMQ rejects two kinds of custom job id: a pure-integer string ("Custom Id
- * cannot be integers", since it reserves numeric ids for its internal counter)
- * AND a single-colon id ("Custom Id cannot contain :", reserved for the 3-part
- * repeatable-job format). Notification ids are MySQL integer PKs (e.g. "42"),
- * so we namespace them with a hyphen — non-numeric and colon-free. The
- * `notificationId` payload stays the raw numeric string for the dispatcher;
- * only the BullMQ-facing id is prefixed.
+ * BullMQ rejects pure-integer custom job ids and ids containing a single colon,
+ * so integer notification ids are prefixed with a hyphenated namespace. The job
+ * payload keeps the raw id.
  */
 const jobIdFor = (notificationId: string): string => `notif-${notificationId}`;
 
@@ -53,9 +42,8 @@ let depthInterval: NodeJS.Timeout | null = null;
 let started = false;
 
 /**
- * BullMQ requires a dedicated ioredis connection with `maxRetriesPerRequest: null`
- * and `enableReadyCheck: false`. Do NOT reuse the shared session/cache redisClient,
- * which has retries enabled.
+ * BullMQ requires a dedicated connection with `maxRetriesPerRequest: null` and
+ * `enableReadyCheck: false`; do not reuse the shared redisClient (retries enabled).
  */
 function buildConnection(): RedisType {
   return new Redis({
@@ -67,12 +55,9 @@ function buildConnection(): RedisType {
   });
 }
 
-// Ensure a producer queue exists so jobs can be enqueued from HTTP handlers.
-// In split PM2 deployments the API runs with WORKER_ENABLED=false (so
-// initNotificationScheduler / the worker never run there), yet scheduled
-// broadcasts and live reminders still call scheduleNotificationJob from the
-// API process. Also covers the boot-race window before startWorkers() finishes
-// in single-process dev. Idempotent — initNotificationScheduler reuses it.
+// Lazily created producer: split PM2 deployments run the API with
+// WORKER_ENABLED=false (initNotificationScheduler never runs there) yet still
+// enqueue jobs. Also covers the boot race before startWorkers() finishes.
 function ensureProducer(): Queue<NotificationJobData> {
   if (!queue) {
     connection = connection ?? buildConnection();
@@ -85,10 +70,7 @@ export function getNotificationQueue(): Queue<NotificationJobData> {
   return ensureProducer();
 }
 
-/**
- * Thrown by `scheduleNotificationJob` when the queue is over its depth
- * limit. Controllers should map this to HTTP 503 with `Retry-After`.
- */
+/** Controllers should map this to HTTP 503 with `Retry-After`. */
 export class QueueBackpressureError extends Error {
   constructor(public readonly depth: number, public readonly limit: number) {
     super(`Notification queue is at ${depth}/${limit} — try again later.`);
@@ -97,19 +79,14 @@ export class QueueBackpressureError extends Error {
 }
 
 export interface ScheduleOptions {
-  /** Skip the queue-depth backpressure check (boot rehydrate, admin
-   *  retries). Default false. */
+  /** Skip the queue-depth check (boot rehydrate, admin retries). */
   bypassBackpressure?: boolean;
 }
 
 /**
- * Enqueue a scheduled notification. Job id is the notification's _id so we can
- * deterministically cancel/remove it and so duplicate enqueues (e.g. boot
- * rehydrate after a controller already enqueued) are no-ops.
- *
- * Backpressure: refuses new schedules once the waiting + delayed count
- * exceeds `QUEUE_DEPTH_LIMIT` (env-tunable). The boot rehydrate path passes
- * `bypassBackpressure: true` because that's recovery work, not new load.
+ * Job id derives from the notification id so it can be cancelled deterministically
+ * and duplicate enqueues are no-ops. Throws QueueBackpressureError once waiting +
+ * delayed reaches `QUEUE_DEPTH_LIMIT`.
  */
 export async function scheduleNotificationJob(
   notificationId: string,
@@ -119,7 +96,6 @@ export async function scheduleNotificationJob(
   const q = ensureProducer();
   const delay = Math.max(0, scheduledAt.getTime() - Date.now());
 
-  // Backpressure check. Cheap — single Redis HGETALL via BullMQ.
   if (!options.bypassBackpressure) {
     try {
       const counts = await q.getJobCounts("waiting", "delayed");
@@ -133,20 +109,18 @@ export async function scheduleNotificationJob(
         throw new QueueBackpressureError(depth, QUEUE_DEPTH_LIMIT);
       }
     } catch (err) {
-      // Don't let a Redis blip during the depth check block writes. Re-throw
-      // backpressure errors but swallow anything else.
+      // A Redis blip during the depth check must not block writes.
       if (err instanceof QueueBackpressureError) throw err;
     }
   }
 
-  // Remove any stale job for the same id (e.g. user rescheduled). BullMQ will
-  // throw if a job with the same id already exists in a different state.
+  // Remove any stale job for the same id (reschedule); BullMQ throws if a job with
+  // the same id exists in a different state.
   try {
     const existing = await q.getJob(jobIdFor(notificationId));
     if (existing) await existing.remove();
   } catch {
-    // ignore — getJob can throw if job is in a locked state; add() below will
-    // either succeed or surface the real error.
+    // getJob can throw for a locked job; add() below surfaces any real error.
   }
 
   await q.add(
@@ -163,9 +137,7 @@ export async function scheduleNotificationJob(
   );
 }
 
-/**
- * Remove a scheduled job (cancel path). Safe to call if the job no longer exists.
- */
+/** Safe to call if the job no longer exists. */
 export async function cancelNotificationJob(notificationId: string): Promise<void> {
   const q = ensureProducer();
   const job = await q.getJob(jobIdFor(notificationId));
@@ -185,8 +157,8 @@ const REHYDRATE_LOCK_KEY = "notif:rehydrate:boot-lock";
 const REHYDRATE_LOCK_TTL_SEC = 120;
 
 /**
- * Only one worker process should scan scheduled rows on boot. BullMQ jobIds are
- * idempotent, but the SQL scan + enqueue loop is wasteful when duplicated.
+ * Only one worker process scans scheduled rows on boot. Job ids are idempotent,
+ * but the duplicated scan + enqueue loop is wasteful.
  */
 async function tryAcquireRehydrateLock(conn: RedisType): Promise<boolean> {
   const acquired = await conn.set(
@@ -199,15 +171,8 @@ async function tryAcquireRehydrateLock(conn: RedisType): Promise<boolean> {
   return acquired === "OK";
 }
 
-/**
- * Boot-time rehydrate: enqueue every notification still in "scheduled" status.
- * BullMQ's deterministic jobId (notification._id) makes this idempotent — if
- * the queue already has the job, the second add() is a no-op.
- */
+/** Re-enqueues every "scheduled" notification on boot; idempotent via deterministic job ids. */
 async function rehydrateScheduledNotifications(): Promise<number> {
-  // Recovery rows: { id, scheduledAt } from the SQL scheduled rows (the
-  // canonical write store). BullMQ's deterministic jobId makes a duplicate
-  // add() a no-op.
   const recovery: { id: string; scheduledAt: Date }[] = [];
 
   try {
@@ -221,10 +186,7 @@ async function rehydrateScheduledNotifications(): Promise<number> {
   let count = 0;
   for (const row of recovery) {
     try {
-      // bypassBackpressure: this is recovery of work that already existed
-      // before the restart, not new client-driven load. Refusing the row
-      // would lose it permanently (status flips to "failed" via the worker
-      // never picking it up).
+      // Recovery of existing work, not new load; refusing it would lose the row.
       await scheduleNotificationJob(row.id, row.scheduledAt, {
         bypassBackpressure: true,
       });
@@ -239,16 +201,14 @@ async function rehydrateScheduledNotifications(): Promise<number> {
   return count;
 }
 
+// Start worker, DLQ and depth sampler; one process re-enqueues scheduled rows on boot.
 export async function initNotificationScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  // Reuse the producer queue if enqueue already lazily created it in this process.
   ensureProducer();
-  // DLQ: when a job exhausts its retries we push a copy here with the last
-  // error attached. The DLQ has no worker — it's a forensics inbox you can
-  // drain manually via the admin tooling (or replay back into the main
-  // queue after fixing the root cause).
+  // Jobs that exhaust retries are copied here with the last error. No worker:
+  // it is a forensics inbox, drained or replayed by hand.
   dlq = new Queue<NotificationJobData & { lastError: string }>(DLQ_NAME, {
     connection: buildConnection(),
   });
@@ -259,12 +219,11 @@ export async function initNotificationScheduler(): Promise<void> {
       const { notificationId } = job.data;
       const result = await dispatchScheduledById(notificationId);
       if (!result) {
-        // Row was already claimed/cancelled — drop silently.
+        // Already claimed/cancelled.
         return { skipped: true };
       }
       if (result.status === "failed") {
-        // Trigger BullMQ retry by throwing — dispatcher already rolled the
-        // row back to "scheduled".
+        // Throw to trigger a retry; the dispatcher already rolled the row back to "scheduled".
         throw new Error(result.failureReason || "Dispatch failed.");
       }
       return {
@@ -288,11 +247,9 @@ export async function initNotificationScheduler(): Promise<void> {
       attemptsMade: job.attemptsMade,
       error: err.message,
     });
-    // Final failure (all retries exhausted) → mark the row failed permanently
-    // AND push a copy onto the DLQ for forensics.
+    // Retries exhausted: mark the row failed and copy the job to the DLQ.
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
       try {
-        // Mark the SQL row failed if it exists.
         if (await sqlNotificationExists(job.data.notificationId)) {
           await sqlMarkFailed(job.data.notificationId, err.message);
         }
@@ -308,12 +265,10 @@ export async function initNotificationScheduler(): Promise<void> {
             "dead-letter",
             { notificationId: job.data.notificationId, lastError: err.message },
             {
-              // Hyphen, not colon: BullMQ rejects single-colon custom ids
-              // (only the 3-part repeatable format is allowed).
+              // Hyphen, not colon: BullMQ rejects single-colon custom ids.
               jobId: `dlq-${job.id}`,
               removeOnComplete: false,
-              // DLQ items never expire automatically — they're meant to be
-              // inspected and replayed by hand. Cap retention to 30 days.
+              // Kept for manual inspection; retention capped at 30 days.
               removeOnFail: { age: 30 * 24 * 60 * 60 },
             }
           );
@@ -344,8 +299,7 @@ export async function initNotificationScheduler(): Promise<void> {
   }
   logger.info("BullMQ notification scheduler started.", { rehydrated });
 
-  // Sample queue depth periodically and publish to the /metrics registry.
-  // BullMQ exposes per-state job counts cheaply via getJobCounts().
+  // Publish queue depth to /metrics.
   depthInterval = setInterval(async () => {
     try {
       if (!queue) return;
@@ -366,18 +320,12 @@ export async function initNotificationScheduler(): Promise<void> {
         );
       }
     } catch (err) {
-      // Sampling failures shouldn't crash the worker. Log + move on.
       logger.warn("Queue depth sample failed", { error: (err as Error).message });
     }
   }, QUEUE_DEPTH_SAMPLE_MS);
-  // Don't keep the event loop alive for the sampler alone.
   depthInterval.unref?.();
 }
 
-/**
- * Graceful shutdown — close worker, queue events, queue, and the dedicated
- * Redis connections. Useful for tests and process signals.
- */
 export async function shutdownNotificationScheduler(): Promise<void> {
   try {
     if (depthInterval) clearInterval(depthInterval);

@@ -1,3 +1,4 @@
+// Admin careers: HTTP handlers for job opening CRUD.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { HttpError } from "../../middlewares/errorHandler";

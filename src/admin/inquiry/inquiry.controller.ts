@@ -1,3 +1,4 @@
+// Admin inquiries: HTTP handlers for contact inquiries and contact departments.
 import { Request, Response } from "express";
 import { z } from "zod";
 import {
@@ -12,7 +13,6 @@ import {
   parseDepartmentId,
 } from "../../modules/department/department.service";
 
-// GET /api/v1/admin/inquiries
 export const listInquiries = async (req: Request, res: Response) => {
   try {
     const { search, course, mode, fromDate, toDate, page = "1", limit = "20" } =
@@ -34,7 +34,6 @@ export const listInquiries = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/inquiries/:id
 export const getInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -48,7 +47,6 @@ export const getInquiry = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/inquiries/:id
 export const deleteInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -62,13 +60,10 @@ export const deleteInquiry = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Department management (used by contact-us screen) ─────────────────────────
-
 const contactSchema = z.object({
   mobile: z.string().min(1).max(20),
   order: z.number().int().default(0),
   active: z.boolean().default(true),
-  // MySQL `ws_department_contact` flags (additive vs the legacy Mongo shape).
   isCallAvailable: z.boolean().optional(),
   isWhatsAppAvailable: z.boolean().optional(),
 });
@@ -81,7 +76,6 @@ const departmentCreateSchema = z.object({
 });
 const departmentUpdateSchema = departmentCreateSchema.partial();
 
-// Data access delegated to department service (MySQL/Prisma). API JSON shape preserved.
 const departmentIdInvalid = (id: string) => !parseDepartmentId(id);
 
 export const listDepartments = async (req: Request, res: Response) => {
@@ -89,7 +83,7 @@ export const listDepartments = async (req: Request, res: Response) => {
     const { page = "1", limit = "10", active } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
-    // `active` filters by status: "true"/"false". Omit (undefined) for all.
+    // `active`: "true"/"false"; omitted returns all.
     const activeFilter = active === undefined ? undefined : active === "true";
 
     const { items, total } = await listDepartmentsService({

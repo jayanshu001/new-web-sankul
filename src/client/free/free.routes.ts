@@ -1,3 +1,4 @@
+// Client free content: free catalog lists and free-video progress routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
@@ -19,17 +20,14 @@ const router = Router();
 
 router.use(authenticate);
 
-// free-tests/-ebooks/-courses embed per-user attempt stats / isPurchased →
-// Tier-2, cached per-user + short TTL (ebook precedent), entity: CacheEntity.Free.
+// free-tests/-ebooks/-courses embed per-user attempt stats / isPurchased → per-user cache.
 router.get("/free-tests", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Free, scope: CacheScope.User }), listFreeTests);
-// free-materials is Tier-1 (its customerId arg is unused → identical for all).
-// free-videos mints a CUSTOMER-BOUND mediaToken per row (shapeVideo → cust:id),
-// so it MUST be scope: CacheScope.User — a shared key would serve one user's token to all.
+// free-materials is identical for all users → shared. free-videos mints a
+// customer-bound mediaToken per row, so it MUST be per-user or one user's token leaks to all.
 router.get("/free-materials", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Free, scope: CacheScope.Shared }), listFreeMaterials);
 router.get("/free-videos", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Free, scope: CacheScope.User }), listFreeVideos);
-// "/free-videos/resume" must precede the ":videoId" route so it isn't captured
-// as a video id; the heartbeat lives under the same /free-videos prefix. Per-user
-// resume + progress writes stay uncached.
+// "/free-videos/resume" must precede ":videoId" so it isn't captured as an id.
+// Resume + progress writes stay uncached.
 router.get("/free-videos/resume", listFreeVideoResume);
 router.post("/free-videos/:videoId/progress", reportFreeVideoProgress);
 router.get("/free-ebooks", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Free, scope: CacheScope.User }), listFreeEbooks);

@@ -1,9 +1,5 @@
-// src/admin/cache/cache.controller.ts
-//
-// Admin cache management — manual flush + stats for the route-level response
-// cache (src/middlewares/cacheRoute.ts). Because route caching is TTL-only with
-// no automatic write→invalidate hook, this is how the admin panel forces a
-// refresh after editing content: call POST /api/v1/admin/cache/flush.
+// Admin cache: manual flush and stats for the route-level response cache.
+// Lets the admin panel force a refresh after editing content (middlewares/cacheRoute.ts).
 
 import type { Request, Response } from "express";
 import { redisClient, isRedisReady } from "../../config/redis";
@@ -30,12 +26,9 @@ const deleteByPrefix = async (prefix: string): Promise<number> => {
 };
 
 /**
- * POST /api/v1/admin/cache/flush
- * Body/query: { prefix?: string }
- *   - no prefix  → flush ALL route caches (`{env}:route:{ver}:*`)
- *   - prefix     → flush a narrower slice, e.g.
- *                  "GET:/api/v1/admin/ebook" or "GET:/api/v1/admin/course".
- *                  The value is appended to the route-cache prefix.
+ * POST /api/v1/admin/cache/flush  { prefix? }
+ * No prefix flushes all route caches (`{env}:route:{ver}:*`); a prefix such as
+ * "GET:/api/v1/admin/ebook" is appended to the route-cache prefix to narrow it.
  */
 export const flushCache = async (req: Request, res: Response) => {
   try {

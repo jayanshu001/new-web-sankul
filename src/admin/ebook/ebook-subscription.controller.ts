@@ -1,3 +1,4 @@
+// Admin ebook subscriptions: HTTP handlers for report, exports and manual grants.
 import { Request, Response } from "express";
 import { createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
@@ -5,8 +6,7 @@ import { isReportStatus, REPORT_STATUSES } from "../../utils/reportFilters";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { success, failure } from "../../utils/httpResponse";
 
-// Shared filter mapping for the report list + its CSV/Excel exports, so all three
-// honor the identical param contract. Returns a 400 message on invalid ids/method.
+// Shared by the report list and its CSV/Excel exports so all three honor one param contract.
 export const parseSubReportQuery = (
   q: Record<string, string>,
 ): { ok: false; message: string } | { ok: true; query: adminEbook.SubReportQuery } => {
@@ -14,12 +14,9 @@ export const parseSubReportQuery = (
   if (q.ebookId && !adminEbook.parseEbookId(q.ebookId)) return { ok: false, message: "Invalid ebookId" };
   const paymentMethodEnum = adminEbook.coercePaymentMethod(q.paymentMethod);
   if (q.paymentMethod && !paymentMethodEnum) return { ok: false, message: "Invalid paymentMethod" };
-  // Computed report status (active|expired|inactive); legacy true/false still accepted.
-  // Anything else is rejected rather than dropped: an unrecognised value (e.g. the
-  // upper-case "ACTIVE" the admin UI used to send) would otherwise fall through BOTH
-  // `statusFilter` and the legacy boolean below as undefined, returning a plausible
-  // but silently UNFILTERED list. This mirrors assertReportStatus in reportFilters;
-  // that helper isn't reused here only because this report also honors true/false.
+  // active|expired|inactive, plus legacy true/false. Anything else is rejected:
+  // it would otherwise return a silently unfiltered list. Not using
+  // assertReportStatus only because this report also accepts true/false.
   if (q.status && !isReportStatus(q.status) && q.status !== "true" && q.status !== "false")
     return {
       ok: false,
@@ -34,9 +31,7 @@ export const parseSubReportQuery = (
       status: q.status === "true" ? true : q.status === "false" ? false : undefined,
       statusFilter,
       paymentMethod: paymentMethodEnum,
-      // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is
-      // the unified cross-report name (reports-date-filter-created-at.md); dateFrom/
-      // dateTo kept as legacy aliases.
+      // Bounds createdAt at IST day edges; dateFrom/dateTo are legacy aliases.
       dateFrom: adminEbook.parseDateBound(q.createdFrom ?? q.dateFrom, false),
       dateTo: adminEbook.parseDateBound(q.createdTo ?? q.dateTo, true),
       search: q.search,
@@ -70,7 +65,7 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /admin/ebooks/subscriptions/export/csv — entire filtered set, no pagination.
+// Entire filtered set, no pagination.
 export const exportEbookSubscriptionsCsv = async (req: Request, res: Response) => {
   try {
     const parsed = parseSubReportQuery(req.query as Record<string, string>);
@@ -85,7 +80,7 @@ export const exportEbookSubscriptionsCsv = async (req: Request, res: Response) =
   }
 };
 
-// GET /admin/ebooks/subscriptions/export/excel — entire filtered set, no pagination.
+// Entire filtered set, no pagination.
 export const exportEbookSubscriptionsExcel = async (req: Request, res: Response) => {
   try {
     const parsed = parseSubReportQuery(req.query as Record<string, string>);
@@ -113,6 +108,7 @@ export const getEbookSubscriptionById = async (req: Request, res: Response) => {
   }
 };
 
+// Manual admin grant (or extend); flushes the customer's cached isPurchased.
 export const createEbookSubscription = async (req: Request, res: Response) => {
   try {
     const d = createEbookSubscriptionSqlSchema.parse(req.body);
@@ -122,7 +118,7 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
       planId: d.planId ?? null,
       durationInDays: d.durationInDays,
       paymentMethod: d.paymentMethod,
-      orderPrice: d.orderPrice ?? 0, // guaranteed present by schema refine (amount|orderPrice)
+      orderPrice: d.orderPrice ?? 0,
       razorpayOrderId: d.razorpayOrderId ?? null,
       razorpayPaymentId: d.razorpayPaymentId ?? null,
       transactionId: d.transactionId ?? null,
@@ -130,14 +126,13 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
       remarks: d.remarks ?? null,
       status: d.status,
       extend: d.extend,
-      // Audit: acting admin from the JWT (never from the body).
+      // From the JWT, never the body.
       actingAdminId: adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null,
     });
     if (!result.ok) {
       const msg = result.reason === "ebook" ? "Ebook not found" : "Plan not found";
       return res.status(404).json({ success: false, message: msg });
     }
-    // Admin granted an ebook → clear that customer's cached catalog reads.
     await flushUserRouteCache(d.customerId);
     return res.status(201).json({ success: true, data: result.data });
   } catch (error: any) {
@@ -146,6 +141,7 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
   }
 };
 
+// Verify a pending order or toggle/re-date the subscription; flushes the owner's cache.
 export const updateEbookSubscription = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;
@@ -154,8 +150,7 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
 
     const numId = adminEbook.parseEbookId(subscriptionId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
-    // Revoke path (status:false) changes isPurchased across the catalog; resolve the
-    // owner before mutating so the flush below mirrors the delete handler.
+    // Revoking changes isPurchased across the catalog; resolve the owner for the flush below.
     const customerId = await adminEbook.getSubscriptionCustomerId(numId);
     const result = await adminEbook.updateSubscription(numId, {
       razorpayOrderId: validatedData.razorpayOrderId,
@@ -164,7 +159,7 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
       status: validatedData.status,
       startAt: validatedData.startAt,
       endAt: validatedData.endAt,
-      // Audit: acting admin from the JWT stamps updated_by.
+      // From the JWT; stamps updated_by.
       actingAdminId: adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null,
     });
     if (result === "not_found") return res.status(404).json({ success: false, message: "Subscription not found" });
@@ -172,8 +167,7 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
     if (result === "already_active") return res.status(400).json({ success: false, message: "Subscription is already active" });
     if (result === "bad_start") return res.status(400).json({ success: false, message: "startAt must be a valid date" });
     if (result === "bad_end") return res.status(400).json({ success: false, message: "endAt must be a valid date" });
-    // Drop the owner's cached per-user reads so ebook listings/details stop
-    // reporting isPurchased:true immediately (24h TTL otherwise).
+    // Otherwise cached reads report the old isPurchased for up to 24h.
     if (customerId) await flushUserRouteCache(customerId);
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
@@ -200,7 +194,7 @@ export const deleteEbookSubscription = async (req: Request, res: Response) => {
     const subscriptionId = req.params.subscriptionId as string;
     const numId = adminEbook.parseEbookId(subscriptionId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
-    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    // Resolve the owner before the row is deleted.
     const customerId = await adminEbook.getSubscriptionCustomerId(numId);
     const ok = await adminEbook.deleteSubscription(numId);
     if (!ok) return res.status(404).json({ success: false, message: "Subscription not found" });
@@ -211,13 +205,15 @@ export const deleteEbookSubscription = async (req: Request, res: Response) => {
   }
 };
 
+// Plan options for the Add-Subscription form.
 export const getEbookPricesForSubscription = async (req: Request, res: Response) => {
   try {
     const ebookId = req.params.ebookId as string;
     const numId = adminEbook.parseEbookId(ebookId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
     const res2 = await adminEbook.getEbookPricesForSubscription(numId);
-    // Mongo returns [] for a missing ebook (no 404) — keep that contract.
+    // A missing ebook returns [] (no 404) by contract.
+
     return res.status(200).json({ success: true, data: res2 === "not_found" ? [] : res2 });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

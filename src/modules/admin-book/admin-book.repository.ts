@@ -1,25 +1,19 @@
+// Admin books: Prisma queries for books and book orders.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch, buildPrismaSearch, searchNumericId } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
- * ws_book_order_item / ws_book_tracking). Books CRUD + order reads.
- *
- * ⚠ Schema-drift (ws_book has NO column for): publication, deliveryEta,
- * termsAndConditions, demoFileName/bookFileName, bookUrl, packageIds. Those
- * Mongo fields are synthesized (defaults) or dropped by the transformer.
- * (isTrending DOES exist → ws_book.is_trending, written by create/update + the
- * trending toggle; examCountdown* are stored as JSON int-arrays.)
- * NOT-NULL no-default cols (name, pages, dynamic_link) get write-time sentinels.
+ * ws_book has no column for publication, deliveryEta, termsAndConditions,
+ * demoFileName/bookFileName, bookUrl or packageIds; the transformer synthesizes or
+ * drops them. examCountdown* are JSON int-arrays. NOT NULL no-default cols (name,
+ * pages, dynamic_link) get write-time sentinels.
  */
 export const adminBookRepository = {
-  // ── books: list / get ──────────────────────────────────────────────────────
   list: (opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean; skip: number; take: number; orderBy?: Prisma.BookOrderByWithRelationInput[] }) =>
     prisma.book.findMany({
       where: buildWhere(opts),
-      // Default is recency (utils/listOrdering); `orderBy` overrides it when the
-      // caller passed an explicit sortBy (e.g. ?sortBy=updatedAt&sortOrder=desc).
+      // Default is recency; `orderBy` overrides it for an explicit sortBy.
       orderBy: opts.orderBy ?? [{ created_at: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
@@ -29,7 +23,6 @@ export const adminBookRepository = {
 
   findById: (id: number) => prisma.book.findUnique({ where: { id } }),
 
-  // ── books: write ────────────────────────────────────────────────────────────
   create: (data: Prisma.BookUncheckedCreateInput) => prisma.book.create({ data }),
   update: (id: number, data: Prisma.BookUncheckedUpdateInput) => prisma.book.update({ where: { id }, data }),
   delete: (id: number) => prisma.book.delete({ where: { id } }),
@@ -40,11 +33,9 @@ export const adminBookRepository = {
   setOrder: (id: number, orderBy: number) =>
     prisma.book.update({ where: { id }, data: { order_by: orderBy, updated_at: new Date() } }),
 
-  // ── orders: list / get ──────────────────────────────────────────────────────
   /**
-   * Order listing. customer/book search is resolved upstream (the service
-   * collects matching customer ids + the order_ids whose item rows match a book)
-   * since the relation spans ws_book_order_item.
+   * Customer/book search is resolved upstream (customer ids + order_ids whose item rows
+   * match a book) since the relation spans ws_book_order_item.
    */
   listOrders: (opts: {
     customerId?: number;
@@ -70,11 +61,9 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders, ordered
-  // tracking_id ASC, then untracked rows id ASC — no deep OFFSET, no row cap, so the
-  // caller can walk the full filtered set (lakhs) in O(take) pages.
-  // Keyset is (tracking_id, id) — tracking_id isn't unique-constrained (admin can set
-  // it); the NULL-tracking tail is walked separately by id since NULL can't be compared.
+  // Keyset page for the unbounded export: same filter + includes as listOrders, ordered
+  // tracking_id ASC then the untracked (NULL) tail by id ASC, walked separately since NULL
+  // can't be compared. tracking_id isn't unique (admin can set it), hence the (tracking_id, id) key.
   listOrdersPageKeyset: (opts: Parameters<typeof buildOrderWhere>[0], cursor: OrderExportCursor, take: number) => {
     const base = buildOrderWhere(opts);
     const page: Prisma.BookOrderWhereInput = cursor.untracked
@@ -104,7 +93,6 @@ export const adminBookRepository = {
       },
     }),
 
-  /** Line items for a set of order business keys + the linked book metadata. */
   findOrderItems: (orderKeys: string[]) =>
     orderKeys.length
       ? prisma.bookOrderItem.findMany({
@@ -113,18 +101,15 @@ export const adminBookRepository = {
         })
       : Promise.resolve([]),
 
-  /** Books by id (hydrate the order_items JSON snapshot's `item` book id). */
   findBooksByIds: (ids: number[]) =>
     ids.length
       ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, thumbnail: true, author: true, weight: true } })
       : Promise.resolve([]),
 
   /**
-   * Order business keys whose CHILD item rows match a book name (book name →
-   * bookId → ws_book_order_item.order_id). The legacy `order_items` JSON snapshot
-   * and the customer match are applied in-query by buildOrderWhere — never
-   * materialized as id lists, since a 1-char search over ws_customer (1M+ rows)
-   * blew MySQL's 65,535-placeholder cap (ER 1390) on `customer_id IN (...)`.
+   * Order keys whose child item rows match a book name. The JSON snapshot and customer
+   * match are applied in-query by buildOrderWhere, never materialized as id lists: a
+   * 1-char search over ws_customer (1M+ rows) blew MySQL's 65,535-placeholder cap (ER 1390).
    */
   findOrderKeysByBookSearch: async (q: string): Promise<string[]> => {
     const books = await prisma.book.findMany({ where: buildPrismaPrefixSearch(q, ["name"]) ?? {}, select: { id: true } });
@@ -138,10 +123,8 @@ export const adminBookRepository = {
   },
 
   /**
-   * Order business keys that contain a specific book id. Same dual scan as the
-   * name search: child rows (ws_book_order_item.bookId) AND the JSON snapshot,
-   * where items serialize as `"item":<id>`. The regex anchors the id with a
-   * non-digit/quote boundary so id 5 doesn't match 50/"54" etc.
+   * Order keys containing a book id: child rows AND the JSON snapshot (`"item":<id>`).
+   * The regex anchors the id with a non-digit/quote boundary so 5 doesn't match 50/"54".
    */
   findOrderKeysByBookId: async (bookId: number): Promise<string[]> => {
     const keys = new Set<string>();
@@ -150,7 +133,6 @@ export const adminBookRepository = {
       select: { order_id: true },
     });
     for (const it of items) keys.add(it.order_id);
-    // JSON: "item":54 or "item":"54", not followed by another digit.
     const re = `"item":"?${bookId}"?([^0-9]|$)`;
     const rows = await prisma.$queryRaw<Array<{ order_id: string }>>`
       SELECT order_id FROM ws_book_order WHERE order_items REGEXP ${re}`;
@@ -184,30 +166,28 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; state?: n
   const where: Prisma.BookOrderWhereInput = {};
   if (opts.customerId !== undefined) where.userId = opts.customerId;
   if (opts.status) where.status = opts.status;
-  // Delivery-state filter lives on the linked shipping row (numeric state id).
+  // Delivery-state filter lives on the linked shipping row.
   if (opts.state !== undefined) where.shipping = { is: { state: opts.state } };
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
     if (opts.toDate) where.createdAt.lte = opts.toDate;
   }
-  // bookId filter: AND restriction to orders that contain the book (by business
-  // key). Empty array → matches nothing (no order has that book).
+  // Empty array → matches nothing.
   if (opts.bookOrderKeysIn) where.receiptId = { in: opts.bookOrderKeysIn };
-  // Search OR: receiptId match | order belongs to a matching customer | items
-  // JSON matches | order_id appears in the child-item-matched key set. Each clause optional; AND with filters.
+  // Search OR: receiptId | matching customer | items JSON | child-item-matched keys.
   const or: Prisma.BookOrderWhereInput[] = [];
-  // Order id = receipt key OR the Razorpay order/payment id (prefix, same LIKE 'x%').
+  // Receipt key or Razorpay order/payment id (prefix LIKE).
   const receiptSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["receiptId", "gatewayOrderId", "gatewayPaymentId"]);
   if (receiptSearch) or.push(receiptSearch);
-  // All-digit term: exact customer id / tracking AWB (BIGINT — LIKE can't serve it).
+  // All-digit term: exact customer id / tracking AWB (BIGINT, LIKE can't serve it).
   const numericId = searchNumericId(opts.receiptSearch);
   if (numericId) {
     or.push({ trackingId: numericId.big });
     if (numericId.int !== undefined) or.push({ userId: numericId.int });
   }
-  // Customer name/phone/email + JSON-snapshot item name resolve as SQL (relation
-  // subquery / LIKE on order_items), not as bound id lists — see findOrderKeysByBookSearch.
+  // Customer and JSON-snapshot item matches resolve as SQL, not bound id lists
+  // (see findOrderKeysByBookSearch).
   const customerSearch = buildPrismaPrefixSearch(opts.receiptSearch, ["fullName", "phoneNumber", "emailAddress"]);
   if (customerSearch) or.push({ user: { is: customerSearch } });
   const itemsSearch = buildPrismaSearch(opts.receiptSearch, ["orderItems"]);

@@ -1,28 +1,8 @@
-// src/libs/cache.ts
-//
-// Centralized cache-aside helper with:
-//   - Key convention: `{env}:{domain}:{entity}:{id}:{version}`
-//   - TTL + jitter to prevent thundering-herd expiry
-//   - Singleflight via `SET NX PX` to dedupe parallel misses on hot keys
-//   - Explicit invalidation by entity/id or by pattern prefix (scan-based)
-//   - Fail-open: every Redis error falls through to the loader; cache is
-//     never load-bearing for correctness.
-//
-// Usage:
-//   const goals = await cache.aside({
-//     key: cache.key("admin", "goals", "list"),
-//     ttlSeconds: 600,
-//     load: () => Goal.find().lean(),
-//   });
-//
-//   await cache.invalidate(cache.key("admin", "goals", "list"));
-//
-// Key convention (`{env}:{domain}:{entity}:{id}:{version}`):
-//   env     -> NODE_ENV (or "dev")
-//   domain  -> "admin" | "client" | "auth" | "permission" | ...
-//   entity  -> "course" | "package" | "ebook" | "goal" | ...
-//   id      -> entity id or "list" / "active" / `{filterHash}`
-//   version -> short integer; bump when response shape changes
+// Redis cache: cache-aside helper. Keys are `{env}:{domain}:{entity}:{id}:{version}`; bump
+// the version when a cached response shape changes. TTLs are jittered to avoid
+// thundering-herd expiry, parallel misses are deduped with a `SET NX PX` lock,
+// and every Redis error falls through to the loader (fail-open: the cache is
+// never load-bearing for correctness).
 
 import { redisClient, isRedisReady } from "../config/redis";
 import logger from "../utils/logger";
@@ -35,10 +15,7 @@ import crypto from "crypto";
 const ENV = (process.env.NODE_ENV || "dev").toLowerCase();
 const KEY_VERSION = process.env.CACHE_KEY_VERSION || "v1";
 
-/** Which surface/caller a cache-aside entry belongs to — the domain segment
- * of its key. A real enum, same reasoning as CacheEntity/CacheScope in
- * middlewares/flushGroups.ts and cacheRoute.ts: one reusable symbol instead
- * of a retyped string at every call site. */
+/** Domain segment of a cache-aside key (the caller surface). */
 export enum CacheDomain {
   Admin = "admin",
   Client = "client",
@@ -57,11 +34,8 @@ export const key = (
 ): string => `${ENV}:${domain}:${entity}:${id}:${version}`;
 
 /**
- * Build a stable key prefix (no version suffix) for `invalidateByPrefix`.
- * `key()` always appends `:{version}`, so it cannot be used to construct a
- * partial prefix — `key(CacheDomain.Admin, CacheEntity.Package, "list:")`
- * yields `...:package:list::v1`, which never matches real keys like
- * `...:package:list:<hash>:v1`. Use this for prefix sweeps instead.
+ * Key prefix (no version suffix) for `invalidateByPrefix`. `key()` always
+ * appends `:{version}`, so it cannot build a prefix that matches real keys.
  */
 export const keyPrefix = (
   domain: CacheDomain,
@@ -69,10 +43,7 @@ export const keyPrefix = (
   idPrefix: string
 ): string => `${ENV}:${domain}:${entity}:${idPrefix}`;
 
-/**
- * Hash a filter object into a stable short key suffix so list queries with
- * different filters get distinct cache slots.
- */
+/** Stable short key suffix so list queries with different filters get distinct slots. */
 export const hashFilter = (filter: unknown): string =>
   crypto
     .createHash("sha1")
@@ -81,7 +52,7 @@ export const hashFilter = (filter: unknown): string =>
     .slice(0, 12);
 
 const jitter = (ttl: number): number => {
-  // ±10% jitter, minimum 1s
+  // ±10%, minimum 1s
   const delta = Math.max(1, Math.round(ttl * 0.1));
   return ttl + Math.floor(Math.random() * (delta * 2)) - delta;
 };
@@ -99,13 +70,10 @@ export interface AsideOptions<T> {
 }
 
 /**
- * Cache-aside read. Returns cached value if present, else calls `load()`,
- * stores result with jittered TTL, and returns it.
- *
- * Singleflight: parallel misses on the same key contend for a Redis lock
- * (`{key}:lock` via SET NX PX). The winner runs `load()`. Losers poll the
- * value key for up to `lockMaxWaitMs`, then fall back to `load()` themselves
- * if still missing (avoids stampede AND avoids deadlock if the winner dies).
+ * Cache-aside read: cached value if present, else `load()` and store it with a
+ * jittered TTL. Parallel misses contend for `{key}:lock`; the winner loads,
+ * losers poll for up to `lockMaxWaitMs` then load themselves, which avoids both
+ * a stampede and a deadlock if the winner dies.
  */
 export const aside = async <T>(opts: AsideOptions<T>): Promise<T> => {
   const { key: k, ttlSeconds, load } = opts;
@@ -166,8 +134,7 @@ export const aside = async <T>(opts: AsideOptions<T>): Promise<T> => {
       await writeBack(k, value, ttlSeconds);
       return value;
     } finally {
-      // Best-effort lock release; correctness doesn't depend on it because
-      // the lock has a PX expiry.
+      // Best-effort release; the lock also has a PX expiry.
       try {
         const current = await redisClient.get(lockKey);
         if (current === lockToken) await redisClient.del(lockKey);
@@ -189,18 +156,15 @@ export const aside = async <T>(opts: AsideOptions<T>): Promise<T> => {
       break;
     }
   }
-  // Fallback: load directly. Won't write back to cache (winner will).
+  // Not written back; the winner does that.
   return load();
 };
 
 const writeBack = async <T>(k: string, value: T, ttlSeconds: number) => {
   try {
-    // Same IST date replacer cacheRoute.ts uses (app.set("json replacer", ...) in
-    // app.ts). Cached values here routinely embed real Date objects (createdAt/
-    // updatedAt on catalog DTOs) — a bare JSON.stringify would freeze those as
-    // native UTC `...Z` strings forever (JSON.parse never resurrects a Date, so
-    // nothing downstream gets a second chance to reformat them). Apply the same
-    // replacer here so a cache HIT and a cache MISS always render dates identically.
+    // Same IST replacer as app.ts/cacheRoute.ts: cached DTOs embed Dates, and a
+    // bare stringify would freeze them as UTC strings, so a hit would render
+    // dates differently from a miss.
     await redisClient.set(k, JSON.stringify(value, istJsonReplacer), "EX", jitter(ttlSeconds));
   } catch (err) {
     logger.warn("cache.aside write-back failed", {
@@ -223,10 +187,7 @@ export const invalidate = async (...keys: string[]): Promise<void> => {
   }
 };
 
-/**
- * Invalidate by prefix using non-blocking SCAN. Use sparingly — prefer
- * tracking explicit keys when you write them.
- */
+/** Invalidate by prefix using non-blocking SCAN. Prefer explicit keys where possible. */
 export const invalidateByPrefix = async (prefix: string): Promise<number> => {
   if (!isRedisReady()) return 0;
   let cursor = "0";
@@ -256,12 +217,9 @@ export const invalidateByPrefix = async (prefix: string): Promise<number> => {
 };
 
 /**
- * Sweep every `cache.aside` entry for one entity, across ALL domains — the
- * `libs/cache.ts` counterpart to `middlewares/autoFlush.ts`'s route-cache
- * sweep. `autoFlushGroup`/`flushEntity` call this automatically for the same
- * entity, so a single `autoFlushGroup(CacheEntity.Video)` on an admin write
- * clears BOTH the route cache AND any `cache.aside` entries tagged with that
- * entity — callers never need to know two separate cache layers exist.
+ * Sweep every `cache.aside` entry for one entity across all domains.
+ * `autoFlushGroup`/`flushEntity` call this alongside the route-cache sweep, so
+ * one flush clears both cache layers.
  */
 export const invalidateEntity = async (entity: CacheEntity): Promise<number> => {
   const counts = await Promise.all(

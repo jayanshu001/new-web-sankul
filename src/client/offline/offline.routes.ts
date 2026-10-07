@@ -1,3 +1,4 @@
+// Client offline batches: dashboard, center, batch and enquiry routes.
 import { Router } from "express";
 import authenticate, { requireRole, optionalAuthenticate } from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -5,8 +6,6 @@ import { CacheEntity } from "../../middlewares/flushGroups";
 import { CACHE_TTL } from "../../config/cacheTtl";
 import {
   getOfflineDashboard,
-  // listCities,            // moved to /api/v1/client/address/cities
-  // listCentersByCity,     // moved to /api/v1/client/address/cities/:cityId/centers
   listCenters,
   listBatches,
   getCenterDetail,
@@ -17,16 +16,10 @@ import {
 
 const router = Router();
 
-// Dashboard + browsing — public (no auth) so marketing site can surface
+// Dashboard is public (no auth) so the marketing site can surface it.
 router.get("/", getOfflineDashboard);
-// Cities + centers-by-city moved to the address module — see address.routes.ts
-// router.get("/cities", listCities);
-// router.get("/cities/:cityId/centers", listCentersByCity);
-// Centers + batches require an authenticated customer (Bearer token).
-// Center/batch masters are the same for every customer → Tier-1 shared. No
-// dedicated entity tag → "misc", medium TTL. The dashboard "/" is per-user (uncached).
-// Shared (identical for every customer) + entity-tagged, so admin centre/batch/
-// city writes sweep these immediately instead of leaving them for the 24h TTL.
+// Centers + batches require a customer token. Their masters are identical for every
+// customer → shared cache, entity-tagged so admin centre/batch/city writes sweep them.
 const OFFLINE = { ttl: CACHE_TTL.DAY, entity: CacheEntity.Offline as const, scope: CacheScope.Shared as const };
 
 router.get("/centers", authenticate, requireRole("customer"), cacheRoute(OFFLINE), listCenters);
@@ -34,11 +27,9 @@ router.get("/batches", authenticate, requireRole("customer"), cacheRoute(OFFLINE
 router.get("/centers/:id", authenticate, requireRole("customer"), cacheRoute(OFFLINE), getCenterDetail);
 router.get("/batches/:id", authenticate, requireRole("customer"), cacheRoute(OFFLINE), getBatchDetail);
 
-// Enquiry accepts both anonymous and authenticated — attach userId when a valid
-// token is present; a stale/invalid token must NOT block this public route.
+// Public: attaches userId when a valid token is present; a stale/invalid token must not block it.
 router.post("/enquiry", optionalAuthenticate, submitEnquiry);
 
-// Offline-batch "Register" form — auth REQUIRED (Bearer token, customer role).
 router.post("/batch-enquiry", authenticate, requireRole("customer"), submitBatchEnquiry);
 
 export default router;

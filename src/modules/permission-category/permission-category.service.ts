@@ -1,8 +1,7 @@
+// Permission categories: admin CRUD with per-category permission counts.
 import { prisma } from "../../config/prisma";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
-
-
 
 export const parsePcatId = (id: string): number | null => {
   const n = Number(id);
@@ -76,9 +75,8 @@ export const listCategories = async (
   const titleSearch = buildPrismaPrefixSearch(search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
 
-  // RECENCY IS THE CONTRACT on admin lists (utils/listOrdering): an "order" sort
-  // and the no-sort default both fall through to createdAt DESC, with sortDir
-  // deliberately ignored — honouring the `asc` the UI sends would invert it.
+  // Recency is the contract on admin lists (utils/listOrdering): an "order" sort and the
+  // default fall through to createdAt DESC, ignoring sortDir (the UI's `asc` would invert it).
   const mapped = SORT_FIELD_MAP[sortBy];
   const recency = !mapped || mapped === "orderBy";
   const listOrderBy = recency
@@ -146,7 +144,6 @@ export const createCategory = async (
   if (exists) return { ok: false, code: "slug_exists" };
 
   const now = new Date();
-  // No explicit order → previous row + 1 (see utils/listOrdering).
   const orderBy = input.order ?? nextOrder((await prisma.permissionCategoryRow.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await prisma.permissionCategoryRow.create({
     data: {
@@ -208,6 +205,7 @@ export type DeleteCategoryResult =
   | { ok: true }
   | { ok: false; code: "not_found" | "in_use" };
 
+// Refused (in_use) while any permission still points at the category.
 export const deleteCategory = async (
   id: number
 ): Promise<DeleteCategoryResult> => {

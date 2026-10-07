@@ -1,3 +1,4 @@
+// Admin plans: course/package/ebook price plan CRUD with frozen paid terms.
 import { adminPlanRepository as repo, OWNED } from "./admin-plan.repository";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 
@@ -31,9 +32,8 @@ const toDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
-  // "Most Popular" badge — computed, read-only (plan-popularity module ranks by
-  // all-time paid orders). NOT writable here or anywhere else in the admin API;
-  // the manual override was removed 2026-08-05 (docs/admin/MOST_POPULAR_PLAN_PIN.md).
+  // Computed, read-only (plan-popularity ranks by all-time paid orders); not writable
+  // anywhere in the admin API.
   isMostPopular: p.isMostPopular ?? false,
   courseId: OWNED(p.courseId) ? (p.Course ? ref(p.Course) : String(p.courseId)) : null,
   packageId: OWNED(p.packageId) ? (p.Package ? ref(p.Package) : String(p.packageId)) : null,
@@ -42,7 +42,6 @@ const toDto = (p: any) => ({
   updatedAt: p.updated_at ?? null,
 });
 
-// ── list / get ────────────────────────────────────────────────────────────────
 export const listPlans = async (q: { entityType?: string; courseId?: string; packageId?: string; ebookId?: string; status?: string; isDefault?: string; withMaterial?: string; search?: string; sortBy?: string; sortDir?: "asc" | "desc"; page: number; limit: number }) => {
   const opts = {
     entityType: q.entityType,
@@ -74,15 +73,13 @@ export const getPlanById = async (id: number) => {
   if (!plan) return null;
   const [promotedCount, subscriberCount, orderCount] = await Promise.all([
     repo.promotedCount(id),
-    // ⚠ subscriberCount keeps its existing ALL-TIME meaning — the delete guard has
-    // always reported on it and the panel reads `orderCount ?? subscriberCount`.
+  // subscriberCount keeps its all-time meaning: the panel reads `orderCount ?? subscriberCount`.
     repo.subscriberCount(id),
     countPlanUsageOne("price", id),
   ]);
   return { ...toDto(plan), promotedCount, subscriberCount, orderCount };
 };
 
-// ── create / update ─────────────────────────────────────────────────────────
 export interface PlanWriteInput {
   courseId?: string | null; packageId?: string | null; ebookId?: string | null;
   name?: string | null; duration?: number; price?: number;
@@ -123,27 +120,16 @@ const changesPaidTerms = (existing: any, input: PlanWriteInput): boolean =>
 export const PLAN_TERMS_FROZEN_MESSAGE =
   "A saved plan's price, duration and material terms cannot be changed. Add a new plan and turn this one off instead.";
 
+// Returns "has_subscribers" when paid terms change or a sold plan is re-linked.
 export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any | null | "has_subscribers"> => {
   const existing = await repo.findBare(id);
   if (!existing) return null;
-  // Commercial terms are frozen at creation (product rule, 2026-08-21). A wrong price
-  // is corrected by adding a new plan and deactivating this one — never by rewriting
-  // what buyers already paid.
-  //
-  // This used to fire only when `activeSubscriberCount(id) > 0`. That narrowing existed
-  // for ONE reason: the old package/course edit form re-PUT every plan on save, so a
-  // strict guard would have blocked unrelated edits. That form stopped writing saved
-  // plans (frontend shipped 2026-08-21), and meanwhile the loose guard let a plan sold
-  // twelve times in 2024 — all now expired — accept a repricing that rewrote what every
-  // historical report says those customers paid.
-  //
-  // Still scoped to an ACTUAL change: `changesPaidTerms` compares against the stored
-  // row, so a payload repeating the current values passes untouched. The live-course
-  // and test-series product forms rely on that when they re-send `status` on a
-  // paid→free switch — do NOT tighten this to "field present".
-  //
-  // name / status / isDefault stay editable. isDefault is editorial ("show this one
-  // first"), not a term anyone paid for.
+  // Commercial terms are frozen at creation: a wrong price is fixed by adding a new plan
+  // and deactivating this one, never by rewriting what buyers paid — sold or not.
+  // Scoped to an actual change: `changesPaidTerms` compares against the stored row, so a
+  // payload repeating current values passes. The live-course and test-series forms rely
+  // on that when re-sending `status` on a paid→free switch — do not tighten this to
+  // "field present". name / status / isDefault stay editable (isDefault is editorial).
   if (changesPaidTerms(existing, input)) return "has_subscribers";
 
   // Re-linking a SOLD plan to a different product misattributes every historical order
@@ -177,11 +163,12 @@ export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any
   return toDto(await repo.findById(id));
 };
 
+// Refuses with the usage count while any order references the plan.
 export const deletePlan = async (id: number): Promise<"ok" | "not_found" | { inUse: number }> => {
   const existing = await repo.findBare(id);
   if (!existing) return "not_found";
-  // Widened from `subscriberCount` to the full all-time usage union so a plan with
-  // only a PENDING order (no subscription row yet) is pinned too.
+  // Full all-time usage union, so a plan with only a PENDING order (no subscription
+  // row yet) is pinned too.
   const inUse = await countPlanUsageOne("price", id);
   if (inUse > 0) return { inUse };
   await repo.deletePromotedForPlan(id);
@@ -212,7 +199,7 @@ export const bulkStatus = async (ids: number[], status: boolean) => {
 };
 
 export const bulkDelete = async (ids: number[]): Promise<{ ok: false } | { ok: true; deleted: number }> => {
-  // All-or-nothing, as today: one ordered plan in the selection refuses the batch.
+  // All-or-nothing: one ordered plan in the selection refuses the batch.
   const usage = await countPlanUsage("price", ids);
   if ([...usage.values()].some((n) => n > 0)) return { ok: false };
   await repo.deletePromotedForPlans(ids);
@@ -220,6 +207,7 @@ export const bulkDelete = async (ids: number[]): Promise<{ ok: false } | { ok: t
   return { ok: true, deleted: r.count };
 };
 
+// Copy a plan onto exactly one new owner (never as the default).
 export const clonePlan = async (id: number, target: { courseId?: string; packageId?: string; ebookId?: string }): Promise<"not_found" | "bad_target" | any> => {
   const existing = await repo.findBare(id);
   if (!existing) return "not_found";

@@ -1,9 +1,10 @@
+// Client live polls: HTTP handler for a class's active poll.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
-// GET /api/v1/client/live-polls/:liveClassId/active
+// Active poll for a class plus the caller's vote, or `poll: null`.
 export const getActivePoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { liveClassId } = req.params;

@@ -1,3 +1,4 @@
+// Jobs organizations: DTO and input types.
 export interface OrganizationDto {
   _id: string;
   name: string;

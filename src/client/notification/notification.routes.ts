@@ -1,3 +1,4 @@
+// Client notifications: feed, read/delete and image-banner routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -14,20 +15,16 @@ import {
 
 const router = Router();
 
-// Public — list active in-app banner images. Tier-1 shared (no per-user field);
-// no dedicated entity tag → "misc", relies on TTL. The per-user feed + unread
-// count below are NOT cached (live).
+// Public, shared-cached banner list. The per-user feed below is not cached.
 router.get("/image-notifications", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ImageNotification, scope: CacheScope.Shared }), listActiveImageNotifications);
 
-// Authenticated feed
 router.get("/notifications", authenticate, listMyNotifications);
-// Lightweight unread badge count — short TTL so dashboard fan-out doesn't hit DB every second under load.
+// Short TTL so dashboard fan-out doesn't hit the DB on every request under load.
 router.get("/notifications/count", authenticate, cacheRoute({ ttl: CACHE_TTL.UNREAD_COUNT, scope: CacheScope.User }), getUnreadCount);
 router.post("/notifications/read-all", authenticate, markAllAsRead);
 router.post("/notifications/:id/read", authenticate, markAsRead);
 
-// Delete ("dismiss from my feed") — single, multi, or all via one endpoint.
-// Body: { ids: number[] } to delete specific ones, or { all: true } to clear the feed.
+// Body: { ids: number[] } or { all: true } to clear the feed.
 router.post("/notifications/delete", authenticate, deleteNotifications);
 
 export default router;

@@ -1,13 +1,10 @@
+// Client goals: HTTP handlers for active goals and the user's goal selection.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { getActiveGoals, getMySelectedGoals, updateMyGoals } from "./goal.client.service";
 import logger from "../../utils/logger";
 import { omit, omitList } from "../../utils/pick";
 
-/**
- * GET /api/v1/client/goals
- * Fetches natively active goals for the Mobile UI Goal Selection Screen.
- */
 export const fetchActiveGoalsHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("fetchActiveGoalsHandler invoked", {
@@ -33,10 +30,6 @@ export const fetchActiveGoalsHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/client/goals/my-goals
- * Fetches only the goals & labels strictly checked/selected by the customer.
- */
 export const fetchMySelectedGoalsHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -67,8 +60,7 @@ export const fetchMySelectedGoalsHandler = async (req: Request, res: Response) =
       count: result.data?.length,
     });
 
-    // my-goals is used only to resolve selected goal ids + label ids — the RN app
-    // reads neither title/image nor label names here (see docs/api-optimization).
+    // The RN app only resolves selected goal/label ids here (see docs/api-optimization).
     const slimmed = (result.data ?? []).map((g: any) => ({
       ...omit(g, ["title", "image"]),
       labels: omitList(g.labels, ["name"]),
@@ -85,11 +77,6 @@ export const fetchMySelectedGoalsHandler = async (req: Request, res: Response) =
   }
 };
 
-/**
- * PUT /api/v1/client/goals
- * Body: { goals: [{ goalId, labelIds }] } (legacy flat id array also accepted).
- * Updates the authenticated customer's selected goals + labels.
- */
 export const updateMyGoalsHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

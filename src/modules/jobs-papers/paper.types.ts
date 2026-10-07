@@ -1,3 +1,4 @@
+// Jobs previous papers: enums, DTO and input types.
 export const JOB_PAPER_TIERS = ["tier_1", "tier_2", "pre", "mains", "all"] as const;
 export type JobPaperTier = (typeof JOB_PAPER_TIERS)[number];
 

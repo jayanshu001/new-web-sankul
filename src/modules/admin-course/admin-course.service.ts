@@ -1,3 +1,4 @@
+// Admin courses: course, plan, linked content and video-category management logic.
 import { adminCourseRepository as repo } from "./admin-course.repository";
 import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
@@ -14,7 +15,7 @@ export const parseCourseId = (id: string): number | null => {
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
-// SQL enum → Mongo bool (mirrors catalog-course.transformer).
+// SQL enum → bool (same as catalog-course.transformer).
 const toIsPopular = (v: Course["is_featured"]): boolean => v === "yes";
 const toIsPaid = (v: Course["purchase"]): boolean => v !== "no";
 
@@ -27,7 +28,7 @@ type CourseRow = Course & {
 const nameRef = (r: { id: number; name: string | null } | null | undefined) => (r ? { _id: String(r.id), name: r.name ?? "" } : null);
 const titleRef = (r: { id: number; title: string } | null | undefined) => (r ? { _id: String(r.id), title: r.title } : null);
 
-/** `ws_course` row (+ refs) → Mongo-shaped Course doc (populated refs replace scalar ids). */
+/** `ws_course` row (+ refs) → Course DTO (populated refs replace scalar ids). */
 const toCourseDto = (
   row: CourseRow,
   materialCats: any[],
@@ -50,8 +51,8 @@ const toCourseDto = (
   courseSubjectCategoryId: titleRef(row.subject) ?? idStrOrNull(row.courseSubjectCategoryId),
   videoCategoryId: titleRef(row.VideoCategory) ?? idStrOrNull(row.videoCategoryId),
   pcMaterialId: idStrOrNull(row.pcMaterialId),
-  // Mongo embedded arrays → from the SQL pivot tables. category populated:
-  // material → {_id,title,image}; exam → {_id,name,image}.
+  // From the pivot tables, category populated: material → {_id,title,image};
+  // exam → {_id,name,image}.
   materialCategories: materialCats.map((m) => ({
     category: m.MaterialCategory ? { _id: String(m.MaterialCategory.id), title: m.MaterialCategory.name, image: m.MaterialCategory.image ?? null } : idStrOrNull(m.materialCategoryId),
     order: m.order,
@@ -60,10 +61,9 @@ const toCourseDto = (
     category: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null, image: e.ExamCategory.image ?? null } : idStrOrNull(e.examCategoryId),
     order: e.order,
   })),
-  // C6: embedded examCountdown attachments, populated to the Mongo shape.
   examCountdownIds: ec?.examCountdownIds ?? [],
   examCountdownCategoryIds: ec?.examCountdownCategoryIds ?? [],
-  // Legacy single-category field (first populated category or null).
+  // Legacy single-category field: first populated category or null.
   examCountdownCategoryId: ec?.examCountdownCategoryIds?.[0] ?? null,
   createdAt: row.createdAt ?? null,
   updatedAt: row.updatedAt ?? null,
@@ -84,7 +84,7 @@ const toPlanDto = (p: any) => ({
   updatedAt: p.updated_at ?? null,
 });
 
-// ── pre-requisites ───────────────────────────────────────────────────────────
+// Course form dropdowns: active educators, subject/video categories and materials.
 export const getPreRequisites = async () => {
   const [educators, subjectCategories, videoCategories, materials] = await Promise.all([
     repo.activeEducators(), repo.activeSubjectCategories(), repo.activeVideoCategories(), repo.allMaterials(),
@@ -97,7 +97,6 @@ export const getPreRequisites = async () => {
   };
 };
 
-// ── list / detail ──────────────────────────────────────────────────────────────
 export interface ListCoursesQuery { search?: string; status?: string; isPaid?: string; isPopular?: string; page?: string; limit?: string; sortBy?: string; sortOrder?: string }
 
 export const listCourses = async (q: ListCoursesQuery) => {
@@ -115,7 +114,6 @@ export const listCourses = async (q: ListCoursesQuery) => {
     repo.list({ ...opts, skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.count(opts),
   ]);
-  // Hydrate each course's category pivots.
   const data = await Promise.all(rows.map(async (row) => {
     const [mc, ec] = await Promise.all([repo.materialCategoriesFor(row.id), repo.examCategoriesFor(row.id)]);
     return toCourseDto(row, mc, ec);
@@ -128,22 +126,20 @@ export const getCourseById = async (id: number): Promise<"not_found" | { course:
     repo.findById(id), repo.materialCategoriesFor(id), repo.examCategoriesFor(id), repo.listPlans(id),
   ]);
   if (!row) return "not_found";
-  // C6: populate the row's stored examCountdown JSON columns to Mongo shape.
   const countdowns = await populateExamCountdowns(row as any);
   return { course: toCourseDto(row, mc, ec, countdowns), plans: plans.map(toPlanDto) };
 };
 
-// ── course write ────────────────────────────────────────────────────────────
-// ws_course NOT-NULL no-default columns get write-time sentinels.
+// ws_course NOT NULL no-default columns get write-time sentinels.
 export interface CourseWriteInput {
   name?: string; description?: string; image?: string; ordered?: number; shareableLink?: string;
   withMaterial?: string; withoutMaterial?: string; level?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean;
   courseEducatorId?: number; courseSubjectCategoryId?: number; videoCategoryId?: number;
-  // Physical-material kit FK (ws_course.pc_material_id). null detaches.
+  // ws_course.pc_material_id; null detaches.
   pcMaterialId?: number | null;
   materialCategories?: Array<{ category: number; order: number }>;
   examCategories?: Array<{ category: number; order: number }>;
-  // C6: embedded examCountdown attachments — stored as JSON int[] on ws_course.
+  // Stored as JSON int[] on ws_course.
   examCountdownIds?: any;
   examCountdownCategoryIds?: any;
 }
@@ -165,18 +161,16 @@ export const createCourse = async (d: CourseWriteInput) => {
       withMaterial: d.withMaterial ?? "0",
       withoutMaterial: d.withoutMaterial ?? "0",
       level: d.level ?? "1",
-      // course_category_id / educator_id are NOT NULL → 0 sentinel when unset.
+      // NOT NULL → 0 sentinel when unset.
       courseSubjectCategoryId: d.courseSubjectCategoryId ?? 0,
       courseEducatorId: d.courseEducatorId ?? 0,
       videoCategoryId: d.videoCategoryId ?? null,
       pcMaterialId: d.pcMaterialId ?? null,
-      // A course is NEVER free (business rule, 2026-08-25) — always paid,
-      // whatever `isPaid` the caller sends. The DB backs this with NOT NULL
-      // DEFAULT '1'; see 2026-08-25_ws_course_purchase_always_paid.sql.
+      // A course is never free (business rule): always paid, whatever `isPaid` says.
+      // The DB backs this with NOT NULL DEFAULT '1'.
       purchase: "yes",
       is_featured: d.isPopular ? "yes" : "no",
       status: d.status ?? true,
-      // C6: embedded examCountdown attachments → JSON int[] columns.
       examCountdownIds: parseIdArray(d.examCountdownIds),
       examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
       createdAt: now, updatedAt: now,
@@ -185,8 +179,8 @@ export const createCourse = async (d: CourseWriteInput) => {
     examCategories: pivotRows(d.examCategories),
   });
   const detail = await getCourseById(course.id);
-  // The Mongo path returns { course, folder }; folder is the Root VideoCategory
-  // automation, which is NOT representable on SQL (no course_id col) → null.
+  // `folder` (Root VideoCategory automation) has no representation (no course_id
+  // column on ws_video_category), so it is always null.
   return { course: detail === "not_found" ? null : detail.course, folder: null };
 };
 
@@ -205,11 +199,10 @@ export const updateCourse = async (id: number, d: CourseWriteInput): Promise<"no
   if (d.courseEducatorId !== undefined) data.courseEducatorId = d.courseEducatorId;
   if (d.videoCategoryId !== undefined) data.videoCategoryId = d.videoCategoryId;
   if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId;
-  // `isPaid` is accepted but never written — a course cannot be made free.
-  // Kept in the validator so an admin panel still sending it gets 200, not 422.
+  // `isPaid` is accepted but never written (a course cannot be made free); the
+  // validator keeps it so older panels get 200, not 422.
   if (d.isPopular !== undefined) data.is_featured = d.isPopular ? "yes" : "no";
   if (d.status !== undefined) data.status = d.status;
-  // C6: embedded examCountdown attachments → JSON int[] columns.
   if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
 
@@ -224,7 +217,7 @@ export const updateCourse = async (id: number, d: CourseWriteInput): Promise<"no
 export const deleteCourse = async (id: number): Promise<"not_found" | { deletedCourseId: string; deletedPlans: number; deletedCourseVideoCategories: number; deletedVideoRelations: number }> => {
   if (!(await repo.exists(id))) return "not_found";
   const { deletedPlans } = await repo.deleteCourse(id);
-  // courseId-scoped folder/relation cleanup is N/A on SQL (no course_id col).
+  // courseId-scoped folder/relation cleanup does not apply (no course_id column).
   return { deletedCourseId: String(id), deletedPlans, deletedCourseVideoCategories: 0, deletedVideoRelations: 0 };
 };
 
@@ -240,9 +233,8 @@ export const toggleCoursePopular = async (id: number, requested?: boolean | stri
   return { _id: String(id), isPopular: next };
 };
 
-// Toggle status (ws_course.status). Flips the current value; an explicit
-// boolean/"true"/"false" in the body sets it directly. No required-field checks
-// (unlike the full update) so a status flip never trips e.g. courseEducatorId.
+// Flips the current value, or sets an explicit boolean/"true"/"false". Skips the
+// full update's required-field checks so a flip never trips e.g. courseEducatorId.
 export const toggleCourseStatus = async (id: number, requested?: boolean | string): Promise<"not_found" | { _id: string; status: boolean }> => {
   const course = await repo.findBare(id);
   if (!course) return "not_found";
@@ -254,7 +246,6 @@ export const toggleCourseStatus = async (id: number, requested?: boolean | strin
   return { _id: String(id), status: next };
 };
 
-// ── plans ──────────────────────────────────────────────────────────────────────
 export const listCoursePlans = async (
   courseId: number,
   opts: { skip: number; take: number; page: number; limit: number }
@@ -264,9 +255,8 @@ export const listCoursePlans = async (
     repo.listPlans(courseId, opts.skip, opts.take),
     repo.countPlans(courseId),
   ]);
-  // `orderCount` drives the panel's Delete lock (all-time, status-blind) — one
-  // grouped query for the page, never one per row. Always a number: absent means
-  // "unknown" to the FE, which then leaves Delete enabled.
+  // `orderCount` drives the panel's Delete lock (all-time, status-blind), one grouped
+  // query per page. Always a number: absent means "unknown" and leaves Delete enabled.
   const usage = await countPlanUsage("price", rows.map((r) => r.id));
   return {
     data: rows.map((r) => ({ ...toPlanDto(r), orderCount: usage.get(r.id) ?? 0 })),
@@ -274,10 +264,8 @@ export const listCoursePlans = async (
   };
 };
 
-// ── course-detail category tabs (paginated, resolved rows) ──────────────────────
-// Flatten each pivot row to { _id, name, image, status, order }, resolving the
-// linked category so the admin UI drops its client-side name lookup. `_id` is the
-// category id; `order` is the course-specific pivot order.
+// Course-detail category tabs: pivot rows flattened to { _id, name, image, status, order }
+// with the category resolved. `_id` = category id; `order` = per-course pivot order.
 const examCatRowDto = (e: {
   order: number; examCategoryId: number | null;
   ExamCategory: { id: number; name: string | null; image: string | null; status: boolean } | null;
@@ -323,8 +311,8 @@ export const listCourseMaterialCategories = async (
   return { data: rows.map(materialCatRowDto), pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
-// Course-Detail "Material (Book)" row. Shape matches the admin book-row renderer
-// (same as the Package → Books tab). `orderBy` is the per-course pivot order.
+// Matches the admin book-row renderer (same as Package → Books). `orderBy` is the
+// per-course pivot order.
 const courseBookRowDto = (r: {
   order: number; bookId: number | null;
   Book: {
@@ -360,8 +348,8 @@ export const listCourseBooks = async (
   return { data: rows.map(courseBookRowDto), pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
-// Attach books to a course. Skips ids already linked and ids that don't exist;
-// new links append after the current max per-course order. Idempotent.
+// Idempotent: skips ids already linked or nonexistent; new links append after the
+// current max per-course order.
 export const linkCourseBooks = async (
   courseId: number,
   bookIds: number[]
@@ -445,18 +433,16 @@ export const getCoursePlanById = async (planId: number): Promise<"not_found" | a
 };
 
 /**
- * A saved plan's COMMERCIAL terms are immutable (product rule, 2026-08-21) — a
- * wrong price is corrected by adding a new plan and deactivating the old one, not
- * by rewriting what buyers already paid. Only `name`, `status` and the editorial
- * `isDefault` flag stay writable; everything else is dropped rather than 422'd, so
- * a form that still re-sends the stored values on save is not broken by the rule.
+ * A saved plan's commercial terms are immutable (product rule): a wrong price is fixed
+ * by adding a new plan and deactivating the old one. Only `name`, `status` and
+ * `isDefault` stay writable; other fields are dropped rather than 422'd so forms that
+ * re-send stored values keep working.
  */
 export const updateCoursePlan = async (planId: number, validated: any): Promise<"not_found" | "frozen_terms" | any> => {
   const existing = await repo.findPlanById(planId);
   if (!existing) return "not_found";
 
-  // Reject only a payload that would actually CHANGE a frozen term; a no-op
-  // re-send of the stored values passes untouched.
+  // Reject only a payload that would change a frozen term; re-sending stored values passes.
   const duration = validated.duration ?? validated.subscriptionDurationMonths;
   const changesFrozen =
     (duration !== undefined && duration !== existing.duration) ||
@@ -474,11 +460,11 @@ export const updateCoursePlan = async (planId: number, validated: any): Promise<
   return toPlanDto(updated);
 };
 
+// Refuses while any order references the plan (returns { inUse }).
 export const deleteCoursePlan = async (planId: number): Promise<"not_found" | { inUse: number } | true> => {
   if (!(await repo.findPlanById(planId))) return "not_found";
-  // One ordered row — of any status, expired or not — pins the plan for good.
-  // ws_package_course_subscription has no FK on pcb_id, so without this the
-  // delete succeeds and leaves those rows pointing at a plan that is gone.
+  // One ordered row of any status pins the plan for good. ws_package_course_subscription
+  // has no FK on pcb_id, so the delete would otherwise orphan those rows.
   const inUse = await countPlanUsageOne("price", planId);
   if (inUse > 0) return { inUse };
   await repo.deletePromotedForPlan(planId);
@@ -486,13 +472,12 @@ export const deleteCoursePlan = async (planId: number): Promise<"not_found" | { 
   return true;
 };
 
-// ── video categories (global ws_video_category; courseId dropped) ───────────────
 const toVideoCategoryDto = (v: any) => ({
   _id: String(v.id),
   title: v.title,
   slug: v.slug,
   image: v.image,
-  // courseId has no SQL column — Mongo-only; surfaced null for shape-compat.
+  // No column; kept null for shape compatibility.
   courseId: null,
   order_by: v.order_by,
   status: v.status,
@@ -514,7 +499,7 @@ export const createCourseVideoCategory = async (validated: any) => {
   const now = new Date();
   const created = await repo.createVideoCategory({
     title: validated.title, slug: validated.slug, image: validated.image,
-    // courseId dropped (no column); parent/educator_id/pdf default per admin-master.
+    // parent/educator_id/pdf defaults match admin-master.
     parent: 0, educatorId: 0, pdf: "",
     order_by: validated.order_by ?? 0,
     status: validated.status ?? true,
@@ -543,7 +528,6 @@ export const deleteCourseVideoCategory = async (id: number): Promise<"not_found"
   return { deletedRelations: rel.count };
 };
 
-// ── materials (pc-material; title-only) ─────────────────────────────────────────
 const toMaterialDto = (m: any) => ({ _id: String(m.id), title: m.title, createdAt: m.created_at ?? null, updatedAt: m.updated_at ?? null });
 
 export const listCourseMaterials = async (q: { page?: string; limit?: string }) => {
@@ -558,7 +542,7 @@ export const listCourseMaterials = async (q: { page?: string; limit?: string }) 
 
 export const createCourseMaterial = async (validated: any) => {
   const now = new Date();
-  // ws_package_course_material is TITLE-ONLY (image/isActive dropped — admin-master).
+  // ws_package_course_material is title-only.
   const created = await repo.createMaterial({ title: validated.title, created_at: now, updated_at: now });
   return toMaterialDto(created);
 };
@@ -577,11 +561,10 @@ export const deleteCourseMaterial = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// ── video category relations ─────────────────────────────────────────────────
 const toRelationDto = (r: any) => ({
   _id: String(r.id),
   parent: String(r.parent),
-  // Only the child FK is a real relation in Prisma; parent is a bare int.
+  // Only the child FK is a Prisma relation; parent is a bare int.
   child: r.childVideoCategory ? { _id: String(r.childVideoCategory.id), title: r.childVideoCategory.title, slug: r.childVideoCategory.slug } : String(r.child),
   order: r.order,
 });

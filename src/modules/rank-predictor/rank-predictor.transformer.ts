@@ -1,3 +1,4 @@
+// Rank predictor: row to DTO mapping (response shape is frozen).
 import type { OcrAnswerKey, OcrExam, OcrScore, OcrSubmission } from "@prisma/client";
 import { buildAnswerReview, cancelledCountOf, normalizePaperSeries } from "./rank-predictor.scoring";
 import {
@@ -43,6 +44,7 @@ const lowerOrNull = (value: string | null | undefined): string | null =>
 
 export const parsePaperSeries = (value: unknown): string[] => normalizePaperSeries(value);
 
+// Keep the first half of each word and mask the rest.
 export const maskName = (fullName: string): string => {
   const words = fullName.trim().split(/\s+/).filter(Boolean);
   if (!words.length) return MASKED_NAME_FALLBACK;

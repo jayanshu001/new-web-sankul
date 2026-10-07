@@ -1,3 +1,4 @@
+// Share links: public /share redirect pages and the token-to-id resolve route.
 import { Router, Request, Response } from "express";
 import { buildShareTargets, decodeShareId, renderShareRedirect } from "./shareRedirect";
 import { success, failure } from "../utils/httpResponse";
@@ -24,6 +25,7 @@ function resolveId(resource: string, param: string): string | null {
   return decodeShareId(resource, param);
 }
 
+// HTML redirect page that opens the app, else the store or web fallback.
 function sendShare(resource: string) {
   const deepPath = SURFACES[resource];
   return (req: Request, res: Response) => {

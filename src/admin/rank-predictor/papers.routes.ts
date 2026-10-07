@@ -1,3 +1,4 @@
+// Admin rank predictor: paper, answer-key and leaderboard routes.
 import { Router } from "express";
 import { uploadRankPdfToMemory } from "../../middlewares/upload";
 import { listAnswerKeys, publishAnswerKey } from "./answerKeys.controller";

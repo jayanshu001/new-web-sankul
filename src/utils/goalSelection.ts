@@ -1,14 +1,9 @@
+// Goal selection: parse and reconcile a customer's stored goal + label choices.
 /**
- * Customer goal-selection encoding shared by the profile + client-goals modules.
- *
- * A customer's selection lives on `ws_customer.goal` (JSON) as an array of
- * `{ goalId, labelIds }` — a target goal (`ws_customer_target_goal`) plus the
- * specific labels chosen within it (empty when the goal has no labels). The
- * legacy shape was a flat id array (`[1, 8, 9]`); readers stay tolerant of it by
- * coercing each bare id to `{ goalId, labelIds: [] }`.
- *
- * Target-goal labels live in `ws_customer_target_goal.labels` as `[{ id, name }]`
- * (ids assigned by the admin target-goal service, mirroring `ws_goal`).
+ * Customer goal selection, stored on `ws_customer.goal` (JSON) as
+ * `[{ goalId, labelIds }]` (labelIds empty for labelless goals). Readers also
+ * accept the legacy flat id array, coercing each id to `{ goalId, labelIds: [] }`.
+ * Labels live in `ws_customer_target_goal.labels` as `[{ id, name }]`.
  */
 
 export interface GoalSelection {
@@ -16,7 +11,6 @@ export interface GoalSelection {
   labelIds: number[];
 }
 
-/** One entry as accepted on the write boundary (object form or a bare id). */
 export type GoalSelectionInput =
   | { goalId: string | number; labelIds?: (string | number)[] }
   | string
@@ -27,7 +21,6 @@ const toPosInt = (v: unknown): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Parse a `ws_goal`/`ws_customer_target_goal` labels JSON → `[{ id, name }]`. */
 export const parseLabels = (raw: unknown): { id: number; name: string }[] => {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -36,31 +29,21 @@ export const parseLabels = (raw: unknown): { id: number; name: string }[] => {
     .filter((l) => Number.isInteger(l.id) && l.id > 0);
 };
 
-/** A goal as it currently exists in the catalog, for reconciliation. */
 export interface CatalogGoal {
-  /** Ids of the labels that currently exist on the goal. */
   labelIds: Set<number>;
-  /** Whether the catalog goal is a labelled (accordion) goal. */
+  /** Labelled (accordion) goal. */
   hasLabels: boolean;
 }
 
 /**
- * Reconcile a parsed selection against the current catalog so every returned
- * entry matches one of the two valid FE shapes and can never disagree with
- * `GET /client/goals`:
+ * Reconcile a selection against the current catalog so it never disagrees with
+ * `GET /client/goals`: labelless goals get `labelIds: []`, labelled goals a
+ * non-empty subset of their current labels. Drops unknown/inactive goals and
+ * labelled goals whose chosen labels all vanished (an empty-labels entry would
+ * read as labelless and crash the Select-Goals sheet).
  *
- *   - labelless goal → `labelIds: []`            (catalog goal has NO labels)
- *   - labelled goal  → `labelIds: [non-empty subset of the catalog's labels]`
- *
- * Drops any selection that would otherwise crash the Select-Goals bottom sheet:
- *   - goal id not in the (active) catalog                     → unknown/inactive
- *   - labelled catalog goal whose chosen labels all vanished  → stale (would
- *     otherwise be emitted as an empty-labels shape that FE reads as a
- *     *labelless* selection, conflicting with the catalog's accordion shape —
- *     the exact goal-moved-under-another-goal migration bug).
- *
- * `validGoals` must contain ONLY goals that still exist and are active; callers
- * build it from the same catalog read they render from.
+ * `validGoals` must contain only existing, active goals, built from the same
+ * catalog read the caller renders from.
  */
 export const reconcileGoalSelection = (
   selections: GoalSelection[],
@@ -69,22 +52,21 @@ export const reconcileGoalSelection = (
   const out: GoalSelection[] = [];
   for (const sel of selections) {
     const g = validGoals.get(sel.goalId);
-    if (!g) continue; // unknown / inactive goal — drop
+    if (!g) continue;
     if (g.hasLabels) {
       const kept = sel.labelIds.filter((id) => g.labelIds.has(id));
-      if (kept.length === 0) continue; // labelled goal, no surviving chosen label — drop
+      if (kept.length === 0) continue;
       out.push({ goalId: sel.goalId, labelIds: kept });
     } else {
-      out.push({ goalId: sel.goalId, labelIds: [] }); // genuinely labelless
+      out.push({ goalId: sel.goalId, labelIds: [] });
     }
   }
   return out;
 };
 
 /**
- * Parse the stored/incoming selection into normalized `{ goalId, labelIds }[]`.
- * Tolerant of the legacy flat id array; drops invalid ids; dedupes by goalId
- * (first wins) while preserving order.
+ * Normalize a stored/incoming selection. Accepts the legacy flat id array, drops
+ * invalid ids, dedupes by goalId (first wins) preserving order.
  */
 export const parseGoalSelection = (raw: unknown): GoalSelection[] => {
   if (!Array.isArray(raw)) return [];
@@ -100,11 +82,10 @@ export const parseGoalSelection = (raw: unknown): GoalSelection[] => {
         labelIds = rawLabels.map(toPosInt).filter((n): n is number => n != null);
       }
     } else {
-      goalId = toPosInt(item); // legacy flat id
+      goalId = toPosInt(item);
     }
     if (goalId == null || seen.has(goalId)) continue;
     seen.add(goalId);
-    // dedupe labelIds, preserve order
     out.push({ goalId, labelIds: [...new Set(labelIds)] });
   }
   return out;

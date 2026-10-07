@@ -1,3 +1,4 @@
+// Jobs previous papers: row to DTO mapping (response shape is frozen).
 import type { Prisma } from "@prisma/client";
 import type { PAPER_INCLUDE } from "./paper.repository";
 import type { PaperDto, PaperFileDto, PaperProductDto } from "./paper.types";
@@ -23,7 +24,7 @@ const parseFiles = (pdfUrl: string | null): PaperFileDto[] => {
         return files;
       }
     } catch {
-      // fall through — treat as a plain URL
+      // treat as a plain URL
     }
   }
   return [{ _id: "1", url: raw }];

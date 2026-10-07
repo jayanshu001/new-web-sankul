@@ -1,3 +1,4 @@
+// Client profile: HTTP handlers for profile, picture, device tokens and account deletion.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import {
@@ -15,8 +16,7 @@ import { omit } from "../../utils/pick";
 import { queueCRMLead } from "../../utils/crm";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 
-// Fields the RN app never reads on GET /profile — dropped at the controller edge
-// to slim the mobile payload (see docs/api-optimization/GET_client_profile.md).
+// Fields the RN app never reads (see docs/api-optimization/GET_client_profile.md).
 const PROFILE_DROP_FIELDS = [
   "phone2",
   "dob",
@@ -34,6 +34,7 @@ const PROFILE_DROP_FIELDS = [
   "isProfileCompleted",
 ] as const;
 
+// Update profile fields; queues a TeleCRM signup lead once name and email exist.
 export const updateProfileHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -70,8 +71,7 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
 
     logger.info("updateProfileHandler success", { traceId, userId });
 
-    // TeleCRM SIGNUP lead only once both name and email are on file — matches
-    // the old backend's rule.
+    // TeleCRM SIGNUP lead only once both name and email are on file.
     const profileData = result?.data as { firstName?: string; emailAddress?: string } | undefined;
     if (profileData?.firstName && profileData?.emailAddress) {
       queueCRMLead({ params: { userId }, leadType: CRM_LEAD_TYPE.SIGNUP }, { traceId, userId });
@@ -88,6 +88,7 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
   }
 };
 
+// Profile minus the fields the app never reads.
 export const getProfileHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -117,10 +118,6 @@ export const getProfileHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * PUT /api/v1/client/profile/profile-picture
- * Body: multipart/form-data { image: file }
- */
 export const upsertProfilePictureHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -136,7 +133,6 @@ export const upsertProfilePictureHandler = async (req: Request, res: Response) =
       return failure(res, "Unauthorized request.", 401);
     }
 
-    // `multer-s3` attaches the S3 URL exactly to `req.file.location`
     const file = req.file as any;
     const image = file?.location as string | undefined;
 
@@ -168,10 +164,6 @@ export const upsertProfilePictureHandler = async (req: Request, res: Response) =
   }
 };
 
-/**
- * DELETE /api/v1/client/profile
- * Soft-deletes the authenticated customer's account and invalidates all tokens.
- */
 export const deleteAccountHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -191,20 +183,13 @@ export const deleteAccountHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * PATCH /api/v1/client/profile/firebase-token
- * Body: { firebaseToken: string; platform?: "ios" | "android" }
- * Authenticated — the token is bound to the caller's phone from the JWT (any
- * `phoneNumber` in the body is ignored). Legacy; prefer PUT /device-token.
- */
 export const updateFirebaseTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
   logger.info("updateFirebaseTokenHandler invoked", { traceId, userId });
   try {
-    // Bind to the AUTHENTICATED user's phone (from the JWT) — never trust a
-    // `phoneNumber` from the body, which previously let anyone overwrite another
-    // user's push token. The body phone (if any) is ignored.
+    // Bind to the JWT's phone; a body phoneNumber would let anyone overwrite another
+    // user's push token.
     const phoneNumber = req.user?.phone;
     const { firebaseToken, platform } = req.body;
     if (!phoneNumber) {
@@ -231,11 +216,6 @@ export const updateFirebaseTokenHandler = async (req: Request, res: Response) =>
   }
 };
 
-/**
- * PUT /api/v1/client/profile/device-token
- * Body: { firebaseToken: string; platform?: "ios" | "android" }
- * Authenticated. Preferred over the legacy phone-based endpoint.
- */
 export const registerDeviceTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -265,12 +245,6 @@ export const registerDeviceTokenHandler = async (req: Request, res: Response) =>
   }
 };
 
-/**
- * DELETE /api/v1/client/profile/device-token
- * Body: { firebaseToken: string }
- * Authenticated. Removes only this device's token, leaving other logged-in
- * devices receiving pushes.
- */
 export const unregisterDeviceTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -298,9 +272,6 @@ export const unregisterDeviceTokenHandler = async (req: Request, res: Response) 
   }
 };
 
-/**
- * DELETE /api/v1/client/profile/profile-picture
- */
 export const deleteProfilePictureHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

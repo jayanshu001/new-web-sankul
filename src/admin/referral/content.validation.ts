@@ -1,3 +1,4 @@
+// Admin referral content: Zod schemas for referral terms and FAQs.
 import { z } from "zod";
 
 export const createTermSchema = z.object({

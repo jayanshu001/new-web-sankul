@@ -1,45 +1,28 @@
+// Live-course orders: checkout, payment verification and webhook fulfilment.
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { extractPromoterAttribution } from "../order-code-snapshot/order-code-snapshot.service";
 import { computeEndAt } from "../../utils/planDuration";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
-// The course/material money split is NOT re-derived here — it is the shared helper
-// ws_package_course_subscription has always used, so both products book the split
-// identically (floor at MIN_COURSE_AMOUNT, material as the residual).
+// Shared with the package path so both book the course/material split identically.
 import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 
 /**
- * Live-course payment write path on SQL.
+ * Live-course payment write path. The order owns payment, the subscription owns
+ * entitlement, and one order = one subscription row: checkout writes a pending
+ * `ws_live_course_order`; verify flips it to complete and creates a subscription
+ * row. A renewal gets its own order and row, starting where the current
+ * entitlement ends; it never folds onto the existing row.
  *
- * Since 2026-08-25 live course has a real order table and follows the same rule as
- * every other product: THE ORDER OWNS PAYMENT, THE SUBSCRIPTION OWNS ENTITLEMENT,
- * and ONE ORDER = ONE SUBSCRIPTION ROW. Checkout writes a pending
- * `ws_live_course_order`; verify flips it to complete and CREATES a subscription row
- * for it. A renewal gets its own order and its own subscription row starting where
- * the current entitlement ends — it never folds onto the existing row.
+ * Legacy payment columns still exist on ws_live_course_subscription for old rows;
+ * new writes do not touch them.
  *
- * Before that, the design was SINGLE-TABLE: `ws_live_course_subscription` carried
- * the payment fields too, checkout wrote a `payment_status='pending'` subscription
- * row, and a renewal had to fold (bump end_at, retire the pending row) because there
- * was no second table to record the second payment. Those payment columns still
- * exist on the subscription for pre-migration rows — new writes do not touch them.
+ * plan.duration is in DAYS (the schema comment saying months is stale).
  *
- * ⚠ plan.duration is DAYS (per the live-course controllers + admin-live-course
- * grant — computeEndAt asDays:true). The schema comment saying MONTHS is stale;
- * DAYS is the shipped precedent. See [[project_plan_duration_unit]].
- * withMaterial / customerShippingId are persisted on the SQL SUBSCRIPTION
- * (ws_live_course_subscription.with_material / customer_shipping_id). withMaterial
- * is derived from the selected plan's flag; customerShippingId is the delivery
- * address chosen at checkout (validated for ownership in the controller).
- *
- * ⚠ 2026-08-27: the order table adopted the ws_package_course_order shape column for
- * column. `with_material` left the ORDER (package does not have it — it is a property
- * of the plan, ws_live_course_plan.with_material), `customer_shipping_id` became
- * `shipping`, `paid_amount` became `discount_price` (Prisma `amount`),
- * `original_amount` became `price` (Prisma `originalPrice`, now ALWAYS written),
- * `wallet_coin` became `ws_coin`, and `paid_at` is gone — `updated_at` is the paid-at
- * on every order table, which is where the package receipt has always read it.
+ * The order table matches ws_package_course_order column for column:
+ * `with_material` belongs to the plan, `updated_at` is the paid-at, and
+ * `price` (Prisma `originalPrice`) is always written.
  */
 
 export type LiveCourseVerifyDto = {
@@ -59,22 +42,17 @@ export type LiveCourseVerifyDto = {
 };
 
 /**
- * The verify DTO is unchanged on the wire: entitlement fields come from the
- * subscription, payment fields from the order. `paymentStatus` still reports the
- * subscription vocabulary ("verified"), NOT the order's "complete" — the field is
- * part of a shipped response shape and is mapped, not renamed.
+ * Entitlement fields come from the subscription, payment fields from the order.
+ * `paymentStatus` keeps the shipped vocabulary ("verified"), mapped from the
+ * order's status, not renamed.
  *
- * `sub` is null only on the defensive path where an order is complete but its
- * subscription is missing; the DTO then carries the order's own identity so the
- * caller still gets a well-formed response.
+ * `sub` is null only when an order is complete but its subscription is missing;
+ * the DTO then carries the order's identity so the response stays well-formed.
  */
 const ORDER_STATUS_TO_PAYMENT_STATUS: Record<string, string> = {
   pending: "pending",
   complete: "verified",
-  // 'cancel' is the ws_package_course_order spelling of what this table used to
-  // store as 'failed' (2026-08-27). The WIRE value stays "failed" — the map is what
-  // keeps the shipped response identical. 'failed' is kept as a key so a row written
-  // before the enum change still resolves.
+  // The wire value stays "failed"; 'failed' is kept as a key for older rows.
   cancel: "failed",
   failed: "failed",
 };
@@ -96,7 +74,7 @@ const toVerifyDto = (sub: any | null, order: any): LiveCourseVerifyDto => ({
   updatedAt: sub?.updatedAt ?? order.updatedAt ?? null,
 });
 
-/** Read a live-course plan for create-order. Returns null if missing/zero-price. */
+/** Null if missing or zero-price. */
 export const findLiveCoursePlanForOrder = async (
   planId: number
 ): Promise<{ liveCourseId: number; price: number; duration: number; withMaterial: boolean; materialPrice: number | null } | null> => {
@@ -114,12 +92,10 @@ export const findLiveCoursePlanForOrder = async (
   };
 };
 
-/** Minimal live-course lookup (id + name + status) for SQL order responses.
- *  `status` lets create-order refuse a deactivated live course. */
+/** `status` lets create-order refuse a deactivated live course. */
 export const findLiveCourse = (id: number) =>
   prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true, status: true } });
 
-/** All active pricing plans for a live course (apply-promo plan list). */
 export const listPlansForLiveCourse = (liveCourseId: number) =>
   prisma.liveCoursePlan.findMany({
     where: { liveCourseId, status: true },
@@ -127,40 +103,26 @@ export const listPlansForLiveCourse = (liveCourseId: number) =>
   });
 
 /**
- * The promo discount on a live-course subscription, DERIVED.
- *
- * ⚠ 2026-08-27: the discount is STORED again, in `ws_live_course_order.code_discount`
- * — the ws_package_course_order column. This function now PREFERS that column and
- * falls back to the derivation only for rows written before it existed. Keep both
- * paths: the admin customer-details DTO still reads legacy subscription rows.
- *
- * `ws_live_course_subscription.discount_amount` was dropped 2026-08-20 as redundant.
- * The legacy derivation is the exact inverse of what checkout used to write:
+ * Prefers the stored `code_discount`; older rows fall back to deriving it as the
+ * inverse of the legacy checkout write:
  *
  *   paid_amount = original_amount - discount - wallet_coin
  *
- * `original_amount` was set ONLY when a promo was applied (the same condition under
- * which `discount_amount` used to be non-NULL), so a NULL original means no promo and
- * therefore no discount. Wallet coin is subtracted out because it is redemption, not
- * a discount — it was never part of the stored value either.
- *
- * Both API readers (live-course receipt, admin customer-details DTO) call this, so
- * their responses are byte-identical to when the column existed. Keep the two in
- * sync: if the write formula ever changes, this must change with it.
+ * `original_amount` was set only when a promo applied, so NULL means no discount.
+ * Wallet coin is redemption, not discount. Keep both paths: the admin
+ * customer-details DTO still reads legacy subscription rows, and the receipt and
+ * that DTO must stay byte-identical. If the write formula changes, change this too.
  */
 export const liveSubDiscountAmount = (sub: {
   codeDiscount?: number | null;
   originalPrice?: number | null;
   amount?: number | null;
   wsCoin?: number | null;
-  /** Legacy ws_live_course_subscription columns (pre-2026-08-25 rows). */
+  /** Legacy ws_live_course_subscription columns. */
   originalAmount?: number | null;
   paidAmount?: number | null;
   walletCoin?: number | null;
 }): number => {
-  // Since 2026-08-27 the discount is a real column (`code_discount`), exactly as on
-  // ws_package_course_order — the derivation below is the LEGACY path, kept for rows
-  // that predate it and for the subscription's own dropped columns.
   if (sub.codeDiscount != null) return Number(sub.codeDiscount) > 0 ? Number(sub.codeDiscount) : 0;
 
   const original = sub.originalPrice ?? sub.originalAmount;
@@ -173,9 +135,8 @@ export const liveSubDiscountAmount = (sub: {
 };
 
 /**
- * Create the pending live-course ORDER row + return its id. Nothing is granted yet:
- * no subscription row exists until the payment verifies, which is exactly why an
- * abandoned checkout can no longer leave an unverified row in the entitlement table.
+ * Nothing is granted yet: no subscription row exists until payment verifies, so an
+ * abandoned checkout leaves no unverified entitlement.
  */
 export const createLiveCourseOrderMysql = async (input: {
   customerId: number;
@@ -184,46 +145,33 @@ export const createLiveCourseOrderMysql = async (input: {
   /** Charged amount (post-promo, post-coin) → `discount_price`. */
   amount: number;
   razorpayOrderId: string;
-  /** Business key (the receipt id) → `unique_id`. Mirrors the package/ebook paths. */
+  /** Receipt id → `unique_id`. */
   uniqueId?: string | null;
   /** Full Razorpay order response, JSON string → `razorpay_order`. */
   razorpayOrderPayload?: string | null;
   /** Originating client IP → `ip_address` (utils/clientIp, clamped to the column). */
   ipAddress?: string | null;
-  /** Referring CUSTOMER id → `referrer_id`, denormalised out of the snapshot. */
+  /** Referring customer id → `referrer_id`, denormalised from the snapshot. */
   referrerId?: number | null;
   /** Promo/referral discount in rupees → `code_discount`. 0 when no code. */
   codeDiscount?: number | null;
   /**
-   * Purchase-time code snapshots from `buildOrderCodeSnapshots({..., planKind:
-   * "livePlan"})`. Frozen objects, routed to exactly ONE column — a real promocode →
-   * `promocode`, a customer referral code → `refferalcode` — mirroring
-   * ws_package_course_order. Both null when no code was applied, or when the snapshot
-   * could not be built — a snapshot never blocks a payment.
-   *
-   * These REPLACE the old `promocode_id` / `referrer_id` columns (dropped 2026-08-20):
-   * the snapshot is now the single source of truth for who redeemed what, and the
-   * referral credit at verify reads the referrer out of it (referrerIdOf below).
+   * Purchase-time snapshots from `buildOrderCodeSnapshots({..., planKind:
+   * "livePlan"})`, routed to exactly one column: promocode → `promocode`, customer
+   * referral code → `refferalcode`. Both null when no code applied or the snapshot
+   * could not be built; a snapshot never blocks a payment.
    */
   promocodeSnapshot?: unknown | null;
   refferalcodeSnapshot?: unknown | null;
   coin?: number | null;
-  /**
-   * Plan LIST price → `price`. ALWAYS written since 2026-08-27, matching
-   * ws_package_course_order (`OrigianalPrice ?? price` in commerce-order.repository).
-   * It used to be written only on a promo, because NULL was how "no promo" was
-   * signalled to liveSubDiscountAmount; `codeDiscount` carries that explicitly now.
-   */
+  /** Plan list price → `price`; always written, as on ws_package_course_order. */
   originalAmount?: number | null;
   /**
-   * NOT persisted on the order any more (2026-08-27): ws_package_course_order has no
-   * `with_material` column — material is a property of the PLAN
-   * (ws_live_course_plan.with_material) and verify re-reads it from there. Still
-   * accepted so the controller keeps one call shape, and still written to the
-   * SUBSCRIPTION at verify.
+   * Not persisted on the order (material is a plan property; verify re-reads it).
+   * Accepted so the controller keeps one call shape.
    */
   withMaterial?: boolean;
-  /** → `shipping` (was `customer_shipping_id`). ws_customer_shipping.id. */
+  /** ws_customer_shipping.id → `shipping`. */
   customerShippingId?: number | null;
   now: Date;
 }): Promise<{ orderId: number }> => {
@@ -237,10 +185,8 @@ export const createLiveCourseOrderMysql = async (input: {
       amount: Math.round(input.amount),
       originalPrice: Math.round(input.originalAmount ?? input.amount),
       codeDiscount: Math.round(input.codeDiscount ?? 0),
-      // `?? Prisma.DbNull` (not `?? null`): on a Json column Prisma reads a bare
-      // `null` as JsonNull — the JSON literal `null` INSIDE the column — whereas
-      // DbNull is a real SQL NULL. The report treats SQL NULL as "no code"; a JSON
-      // null would be a non-empty value that every JSON_EXTRACT path then misses.
+      // DbNull, not null: Prisma writes a bare null as JSON `null`, which reports
+      // would treat as a code; they read SQL NULL as "no code".
       promocode: (input.promocodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
       refferalcode: (input.refferalcodeSnapshot as Prisma.InputJsonValue) ?? Prisma.DbNull,
       referrerId: input.referrerId ?? null,
@@ -259,20 +205,10 @@ export const createLiveCourseOrderMysql = async (input: {
 };
 
 /**
- * The referring CUSTOMER's id, read out of the frozen referral snapshot.
- *
- * ⚠ 2026-08-27: `referrer_id` is a real column again (ws_package_course_order has
- * one), and checkout now writes it. This stays the FALLBACK for rows written between
- * 2026-08-20 and 2026-08-27, when the snapshot was the only source — see the
- * `order.referrerId ?? referrerIdOf(order)` call in verify.
- *
- * ⚠ In the legacy referral shape the key `promoter` holds the referring CUSTOMER
- * (not a ws_promoter), so the id lives at `$.refferalcode.promoter.id` — the same
- * value `referrer_id` used to carry. A promocode snapshot has no referrer at all and
- * correctly yields null, so promocode purchases never credit anyone.
- *
- * Returns null for pre-2026-08-20 rows that were never backfilled; creditReferrer
- * treats a null referrer as "nothing to credit" and is a no-op.
+ * Fallback for orders written while `referrer_id` was not a column. In the legacy
+ * referral shape `promoter` holds the referring customer (not a ws_promoter). A
+ * promocode snapshot yields null, so promocode purchases never credit anyone;
+ * creditReferrer treats null as a no-op.
  */
 const referrerIdOf = (row: { refferalcode: unknown }): number | null => {
   const ref = row.refferalcode as any;
@@ -280,47 +216,31 @@ const referrerIdOf = (row: { refferalcode: unknown }): number | null => {
   return Number.isInteger(id) && id > 0 ? (id as number) : null;
 };
 
-/**
- * Promoter attribution for the subscription's `promoter_id` / `promoter_percentage`
- * columns. Moved to modules/order-code-snapshot on 2026-08-31 so live-course and
- * test-series verify share ONE reader of the snapshot's load-bearing JSON paths —
- * the module that writes the shape now also owns reading it back.
- */
+/** Shared with test-series verify; the snapshot module owns both writing and reading the shape. */
 const promoterAttribution = extractPromoterAttribution;
 
-/** Owner lookup for verify (the order owning this razorpay order id). */
 export const findLiveCourseOrderForVerify = async (
   razorpayOrderId: string,
   customerId: number
 ) => prisma.liveCourseOrder.findFirst({ where: { razorpayOrderId, customerId } });
 
 /**
- * Verify fulfillment. Idempotent: an order that is no longer "pending" returns its
- * existing subscription untouched.
- *
- * Otherwise, in ONE transaction: the order flips to "complete" and a NEW
- * subscription row is created for it. A renewal continues from the customer's
- * current entitlement (`startAt = existing.endAt` when that is still in the future,
- * else now) and leaves that row alone — the pre-2026-08-25 behaviour folded the
- * window onto it and retired the pending row instead, which is why a renewal's
- * payment had nowhere of its own to live.
- *
- * `duration` is DAYS — see [[project_plan_duration_unit]].
+ * Idempotent: an order no longer "pending" returns its existing subscription.
+ * Otherwise one transaction completes the order and creates a new subscription;
+ * a renewal starts at the current entitlement's future endAt (else now) and
+ * leaves that row alone. `duration` is in DAYS.
  */
 export const verifyLiveCourseOrderMysql = async (
   order: any,
   razorpayPaymentId: string,
   now: Date = new Date()
 ): Promise<LiveCourseVerifyDto> => {
-  // Idempotency: the order already ran. Return the subscription it produced.
   if (order.status && order.status !== "pending") {
     const existingSub = await prisma.liveCourseSubscription.findFirst({ where: { orderId: order.id } });
     return toVerifyDto(existingSub, order);
   }
 
-  // `withMaterial` is read from the PLAN, not the order: ws_package_course_order has
-  // no with_material column and neither does this table since 2026-08-27. It was
-  // never a free checkout choice — the controller set it from this same plan flag.
+  // `withMaterial` comes from the plan; the order table has no such column.
   const plan = await prisma.liveCoursePlan.findFirst({
     where: { id: order.planId ?? 0 },
     select: { duration: true, withMaterial: true, materialPrice: true },
@@ -329,21 +249,16 @@ export const verifyLiveCourseOrderMysql = async (
   const withMaterial = !!plan?.withMaterial;
   const amount = order.amount ?? 0;
 
-  // ── the ws_package_course_subscription columns, sourced the same way ────────
-  // Money split: shared helper, so live course and package book it identically.
   const material = computeMaterialSplit(amount, plan);
-  // The entitled material kit, copied off the live course — the twin of
-  // findCoursePcMaterialId / findPackagePcMaterialId on the package path.
+  // Entitled material kit, as findCoursePcMaterialId does on the package path.
   const liveCourseRow = await prisma.liveCourse.findFirst({
     where: { id: order.liveCourseId },
     select: { pcMaterialId: true },
   });
-  // Promoter attribution, denormalised out of the order's frozen promocode snapshot.
   const promoter = promoterAttribution(order);
 
-  // The customer's current entitlement for this live course, read ONLY to place the
-  // new window. `endAt: null` is a lifetime grant, which cannot be continued from —
-  // it never ends — so such a row falls through to `now` like a lapsed one.
+  // Read only to place the new window. A lifetime grant (`endAt: null`) cannot be
+  // continued from, so it falls through to `now`.
   const existingActive = await prisma.liveCourseSubscription.findFirst({
     where: {
       customerId: order.customerId,
@@ -360,26 +275,19 @@ export const verifyLiveCourseOrderMysql = async (
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
 
   const sub = await prisma.$transaction(async (tx) => {
-    // Claim the order: only a still-pending row flips. The loser of a concurrent
-    // /verify + webhook matches 0 rows, writes nothing and returns null — one
-    // order never yields two subscriptions or two kit dispatches.
+    // Claim: only a still-pending row flips. The loser of a concurrent /verify +
+    // webhook matches 0 rows and writes nothing, so one order never yields two
+    // subscriptions or two kit dispatches.
     const claim = await tx.liveCourseOrder.updateMany({
       where: { id: order.id, status: "pending" },
-      // `paid_at` is gone (2026-08-27) — `updated_at` IS the paid-at on an order
-      // table, which is where the package receipt has always read it. Verify already
-      // wrote both with the same `now`, so no reader's value changes.
+      // `updated_at` is the paid-at on order tables.
       data: { status: "complete", razorpayPaymentId, updatedAt: now },
     });
     if (claim.count === 0) return null;
 
-    // Shipment tracking now lives in ws_live_course_subscription_tracking, the twin of
-    // ws_package_course_subscription_tracking (2026-08-27 (c)) — created BEFORE the
-    // subscription so its id can go straight onto the row, exactly as verifyCourseTx
-    // does it. That id is also the AWB (courierForAwb routes on it). ONLY material
-    // purchases get a row; digital-only subs keep tracking null.
-    //
-    // ⚠ `orderId` here is the ORDER id, not the subscription id — same as the
-    // reference table.
+    // Tracking row is created before the subscription so its id goes straight onto
+    // the row (as verifyCourseTx does); that id is also the AWB. Only material
+    // purchases get one. `orderId` here is the ORDER id, not the subscription id.
     const trackingRow = withMaterial
       ? await tx.liveCourseSubscriptionTracking.create({
           data: { orderId: order.id, status: "pending", created_at: now, updated_at: now },
@@ -395,14 +303,13 @@ export const verifyLiveCourseOrderMysql = async (
         startAt,
         endAt,
         status: true,
-        // Material comes from the plan; the entitlement row stores it so dispatch +
-        // access checks stay row-local (the order no longer carries a copy).
+        // Stored on the entitlement row so dispatch and access checks stay row-local.
         withMaterial,
         shipping: order.shipping ?? null,
         tracking: trackingRow?.id ?? null,
         pcMaterialId: liveCourseRow?.pcMaterialId ?? null,
-        // Money mirrored off the order so the subscription reports stand alone, split
-        // exactly as package splits it. course + material always sums back to amount.
+        // Mirrored off the order so subscription reports stand alone; course +
+        // material always sums back to amount.
         amount,
         courseAmount: material.courseAmount,
         materialAmount: material.materialAmount,
@@ -417,35 +324,27 @@ export const verifyLiveCourseOrderMysql = async (
       },
     });
 
-    // No second write: the AWB is the tracking row's id, which exists before the
-    // subscription is inserted. (It used to be the subscription's own id, which could
-    // only be known after the insert.)
     return created;
   });
 
   if (!sub) {
-    // Lost the claim: return what the winner produced (its transaction has
-    // committed — our UPDATE waited on its row lock). Same path as the
-    // idempotency check above, on the re-read order.
+    // Lost the claim: the winner has committed (our UPDATE waited on its row lock),
+    // so return what it produced.
     const fulfilled = await prisma.liveCourseOrder.findFirst({ where: { id: order.id } });
     const existingSub = await prisma.liveCourseSubscription.findFirst({ where: { orderId: order.id } });
     return toVerifyDto(existingSub, fulfilled ?? order);
   }
 
-  // Referral credit + wallet debit are keyed to the ORDER id (the payment record).
-  // Both are idempotent and non-throwing — neither may block fulfilment.
-  // `referrer_id` is a column again since 2026-08-27; the snapshot read is the
-  // fallback for rows written while it did not exist.
+  // Keyed to the ORDER id. Both are idempotent and non-throwing, so neither can
+  // block fulfilment.
   await creditReferrer({ referrerId: order.referrerId ?? referrerIdOf(order), buyerId: order.customerId, orderId: order.id, paidAmount: amount, source: "liveCourse" });
   await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.wsCoin, source: "liveCourse" });
   return toVerifyDto(sub, { ...order, status: "complete", razorpayPaymentId, updatedAt: now });
 };
 
 /**
- * Webhook fulfillment (paymentWebhook). The webhook arrives independently of the
- * client /verify call; same fulfilment, keyed by razorpayOrderId ALONE (the razorpay
- * payload carries no customer). Idempotent + safe to run before or after /verify.
- * Returns null if no SQL order owns this id (→ caller falls through).
+ * Keyed by razorpayOrderId alone (the payload carries no customer). Safe to run
+ * before or after /verify. Null if no order owns this id.
  */
 export const fulfillLiveCourseWebhookMysql = async (
   razorpayOrderId: string,

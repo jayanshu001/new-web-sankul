@@ -1,3 +1,4 @@
+// Admin plans: HTTP handlers for course/package/ebook pricing-plan CRUD.
 import { Request, Response } from "express";
 import { planInUseMessage } from "../../utils/planUsage";
 import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
@@ -8,8 +9,6 @@ import {
   bulkDeleteSchema,
 } from "./plan.validation";
 import * as planSql from "../../modules/admin-plan/admin-plan.service";
-
-// ─── Endpoints ────────────────────────────────────────────────────────────────
 
 export const listPlans = async (req: Request, res: Response) => {
   try {
@@ -65,6 +64,7 @@ export const createPlan = async (req: Request, res: Response) => {
   }
 };
 
+// Price/duration terms are frozen once the plan has subscribers (422).
 export const updatePlan = async (req: Request, res: Response) => {
   const id = req.params.id as string;
 
@@ -74,8 +74,7 @@ export const updatePlan = async (req: Request, res: Response) => {
     const data = updatePlanSchema.parse(req.body);
     const updated = await planSql.updatePlan(numId, data as any);
     if (!updated) return res.status(404).json({ success: false, message: "Plan not found." });
-    // 422 + field-keyed messages so the panel can pin the error to price/duration
-    // rather than showing a bare toast. Was a 400 with a bare `message`.
+    // 422 + field-keyed messages so the panel can pin the error to price/duration.
     if (updated === "has_subscribers")
       return res.status(422).json({
         success: false,
@@ -103,8 +102,6 @@ export const deletePlan = async (req: Request, res: Response) => {
     const r = await planSql.deletePlan(numId);
     if (r === "not_found") return res.status(404).json({ success: false, message: "Plan not found." });
     // 409 + the shared wording, so all five plan-delete endpoints answer alike.
-    // NOTE: this was a 400 — the status changed deliberately (see the backend
-    // request 2026-08-21); the panel already treats any non-2xx here as a toast.
     if (typeof r === "object") return res.status(409).json({ success: false, message: planInUseMessage(r.inUse) });
     return res.status(200).json({ success: true, message: "Plan deleted." });
   } catch (error: any) {
@@ -126,6 +123,7 @@ export const togglePlanStatus = async (req: Request, res: Response) => {
   }
 };
 
+// Make this the default plan of its owning course/package/ebook.
 export const markAsDefault = async (req: Request, res: Response) => {
   const id = req.params.id as string;
 
@@ -166,6 +164,7 @@ export const bulkDelete = async (req: Request, res: Response) => {
   }
 };
 
+// Copy a plan onto exactly one target course, package or ebook.
 export const clonePlan = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;

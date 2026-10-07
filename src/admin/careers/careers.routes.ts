@@ -1,3 +1,4 @@
+// Admin careers: mounts the openings and applications routers.
 import { Router } from "express";
 import openingsRoutes from "./openings.routes";
 import applicationsRoutes from "./applications.routes";

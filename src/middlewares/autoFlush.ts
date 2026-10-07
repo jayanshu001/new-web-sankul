@@ -1,31 +1,7 @@
-// src/middlewares/autoFlush.ts
-//
-// Auto-invalidation for the route-level response cache. Put it on WRITE routes
-// (POST/PUT/PATCH/DELETE) for an entity; when the write succeeds, it sweeps all
-// cached reads for that entity so the next GET returns fresh data — with NO
-// changes to controllers or services.
-//
-//   router.get("/",     cacheRoute({ ttl: 120, entity: CacheEntity.Ebook }), getEbooks);
-//   router.get("/:id",  cacheRoute({ ttl: 600, entity: CacheEntity.Ebook }), getEbookById);
-//   router.post("/",    autoFlush(CacheEntity.Ebook), createEbook);
-//   router.put("/:id",  autoFlush(CacheEntity.Ebook), updateEbook);
-//   router.delete("/:id", autoFlush(CacheEntity.Ebook), deleteEbook);
-//
-// Semantics (entity-wide):
-//   - On a 2xx response, clear EVERY cached read tagged with this entity
-//     (all detail keys + all list variants). Broad but always-correct for
-//     same-entity edits.
-//   - Only flushes on success — a failed/validation-rejected write (non-2xx)
-//     leaves the cache intact.
-//   - Fires AFTER the response is sent (res "finish"), so it never delays the
-//     client and never runs on a request that errored out before responding.
-//   - Fail-open: a Redis error is logged and swallowed; the write already
-//     succeeded regardless.
-//
-// LIMITATION (by design): this matches by entity tag, so it CANNOT clear
-// cross-entity embeds. E.g. renaming a package *type* won't refresh cached
-// package *details* that embed the type name — those still rely on TTL or a
-// manual /admin/cache/flush. Only same-entity staleness is auto-handled.
+// Route-cache invalidation for write routes: on a 2xx response (after "finish", so it
+// never delays the client) it clears every cached read tagged with the entity. Fail-open
+// on Redis errors. Matches by entity tag only, so cross-entity embeds (e.g. a package
+// type name inside cached package details) need autoFlushGroup, TTL or /admin/cache/flush.
 
 import type { Request, Response, NextFunction } from "express";
 import { redisClient, isRedisReady } from "../config/redis";
@@ -51,25 +27,16 @@ const sweepEntity = async (entity: CacheEntity): Promise<number> => {
     cursor = next;
     if (batch.length) deleted += await redisClient.del(...batch);
   } while (cursor !== "0");
-  // Also sweep any `cache.aside` (libs/cache.ts) entries tagged with this
-  // entity — a second, lower-level cache namespace controllers use directly
-  // (see client/categories/categories.controller.ts). One flush call clears
-  // both layers so a write route never has to know which layer cached what.
+  // Also clear the lower-level `cache.aside` namespace (libs/cache.ts) so a write
+  // route never has to know which layer cached what.
   deleted += await cache.invalidateEntity(entity);
   return deleted;
 };
 
 /**
- * Imperatively clear all cached reads for one or more entities. Use this from
- * code paths that mutate cached data but do NOT flow through an `autoFlush`
- * route — BullMQ jobs, webhooks, socket handlers, or another module's service.
- *
- *   import { flushEntity } from "../../middlewares/autoFlush";
- *   await adminEbook.setUploadStatus(id, "completed");
- *   await flushEntity(CacheEntity.Ebook);   // keep the route cache honest
- *
- * Fail-open: a Redis error is logged and swallowed. Returns the number of keys
- * cleared (0 if cache is unavailable).
+ * Clears all cached reads for the entities, for writes that don't go through an
+ * `autoFlush` route (jobs, webhooks, sockets, other services). Fail-open; returns keys
+ * cleared (0 if the cache is unavailable).
  */
 export const flushEntity = async (...entities: CacheEntity[]): Promise<number> => {
   if (!isRedisReady()) return 0;
@@ -90,21 +57,10 @@ export const flushEntity = async (...entities: CacheEntity[]): Promise<number> =
 };
 
 /**
- * Per-user targeted flush: clear ONE caller's cached per-user reads across every
- * entity, WITHOUT touching other users or the shared caches.
- *
- * Use it after an entitlement change (a purchase / subscription grant) so the
- * buyer's `isPurchased` overlay refreshes immediately. The entity-wide
- * `flushEntity` would wipe every user's catalog cache on each purchase — this
- * clears just this customer's keys instead, so per-user reads can safely run a
- * long TTL.
- *
- * Cache keys end with `...:{userId}:{role}:{hash}` (see cacheRoute.buildKey), so
- * we SCAN by that identity segment. Awaited (not fire-and-forget) at call sites
- * so the buyer's next fetch — which happens right after payment — is already a
- * clean MISS, never a stale HIT.
- *
- * Fail-open: a Redis error is logged and swallowed. Returns keys cleared.
+ * Clears one user's cached per-user reads across every entity, leaving other users and
+ * shared caches alone. Call after an entitlement change so `isPurchased` refreshes.
+ * SCANs by the `...:{userId}:{role}:{hash}` key suffix (cacheRoute.buildKey). Await it so
+ * the buyer's next fetch right after payment is a miss, not a stale hit. Fail-open.
  */
 export const flushUserRouteCache = async (
   userId: number | string,
@@ -131,20 +87,12 @@ export const flushUserRouteCache = async (
   }
 };
 
-/**
- * Middleware factory: invalidate all cached reads for `entity` when this write
- * succeeds. Accepts one or more entities (e.g. a write that affects both
- * "package" and "package-type").
- */
 export const autoFlush = (...entities: CacheEntity[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    // Nothing to do for non-mutating verbs (defensive; these routes are writes).
     if (req.method === "GET" || req.method === "HEAD") return next();
 
     res.on("finish", () => {
-      // Only invalidate when the write actually succeeded.
       if (res.statusCode < 200 || res.statusCode >= 300) return;
-      // flushEntity is fail-open and no-ops when Redis is unavailable.
       void flushEntity(...entities);
     });
 
@@ -153,14 +101,8 @@ export const autoFlush = (...entities: CacheEntity[]) => {
 };
 
 /**
- * Like `autoFlush`, but expands a flush GROUP (from flushGroups.ts) to its full
- * entity list — so one admin write clears both its own cache AND every client
- * cache that embeds its data. Prefer this on admin write routes.
- *
- *   router.put("/:id", autoFlushGroup(CacheEntity.Ebook), updateEbook);
- *   // → flushes ebook, catalog-ebook, client-dashboard, free, exam-countdown
- *
- * Accepts multiple groups (deduped) for writes that span concerns.
+ * `autoFlush` over a flush group (flushGroups.ts), so one admin write also clears every
+ * client cache that embeds its data. Prefer this on admin write routes.
  */
 export const autoFlushGroup = (...groups: CacheEntity[]) => {
   const entities = [...new Set(groups.flatMap(resolveFlushGroup))];

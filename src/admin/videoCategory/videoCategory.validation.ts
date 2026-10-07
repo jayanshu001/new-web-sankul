@@ -1,21 +1,17 @@
+// Admin video categories: Zod request schemas.
 import { z } from "zod";
 
 const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
-// validation works on MySQL where ids are integers. Coerce first: the FE sends
-// MySQL ids as JSON numbers (e.g. 3157), so without coercion z.string() rejects
-// them. Mirrors the dual-id handling in video.validation.ts.
+// Accepts a 24-hex legacy id or a numeric id. Coerce first: the FE sends ids as
+// JSON numbers, which z.string() would reject.
 const objectIdSchema = z.coerce.string().refine(
   (v) => objectIdRegex.test(v) || /^[1-9]\d*$/.test(v),
   { message: "Invalid id" }
 );
 
-// Multipart form-data sends every field as a string, so an "empty" optional id
-// (no educator selected) arrives as "" — or the literal "null"/"undefined" —
-// rather than JS null/undefined. Those slip past .optional()/.nullable() and
-// then fail the id regex ("Invalid id"). Normalize them BEFORE validation:
-//   - body (create/update): -> null, which the service stores as 0 (clears the
-//     educator); .nullable() accepts it.
+// Multipart sends an empty optional id as "", "null" or "undefined", which would
+// slip past .optional()/.nullable() and fail the id regex. Normalize first:
+//   - body (create/update): -> null, stored as 0 (clears the educator).
 const bodyOptionalId = z.preprocess(
   (v) => (v === "" || v === "null" || v === "undefined" ? null : v),
   objectIdSchema.nullable().optional()

@@ -1,3 +1,4 @@
+// Admin ebooks: Prisma queries for ebooks, plans and subscriptions.
 import { prisma } from "../../config/prisma";
 import type { Prisma, PaymentMethod } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
@@ -17,21 +18,14 @@ export type SubFilter = {
 };
 
 /**
- * Prisma persistence for the admin-ebook MySQL branch.
- *  - ebooks       → ws_ebook
- *  - plans        → ws_package_course_ebook_price (ebook-owned rows; shared table,
- *                   same as admin-plan / commerce-price)
- *  - subscriptions→ ws_ebook_subscription (+ ws_ebook_order for the backend grant)
- *
- * ⚠ Schema-drift: ws_ebook has NO column for isTrending, the PDF-upload status
- * fields (book/demoUploadStatus/Progress), or the Mongo-only examCountdown*
- * relations. ws_ebook_order.customer_id is varchar(255) in the DB (Prisma maps
- * Int — MySQL casts transparently on read/write; verified).
+ * Plans live in the shared ws_package_course_ebook_price table (ebook-owned rows).
+ * ws_ebook has no column for isTrending or the PDF-upload status fields.
+ * ws_ebook_order.customer_id is varchar(255) in the DB but Int in Prisma; MySQL
+ * casts transparently.
  */
 const OWNED = (v: number | null | undefined) => v != null && v > 0;
 
 export const adminEbookRepository = {
-  // ── ebooks ───────────────────────────────────────────────────────────────────
   list: (opts: { search?: string; author?: string; publisher?: string; language?: string; status?: boolean; skip: number; take: number }) =>
     prisma.eBook.findMany({
       where: buildEbookWhere(opts),
@@ -49,7 +43,7 @@ export const adminEbookRepository = {
   create: (data: Prisma.EBookUncheckedCreateInput) => prisma.eBook.create({ data }),
   update: (id: number, data: Prisma.EBookUncheckedUpdateInput) => prisma.eBook.update({ where: { id }, data }),
   delete: (id: number) =>
-    // Cascade the ebook's plans (mirrors the Mongo deleteEbook's EbookPrice.deleteMany).
+    // Cascades the ebook's plans.
     prisma.$transaction(async (tx) => {
       await tx.packageCourseEbookPrice.deleteMany({ where: { ebookId: id } });
       await tx.eBook.delete({ where: { id } });
@@ -57,7 +51,6 @@ export const adminEbookRepository = {
   setOrder: (id: number, order: number) =>
     prisma.eBook.update({ where: { id }, data: { orderby: order, updatedAt: new Date() } }),
 
-  // ── plans (ebook-owned price rows) ─────────────────────────────────────────────
   listPlans: (ebookId: number, opts?: { activeOnly?: boolean; skip?: number; take?: number }) =>
     prisma.packageCourseEbookPrice.findMany({
       where: { ebookId, ...(opts?.activeOnly ? { status: true } : {}) },
@@ -73,17 +66,13 @@ export const adminEbookRepository = {
   createPlan: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) => prisma.packageCourseEbookPrice.create({ data }),
   updatePlan: (id: number, data: Prisma.PackageCourseEbookPriceUncheckedUpdateInput) => prisma.packageCourseEbookPrice.update({ where: { id }, data }),
   /**
-   * Promo-code plan links point at ws_package_course_ebook_price.id with NO foreign
-   * key, so deleting a plan without clearing them leaves rows in
-   * ws_promoted_package_course_ebook aimed at an id that no longer exists — the same
-   * orphan class the delete guards exist to prevent. admin-plan.deletePlan has always
-   * done this; the per-module deletes did not.
+   * Promo-code plan links point at ws_package_course_ebook_price.id with no FK, so a
+   * plan delete must clear them or they orphan (same as admin-plan.deletePlan).
    */
   deletePromotedForPlan: (planId: number) =>
     prisma.promotedPackageCourseEbook.deleteMany({ where: { planId } }),
   deletePlan: (id: number) => prisma.packageCourseEbookPrice.delete({ where: { id } }),
 
-  // ── subscriptions ──────────────────────────────────────────────────────────────
   listSubscriptions: (opts: SubFilter & {
     sortBy: string;
     sortDir: "asc" | "desc";
@@ -105,9 +94,8 @@ export const adminEbookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  // Keyset page for the UNBOUNDED export: same filter + includes as listSubscriptions,
-  // ordered id DESC, rows strictly older than the last id seen — no deep OFFSET, no row
-  // cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
+  // Keyset page for the unbounded export: same filter + includes as listSubscriptions,
+  // id DESC, strictly older than the last id seen. No deep OFFSET, no row cap.
   listSubscriptionsPageKeyset: (opts: SubFilter, beforeId: number | undefined, take: number) => {
     const base = buildSubWhere(opts);
     return prisma.eBookSubscription.findMany({
@@ -140,15 +128,14 @@ export const adminEbookRepository = {
   findSubscriptionBare: (id: number) => prisma.eBookSubscription.findUnique({ where: { id } }),
 
   /**
-   * The customer who owns this subscription. Read BEFORE an admin revoke so the
-   * caller can flush that customer's per-user route cache — on delete the row is
-   * gone afterwards, so this cannot be resolved after the fact.
+   * Read before an admin revoke so the caller can flush that customer's route cache;
+   * after delete the row is gone.
    */
   findSubscriptionCustomerId: (id: number) =>
     prisma.eBookSubscription.findUnique({ where: { id }, select: { customerId: true } }),
   findOrderById: (id: number) => prisma.eBookOrder.findUnique({ where: { id } }),
 
-  /** Backend grant: create the COMPLETE order + its subscription in one txn. */
+  /** Backend grant: creates the complete order + its subscription in one transaction. */
   createBackendSubscription: (input: {
     uniqueId: string;
     customerId: number;
@@ -165,7 +152,6 @@ export const adminEbookRepository = {
     endAt: Date;
     remarks: string | null;
     status: boolean;
-    // Acting admin id (from the JWT) → both audit columns on the new sub row.
     actingAdminId?: number | null;
   }) =>
     prisma.$transaction(async (tx) => {
@@ -174,8 +160,8 @@ export const adminEbookRepository = {
           uniqueId: input.uniqueId,
           userId: input.customerId,
           orderType: "purchase",
-          // ws_ebook_order.plan_id is NOT NULL — use 0 when no plan was chosen
-          // (durationInDays path). Mongo stores null; 0 is the SQL sentinel.
+          // ws_ebook_order.plan_id is NOT NULL; 0 is the sentinel when no plan was chosen
+          // (durationInDays path).
           planId: input.planId ?? 0,
           orderPrice: input.orderPrice,
           paymentMethod: input.paymentMethod as any,
@@ -199,7 +185,7 @@ export const adminEbookRepository = {
           remarks: input.remarks,
           payment_type: "backend",
           status: input.status,
-          // Admin-initiated manual grant → both audit columns = the acting admin.
+          // Manual grant → both audit columns = the acting admin.
           created_by: input.actingAdminId ?? null,
           updated_by: input.actingAdminId ?? null,
           createdAt: new Date(),
@@ -209,7 +195,7 @@ export const adminEbookRepository = {
       return { order, subscription };
     }),
 
-  /** Latest active subscription for a customer's ebook (Subscription Type = Extend). */
+  /** Latest active subscription (Subscription Type = Extend). */
   findActiveSubscription: (customerId: number, ebookId: number, now: Date) =>
     prisma.eBookSubscription.findFirst({
       where: { customerId, ebookId, status: true, endAt: { gte: now } },
@@ -222,7 +208,6 @@ export const adminEbookRepository = {
     prisma.eBookOrder.update({ where: { id }, data }),
   deleteSubscription: (id: number) => prisma.eBookSubscription.delete({ where: { id } }),
 
-  // ── search helpers (cross-table, for subscription search) ───────────────────────
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
       where: buildPrismaPrefixSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
@@ -262,8 +247,8 @@ function buildSubWhere(opts: SubFilter): Prisma.EBookSubscriptionWhereInput {
   const where: Prisma.EBookSubscriptionWhereInput = {};
   if (opts.customerId !== undefined) where.customerId = opts.customerId;
   if (opts.ebookId !== undefined) where.ebookId = opts.ebookId;
-  // Computed status: inactive = not active; expired = active but endAt in the past;
-  // active = active and not expired. `statusFilter` wins over the legacy boolean.
+  // Computed status: inactive = not active; expired = active but endAt past; active =
+  // active and not expired. `statusFilter` wins over the legacy boolean.
   if (opts.statusFilter) {
     const now = opts.now ?? new Date();
     if (opts.statusFilter === "inactive") where.status = false;
@@ -272,15 +257,13 @@ function buildSubWhere(opts: SubFilter): Prisma.EBookSubscriptionWhereInput {
   } else if (opts.status !== undefined) {
     where.status = opts.status;
   }
-  // Payment method lives on the linked order.
   if (opts.paymentMethod) where.eBookOrder = { is: { paymentMethod: opts.paymentMethod } };
-  // Inclusive createdAt range (bounds pre-computed to day edges by the service).
+  // Inclusive range; bounds are pre-computed to day edges by the service.
   if (opts.dateFrom || opts.dateTo) {
     where.createdAt = {};
     if (opts.dateFrom) where.createdAt.gte = opts.dateFrom;
     if (opts.dateTo) where.createdAt.lte = opts.dateTo;
   }
-  // search OR (customer-name/phone/email match | ebook-name match), AND-ed with filters.
   const or: Prisma.EBookSubscriptionWhereInput[] = [];
   if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
   if (opts.ebookIdsIn?.length) or.push({ ebookId: { in: opts.ebookIdsIn } });

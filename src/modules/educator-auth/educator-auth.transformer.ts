@@ -1,12 +1,8 @@
+// Educator auth: educator DTOs and password verification.
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import type { CourseEducator } from "@prisma/client";
 
-/**
- * Educator profile DTO — same shape the Mongo `buildProfile` returns so the
- * API contract is unchanged across the migration. `id` is the stringified SQL
- * int (Mongo returned the ObjectId).
- */
 export interface EducatorDto {
   id: string;
   name: string;
@@ -27,10 +23,7 @@ export const toEducatorDto = (row: CourseEducator): EducatorDto => ({
   status: row.status,
 });
 
-/**
- * Admin master-list DTO. Mirrors the Mongo educator document shape the admin UI
- * expects (uses `_id`, carries status + timestamps; password always omitted).
- */
+/** Admin master-list DTO; password always omitted. */
 export interface EducatorListDto {
   _id: string;
   name: string;
@@ -44,11 +37,8 @@ export interface EducatorListDto {
 }
 
 export const toEducatorListDto = (row: CourseEducator): EducatorListDto => {
-  // Mongo (timestamps:true) always populated both dates, so the admin UI assumes
-  // a non-null updatedAt per row (it formats the date and silently drops rows it
-  // can't). Legacy ws_course_educator rows have updated_at = NULL, which broke
-  // that contract. Coalesce each timestamp to the other so a row that has either
-  // reports both — restoring Mongo parity.
+  // The admin UI silently drops rows with a null updatedAt, and legacy rows have
+  // NULL updated_at, so each timestamp falls back to the other.
   const createdAt = row.createdAt ?? row.updatedAt ?? null;
   const updatedAt = row.updatedAt ?? row.createdAt ?? null;
   return {
@@ -65,13 +55,9 @@ export const toEducatorListDto = (row: CourseEducator): EducatorListDto => {
 };
 
 /**
- * Verify a plaintext password against the stored hash. Legacy `ws_course_educator`
- * rows carry a mix of formats:
- *   - bcrypt (`$2y$`/`$2b$`, 60 chars) — modern rows
- *   - MD5 (32-char hex) — legacy Laravel rows
- * Try bcrypt first; fall back to MD5 only when the stored value is 32-char hex.
- * Empty-string MD5 (`d41d8cd9...`) means "no real password" — those never match
- * a non-empty input, which is the desired behavior.
+ * Stored hashes are bcrypt (`$2y$`/`$2b$`) or legacy Laravel MD5 (32-char hex).
+ * bcrypt first; MD5 only for 32-char hex. Empty-string MD5 (`d41d8cd9...`) never
+ * matches a non-empty input, as intended.
  */
 export const verifyEducatorPassword = async (
   plain: string,
@@ -85,6 +71,5 @@ export const verifyEducatorPassword = async (
     const md5 = crypto.createHash("md5").update(plain).digest("hex");
     return md5.toLowerCase() === stored.toLowerCase();
   }
-  // Unknown format — be safe and reject.
   return false;
 };

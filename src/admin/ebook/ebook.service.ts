@@ -1,8 +1,4 @@
-// src/admin/ebook/ebook.service.ts
-//
-// Domain logic for admin ebook endpoints. Same shape as course/package service:
-//   cache-aside on hot reads, HttpError for predictable status codes.
-
+// Admin ebooks: catalog, trending and plan logic over the admin-ebook module.
 import { HttpError } from "../../middlewares/errorHandler";
 import { planInUseMessage } from "../../utils/planUsage";
 import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
@@ -10,10 +6,8 @@ import cache, { CacheDomain } from "../../libs/cache";
 import { CacheEntity } from "../../middlewares/flushGroups";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 
-// Re-exported so the thin controllers can branch validation (numeric vs ObjectId).
 export const parseEbookId = adminEbook.parseEbookId;
 
-// On the SQL branch ids are numeric.
 const assertEbookSqlId = (id: string, label: string): number => {
   const n = adminEbook.parseEbookId(id);
   if (!n) throw new HttpError(400, `Invalid ${label} ID`);
@@ -30,10 +24,6 @@ const invalidateEbookCaches = async (ebookId?: string) => {
     cache.invalidateByPrefix(cache.keyPrefix(CacheDomain.Admin, CacheEntity.Ebook, "list:")),
   ]);
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Ebook CRUD
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListEbooksQuery {
   search?: string;
@@ -56,40 +46,27 @@ export const getEbookById = async (id: string) => {
 };
 
 export const createEbook = async (validated: any) => {
-  // SQL ws_ebook now stores examCountdownIds/examCountdownCategoryIds as JSON
-  // int-arrays (C6, persisted in adminEbook.createEbook) and isTrending
-  // (ws_ebook.is_trending). Only the PDF-upload status fields remain SQL-managed
-  // by the upload pipeline, not this write path.
+  // PDF-upload status fields are owned by the upload pipeline, not this write path.
   return adminEbook.createEbook(validated);
 };
 
-// NOTE: the former Mongo `setEbookUploadStatus` helper was removed — the live
-// PDF-upload pipeline persists status via `setEbookUploadStatusSql`
-// (src/modules/pdf-upload/pdf-upload.service.ts), which writes the ws_ebook
-// upload columns. This orphan had no remaining callers.
-
 export const updateEbook = async (id: string, validated: any) => {
-  // NOTE: the Mongo path best-effort-deletes replaced S3 files; on SQL we skip
-  // that orphan cleanup (not part of the API contract). examCountdownIds/
-  // examCountdownCategoryIds ARE persisted as JSON on SQL (C6) and isTrending
-  // persists to ws_ebook.is_trending; PDF-status fields are managed by the
-  // upload pipeline, not this write path.
+  // Replaced S3 files are not cleaned up here. PDF-status fields are owned by
+  // the upload pipeline.
   const data = await adminEbook.updateEbook(assertEbookSqlId(id, "Ebook"), validated);
   if (!data) throw new HttpError(404, "Ebook not found");
   return data;
 };
 
 export const deleteEbook = async (id: string) => {
-  // Cascades the ebook's plans (ws_package_course_ebook_price) in one txn.
-  // S3 file cleanup is skipped on SQL (best-effort, not contract).
+  // Cascades the ebook's plans (ws_package_course_ebook_price) in one txn; S3 files are not cleaned up.
   const ok = await adminEbook.deleteEbook(assertEbookSqlId(id, "Ebook"));
   if (!ok) throw new HttpError(404, "Ebook not found");
   return;
 };
 
-// Flips ws_ebook.is_trending via the admin-ebook SQL module and invalidates the
-// admin ebook caches so list/detail reads reflect the new value.
-export const toggleEbookTrending = async (id: string) => {
+export
+ const toggleEbookTrending = async (id: string) => {
   const numId = assertEbookSqlId(id, "Ebook");
   const updated = await adminEbook.toggleEbookTrending(numId);
   if (!updated) throw new HttpError(404, "Ebook not found");
@@ -101,10 +78,6 @@ export const reorderEbooks = async (orders: Array<{ id: string; order: number }>
   await adminEbook.reorderEbooks(orders);
   return;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Ebook plans
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listEbookPlans = async (
   ebookId: string,

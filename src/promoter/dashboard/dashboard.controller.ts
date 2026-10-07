@@ -1,3 +1,4 @@
+// Promoter dashboard: HTTP handlers for the summary and range-based overview.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -7,7 +8,6 @@ import {
   buildPromoterOverview as buildPromoterOverviewSql,
 } from "../../modules/promoter-data/promoter-data.service";
 
-// GET /api/v1/promoter/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;
@@ -27,7 +27,6 @@ export const getDashboard = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/promoter/dashboard/overview?range=today|week|month|year|all
 // The logged-in promoter sees their own data. Admin views the same screen via
 // /api/v1/admin/promoters/:id/dashboard.
 export const getDashboardOverview = async (req: Request, res: Response) => {
@@ -40,7 +39,7 @@ export const getDashboardOverview = async (req: Request, res: Response) => {
 
     const { range, startDate, endDate } = req.query as Record<string, string>;
 
-    // promocodeId scope not supported on SQL — see note.
+    // A promocodeId scope filter is not supported.
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await buildPromoterOverviewSql(pid, range, { startDate, endDate });

@@ -1,3 +1,4 @@
+// FAQs: row to DTO mapping and Prisma write data (response shape is frozen).
 import type { FAQ } from "@prisma/client";
 import type { FaqCategory, FaqDto, FaqCreateInput, FaqUpdateInput } from "./faq.types";
 import { FAQ_TYPE_LABELS } from "./faq.types";

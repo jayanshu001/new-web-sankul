@@ -1,3 +1,4 @@
+// Client purchase history: order lists, receipts and shipment tracking routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {

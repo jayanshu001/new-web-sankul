@@ -1,3 +1,4 @@
+// Client lecture audio notes: upload, list, update and delete routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3Audio } from "../../middlewares/upload";

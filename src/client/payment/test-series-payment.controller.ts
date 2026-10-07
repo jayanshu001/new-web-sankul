@@ -1,3 +1,4 @@
+// Client payments: test-series promo preview and create-order handlers.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
@@ -15,7 +16,6 @@ import { getClientIp } from "../../utils/clientIp";
 import { queueCRMLead } from "../../utils/crm";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 
-// SQL planId is numeric (migrated id-space).
 const applyPromoSqlSchema = z.object({
   planId: z.coerce
     .number({ invalid_type_error: "Please select a valid plan." })
@@ -36,8 +36,7 @@ const createOrderSqlSchema = z.object({
     .optional(),
 });
 
-// POST /api/v1/client/payment/apply-promo/test-series
-// Preview-only. Mirrors apply-promo/live-course.
+// Preview only; mirrors apply-promo/live-course.
 export const applyTestSeriesPromo = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -46,10 +45,8 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("applyTestSeriesPromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ── MySQL test-series promo preview (test-series-order) ──────────────────
-    // Returns the SAME shape as POST /client/promocodes/apply: the entity + ALL
-    // its pricing plans, each annotated with the per-plan offer (orginalPrice,
-    // price, offerAvailable, discountType, discountValue, offerPercentage).
+    // Same shape as POST /client/promocodes/apply: the entity + all its plans, each
+    // annotated with the per-plan offer.
     {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await tsSql.findPlanForOrder(body.planId);
@@ -191,9 +188,8 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/payment/create-order/test-series
-// Body: { planId, promocode? }. Creates TestSeriesOrder PENDING + Razorpay order.
-// /payment/verify provisions TestSeriesSubscription on signature success.
+// Body: { planId, promocode? }. Creates a pending order + Razorpay order;
+// /payment/verify provisions the subscription.
 export const createTestSeriesOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -211,7 +207,6 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    // ── MySQL test-series create-order (test-series-order) ───────────────────
     {
       const customerIdInt = Number(customerId);
       if (!Number.isInteger(customerIdInt)) return res.status(400).json({ success: false, message: "Invalid customer id." });
@@ -230,8 +225,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
         referrerIdNum = result.referrerId ?? null;
       }
       const bd = _shared.computeBreakdown(plan.price, discountAmount, promocodeIdNum != null ? String(promocodeIdNum) : null);
-      // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap,
-      // then reduce the charged total. Coins are debited at verify.
+      // Wallet coins: validated vs balance + 50%-of-plan-price cap; debited at verify.
       const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, plan.price);
       if (walletUsage.error) {
         logger.warn("createTestSeriesOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
@@ -243,13 +237,9 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       }
       if (bd.totalAmount < 1) return res.status(400).json({ success: false, message: "Final amount is below the minimum payable. Please contact support." });
 
-      // Frozen purchase-time code snapshot → the order's promocode / refferalcode
-      // columns (added 2026-08-31). `planKind` MUST be "testSeriesPrice": the three
-      // plan tables share an id space and ws_promoted_package_course_ebook.pcb_price_id
-      // is declared against ws_package_course_ebook_price for every kind, so matching
-      // on the plan id alone can snapshot an unrelated plan's promoterPercentage.
-      // Before this column existed, a promoter-linked test-series sale left no
-      // attributable record at all and modules/promoter-data paid out nothing for it.
+      // Purchase-time code snapshot for promoter attribution. `planKind` must be
+      // "testSeriesPrice": the three plan tables share an id space, so matching on the
+      // plan id alone can snapshot an unrelated plan's promoterPercentage.
       const codeSnapshot = await buildOrderCodeSnapshots({
         promocodeId: promocodeIdNum,
         referrerId: referrerIdNum,
@@ -265,9 +255,6 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       const { orderId } = await tsSql.createOrderMysql({
         customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd,
         promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id, referrerId: referrerIdNum, coin: walletUsage.coin,
-        // Four values this handler already had and previously discarded — the table
-        // took the ws_package_course_order shape on 2026-08-31 and now has somewhere
-        // to put them. `ip_address` existed before but nothing ever wrote it.
         uniqueId: receiptId,
         razorpayOrderPayload: JSON.stringify(rzpOrder),
         ipAddress: getClientIp(req, 255),

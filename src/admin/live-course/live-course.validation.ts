@@ -1,10 +1,9 @@
+// Admin live courses: Zod request schemas.
 import { z } from "zod";
 import { historyRemarkSchema, positiveIdSchema } from "../subscription/subscription.validation";
 
 const objectId = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
 
-// A material/exam category reference, mirroring the recorded-Course schema and
-// the LiveCourse model's `{ category, order }` sub-document shape.
 const categoryRefSchema = z.object({
   category: objectId,
   order: z.number().int().nonnegative().optional(),
@@ -34,9 +33,7 @@ export const createLiveCourseSchema = z
   })
   .strict();
 
-// SQL branch: ref ids are numeric (the Mongo schema enforces ObjectId). Same
-// shape, numeric ids. examCountdown*/materialCategories/examCategories pass
-// through as arrays (stored as JSON; not validated against Mongo collections).
+// examCountdown*/materialCategories/examCategories pass through as arrays (stored as JSON).
 const numId = z.coerce.number().int().positive();
 export const createLiveCourseSqlSchema = z
   .object({
@@ -44,9 +41,7 @@ export const createLiveCourseSqlSchema = z
     subtitle:      z.string().trim().optional(),
     description:   z.string().trim().min(1, "Description is required"),
     image:           z.string().url("Image must be a valid URL"),
-    // Optional since 2026-07-27: omitted → the service assigns previous-row + 1
-    // (utils/listOrdering). An explicit value is still honoured, so this only
-    // relaxes the contract.
+    // Omitted → the service assigns previous-row + 1 (utils/listOrdering).
     ordered:         z.coerce.number().int("Ordered must be an integer").optional(),
     shareableLink:   z.string().trim().optional(),
     withMaterial:    z.string().trim().optional(),
@@ -72,12 +67,7 @@ export const updateLiveCourseSqlSchema = createLiveCourseSqlSchema
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
 
-/**
- * Bulk drag-and-drop reorder body. Same shape as the banners reorder
- * (cms.validation.reorderSchema), with `ordered` instead of `orderBy` to match
- * the ws_live_course column. Ids stay strings — the whole admin API addresses
- * live courses by string id.
- */
+/** Same shape as the banners reorder, with `ordered` instead of `orderBy` to match the column. */
 export const reorderLiveCoursesSchema = z.object({
   orders: z
     .array(z.object({ id: z.string().min(1), ordered: z.number().int() }))

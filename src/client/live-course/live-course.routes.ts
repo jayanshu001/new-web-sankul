@@ -1,3 +1,4 @@
+// Client live courses: catalog, recordings, schedule and session-feed routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -27,28 +28,26 @@ const router = Router();
 
 router.use(authenticate, requireRole("customer"));
 
-// Discovery feeds + course detail/sessions embed a per-user isPurchased overlay →
-// Tier-2, cached per-user + short TTL (ebook precedent), entity: CacheEntity.LiveCourse
-// (admin live-course writes flush it). NOT cached: /live-now-sessions (live state),
-// /my* (per-user schedule), recordings + lecture (per-request media tokens),
-// /:id/schedule* (per-user timetable).
+// Feeds and detail embed a per-user isPurchased overlay, so they are cached per user
+// (admin live-course writes flush it). Not cached: live-now (live state), /my* and
+// /:id/schedule* (per-user), recordings + lecture (per-request media tokens).
 const LC = { ttl: CACHE_TTL.DAY, entity: CacheEntity.LiveCourse as const, scope: CacheScope.User as const };
-router.get("/",                     cacheRoute(LC), listLiveCoursesForClient);     // GET /api/v1/client/live-courses
-router.get("/recently-added",       cacheRoute(LC), listRecentlyAddedLiveCourses); // GET /api/v1/client/live-courses/recently-added  (newest-first feed)
-router.get("/upcoming-batches",     cacheRoute(LC), listUpcomingLiveBatches);      // GET /api/v1/client/live-courses/upcoming-batches  (home carousel + category tab bar)
-router.get("/my",                   listMyLiveCourses);            // GET /api/v1/client/live-courses/my
-router.get("/my/schedule",          listMyScheduleByCategory);     // GET /api/v1/client/live-courses/my/schedule  (home-screen schedule list, grouped by category)
-router.get("/my/upcoming-sessions", listMyUpcomingSessions);       // GET /api/v1/client/live-courses/my/upcoming-sessions
-router.get("/upcoming-sessions",    cacheRoute(LC), listAllUpcomingSessions);      // GET /api/v1/client/live-courses/upcoming-sessions  (global discovery feed)
-router.get("/live-now-sessions",    listLiveNowSessions);          // GET /api/v1/client/live-courses/live-now-sessions  (currently-live across all courses)
-router.get("/:id",                  cacheRoute(LC), getLiveCourseForClient);       // GET /api/v1/client/live-courses/:id
-router.get("/:id/sessions",            cacheRoute(LC), listSessionsForCourseClient);       // GET /api/v1/client/live-courses/:id/sessions
-router.get("/:id/recordings",          listLiveCourseRecordings);          // GET /api/v1/client/live-courses/:id/recordings  (folder videos; ?summary=1 → folder rows + lectureCount, no lectures[])
-router.get("/:id/recordings/:folderId", getLiveCourseRecordingFolder);     // GET /api/v1/client/live-courses/:id/recordings/:folderId  (one folder's lectures, paginated by lecture)
-router.get("/:id/recordings/:folderId/children", listLiveCourseRecordingFolderChildren); // GET /api/v1/client/live-courses/:id/recordings/:folderId/children  (sub-folders, paginated by folder — mirrors /client/material-categories/:id/children)
-router.get("/:id/session-recordings",  listLiveCourseSessionRecordings);   // GET /api/v1/client/live-courses/:id/session-recordings  (raw Streamos recordings)
-router.get("/:id/schedule",                       getLiveCourseSchedule);   // GET /api/v1/client/live-courses/:id/schedule  (timetable + scheduleFolders)
-router.get("/:id/schedule-folders/:folderId",     getMyScheduleFolder);     // GET /api/v1/client/live-courses/:id/schedule-folders/:folderId  (folder detail screen)
-router.get("/:id/lecture/:videoId",    getLiveCourseLecture);              // GET /api/v1/client/live-courses/:id/lecture/:videoId
+router.get("/",                     cacheRoute(LC), listLiveCoursesForClient);
+router.get("/recently-added",       cacheRoute(LC), listRecentlyAddedLiveCourses); // newest-first feed
+router.get("/upcoming-batches",     cacheRoute(LC), listUpcomingLiveBatches); // home carousel + category tab bar
+router.get("/my",                   listMyLiveCourses);
+router.get("/my/schedule",          listMyScheduleByCategory); // home-screen schedule list, grouped by category
+router.get("/my/upcoming-sessions", listMyUpcomingSessions);
+router.get("/upcoming-sessions",    cacheRoute(LC), listAllUpcomingSessions); // global discovery feed
+router.get("/live-now-sessions",    listLiveNowSessions); // currently-live across all courses
+router.get("/:id",                  cacheRoute(LC), getLiveCourseForClient);
+router.get("/:id/sessions",            cacheRoute(LC), listSessionsForCourseClient);
+router.get("/:id/recordings",          listLiveCourseRecordings); // folder videos; ?summary=1 → folder rows + lectureCount, no lectures[]
+router.get("/:id/recordings/:folderId", getLiveCourseRecordingFolder); // one folder's lectures, paginated by lecture
+router.get("/:id/recordings/:folderId/children", listLiveCourseRecordingFolderChildren); // sub-folders, paginated by folder — mirrors /client/material-categories/:id/children
+router.get("/:id/session-recordings",  listLiveCourseSessionRecordings); // raw Streamos recordings
+router.get("/:id/schedule",                       getLiveCourseSchedule); // timetable + scheduleFolders
+router.get("/:id/schedule-folders/:folderId",     getMyScheduleFolder); // folder detail screen
+router.get("/:id/lecture/:videoId",    getLiveCourseLecture);
 
 export default router;

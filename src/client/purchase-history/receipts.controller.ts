@@ -1,3 +1,4 @@
+// Client purchase history: receipt and subscription tracking handlers.
 import { Request, Response } from "express";
 import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
@@ -29,9 +30,7 @@ const TS_ID_PREFIX = "ts_";
 const PCS_ID_PREFIX = "pcs_";
 const TSS_ID_PREFIX = "tss_";
 
-// Receipts return a uniform JSON shape so the frontend can render a receipt
-// screen and (later) generate a PDF locally. Server-side PDF can be swapped
-// in without changing the URL.
+// Uniform JSON receipt shape so the frontend renders it (and any PDF) locally.
 type ReceiptResponse = {
   kind: "book" | "course" | "ebook" | "package" | "live-course";
   receiptId: string;
@@ -40,14 +39,13 @@ type ReceiptResponse = {
   status: string;
   customer: { id: string };
   payment: {
-    /** Display-ready: "Bank", "Cash", "Razorpay", "Free", "Backend"… */
+    /** Display label: "Bank", "Cash", "Razorpay", "Free", "Backend"… */
     method: string;
     razorpayOrderId: string | null;
     razorpayPaymentId: string | null;
     /**
-     * Manual/bank settlement reference (`bank_transaction_id`, or
-     * `transaction_id` on the ebook/test-series tables). Null for gateway
-     * payments and for book orders, which have no such column. Additive.
+     * Manual/bank settlement reference (`bank_transaction_id`, or `transaction_id` on the
+     * ebook/test-series tables). Null for gateway payments and book orders.
      */
     transactionId: string | null;
   };
@@ -67,7 +65,6 @@ type ReceiptResponse = {
   extra?: Record<string, any>;
 };
 
-// GET /api/v1/client/purchase-history/books/:id/receipt
 export const getBookReceipt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -77,7 +74,6 @@ export const getBookReceipt = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("getBookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // SQL int id-space: SQL order ids are ints, not 24-hex.
     const oid = parsePhId(id);
     const cidNum = parsePhId(String(userId));
     if (oid == null) { logger.warn("getBookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
@@ -92,7 +88,7 @@ export const getBookReceipt = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/subscriptions/:id/receipt
+// Receipt for any subscription-history row; the id prefix selects the source.
 export const getCourseReceipt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -105,8 +101,7 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
     const cidNum = parsePhId(String(userId));
     if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // Route by id prefix (see the prefix table above). Order matters: check the longer
-    // "tss_"/"pcs_" prefixes before "ts_".
+    // Route by id prefix; check "tss_"/"pcs_" before "ts_".
     const isPcs = id.startsWith(PCS_ID_PREFIX);
     const isTss = id.startsWith(TSS_ID_PREFIX);
     const isLive = id.startsWith(LIVE_ID_PREFIX);
@@ -141,7 +136,6 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/ebooks/:id/receipt
 export const getEbookReceipt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -151,7 +145,6 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("getEbookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // SQL int id-space: SQL order ids are ints, not 24-hex.
     const oid = parsePhId(id);
     const cidNum = parsePhId(String(userId));
     if (oid == null) { logger.warn("getEbookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
@@ -166,12 +159,9 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/subscriptions/:id/tracking
-// Shipment "Track Order" view for with-material package/course + live-course
-// subscriptions. Same DTO + trackingUrl decoration as the Books tab
-// (GET client/book/orders/:id/tracking), keyed by the same prefixed subscription
-// `_id` the list emits ("lc_" = live, no prefix = package/course, "ts_" = never
-// material). Non-material / non-owned subs → 404 so the FE button stays hidden.
+// Shipment tracking for with-material package/course + live-course subscriptions, same
+// DTO + trackingUrl as GET client/book/orders/:id/tracking, keyed by the prefixed `_id`
+// the list emits. Non-material or non-owned subs → 404 so the FE hides the button.
 export const getSubscriptionTracking = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -193,11 +183,8 @@ export const getSubscriptionTracking = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/subscriptions/:id/tracking/live
-// Live AWB status from the Tirupati courier API (mirrors the Books tab live path).
-// Only meaningful for AWBs in the Tirupati range (>= INITIAL_Number); below-threshold
-// (our synthetic AWBs) return 422 with the static trackingUrl so the FE falls back
-// to the stored history.
+// Live AWB status from the Tirupati courier API. AWBs below the Tirupati range (our
+// synthetic ones) return 422 with the static trackingUrl so the FE shows stored history.
 export const getSubscriptionTrackingLive = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

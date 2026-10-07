@@ -1,10 +1,6 @@
-// src/utils/exportStorage.ts
-//
-// Spaces storage for async report exports. Unlike the rest of the bucket (which is
-// public-read CDN content), generated exports are written PRIVATE and handed to the
-// admin via a short-lived signed GET URL — the file may contain customer PII, so it
-// must not be publicly guessable. Mirrors the S3 client + bucket used everywhere else
-// (src/middlewares/upload.ts); adds the GET-presign the codebase didn't have yet.
+// Export storage: private Spaces upload, signed download and delete for report exports.
+// Report exports may contain customer PII, so unlike the rest of the (public-read)
+// bucket they are written PRIVATE and served via short-lived signed GET URLs.
 
 import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -12,15 +8,12 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { PassThrough } from "node:stream";
 import { s3Config, DO_BUCKET } from "../middlewares/upload";
 
-// How long a signed download URL stays valid. Signed fresh on every poll, so this
-// only bounds a single click's validity — short is fine.
+// Signed fresh on every poll, so this only bounds a single click.
 export const EXPORT_URL_TTL_SECONDS = Number(process.env.EXPORT_SIGNED_URL_TTL_SECONDS) || 15 * 60;
 
-// s3Config is an S3Client; a duplicate @aws-sdk/client-s3 in the dep tree surfaces two
-// incompatible S3Client type declarations, so cast at the call site (runtime unaffected).
+// A duplicate @aws-sdk/client-s3 in the dep tree yields two incompatible S3Client types.
 const client = s3Config as any;
 
-/** PUT a generated export (CSV/XLSX buffer) to Spaces as a PRIVATE object. */
 export const uploadExportObject = async (
   key: string,
   body: Buffer,
@@ -35,20 +28,15 @@ export const uploadExportObject = async (
       ContentType: contentType,
       ContentLength: body.length,
       ACL: "private",
-      // so the browser saves with a friendly name even via the raw signed URL
       ContentDisposition: `attachment; filename="${fileName.replace(/"/g, "")}"`,
     })
   );
 };
 
 /**
- * Streaming PRIVATE upload for large exports. Returns a `body` PassThrough to write
- * the file into and a `done` promise that resolves once Spaces has the whole object.
- *
- * Uses @aws-sdk/lib-storage `Upload`, which performs a MULTIPART upload off a stream:
- * only ~`partSize` bytes (5 MB) are buffered in memory at a time, so a lakhs-of-rows
- * CSV/XLSX never materializes in RAM. Unlike uploadExportObject (single PutObject with
- * a full Buffer + ContentLength), no total size needs to be known up front.
+ * Streaming multipart PRIVATE upload: write the file into `body`; `done` resolves
+ * once Spaces has the whole object. Large exports never sit fully in RAM and no
+ * total size is needed up front.
  */
 export const createExportUpload = (
   key: string,
@@ -66,7 +54,7 @@ export const createExportUpload = (
       ACL: "private",
       ContentDisposition: `attachment; filename="${fileName.replace(/"/g, "")}"`,
     },
-    // 5 MB parts, up to 4 in flight — bounds peak memory to ~20 MB per job.
+    // Bounds peak memory to ~20 MB per job.
     partSize: 5 * 1024 * 1024,
     queueSize: 4,
   });
@@ -74,7 +62,6 @@ export const createExportUpload = (
   return { body, done };
 };
 
-/** Short-lived signed GET URL for a private export object. */
 export const getSignedDownloadUrl = async (
   key: string,
   fileName: string,
@@ -90,7 +77,7 @@ export const getSignedDownloadUrl = async (
     { expiresIn }
   );
 
-/** Delete an export object (retention GC). Best-effort; never throws to the caller. */
+/** Retention GC; best-effort, never throws. */
 export const deleteExportObject = async (key: string): Promise<void> => {
   try {
     await client.send(new DeleteObjectCommand({ Bucket: DO_BUCKET, Key: key }));

@@ -1,3 +1,4 @@
+// Client wishlist: list, add, check and remove routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {

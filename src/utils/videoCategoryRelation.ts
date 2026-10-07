@@ -1,21 +1,10 @@
+// Video category hierarchy: parent/child reads from the relation DAG.
 /**
- * Video-category hierarchy resolver — sourced from the `ws_video_category_relation`
- * edge table (the parent→child DAG), NOT the legacy `ws_video_category.parent`
- * self-FK column.
- *
- * Background: video categories historically carried TWO hierarchy stores kept in
- * sync by the admin CRUD — the single-parent `parent` column and the many-to-many
- * `ws_video_category_relation` edge table. The relation table is the source of
- * truth (it is what the client catalog DAG walker `catalog-category-tree` and
- * package composition already trust). These helpers move every parent/child READ
- * onto that table.
- *
- * The relation table is a DAG (a category may sit under >1 parent). Where the API
- * exposes a SINGLE parent (picker `parentId`, admin tree, ancestor chains), we
- * collapse to a deterministic "primary" parent via {@link primaryParentMap} so the
- * response shape is byte-identical to the old single-parent column output. For
- * well-formed data (exactly one edge per child — how `vcSetParent` maintains it)
- * the primary parent equals the old column value.
+ * Video-category hierarchy reads come from the `ws_video_category_relation` DAG,
+ * not the `ws_video_category.parent` column (still written in sync by admin CRUD).
+ * Where the API exposes a single parent (picker `parentId`, admin tree, ancestor
+ * chains) the DAG is collapsed via {@link primaryParentMap}, which equals the
+ * column value for well-formed single-edge data.
  */
 import { prisma } from "../config/prisma";
 
@@ -26,10 +15,8 @@ export interface VcEdge {
 }
 
 /**
- * Collapse a set of DAG edges to ONE deterministic parent per child:
- * lowest edge `order`, then lowest `parent` id. Stable and — for a child with a
- * single edge — identical to the old `ws_video_category.parent` value.
- * Edges with a non-positive parent/child are ignored. Returns `child → parent`.
+ * `child → parent`, picking the lowest edge `order` then lowest parent id.
+ * Edges with a non-positive parent/child are ignored.
  */
 export function primaryParentMap(edges: VcEdge[]): Map<number, number> {
   const byChild = new Map<number, VcEdge[]>();
@@ -47,11 +34,9 @@ export function primaryParentMap(edges: VcEdge[]): Map<number, number> {
   return out;
 }
 
-/** Every parent→child edge (the whole DAG). Used for in-memory tree builds. */
 export const loadAllEdges = (): Promise<VcEdge[]> =>
   prisma.videoCategoryRelation.findMany({ select: { parent: true, child: true, order: true } });
 
-/** Edges whose `child` ∈ ids (for resolving those children's parents). */
 export const loadEdgesByChild = (ids: number[]): Promise<VcEdge[]> =>
   ids.length
     ? prisma.videoCategoryRelation.findMany({
@@ -60,7 +45,7 @@ export const loadEdgesByChild = (ids: number[]): Promise<VcEdge[]> =>
       })
     : Promise.resolve([]);
 
-/** Distinct category ids that are the parent of ≥1 edge (drives `has_children`). */
+/** Drives `has_children`. */
 export const parentIdsWithChildren = async (): Promise<Set<number>> => {
   const rows = await prisma.videoCategoryRelation.findMany({
     where: { parent: { gt: 0 } },
@@ -89,6 +74,5 @@ export const childIdsOf = async (parentId: number): Promise<number[]> => {
   return out;
 };
 
-/** Batched `child → primary parent` map for the given child ids. */
 export const primaryParentsOf = async (ids: number[]): Promise<Map<number, number>> =>
   primaryParentMap(await loadEdgesByChild(ids));

@@ -1,3 +1,4 @@
+// Testimonials: row to DTO mapping (response shape is frozen).
 import type { Testimonial } from "@prisma/client";
 import type {
   TestimonialCreateInput,
@@ -5,7 +6,7 @@ import type {
   TestimonialUpdateInput,
 } from "./testimonial.types";
 
-/** MySQL row → API DTO. Bridges the legacy `discription` typo → `description`. */
+/** Maps the legacy misspelled `discription` column to `description`. */
 export const toTestimonialDto = (row: Testimonial): TestimonialDto => ({
   _id: String(row.id),
   name: row.name,

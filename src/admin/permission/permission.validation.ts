@@ -1,3 +1,4 @@
+// Admin permissions: guards and Zod request schemas.
 import { z } from "zod";
 
 export const GUARDS = ["web", "educator", "promoter"] as const;
@@ -25,10 +26,8 @@ export const listQuerySchema = z.object({
   category_id: objectIdSchema.optional(),
   search: z.string().trim().optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
-  // Permissions are a bounded, code-defined catalog (~250 keys today) that the
-  // role-assignment UI needs to fetch whole per guard, so the cap is higher than
-  // the usual 200 list ceiling. (For the full registry grouped by module, prefer
-  // GET /admin/permissions/catalog.)
+  // Bounded catalog the role-assignment UI fetches whole per guard, so the cap
+  // is higher than the usual 200 list ceiling.
   per_page: z.coerce.number().int().min(1).max(1000).optional().default(20),
   sort_by: z.enum(["id", "name", "created_at", "updated_at"]).optional().default("created_at"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),

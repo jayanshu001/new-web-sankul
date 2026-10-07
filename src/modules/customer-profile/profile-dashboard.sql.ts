@@ -1,33 +1,15 @@
-/**
- * Profile-dashboard counts — SQL helpers (the subscriptions + pastExams + saved-
- * addresses counts that were still Mongo in profile/dashboard.controller). Gated
- * with the `customer-profile` flag (already ON). folder/ebook/notification counts
- * are already SQL-branched in the controller; this completes the remaining ones.
- *
- * ws_package_course_subscription has no payment_status col → status=true gate.
- *
- * NOTE: an earlier version of this header claimed ws_exam_result has no
- * inProgress/submittedAt columns and that a result row IS a completed attempt.
- * That is wrong — the model maps `qresult_in_progress` / `qresult_submitted_at`,
- * and `pastExamsCount` now gates on them.
- */
+// Customer profile dashboard: badge counts for addresses, subscriptions and past exams.
 import { prisma } from "../../config/prisma";
 
-
-/** Active saved addresses for a customer. */
 export const savedAddressCount = (customerId: number) =>
   prisma.customerAddress.count({ where: { userId: customerId, status: true } });
 
 /**
- * Deduped active-subscription counts matching the My Subscriptions screen:
- * course (course+package+live-course, deduped by target id), test_series, ebook.
- *
- * The `course` tab of /client/my-subscriptions merges recorded course/package
- * cards with LIVE-course cards, so this count must span the same four tables or
- * the profile badge silently under-reports every live-course purchase.
- * Live-course entitlement additionally requires payment_status = "verified"
- * (the row is created at ORDER time as pending) and may be LIFETIME (end_at
- * NULL) — mirrors client-my-subscriptions.repository.activeLiveCourseSubs.
+ * Deduped active-subscription counts matching the My Subscriptions screen. Its
+ * `course` tab merges course/package cards with live-course cards, so this must
+ * span all four tables or the badge under-reports live-course purchases. The
+ * package table has no payment-status column (`status` is the gate); live-course
+ * entitlement may be lifetime (end_at NULL).
  */
 export const countActiveSubscriptions = async (customerId: number, now: Date) => {
   const [cpRows, lcRows, tsRows, ebRows] = await Promise.all([
@@ -38,9 +20,8 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
     prisma.liveCourseSubscription.findMany({
       where: {
         customerId,
-        // `status` alone is the entitlement gate now: since 2026-08-25 a live-course
-        // subscription row exists only for a paid order (payment moved to
-        // ws_live_course_order), and the backfill deactivated legacy unverified rows.
+        // A live-course subscription row exists only for a paid order (payment lives
+        // on ws_live_course_order), so `status` is the entitlement gate.
         status: true,
         OR: [{ endAt: null }, { endAt: { gt: now } }],
       },
@@ -61,7 +42,6 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
     for (const r of rows) seen.add(keyOf(r));
     return seen.size;
   };
-  // course tab = recorded course/package + live course, deduped per target.
   const course =
     dedup(cpRows, (s) =>
       s.courseId ? `c:${s.courseId}` : s.packageId ? `p:${s.packageId}` : `s:${s.id}`
@@ -72,18 +52,11 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
 };
 
 /**
- * Past exams attempted by this customer — DAILY **and** SUBJECT combined.
+ * Finished daily + subject attempts. A result row is not automatically a
+ * completed attempt (rows exist with `submittedAt = NULL`).
  *
- * "Past" means a finished attempt: `inProgress = false` AND `submittedAt` set.
- * A result row is NOT automatically a completed attempt (rows exist with
- * `submittedAt = NULL`), contrary to the stale note this file used to carry —
- * `ExamResult` does map `qresult_in_progress` / `qresult_submitted_at`.
- *
- * The type filter is spelled out as `in [daily, subject]` rather than dropped
- * entirely, so that (a) result rows whose exam was deleted don't silently count
- * as "past exams" the UI can't name, and (b) if a third ExamType is ever added
- * someone has to consciously decide whether it belongs in this badge.
- * `ExamType` is currently exactly { daily, subject }.
+ * The type filter is explicit so results of deleted exams don't count, and a
+ * future ExamType must be consciously added to this badge.
  */
 export const pastExamsCount = async (customerId: number): Promise<number> => {
   return prisma.examResult.count({

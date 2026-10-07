@@ -1,3 +1,4 @@
+// App update settings: Prisma queries for the singleton row.
 import { prisma } from "../../config/prisma";
 import type { AppUpdateUpsertInput } from "./app-update.types";
 import { toPrismaAppUpdateWrite } from "./app-update.transformer";

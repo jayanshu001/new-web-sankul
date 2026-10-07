@@ -1,3 +1,4 @@
+// Testimonials: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import type {
@@ -27,11 +28,10 @@ const buildTestimonialWhere = (opts: TestimonialListOpts): Record<string, unknow
   buildPrismaSearch(opts.search, ["name", "title", "discription"]) ?? {};
 
 export const testimonialRepository = {
-  /** Client + admin list. Legacy API sorts by rating desc. */
+  /** Client + admin list, rating desc. */
   findMany: () =>
     prisma.testimonial.findMany({ orderBy: { rating: "desc" } }),
 
-  /** Admin paginated + search list. */
   findPage: (opts: TestimonialListOpts) =>
     prisma.testimonial.findMany({
       where: buildTestimonialWhere(opts),

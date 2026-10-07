@@ -1,3 +1,4 @@
+// Admin rank predictor: answer-key list, publish and status handlers.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { HttpError } from "../../middlewares/errorHandler";
@@ -30,6 +31,7 @@ const markedAnswersOf = (extraction: OcrExtractionResult): AnswerKeyMap =>
     Object.entries(extraction.answers).filter(([, option]) => option !== null)
   ) as AnswerKeyMap;
 
+// OCR the answer-key PDF; prefer its embedded key, else the marked answers.
 const keysFromPdf = async (file: Express.Multer.File): Promise<AnswerKeyMap> => {
   let extraction: OcrExtractionResult;
   try {
@@ -51,6 +53,7 @@ export const listAnswerKeys = asyncHandler(async (req: Request, res: Response) =
   return success(res, { answer_keys: keys.map(toRankAnswerKeyAdminDto) });
 });
 
+// Publish a new key version (PDF or pasted) and rescore existing submissions.
 export const publishAnswerKey = asyncHandler(async (req: Request, res: Response) => {
   const examId = bigIntParam(req, "examId");
   const body = answerKeyUploadSchema.parse(req.body);
@@ -88,6 +91,7 @@ export const publishAnswerKey = asyncHandler(async (req: Request, res: Response)
   );
 });
 
+// Activate/deactivate a key version; rescores affected submissions.
 export const setAnswerKeyStatus = asyncHandler(async (req: Request, res: Response) => {
   const { key, rescored, skipped } = await rankPredictorService.setAnswerKeyActive(
     bigIntParam(req, "id"),

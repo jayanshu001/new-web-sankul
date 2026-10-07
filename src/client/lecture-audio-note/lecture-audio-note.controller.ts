@@ -1,3 +1,4 @@
+// Client lecture audio notes: HTTP handlers for per-user audio notes on a lecture.
 import { Request, Response } from "express";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -13,14 +14,12 @@ import { buildLectureRef } from "../learning/lectureRef";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as lnSql from "../../modules/client-lecture-note/client-lecture-note.service";
 
-// POST /api/v1/client/lecture-audio-notes
 // multipart/form-data: field `audio` (file) + the body fields.
 export const createAudioNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
   logger.info("createAudioNote invoked", { traceId, path: req.originalUrl, userId });
 
-  // multer-s3 attaches storage metadata on the file object.
   const file = (req.file ?? undefined) as
     | (Express.Multer.File & { location?: string; key?: string; size?: number; mimetype?: string })
     | undefined;
@@ -69,8 +68,7 @@ export const createAudioNote = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/lecture-audio-notes?lectureType=recorded&videoId=...
-//                                        | lectureType=live&liveSessionId=...
+// Lists the user's audio notes on one lecture, plus its lecture ref and resume card.
 export const listAudioNotes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -108,8 +106,7 @@ export const listAudioNotes = async (req: Request, res: Response) => {
       refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
     }
     const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
-    // Live-course recordings: surface the owning liveCourseId on every note so
-    // the FE opens the live player straight from the audio-notes list.
+    // Surface the owning liveCourseId so the FE opens the live player directly.
     const notesOut = lnSql.enrichNotesWithLiveCourse(notes, (lecture as any)?.liveCourseId ?? null);
     return success(res, { notes: notesOut, lecture, resumeNext, pagination: buildPagination(total, page, limit) }, "Audio notes fetched.", 200);
   } catch (err) {
@@ -118,9 +115,6 @@ export const listAudioNotes = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/client/lecture-audio-notes/:id
-// Only metadata is editable — replacing the audio file means deleting and
-// re-uploading.
 export const updateAudioNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -154,7 +148,7 @@ export const updateAudioNote = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/lecture-audio-notes/:id
+// Deletes the note, then best-effort removes its audio file from storage.
 export const deleteAudioNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

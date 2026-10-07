@@ -1,27 +1,19 @@
+// Promoter auth: Prisma queries.
 import { prisma } from "../../config/prisma";
 
-/**
- * Prisma persistence for the promoter-auth MySQL branch.
- * Entity: `ws_promoter`; tokens: `ws_promoter_access_tokens`.
- *
- * Note: ws_promoter has NO last_login_date / last_login_ip columns (the Mongo
- * model wrote them; SQL only has last_seen_at) → login touches last_seen_at.
- */
 export const promoterAuthRepository = {
-  /** Active, non-deleted promoter by email (login lookup). */
   findActiveByEmail: (email: string) =>
     prisma.promoter.findFirst({
       where: { email: email.toLowerCase().trim(), status: true, is_delete: false },
     }),
 
-  /** Active promoter by id (refresh). */
   findActiveById: (id: number) =>
     prisma.promoter.findFirst({ where: { id, status: true, is_delete: false } }),
 
-  /** Promoter by id regardless of status (profile / change-password). */
+  /** Regardless of status (profile / change-password). */
   findById: (id: number) => prisma.promoter.findUnique({ where: { id } }),
 
-  /** Record login activity (no last_login_* columns in SQL → use last_seen_at). */
+  /** ws_promoter has no last_login_* columns, so login touches last_seen_at. */
   touchLogin: (id: number) =>
     prisma.promoter.update({
       where: { id },
@@ -48,7 +40,6 @@ export const promoterAuthRepository = {
       },
     }),
 
-  // ─── Tokens (ws_promoter_access_tokens) ──────────────────────────────────
   createToken: (input: {
     promoterId: number;
     token: string;

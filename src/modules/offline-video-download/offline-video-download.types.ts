@@ -1,10 +1,8 @@
+// Offline downloads: scope kinds, input and access snapshot types.
 /**
- * Product scopes a download can be registered under.
- *
- * Video scopes are the three that have a curriculum a lecture can live inside —
- * and are exactly the three `reachableCategoryIds` accepts, which is why they get
- * their own type. `ebook` is not a container: the ebook IS the content, so it
- * carries no membership check and no GET expansion.
+ * Video scopes are the containers a lecture can live inside (exactly what
+ * `reachableCategoryIds` accepts). `ebook` is the content itself: no membership
+ * check and no GET expansion.
  */
 export type VideoScopeKind = "course" | "package" | "liveCourse";
 export type DownloadScopeKind = VideoScopeKind | "ebook";
@@ -15,10 +13,8 @@ export const DOWNLOAD_SCOPE_KINDS: DownloadScopeKind[] = [...VIDEO_SCOPE_KINDS, 
 export const isVideoScopeKind = (k: DownloadScopeKind): k is VideoScopeKind => k !== "ebook";
 
 /**
- * POST /client/subscriptions/downloads — validated body, ids already numeric.
- * `contentId` is the request's `videoId`: a lecture id for video scopes, and the
- * ebook id (equal to `scopeId`) for `ebook`. The request field keeps the name
- * `videoId` for app compatibility.
+ * `contentId` is the request's `videoId`: a lecture id for video scopes, the ebook
+ * id (equal to `scopeId`) for `ebook`. The request field keeps `videoId` for app compatibility.
  */
 export interface RegisterDownloadInput {
   customerId: number;
@@ -46,10 +42,7 @@ export interface SubscriptionAccessItem {
   videoIds: string[];
 }
 
-/**
- * Why a registration was refused. The controller maps these to status codes;
- * keeping them as a union means the service never imports Express.
- */
+/** Mapped to status codes by the controller, so the service never imports Express. */
 export type RegisterFailure =
   | { ok: false; reason: "content_not_found" }
   | { ok: false; reason: "product_not_found" }

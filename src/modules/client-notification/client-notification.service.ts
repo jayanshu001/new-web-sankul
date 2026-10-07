@@ -1,21 +1,9 @@
+// Client notifications: feed, unread badge, mark-read and dismiss logic.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { extractNotificationRouting } from "../../utils/notificationTarget";
 
-/**
- * Client-facing notification reads on SQL (Wave 7 — net-new ws_notification).
- * Visibility filter: (customer_id = me OR broadcast = true). Unread badge uses
- * the SAME filter (so broadcasts aren't excluded). customer is the SQL int at
- * runtime (customer-auth).
- *
- * ⚠ FLAG-OFF (code-complete, not enabled): the notification WRITE path is a Mongo
- * subsystem — admin dispatcher + scheduler (BullMQ job keyed by the Mongo _id) +
- * FCM push fan-out + per-recipient insertMany keyed by Mongo Customer ObjectIds
- * (resolveAudience). Flipping client reads to SQL while that write path stays Mongo
- * = stale feed. Enable only once the admin notification write subsystem
- * (dispatcher/scheduler/audience) is migrated to SQL Customer ids. Reads + the
- * read-state writes (markRead/markAll) here are correct + verifiable in isolation.
- */
+/** The unread badge uses the same visibility filter as the feed, so broadcasts are counted. */
 
 export const parseNotifId = (id: string): number | null => {
   const n = Number(id);
@@ -23,11 +11,8 @@ export const parseNotifId = (id: string): number | null => {
 };
 
 /**
- * Per-customer notification context, resolved once per request.
- *
- * `signupAt` bounds the broadcast feed and `readBefore` is the read watermark;
- * both come off ws_customer. A missing customer row yields nulls, which degrade to
- * the old permissive behaviour rather than an empty feed.
+ * `signupAt` bounds the broadcast feed and `readBefore` is the read watermark. A missing
+ * customer row yields nulls, which degrade to a permissive feed rather than an empty one.
  */
 const contextFor = async (customerId: number) => {
   const c = await prisma.customer.findUnique({
@@ -38,33 +23,14 @@ const contextFor = async (customerId: number) => {
 };
 
 /**
- * Visibility: own notifications always, plus broadcasts — but ONLY those sent at or
- * after the customer signed up.
+ * Own notifications, plus broadcasts sent at or after signup (so a new or re-registered
+ * account doesn't inherit the entire broadcast history). `signupAt` null → no bound: losing
+ * a whole feed is worse than showing a little extra.
  *
- * The cut-off is the fix for "a new account sees every notification ever sent": the
- * filter used to be a bare `OR broadcast = true` with no date bound, so a freshly
- * created account (including one re-registered after an account deletion) inherited
- * the entire broadcast history — 63 items reaching back months, on staging.
- *
- * It is naturally a no-op for existing users: a broadcast sent after they joined still
- * passes. Only history that predates the account disappears.
- *
- * `signupAt` null (legacy rows with no created_at) → no bound, i.e. the old behaviour.
- * Losing a customer's whole feed is a worse failure than showing a little extra.
- */
-/**
- * Only "sent" rows are visible to customers — "scheduled" rows are written to
- * ws_notification at schedule-create time (so the BullMQ job can be rehydrated
- * on boot) and only actually go out once the scheduler worker flips them to
- * "sent" at `scheduledAt`. Without this, a scheduled/not-yet-fired broadcast
- * already matched the OR below and appeared in every customer's feed the
- * moment an admin scheduled it, well before its send time.
- *
- * The signup cutoff is bounded by `sentAt`, not `createdAt`: `createdAt` on a
- * scheduled row is when the admin composed it, which can predate signup even
- * though the row only actually goes out (and only becomes visible, per the
- * `status: "sent"` filter above) later. Every row this filter can match has
- * `status: "sent"`, so `sentAt` is always populated.
+ * Only "sent" rows are visible: "scheduled" rows exist from schedule-create time (so the
+ * BullMQ job can be rehydrated on boot) and must not appear before their send time.
+ * The cutoff uses `sentAt`, not `createdAt` (composition time, which can predate signup);
+ * every "sent" row has `sentAt`.
  */
 const visWhere = (customerId: number, signupAt: Date | null) => ({
   status: "sent",
@@ -77,12 +43,8 @@ const visWhere = (customerId: number, signupAt: Date | null) => ({
 });
 
 /**
- * Ids this customer has explicitly marked read.
- *
- * Read state deliberately does NOT live on ws_notification.is_read any more: that
- * column is on the SHARED broadcast row, so `markRead` marked a broadcast read for
- * every customer on the platform (60 of 63 broadcasts were already globally read
- * before this changed). Mirrors how dismissals have always worked.
+ * Read state is per-customer, never ws_notification.is_read: that column is on the shared
+ * broadcast row, so writing it would mark a broadcast read for every customer.
  */
 const readIdsFor = async (customerId: number): Promise<Set<number>> => {
   const rows = await prisma.notificationRead.findMany({
@@ -92,12 +54,7 @@ const readIdsFor = async (customerId: number): Promise<Set<number>> => {
   return new Set(rows.map((r) => r.notificationId));
 };
 
-/**
- * Read = an explicit mark, or sent at/before the customer's mark-all watermark.
- * Keyed off `sentAt` (not `createdAt`) for the same reason as the signup cutoff
- * above: a scheduled row's `createdAt` is composition time, not the time it
- * actually reached the feed.
- */
+/** Read = an explicit mark, or sent at/before the mark-all watermark (`sentAt`, as above). */
 const isReadFor = (
   n: { id: number; sentAt: Date | null },
   readIds: Set<number>,
@@ -105,7 +62,6 @@ const isReadFor = (
 ): boolean =>
   readIds.has(n.id) || (!!readBefore && !!n.sentAt && n.sentAt <= readBefore);
 
-/** Prisma `where` for the unread half of the feed — the watermark + explicit marks. */
 const unreadWhere = (readIds: Set<number>, readBefore: Date | null) => {
   const clauses: any[] = [];
   if (readBefore) clauses.push({ OR: [{ sentAt: null }, { sentAt: { gt: readBefore } }] });
@@ -113,9 +69,7 @@ const unreadWhere = (readIds: Set<number>, readBefore: Date | null) => {
   return clauses;
 };
 
-// Ids the customer has dismissed ("deleted from my feed"). Excluded from the feed
-// list + unread badge. Broadcasts are shared rows, so deletion is per-customer here
-// rather than a hard delete of the source notification.
+// Broadcasts are shared rows, so "delete" is a per-customer dismissal, excluded from feed + badge.
 const dismissedIdsFor = async (customerId: number): Promise<number[]> => {
   const rows = await prisma.notificationDismissal.findMany({
     where: { customerId },
@@ -124,25 +78,12 @@ const dismissedIdsFor = async (customerId: number): Promise<number[]> => {
   return rows.map((r) => r.notificationId);
 };
 
-// Routing fields (viewType / deepLink / clickAction / screen / params / live ids)
-// are spread in LAST and only when the row actually carries them, so a plain
-// announcement has no routing keys at all — the app's tap router checks presence,
-// and a `null` placeholder would read as "this has a destination".
-//
-// `deepLink` is intentionally spread over the explicit `deepLink: n.deepLink`
-// below it: extract() already prefers the column and falls back to data.deepLink,
-// so the spread is the more complete value, never a weaker one.
-// `isRead`/`readAt` are supplied by the CALLER (per-customer), never read off the row —
-// n.isRead / n.readAt on a broadcast are the shared, cross-user values this change
-// exists to stop trusting. Same key + type on the wire either way.
-//
-// `createdAt` on the wire is `sentAt` (falling back to `createdAt` only for legacy
-// rows with no `sentAt`) — same key, same type, response shape untouched. Every
-// row reaching this DTO has `status: "sent"` (visWhere), but for a notification
-// that was scheduled, the row's `created_at` column is when the admin composed
-// it, which can be hours before it actually went out. Sending that would put a
-// 6:15pm-scheduled notification in the feed timestamped as if it arrived at
-// (say) 10am. `sentAt` is the moment it actually reached the customer.
+// Routing fields are spread in last and only when present: the app's tap router checks
+// presence, so a `null` placeholder would read as "this has a destination". The spread
+// `deepLink` deliberately overrides the explicit one (it falls back to data.deepLink).
+// `isRead`/`readAt` come from the caller (per-customer), never the shared row.
+// `createdAt` on the wire is `sentAt` (fallback `createdAt` for legacy rows): a scheduled
+// row's created_at is composition time, hours before it actually went out.
 const dto = (n: any, read: { isRead: boolean; readAt: Date | null } = { isRead: false, readAt: null }) => ({
   _id: String(n.id), customerId: n.customerId != null ? String(n.customerId) : null,
   title: n.title, titleHtml: n.titleHtml ?? null, body: n.body, bodyHtml: n.bodyHtml ?? null,
@@ -163,20 +104,16 @@ export const listNotifications = async (
     readIdsFor(customerId),
     contextFor(customerId),
   ]);
-  // Dismissed ("deleted") notifications drop out of the feed, its total, AND the
-  // unread badge — a deleted item must not keep the badge lit.
+  // Dismissed rows drop out of the feed, its total, and the unread badge.
   const notDismissed = dismissed.length ? { id: { notIn: dismissed } } : {};
   const base = { AND: [visWhere(customerId, ctx.signupAt), notDismissed] };
-  // `search` narrows the paginated list + its total by title/body; the unread
-  // badge stays over the FULL visible set (base) so it remains a true count.
+  // `search` narrows the list + total only; the unread badge stays over the full visible set.
   const searchFilter = buildPrismaSearch(search, ["title", "body"]);
   const where: any = searchFilter
     ? { AND: [...base.AND, ...searchFilter.AND] }
     : base;
   const [rows, total, unread] = await Promise.all([
-    // Ordered by sentAt (when it actually reached the feed), not createdAt
-    // (when it was composed) — see the dto() comment above. createdAt is a
-    // tiebreak for legacy rows with no sentAt.
+    // sentAt, not createdAt (see dto()); createdAt breaks ties for legacy rows.
     prisma.notification.findMany({
       where,
       orderBy: [{ sentAt: "desc" }, { createdAt: "desc" }],
@@ -197,8 +134,7 @@ export const listNotifications = async (
     data: rows.map((n) =>
       dto(n, {
         isRead: isReadFor(n, readIds, ctx.readBefore),
-        // A watermark-covered row has no per-row mark, so it has no exact readAt —
-        // the watermark itself is the best available answer.
+        // A watermark-covered row has no exact readAt; the watermark is the best answer.
         readAt: readAtById.get(n.id) ?? (isReadFor(n, readIds, ctx.readBefore) ? ctx.readBefore : null),
       })
     ),
@@ -222,15 +158,11 @@ export const unreadCount = async (customerId: number): Promise<number> => {
 };
 
 /**
- * Mark ONE notification read for THIS customer.
- *
- * Writes a per-customer row instead of UPDATEing ws_notification — the old code did
- * the latter, which on a broadcast marked it read for the entire user base. Idempotent
- * via the (customer_id, notification_id) unique key.
+ * Writes a per-customer row, never UPDATEs ws_notification (a broadcast would be marked read
+ * for every customer). Idempotent via the (customer_id, notification_id) unique key.
  */
 export const markRead = async (customerId: number, id: number): Promise<any | null> => {
   const ctx = await contextFor(customerId);
-  // visibility: own row, or a broadcast sent since signup
   const n = await prisma.notification.findFirst({ where: { AND: [{ id }, visWhere(customerId, ctx.signupAt)] } });
   if (!n) return null;
   const readAt = new Date();
@@ -243,17 +175,8 @@ export const markRead = async (customerId: number, id: number): Promise<any | nu
 };
 
 /**
- * Mark EVERYTHING read for this customer by moving the watermark to now — O(1),
- * whatever the feed size.
- *
- * The old version updated `{ customerId, isRead: false }`, so it silently skipped
- * broadcasts (they have customer_id NULL) — the exact opposite of markRead, which hit
- * every customer. Now both agree.
- *
- * Per-row marks at or before the new watermark become redundant, so they are pruned;
- * that is what stops ws_notification_read growing without bound.
- *
- * Returns the number of notifications this actually cleared, for the API's count.
+ * Moves the watermark to now (O(1) whatever the feed size). Per-row marks at or before it
+ * are pruned, which keeps ws_notification_read bounded. Returns how many were cleared.
  */
 export const markAllRead = async (customerId: number): Promise<number> => {
   const [dismissed, readIds, ctx] = await Promise.all([
@@ -278,12 +201,9 @@ export const markAllRead = async (customerId: number): Promise<number> => {
   return cleared;
 };
 
-// ── Delete ("dismiss from my feed") ────────────────────────────────────────────
-// A delete never touches ws_notification; it records a per-customer dismissal so
-// broadcast rows survive for other recipients. Idempotent (skipDuplicates / upsert).
-
-// Multi (also serves single = a one-element array). Only ids visible to the customer
-// are dismissed; returns rows newly inserted.
+// Deletes never touch ws_notification; they record idempotent per-customer dismissals so
+// broadcast rows survive for other recipients. Only ids visible to the customer are
+// dismissed; returns rows newly inserted.
 export const deleteMany = async (customerId: number, ids: number[]): Promise<number> => {
   const ctx = await contextFor(customerId);
   const visible = await prisma.notification.findMany({
@@ -299,7 +219,6 @@ export const deleteMany = async (customerId: number, ids: number[]): Promise<num
   return r.count;
 };
 
-// All currently-visible, not-yet-dismissed notifications for the customer.
 export const deleteAll = async (customerId: number): Promise<number> => {
   const [dismissedIds, ctx] = await Promise.all([dismissedIdsFor(customerId), contextFor(customerId)]);
   const dismissed = new Set(dismissedIds);

@@ -1,27 +1,13 @@
 /**
- * Admin test-series reads/CRUD — SQL (Prisma) branch.
- *
- * Gated behind `isMysqlModule("admin-testseries")`. Mirrors the Mongo handlers
- * in src/admin/testSeries/testSeries.controller.ts one-for-one, holding response
- * shapes + status codes identical. The controller branches each handler on
- * `isAdminTestSeriesMysql()` BEFORE its 24-hex ObjectId guard, parses ids via
- * `parseAtsId`, and keeps the Mongo path intact as a fallback.
+ * Admin test series: series, papers, plans, subscriptions and orders. Response shapes
+ * and status codes are frozen.
  *
  * Conventions (same as client-testseries.service.ts):
- *   - `_id` is the SQL int stringified.
+ *   - `_id` is the int id stringified.
  *   - Decimal columns surfaced via `num`.
- *   - `examCategoryIds` is a JSON int[] on ws_test_series; on read it is
- *     populated to `[{ _id, name }]` (Mongo `.populate` parity); on write the
- *     legacy single `examCategoryId` int column is kept in sync (first id).
- *
- * Net-new column gap: none required — every field the Mongo handlers touch has
- * a column. `examCategoryIds` (Json), `examCategoryId` (Int), and the
- * subscription `paymentType` String column all exist.
- *
- * Drift / Mongo-only that stays on Mongo (controller keeps its Mongo branch):
- *   - listSubscriptions / listOrders customer populate: SQL surfaces
- *     `{ _id, name, phone, email }` from the Customer table where available.
- *   - TestSeriesOrder is read-only here (listOrders).
+ *   - `examCategoryIds` is a JSON int[] on ws_test_series, populated to
+ *     `[{ _id, name }]` on read; on write the legacy single `examCategoryId` column
+ *     is kept in sync (first id).
  */
 import ExcelJS from "exceljs";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
@@ -45,8 +31,6 @@ export const parseAtsId = (id: string): number | null => {
 };
 
 const num = (v: any): number => (v == null ? 0 : Number(v.toString?.() ?? v) || 0);
-
-// ── examCategoryIds JSON helpers (read populate) ───────────────────────────────
 
 const collectCatIds = (rawIdLists: any[]): number[] => {
   const ids = new Set<number>();
@@ -107,8 +91,6 @@ const resolveCategoryWrite = (
   return {};
 };
 
-// ── DTOs (shape parity with Mongo lean docs) ──────────────────────────────────
-
 const seriesDto = (
   s: any,
   catMap: Map<number, { _id: string; name: string | null }>
@@ -150,16 +132,14 @@ const priceDto = (p: any) => ({
   originalPrice: p.originalPrice != null ? num(p.originalPrice) : null,
   isDefault: p.isDefault,
   status: p.status,
-  // "Most Popular" badge — computed, read-only. Parity with the course/package/
-  // ebook/live-course plan DTOs. No manual override exists (removed 2026-08-05 —
-  // see docs/admin/MOST_POPULAR_PLAN_PIN.md).
+  // Computed, read-only; parity with the course/package/ebook/live-course plan DTOs.
   isMostPopular: p.isMostPopular ?? false,
   createdAt: p.createdAt ?? null,
   updatedAt: p.updatedAt ?? null,
 });
 
-// Paper-link DTO. `examId` / `contentCategoryId` are objects when populated
-// (Mongo `.populate` parity), else the bare id string.
+// Paper-link DTO. `examId` / `contentCategoryId` are objects when populated, else the
+// bare id string.
 const paperDto = (
   l: any,
   examMap?: Map<number, any>,
@@ -196,7 +176,7 @@ const subscriptionDto = (s: any) => ({
   customerId: s.customerId != null ? String(s.customerId) : null,
   testSeriesId: s.testSeriesId != null ? String(s.testSeriesId) : null,
   planId: s.planId != null ? String(s.planId) : null,
-  // WIRE CONTRACT: the DTO key stays `price`; only the column moved to `amount`.
+  // Wire contract: the DTO key stays `price`; the column is `amount`.
   price: num(s.amount),
   startAt: s.startAt ?? null,
   endAt: s.endAt ?? null,
@@ -206,8 +186,6 @@ const subscriptionDto = (s: any) => ({
   createdAt: s.createdAt ?? null,
   updatedAt: s.updatedAt ?? null,
 });
-
-// ── Series CRUD ───────────────────────────────────────────────────────────────
 
 const defaultPlanPreview = (p: any) => ({
   _id: String(p.id),
@@ -227,6 +205,7 @@ export type ListSeriesOpts = {
   limit: number;
 };
 
+// Paged list with each series' default plan; the exam-category filter runs in memory.
 export const listTestSeries = async (opts: ListSeriesOpts) => {
   const where: any = {};
   const search = buildPrismaSearch(opts.search, ["title"]);
@@ -236,8 +215,8 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
   const [rows, total] = await Promise.all([
     prisma.testSeries.findMany({
       where,
-      // Recently-added on top (utils/listOrdering); id (autoincrement) is a
-      // deterministic tiebreaker for null/duplicate createdAt (migrated rows).
+      // Recently-added on top (utils/listOrdering); id breaks ties for null/duplicate
+      // createdAt on migrated rows.
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
@@ -245,9 +224,8 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
     prisma.testSeries.count({ where }),
   ]);
 
-  // Filter on examCategory membership (legacy single OR new array) in-memory:
-  // the array lives in a JSON column, which can't be queried portably. The
-  // controller's Mongo path matched against both fields.
+  // Filter on examCategory membership (legacy single column OR the JSON array) in
+  // memory: the array lives in a JSON column, which can't be queried portably.
   let filtered = rows;
   if (opts.catIds.length) {
     const want = new Set(opts.catIds);
@@ -280,7 +258,7 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
     };
   });
 
-  // total reflects the catId filter when present (matches Mongo countDocuments).
+  // total reflects the catId filter when present.
   return { data, total: opts.catIds.length ? filtered.length : total };
 };
 
@@ -356,12 +334,11 @@ const mapSeriesWrite = (data: SeriesWrite): any => {
 
 export const createTestSeries = async (data: SeriesWrite, now: Date = new Date()) => {
   const set = mapSeriesWrite(data);
-  // Empty-string thumbnail means "no thumbnail" — drop it (Mongo parity).
+  // Empty-string thumbnail means "no thumbnail".
   if (data.thumbnail !== undefined && data.thumbnail !== "") set.thumbnail = data.thumbnail;
-  // created_at/updated_at have no DB default and no ON UPDATE on this introspected
-  // legacy table, and the model declares neither @default(now()) nor @updatedAt — so
-  // unless set here the row reads back null and is invisible to created_at-windowed
-  // reads (admin dashboard) + sorts unpredictably. Same hazard as ws_test_series_order.
+  // created_at/updated_at have no DB default, no ON UPDATE, and no @default/@updatedAt
+  // in the model — unless set here the row reads back null, is invisible to
+  // created_at-windowed reads (admin dashboard) and sorts unpredictably.
   set.createdAt = now;
   set.updatedAt = now;
   // No explicit order → previous row + 1 (see utils/listOrdering).
@@ -420,8 +397,6 @@ export const deleteTestSeries = async (id: number): Promise<boolean> => {
   await prisma.testSeries.delete({ where: { id } });
   return true;
 };
-
-// ── Content categories ────────────────────────────────────────────────────────
 
 export const seriesExists = async (id: number): Promise<boolean> =>
   !!(await prisma.testSeries.findUnique({ where: { id }, select: { id: true } }));
@@ -496,8 +471,7 @@ export const deleteContentCategory = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// ── Series ↔ Exam linking ─────────────────────────────────────────────────────
-
+// Sync ws_test_series.paper_count to its active paper links.
 export const recomputePaperCount = async (testSeriesId: number): Promise<void> => {
   const count = await prisma.testSeriesExam.count({ where: { testSeriesId, status: true } });
   await prisma.testSeries.update({ where: { id: testSeriesId }, data: { paperCount: count } });
@@ -507,10 +481,9 @@ export const listPapers = async (
   testSeriesId: number,
   opts: { search?: string; skip: number; take: number; page: number; limit: number }
 ) => {
-  // The searchable paper display-name is NOT a DB column — it is derived by
-  // hydrating each link's examId through buildExamMap. So we cannot filter or
-  // paginate `name` at the DB level. Fetch ALL links for the series (paper
-  // counts per series are small), hydrate names, then filter/slice in memory.
+  // The searchable paper name is not a column — it comes from hydrating each link's
+  // examId via buildExamMap — so fetch all links for the series (counts are small),
+  // hydrate, then filter/slice in memory.
   const links = await prisma.testSeriesExam.findMany({
     where: { testSeriesId },
     orderBy: [{ orderBy: "asc" }, { id: "asc" }],
@@ -526,9 +499,8 @@ export const listPapers = async (
   const catMap = new Map(cats.map((c) => [c.id, { _id: String(c.id), name: c.name }]));
   let all = links.map((l) => paperDto(l, examMap, catMap));
   if (opts.search) {
-    // Paper display-name is the hydrated exam title (paperDto sets
-    // `examId` to the exam DTO { _id, title, ... } when hydrated; falls back
-    // to the id string otherwise). Match case-insensitively against it.
+    // Paper name = the hydrated exam title (paperDto sets `examId` to the exam DTO when
+    // hydrated, else the id string). Case-insensitive match.
     const needle = opts.search.toLowerCase();
     all = all.filter((p) => {
       const nm = typeof p.examId === "object" && p.examId ? (p.examId as any).title : p.examId;
@@ -613,8 +585,6 @@ export const unlinkPaper = async (linkId: number): Promise<number | null> => {
   return row.testSeriesId;
 };
 
-// ── Prices ────────────────────────────────────────────────────────────────────
-
 export const listPrices = async (
   testSeriesId: number,
   opts: { skip: number; take: number; page: number; limit: number }
@@ -643,6 +613,7 @@ export type PriceWrite = {
   status?: boolean;
 };
 
+// Create a plan; a new default clears the series' other defaults.
 export const createPrice = async (testSeriesId: number, data: PriceWrite) => {
   const price = await prisma.$transaction(async (tx) => {
     if (data.isDefault) {
@@ -700,11 +671,8 @@ export const updatePrice = async (priceId: number, data: PriceWrite): Promise<nu
 };
 
 /**
- * ALL-TIME orders referencing this plan — the delete guard.
- *
- * Replaces `activeSubsForPlan` (status:true AND endAt > now), under which a single
- * EXPIRED subscription no longer blocked the delete and the plan could be removed
- * out from under its own historical rows.
+ * All-time orders referencing this plan — the delete guard. Expired subscriptions
+ * count too, so a plan can't be removed out from under its historical rows.
  */
 export const ordersForPlan = (planId: number): Promise<number> =>
   countPlanUsageOne("testSeriesPrice", planId);
@@ -720,14 +688,10 @@ export const deletePrice = async (priceId: number): Promise<boolean> => {
   return true;
 };
 
-// ── Subscriptions / Orders ────────────────────────────────────────────────────
-
-// ── subscription list (Reports contract) ──────────────────────────────────────
-// Shared contract across the 4 admin subscription reports — see
-// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
-// summary respects all filters but ignores pagination. `status` here is the
-// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
-// coarse online|backend (= paymentType on this table; no order join needed).
+// Reports contract shared across the 4 admin subscription reports
+// (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md): { summary, data, pagination }; summary respects
+// all filters but ignores pagination. `status` is the normalized active|expired|inactive;
+// paymentMethod is the coarse online|backend (= paymentType on this table).
 export type ListSubsOpts = {
   testSeriesId: number | null;
   customerId: number | null;
@@ -742,7 +706,7 @@ export type ListSubsOpts = {
   limit: number;
 };
 
-// Search id-resolvers (id-set → OR { in }), mirroring admin-subscription.repository.
+// Search id-resolvers (id-set → OR { in }), same as admin-subscription.repository.
 const customerIdsByText = async (q: string): Promise<number[]> =>
   (
     await prisma.customer.findMany({
@@ -766,10 +730,9 @@ const SUB_SORT_FIELDS: Record<string, "createdAt" | "startAt" | "endAt" | "price
 // (page/limit only apply to the paginated list).
 export type SubReportOpts = Omit<ListSubsOpts, "page" | "limit">;
 
-// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
-// 23:59:59.999 at Asia/Kolkata, +05:30); full timestamps pass through. Mirrors the
-// Subscription report so the created-at filter honors IST day boundaries (a naive
-// UTC parse would drop the last 5.5h of the day). Invalid → undefined (no bound).
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to → 23:59:59.999
+// at +05:30); full timestamps pass through; invalid → undefined (no bound). A naive UTC
+// parse would drop the last 5.5h of the picked day.
 const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
@@ -782,7 +745,6 @@ const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined
       : new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
-// Date-range filter bounds `createdAt` (records created between X and Y) at IST edges.
 const istCreatedWhere = (dateFrom?: string, dateTo?: string): Record<string, any> => {
   const gte = parseDayBoundIst(dateFrom, false);
   const lte = parseDayBoundIst(dateTo, true);
@@ -793,8 +755,8 @@ const istCreatedWhere = (dateFrom?: string, dateTo?: string): Record<string, any
   return { createdAt };
 };
 
-// Shared where-fragment builder for the list + exports. Returns null when a
-// search matched nothing (force an empty result, mirroring the list contract).
+// Shared where-fragment builder for the list + exports. Returns null when a search
+// matched nothing (forces an empty result).
 const buildSubsWhere = async (opts: SubReportOpts, now: Date): Promise<Record<string, any> | null> => {
   const base: any = {};
   if (opts.testSeriesId != null) base.testSeriesId = opts.testSeriesId;
@@ -825,13 +787,10 @@ const subSortSpec = (opts: SubReportOpts) => ({
   sortDir: (opts.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
 });
 
-// Enrich raw subscription rows into the canonical Reports DTO — mirrors the
-// Subscription report row shape (admin-subscription hydrateCourseSubRows) so the
-// shared MergedSubscriptionReport component + the CSV/Excel columns line up. Fields
-// with no SQL source on test series are surfaced as null (they render blank): test
-// series has no promoter attribution (no promoter_id), no activated-by (no created_by),
-// no educator link, no ws_coin, and no material/course split or shipping — see
-// docs/backend-requests/test-series-report-enrich-columns.md.
+// Enrich raw rows into the Reports DTO, matching the Subscription report row shape
+// (admin-subscription hydrateCourseSubRows) so the shared MergedSubscriptionReport
+// component and the CSV/Excel columns line up. Fields with no source on test series
+// (promoter, activated-by, educator, ws_coin, material/course split, shipping) are null.
 const blankToNull = (v: string | null | undefined): string | null => (v ? v : null);
 const enrichSubRows = async (rows: any[], now: Date) => {
   const uniq = (xs: (number | null | undefined)[]) => [...new Set(xs.filter((v): v is number => v != null))];
@@ -906,7 +865,7 @@ const enrichSubRows = async (rows: any[], now: Date) => {
       promocode: promo?.promocode ?? null,
       promocodeId: r.promocodeId ?? null,
       remarks: r.remarks ?? null,
-      // No SQL source on test series → null (render blank).
+      // No source on test series → null (render blank).
       promoterName: null as string | null,
       promoterId: null as number | null,
       educatorName: null as string | null,
@@ -956,10 +915,9 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
   };
 };
 
-// ── subscription report exports (CSV / Excel) ─────────────────────────────────
-// Entire filtered set (no pagination) and NO row cap — matches the Subscription
-// export. Paged in keyset batches (id DESC, no deep OFFSET) and enriched per batch
-// so memory stays bounded; both formats + the async job share one column spec.
+// Subscription report exports (CSV / Excel): the entire filtered set, no row cap.
+// Paged in keyset batches (id DESC, no deep OFFSET) and enriched per batch so memory
+// stays bounded; both formats + the async job share one column spec.
 const TS_SUB_EXPORT_BATCH = 5000;
 
 async function* iterateSubExportRows(opts: SubReportOpts, now: Date) {
@@ -976,16 +934,10 @@ async function* iterateSubExportRows(opts: SubReportOpts, now: Date) {
   }
 }
 
-// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
-// — same format as the Subscription export (was a raw UTC ISO string).
-
-// Column set follows the Subscription export order so the reports line up, minus the
-// columns that don't apply to a digital test series and were dropped per FE request:
-// Address/City/Pincode, Material Type, Course/Material Amount, plus the four with no
-// test-series data source (Promoter Name, Educator Name, WS Coin, Activated By) — the
-// FE hides all of these on the Test Series screen, so the export matches. Test series
-// is a course-type product, so its name sits in "Course Name" (mirrors the FE
-// productCell for testSeries); Package Name + Alternate Phone stay (blank) for now.
+// Column order follows the Subscription export, minus the columns the FE hides on the
+// Test Series screen (Address/City/Pincode, Material Type, Course/Material Amount,
+// Promoter Name, Educator Name, WS Coin, Activated By). Test series is a course-type
+// product, so its name sits in "Course Name"; Package Name + Alternate Phone stay blank.
 const TS_SUB_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
   { header: "Order Method", get: (r) => r.orderMethod ?? "" },
@@ -1066,9 +1018,8 @@ export type GrantWrite = {
   bankTransactionId?: string | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
-  // extend=true → record a NEW subscription row that CONTINUES from the customer's
-  // existing active subscription for this test series (the prior row is left
-  // untouched). No existing active sub → behaves as a fresh grant.
+  // extend=true → a new subscription row that continues from the customer's existing
+  // active subscription (the prior row is untouched). No active sub → a fresh grant.
   extend?: boolean;
   // Acting admin id (resolved server-side from the JWT) → audit columns.
   actingAdminId?: number | null;
@@ -1092,10 +1043,9 @@ export const grantSubscription = async (
   const now = new Date();
   const startAt = data.startAt ? new Date(data.startAt) : now;
 
-  // Record an order row carrying the granular payment method + reference ids +
-  // amount, then link it via the subscription's order_id (matches the report /
-  // paid-purchase shape where payment data lives on ws_test_series_order). Written
-  // for both fresh grants and extends — an extend is still a paid transaction.
+  // Record an order row carrying the payment method + reference ids + amount, linked
+  // via the subscription's order_id (payment data lives on ws_test_series_order).
+  // Written for fresh grants and extends alike — an extend is still a paid transaction.
   const { subscription: sub } = await prisma.$transaction(async (tx) => {
     const order = await tx.testSeriesOrder.create({
       data: {
@@ -1104,11 +1054,11 @@ export const grantSubscription = async (
         planId: data.planId ?? null,
         paymentMethod: data.paymentMethod ?? "cash",
         orderType: "purchase",
-        // Business key, minted here too so `unique_id` is never half-populated: a
-        // manual grant is still an order and still gets a receipt id.
+        // Minted here too so `unique_id` is never half-populated: a manual grant is
+        // still an order and gets a receipt id.
         uniqueId: `ts-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
-        // Package names since 2026-08-31. A manual grant has no promo and no wallet
-        // spend, so list price == charged and code_discount / ws_coin are a real 0.
+        // A manual grant has no promo and no wallet spend, so list price == charged and
+        // code_discount / ws_coin are a real 0.
         amount: Math.round(price),
         originalPrice: price,
         razorpayOrderId: data.razorpayOrderId ?? null,
@@ -1120,10 +1070,9 @@ export const grantSubscription = async (
       },
     });
 
-    // Subscription Type = Extend: read the customer's current active subscription so
-    // this grant can continue from where it ends. ONE ORDER = ONE SUBSCRIPTION ROW —
-    // the existing row is NOT modified. It previously was, which repointed its
-    // order_id at the extension's order and orphaned the original purchase.
+    // Extend: continue from the customer's current active subscription. One order = one
+    // subscription row — the existing row is not modified (repointing its order_id
+    // would orphan the original purchase).
     const existing = data.extend
       ? await tx.testSeriesSubscription.findFirst({
           where: { customerId: data.customerId, testSeriesId, status: true, endAt: { gte: now } },
@@ -1144,20 +1093,17 @@ export const grantSubscription = async (
         customerId: data.customerId,
         testSeriesId,
         planId: data.planId ?? null,
-        // This row's OWN charge (`price` until 2026-08-31 — renamed onto the package
-        // column name). A free "Add Days" extension is worth 0 here and the customer's
-        // earlier row keeps what it was paid, because we no longer write to it — so
-        // the "0 would wipe ₹699" hazard the fold had cannot arise.
+        // This row's own charge. A free "Add Days" extension is worth 0 here; the
+        // earlier row keeps what it was paid because it is never rewritten.
         amount: price,
         paidAmount: price,
-        // No promoter attribution on a manual grant: there is no order snapshot to
-        // denormalise from, and a backend grant earns no commission.
+        // No promoter attribution on a manual grant: no order snapshot to denormalise
+        // from, and a backend grant earns no commission.
         startAt: subStartAt,
         endAt,
         paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
         remarks: data.remarks ?? null,
         status: true,
-        // Admin-initiated manual grant → both audit columns = the acting admin.
         created_by: data.actingAdminId ?? null,
         updated_by: data.actingAdminId ?? null,
       },
@@ -1181,7 +1127,6 @@ export const updateSubscription = async (id: number, data: UpdateSubWrite) => {
   if (data.endAt) set.endAt = new Date(data.endAt);
   if (typeof data.status === "boolean") set.status = data.status;
   if (typeof data.remarks === "string") set.remarks = data.remarks;
-  // Admin edit → stamp updated_by (created_by untouched).
   if (data.actingAdminId != null) set.updated_by = data.actingAdminId;
   const sub = await prisma.testSeriesSubscription.update({ where: { id }, data: set }).catch(() => null);
   return sub ? { subscription: subscriptionDto(sub) } : null;
@@ -1218,11 +1163,9 @@ export const addSubscriptionDays = async (
 };
 
 /**
- * The customer owning this subscription, or null if it doesn't exist.
- *
- * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
- * can flush that customer's per-user route cache. On delete the row is gone
- * afterwards, so the id cannot be resolved after the mutation.
+ * The customer owning this subscription, or null. Read before an admin revoke (status
+ * flip / date change / delete) so the caller can flush that customer's per-user route
+ * cache — after a delete the owner can no longer be resolved.
  */
 export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
   (
@@ -1239,10 +1182,9 @@ export const deleteSubscription = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// GET-by-id detail for the admin Subscription Details page — same populated shape
-// contract as the other product-type detail endpoints (customer / test series /
-// plan populated; razorpay ids + order type from the linked ws_test_series_order).
-// Returns "not_found" when the id is unknown.
+// GET-by-id detail for the admin Subscription Details page — same populated shape as
+// the other product-type detail endpoints (razorpay ids + order type from the linked
+// ws_test_series_order). Returns "not_found" when the id is unknown.
 export const getSubscriptionById = async (id: number): Promise<"not_found" | any> => {
   const sub = await prisma.testSeriesSubscription.findUnique({ where: { id } });
   if (!sub) return "not_found";
@@ -1291,9 +1233,8 @@ export const getSubscriptionById = async (id: number): Promise<"not_found" | any
     razorpayOrderId: blankToNull(order?.razorpayOrderId),
     razorpayPaymentId: blankToNull(order?.razorpayPaymentId),
     bankTransactionId: blankToNull(order?.bankTransactionId),
-    // WIRE CONTRACT: both keys unchanged. `paidAmount` keeps sourcing from the
-    // charged amount rather than the new paid_amount column — same rule as
-    // admin-customer-details.transformer, which documents why.
+    // Wire contract: both keys unchanged. `paidAmount` sources from the charged amount,
+    // not paid_amount — see admin-customer-details.transformer.
     price: num(sub.amount),
     paidAmount: num(sub.amount),
     startAt: sub.startAt ?? null,
@@ -1332,17 +1273,14 @@ const orderDto = (o: any) => ({
   planId: o.planId != null ? String(o.planId) : null,
   paymentMethod: o.paymentMethod,
   orderType: o.orderType,
-  // WIRE CONTRACT: these five keys predate the 2026-08-31 column rename and are
-  // unchanged. Only the columns behind them moved onto the package names —
-  // order_price → discount_price, base_price → price, discount_amount → code_discount.
+  // Wire contract: these keys are frozen; the columns behind them are
+  // discount_price / price / code_discount.
   orderPrice: num(o.amount),
   basePrice: num(o.originalPrice),
   discountAmount: num(o.codeDiscount),
-  // WIRE CONTRACT: both keys stay in the response. The gst_amount / handling_fee
-  // COLUMNS were dropped on 2026-08-31 — they had only ever held 0, because GST_RATE
-  // and HANDLING_FEE are hardcoded 0 in testSeries.controller.ts. Emitting the same
-  // literal keeps this response byte-identical. If GST is ever switched on, this is
-  // one of the five order tables that would need real columns added.
+  // Wire contract: both keys stay. There are no gst_amount / handling_fee columns (GST
+  // and handling fee are always 0), so the literal keeps the response identical. If GST
+  // is ever switched on, this order table needs real columns.
   gstAmount: 0,
   handlingFee: 0,
   promocodeId: o.promocodeId != null ? String(o.promocodeId) : null,

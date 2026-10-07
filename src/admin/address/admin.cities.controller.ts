@@ -1,15 +1,13 @@
 /**
- * Admin address "Cities" CRUD — sourced from ws_customer_distict (districts),
- * NOT ws_offline_city. Keeps the exact offline-city request/response contract so
- * the existing admin Cities screen keeps working:
- *   - response DTO: { _id, name, image, status, order, stateId:{_id,name,stateCode}, createdAt, updatedAt }
+ * Admin address "Cities" CRUD, sourced from ws_customer_distict (districts), not
+ * ws_offline_city, but keeping the offline-city request/response contract the
+ * admin Cities screen expects:
+ *   - DTO: { _id, name, image, status, order, stateId:{_id,name,stateCode}, createdAt, updatedAt }
  *   - list filters: status ("true"/"false"), stateId, search, page/limit
- * Differences forced by the district schema (see FRONTEND notes below):
- *   - `stateId` is REQUIRED on create (district FK is NOT NULL).
- *   - `image` and `order` are accepted but ignored (no district columns) — the
- *     response always returns image:"" and order:0.
- *   - delete is blocked (409) when a customer references the district.
- * Offline-city CRUD (/admin/offline, cart, centers) is untouched.
+ * District-schema differences:
+ *   - `stateId` is required on create (district FK is NOT NULL).
+ *   - `image`/`order` are accepted but ignored; responses return image:"" and order:0.
+ *   - delete is blocked (409) while a customer references the district.
  */
 import { Request, Response } from "express";
 import { z } from "zod";
@@ -31,7 +29,7 @@ const parseId = (v: string): number | null => {
 const cityCreateSchema = z.object({
   name: z.string().min(1).max(100),
   status: z.boolean().optional(),
-  stateId: z.coerce.number().int().positive(), // REQUIRED — district FK NOT NULL
+  stateId: z.coerce.number().int().positive(),
 });
 const cityUpdateSchema = cityCreateSchema.partial();
 

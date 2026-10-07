@@ -1,3 +1,4 @@
+// Admin material master: HTTP handlers for material type CRUD.
 import { Request, Response } from "express";
 import { createMaterialSchema, updateMaterialSchema } from "./master.validation";
 import * as master from "../../modules/admin-master/admin-master.service";

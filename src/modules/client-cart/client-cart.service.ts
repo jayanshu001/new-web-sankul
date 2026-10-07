@@ -1,7 +1,7 @@
+// Book cart: add/update/remove items, cart summary and shipping attach.
 import { clientCartRepository as repo } from "./client-cart.repository";
 import { resolveShippingIdForAddress } from "../customer-shipping/customer-shipping.service";
 import { getFreeShippingMin } from "../book-order/book-order.service";
-
 
 export const parseCartId = (id: string): number | null => {
   const n = Number(id);
@@ -13,14 +13,13 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Mongo-shaped cart DTO: { _id, items[{bookId,qty,...}], shippingId }. */
 const toCartDto = (cart: any) => ({
   _id: !!cart?.id ? String(cart.id) : null,
   items: (cart?.bookCartItem ?? []).map((it: any) => ({ bookId: String(it.bookId), qty: it.qty })),
   shippingId: !!cart?.shippingId ? String(cart.shippingId) : null,
 });
 
-// ─── add / update / remove ────────────────────────────────────────────────────
+// Creates the cart on first add; an existing line is incremented, not replaced.
 export const addToCart = async (customerId: number, bookId: number, qty: number, userIpAddress: string | null = null) => {
   if (!(await repo.bookExists(bookId))) return { ok: false as const, reason: "book_not_found" as const };
   const cart = await repo.ensureCart(customerId, userIpAddress);
@@ -64,7 +63,7 @@ export const removeCartItem = async (customerId: number, bookId: number) => {
   return { ok: true as const, data: toCartDto(fresh) };
 };
 
-// ─── get cart (with totals) ───────────────────────────────────────────────────
+// Lines plus price summary; shipping waived at the free-shipping minimum (same rule as checkout).
 export const getCart = async (customerId: number) => {
   const cart = await repo.findActiveCart(customerId);
   if (!cart || cart.bookCartItem.length === 0) {
@@ -82,22 +81,17 @@ export const getCart = async (customerId: number) => {
     .filter((line: any) => line.book)
     .map((line: any) => {
       const book = line.book;
-      // The Prisma Book row uses snake_case price columns (list_price,
-      // discounted_price, shipping_price) — NOT camelCase.
       const lineSubtotal = num(book.discounted_price) * line.qty;
       const lineList = num(book.list_price) * line.qty;
       subtotal += lineSubtotal;
       listTotal += lineList;
       itemCount += line.qty;
-      // Per-unit shipping; the free-shipping threshold below may waive it.
       rawShipping += num(book.shipping_price) * line.qty;
       return { bookId: String(line.bookId), qty: line.qty, book, lineSubtotal, lineList };
     });
 
-  // Use the SAME free-shipping logic as create-order (book-order.service) so the
-  // cart total and the charged amount always agree: shipping is waived when the
-  // discounted subtotal meets the configured minimum. (Shipping is NOT address-
-  // based — the address only gates checkout, not the amount.)
+  // Same free-shipping rule as create-order so the cart total matches the charged
+  // amount. Shipping is not address-based; the address only gates checkout.
   const freeShippingMin = await getFreeShippingMin();
   const shippingWaived = freeShippingMin > 0 && subtotal >= freeShippingMin;
   const shipping = shippingWaived ? 0 : rawShipping;
@@ -118,11 +112,7 @@ export const getCart = async (customerId: number) => {
   };
 };
 
-// ─── attach shipping ──────────────────────────────────────────────────────────
-// The address→shipping snapshot itself now lives in modules/customer-shipping so
-// the package/course order path shares the exact same rule (it used to store a
-// raw ws_customer_address id in a ws_customer_shipping FK column). Behaviour here
-// is unchanged — that module is a verbatim extraction of what this function did.
+// Snapshots an address-book entry into ws_customer_shipping and links it to the cart.
 export const attachShipping = async (
   customerId: number,
   addressId: number,
@@ -137,9 +127,6 @@ export const attachShipping = async (
   const cart = await repo.ensureCart(customerId, userIpAddress);
   await repo.attachShipping(cart.id, resolved.shippingId);
   const fresh = await repo.findActiveCartBare(customerId);
-  // FE (Checkout) reads shipping.phone for display; the snapshot previously sent
-  // only {_id, city}. phone is the validated BigInt above → emit as a string.
-  // See docs/api-optimization (FE↔BE mismatch fix).
   return {
     ok: true,
     cart: toCartDto(fresh),

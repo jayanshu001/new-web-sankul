@@ -1,6 +1,4 @@
-// ─── Shared Enums ────────────────────────────────────────────────────────────
-// Mirrors the Prisma enum definitions from websankul-api-staging
-
+// Shared enums: string constants for domain status, type and language values.
 export const UpdateType = {
   IMMEDIATE: "immediate",
   FLEXIBLE: "flexible",
@@ -136,10 +134,9 @@ export type RefferalTransactionType =
 export const RefferalTransactionStatus = {
   PENDING: "pending",
   SUCCESSFUL: "successful",
-  // `failed` = the payout was attempted and bounced (the retired RazorpayX
-  // path). `rejected` = finance declined it and it was never sent. Keeping
-  // them distinct is the point — a merged state can't tell the customer
-  // whether their bank details were wrong or their request was refused.
+  // `failed` = payout attempted and bounced; `rejected` = finance declined it and
+  // it was never sent. Kept distinct so the customer can tell wrong bank details
+  // from a refused request.
   FAILED: "failed",
   REJECTED: "rejected",
 } as const;
@@ -199,11 +196,8 @@ export const AdminRole = {
 } as const;
 export type AdminRole = (typeof AdminRole)[keyof typeof AdminRole];
 
-// TeleCRM lead moments. Mirrors the old Mongo backend's CRM_LEAD_TYPE
-// (docs/old-telecrm-integration.md) plus two net-new moments (VIEW_LIVE_COURSE,
-// VIEW_TEST_SERIES) for products that didn't exist when that backend was
-// written. Adding a new lead-worthy moment = add a member here + a case in
-// utils/crm.ts's note builder + a fire-and-forget call at the trigger site.
+// TeleCRM lead moments (see docs/old-telecrm-integration.md). Adding one = a member
+// here + a case in utils/crm.ts's note builder + a fire-and-forget call at the trigger site.
 export const CRM_LEAD_TYPE = {
   LOGIN: "LOGIN",
   SIGNUP: "SIGNUP",

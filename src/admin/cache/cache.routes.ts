@@ -1,10 +1,4 @@
-// src/admin/cache/cache.routes.ts
-//
-// Admin cache management routes. Secured by the same Bearer auth as the rest of
-// admin, plus requireRole — NOT the old fail-open static x-cache-auth-key.
-//   POST /api/v1/admin/cache/flush   { prefix? }
-//   GET  /api/v1/admin/cache/stats   ?prefix=
-
+// Admin cache: route-cache flush and stats routes (admin/super_admin only).
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { flushCache, cacheStats } from "./cache.controller";

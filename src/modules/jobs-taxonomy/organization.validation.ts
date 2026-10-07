@@ -1,3 +1,4 @@
+// Jobs organizations: Zod request schemas.
 import { z } from "zod";
 
 export const organizationCreateSchema = z.object({

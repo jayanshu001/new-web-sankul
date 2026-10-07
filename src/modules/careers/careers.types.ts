@@ -1,3 +1,4 @@
+// Careers: enums, defaults, DTO and input types.
 export const CAREER_JOB_TYPE = {
   FULL_TIME: "full_time",
   PART_TIME: "part_time",

@@ -1,4 +1,4 @@
-// src/utils/emailService.ts
+// Email: SMTP (nodemailer) transport with bounded, retried sends.
 import 'dotenv/config';
 import nodemailer, { Transporter, SentMessageInfo } from 'nodemailer';
 import { callOutbound } from '../libs/outbound';
@@ -33,10 +33,7 @@ export async function sendEmail(
   html?: string,
   text?: string
 ): Promise<SentMessageInfo> {
-  // Wrapped in callOutbound so a flaky SMTP doesn't pin a request-handling
-  // process. The crash-reporter calls this too — a crash + an unreachable
-  // SMTP shouldn't compound into a hung shutdown. 8s × 2 attempts is enough
-  // for one TLS handshake retry but bounded total wait.
+  // Bounded so a flaky SMTP can't pin a request or hang the crash reporter's shutdown.
   const tx = getTransporter();
   return callOutbound(
     async () => {

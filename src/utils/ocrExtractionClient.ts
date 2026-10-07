@@ -1,3 +1,4 @@
+// Rank predictor OCR: client for the response-sheet extraction service.
 import { OCR_SERVICE, isOcrServiceConfigured } from "../config/ocrService";
 import { callOutbound } from "../libs/outbound";
 import {
@@ -42,6 +43,7 @@ const toFormData = (fileBuffer: Buffer, fileName: string): FormData => {
   return form;
 };
 
+// Retries transport failures only; 413/415/422 become OcrExtractionError codes.
 export const extractResponseSheet = async (
   fileBuffer: Buffer,
   fileName: string

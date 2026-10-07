@@ -1,12 +1,10 @@
+// Admin goals: HTTP handlers for goal CRUD.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { createGoal, getGoals, getGoalById, updateGoal, deleteGoal } from "./goal.admin.service";
 import logger from "../../utils/logger";
 
-/**
- * POST /api/v1/admin/goals
- * Body: multipart/form-data { title, labels, image?, isActive? }
- */
+/** Body: multipart/form-data { title, labels, image?, isActive? } */
 export const createGoalHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createGoalHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -14,9 +12,8 @@ export const createGoalHandler = async (req: Request, res: Response) => {
   try {
     const { title, labels, isActive } = req.body;
 
-    // Labels are OPTIONAL: a goal may have zero labels. The form sends labels as
-    // "[]" (multipart) for none; a missing/null field is also accepted. Only the
-    // title is required. parseLabels() normalizes "[]"/missing → [] downstream.
+    // Labels are optional: the form sends "[]" for none and a missing/null field is
+    // also accepted; parseLabels() normalizes both to []. Only title is required.
     if (!title) {
       logger.warn("createGoalHandler validation failed", { traceId, title });
       return failure(res, "Title is required.", 422);
@@ -44,9 +41,6 @@ export const createGoalHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/admin/goals
- */
 export const getGoalsHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("getGoalsHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -75,9 +69,6 @@ export const getGoalsHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/admin/goals/:id
- */
 export const getGoalByIdHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { id } = req.params;
@@ -101,10 +92,7 @@ export const getGoalByIdHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * PUT /api/v1/admin/goals/:id
- * Body: multipart/form-data { title?, labels?, image?, isActive? }
- */
+/** Body: multipart/form-data { title?, labels?, image?, isActive? } */
 export const updateGoalHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { id } = req.params;
@@ -116,10 +104,8 @@ export const updateGoalHandler = async (req: Request, res: Response) => {
     const { title, labels, isActive } = req.body;
 
     const file = req.file as any;
-    // Image resolution for update, three cases:
-    //   - file uploaded        → use its URL (replace)
-    //   - empty `image` field  → "" sentinel → clear (service unsets it)
-    //   - field absent         → undefined  → leave unchanged
+    // Image on update: file uploaded → replace; empty `image` field → "" sentinel →
+    // clear; field absent → undefined → leave unchanged.
     let image: string | undefined;
     if (file?.location) image = file.location;
     else if (req.body.image === "") image = "";
@@ -148,9 +134,6 @@ export const updateGoalHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * DELETE /api/v1/admin/goals/:id
- */
 export const deleteGoalHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { id } = req.params;

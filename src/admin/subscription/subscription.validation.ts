@@ -1,10 +1,9 @@
+// Admin subscriptions: Zod schemas for subscription grants/edits and customer addresses.
 import { z } from "zod";
 import { PaymentMethod } from "../../shared/enums";
 
-// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
-// validation works on MySQL where ids are integers. Coerce first: the FE sends
-// MySQL ids as JSON numbers, so without coercion z.string() rejects them.
-// Mirrors the dual-id handling in video.validation.ts.
+// Accepts a numeric id or a legacy 24-hex ObjectId. Coerce first: the FE sends ids
+// as JSON numbers, which z.string() would reject.
 const objectIdSchema = z.coerce.string().refine(
   (v) => /^[0-9a-fA-F]{24}$/.test(v) || /^[1-9]\d*$/.test(v),
   { message: "Invalid id." }
@@ -44,9 +43,8 @@ export const createSubscriptionSchema = z
     customerShippingId: objectIdSchema.optional().nullable(),
     remark: z.string().max(1000).optional(),
     status: z.boolean().optional().default(true),
-    // Subscription Type control: extend=true tops up the customer's existing
-    // subscription for this product (append plan duration onto endAt) instead of
-    // creating a fresh row. No existing sub → falls back to a fresh create.
+    // extend=true creates a new row continuing from the customer's existing active
+    // subscription for this product; with none it behaves as a fresh grant.
     extend: z.boolean().optional().default(false),
   })
   .refine((d) => !!(d.courseId || d.packageId), {
@@ -67,12 +65,9 @@ export const updateSubscriptionSchema = z.object({
   customerShippingId: objectIdSchema.nullable().optional(),
   trackingId: z.number().int().nullable().optional(),
   remark: z.string().max(1000).optional(),
-  // Payment correction (2026-08-21). These live on the linked
-  // ws_package_course_order, NOT on the subscription — which is why they were
-  // absent here and, because Zod strips unknown keys silently, an admin editing
-  // "this was a bank transfer" saw the save succeed and nothing change. Same
-  // vocabulary as the create schema; every field optional, and only the ones sent
-  // are written.
+  // Payment correction: these live on the linked ws_package_course_order, not the
+  // subscription. Only the fields sent are written; keep them declared here since
+  // Zod silently strips unknown keys.
   paymentMethod: z
     .enum([
       PaymentMethod.BACKEND,
@@ -99,7 +94,6 @@ export const createEbookSubscriptionSchema = z.object({
   remarks: z.string().max(1000).optional(),
 });
 
-// Admin creates an address on behalf of a customer
 export const adminCreateAddressSchema = z.object({
   customerId: objectIdSchema,
   name: z.string().min(1).max(50),

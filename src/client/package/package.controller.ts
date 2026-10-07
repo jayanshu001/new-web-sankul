@@ -1,3 +1,4 @@
+// Client packages: HTTP handlers for catalog, goal groups, my packages and chat.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -30,23 +31,19 @@ import { CRM_LEAD_TYPE } from "../../shared/enums";
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-// ─── Endpoints ────────────────────────────────────────────────────────────────
-
 export const getPackageDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("getPackageDetail invoked", { traceId, path: req.originalUrl, userId: req.user?.id, packageId: id });
 
   try {
-    // ── MySQL (ws_package + category links + plans/promo/sub) ──────────────────
     const pid = parsePackageId(id);
     if (!pid) { logger.warn("getPackageDetail invalid id (mysql)", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
     if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
-    // Drop nested catalog trees (RN loads tabs via GET /client/catalog/…) + empty
-    // promo list; slim the package DTO (packageType/goal/isPopular/subtitle/
-    // examCountdown* unused). scope + plans kept. See docs/api-optimization Phase 3.
+    // Nested catalog trees are dropped (the app loads tabs via GET /client/catalog/…),
+    // along with the empty promo list and unused package fields.
     const { videos, materials, tests, availablePromoCode, package: pkg, ...restDetail } = detailSql as any;
     const slimDetail = {
       ...restDetail,
@@ -63,8 +60,7 @@ export const getPackageDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/packages
-// Flat paginated listing of active packages, with optional filters.
+// Paginated package catalog (shared cache, live per-user isPurchased overlay).
 export const listPackages = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listPackages invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -100,7 +96,6 @@ export const listPackages = async (req: Request, res: Response) => {
       Number.isInteger(cid) ? cid : null,
       resolveBase(req)
     );
-    // Drop FE-unused FK/meta fields from each card (see docs/api-optimization).
     const slimData = omitList(dataSql, ["goalLabelId", "active", "pcMaterialId", "examId", "packageTypeId", "goalId", "order"]);
     logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
     return res.status(200).json({
@@ -139,9 +134,7 @@ export const listPackagesByType = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/packages/goal?labelIds=id1,id2,id3
-// Returns one entry per requested goal-label, with that label's packages
-// nested inside the `label` object. Driven by labels from /client/goals/my-goals.
+// One entry per requested goal-label, with its packages nested inside `label`.
 export const listPackagesByGoal = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listPackagesByGoal invoked", { traceId, path: req.originalUrl, userId: req.user?.id, labelIds: req.query.labelIds });
@@ -149,12 +142,9 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
   try {
     const parseIntCsv = (v: unknown): number[] =>
       String(v ?? "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map(Number);
-    // labelIds → label-based groups (goals WITH labels). Label ids are per-goal
-    // (they restart at 1 per goal), so each entry SHOULD be goal-scoped as
-    // `goalId:labelId` (e.g. "19:1"). A bare `labelId` is still accepted for
-    // backward compatibility (unscoped → may match across goals — see below).
-    // goalIds → goal-level groups of individual packages (label-less goals).
-    // At least one of labelIds / goalIds is required.
+    // labelIds → label-based groups. Label ids restart at 1 per goal, so entries should be
+    // `goalId:labelId` (e.g. "19:1"); a bare labelId is still accepted but may match across goals.
+    // goalIds → goal-level groups of individual (label-less) packages. One of the two is required.
     const parseLabelRefs = (v: unknown): { goalId: number | null; labelId: number }[] =>
       String(v ?? "")
         .split(",")
@@ -163,7 +153,6 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
         .map((tok) => {
           const [a, b] = tok.split(":").map((p) => p.trim());
           if (b !== undefined) {
-            // composite "goalId:labelId"
             if (/^\d+$/.test(a) && /^\d+$/.test(b)) return { goalId: Number(a), labelId: Number(b) };
             return null;
           }
@@ -185,22 +174,18 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
 
     const cid = req.user?.id ? Number(req.user.id) : null;
     const base = resolveBase(req);
-    // `search` filters each group's packages by name; `skip`/`take` page each
-    // group by the same window. Top-level `pagination.total` is the sum of the
-    // per-group match counts (the response stays grouped).
+    // `search` filters each group's packages by name; `skip`/`take` page each group.
+    // `pagination.total` is the sum of per-group match counts.
     const { search, page, limit, skip } = parseListQuery(req.query);
     const goals = await prismaPkg.customerTargetGoal.findMany({ select: { id: true, name: true, labels: true } });
     const goalById = new Map(goals.map((g) => [g.id, g]));
 
-    // ── label-based groups ────────────────────────────────────────────────────
-    // Resolve a label's display name within a specific goal.
     const labelName = (goalId: number, labelId: number): string | null => {
       const labels = Array.isArray(goalById.get(goalId)?.labels) ? (goalById.get(goalId)!.labels as any[]) : [];
       const hit = labels.find((l) => Number(l?.id) === labelId);
       return hit ? String(hit?.name ?? "") : null;
     };
-    // Legacy fallback: bare labelId with no goal context — find the first goal
-    // that owns a label with this id (ambiguous if multiple goals share the id).
+    // Bare labelId with no goal: first goal owning that label id (ambiguous by design).
     const firstGoalForLabel = (labelId: number): number | null => {
       for (const g of goals) {
         const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
@@ -210,7 +195,6 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     };
     const labelGroups = await Promise.all(
       labelRefs.map(async (ref) => {
-        // Prefer goal-scoped lookup (correct); fall back to unscoped for legacy bare ids.
         const goalId = ref.goalId ?? firstGoalForLabel(ref.labelId);
         const { rows, total } = goalId != null
           ? await listPackagesByGoalLabelScopedSql(goalId, ref.labelId, { search, skip, take: limit })
@@ -231,7 +215,6 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
       })
     );
 
-    // ── goal-level (individual) groups ─────────────────────────────────────────
     const goalGroups = await Promise.all(
       goalIntIds.map(async (gid) => {
         const { rows, total } = await listPackagesByGoalIndividualSql(gid, { search, skip, take: limit });
@@ -257,8 +240,8 @@ export const listPackageTypes = async (req: Request, res: Response) => {
 
   try {
     const { search, page, limit, skip } = parseListQuery(req.query);
-    // ws_package_type has no `order`/`active` cols; the service synthesizes
-    // `order:0` + `active:true` so the response JSON stays shape-compatible.
+    // ws_package_type has no `order`/`active` columns; the service synthesizes
+    // `order:0` + `active:true` to keep the response shape.
     const { data: types, total } = await listPackageTypesMysql({ search, skip, take: limit });
     const slimTypes = omitList(types, ["order", "active", "createdAt", "updatedAt"]);
     logger.info("listPackageTypes success", { traceId, count: types.length, total, source: "mysql" });
@@ -269,6 +252,7 @@ export const listPackageTypes = async (req: Request, res: Response) => {
   }
 };
 
+// Caller's active package subscriptions, each with the enriched package and daysLeft.
 export const listMyPackages = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -278,7 +262,6 @@ export const listMyPackages = async (req: Request, res: Response) => {
     if (!customerId) { logger.warn("listMyPackages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const now = new Date();
 
-    // ── MySQL branch ──────────────────────────────────────────────────────────
     const cid = Number(customerId);
     if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const { search, page, limit, skip } = parseListQuery(req.query);
@@ -292,8 +275,7 @@ export const listMyPackages = async (req: Request, res: Response) => {
       packageId: byId.get(String(s.targetPackageId)) ?? null,
       daysLeft: computeDaysLeft(s.endAt ?? null, now),
     }));
-    // Non-Prisma source (subscriptions): filter by the enriched package name,
-    // then slice the resolved array. `total` reflects the post-search set.
+    // Search runs in memory on the enriched package name; `total` is the post-search count.
     const filtered = search
       ? dataAll.filter((d) => matchesAllTokens(search, [String((d.packageId as any)?.name ?? "")]))
       : dataAll;
@@ -307,8 +289,7 @@ export const listMyPackages = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Chat ─────────────────────────────────────────────────────────────────────
-
+// Package chat history; requires an active subscription to that package.
 export const getChatMessages = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -318,11 +299,8 @@ export const getChatMessages = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("getChatMessages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ── MySQL package-chat read ──────────────────────────────────────────────
-    // A MySQL package id is an int. The subscription gate uses the MySQL
-    // commerce-subscription module (int ids).
     const packageIdInt = Number(packageId);
-    const customerIdInt = Number(customerId); // C3 seam
+    const customerIdInt = Number(customerId);
     if (!Number.isInteger(packageIdInt) || packageIdInt <= 0) {
       logger.warn("getChatMessages invalid id (mysql)", { traceId, customerId, packageId });
       return res.status(400).json({ success: false, message: "Invalid package id." });

@@ -1,23 +1,16 @@
+// Admin customer details: Prisma queries for a customer's subscriptions and orders.
 import { prisma } from "../../config/prisma";
 
 /**
- * Prisma persistence for the admin customer-details aggregate (MySQL branch).
- * Read-only aggregation over already-migrated subscription/order tables — no new
- * tables. Each subscription type is fetched for the customer, then its foreign
- * references (course/package/plan/ebook/book/state names) are hydrated by id so
- * the transformer can emit the same populated DTO the Mongo handler returned.
- *
- * ⚠ ws_package_course_subscription column mapping (inverted vs Mongo):
- *   package_id → the PACKAGE (Mongo `targetPackageId`)
- *   pcb_id     → the PLAN price row (Mongo `packageId`, carries duration/price)
+ * ws_package_course_subscription column mapping:
+ *   package_id → the package (DTO `targetPackageId`)
+ *   pcb_id     → the plan price row (DTO `packageId`, carries duration/price)
  */
 export const adminCustomerDetailsRepository = {
-  // ── subscriptions / orders for the customer (newest first) ──────────────────
   packageCourseSubs: (customerId: number) =>
     prisma.packageCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
-  // `order` included: payment (paid/original amount, method, gateway refs, code
-  // snapshots) moved to ws_live_course_order on 2026-08-25 — the DTO reads it there,
-  // falling back to this row's legacy columns for pre-backfill rows.
+  // `order` included: payment fields live on ws_live_course_order; the DTO falls back
+  // to this row's legacy columns for pre-backfill rows.
   liveCourseSubs: (customerId: number) =>
     prisma.liveCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" }, include: { order: true } }),
   testSeriesSubs: (customerId: number) =>
@@ -26,12 +19,11 @@ export const adminCustomerDetailsRepository = {
     prisma.eBookSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
   bookOrders: (customerId: number) =>
     prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" } }),
-  // `status: true` = not soft-deleted. DELETE /admin/subscriptions/customer-addresses/:id
-  // flips status to false; these reads must match that predicate or deleted rows reappear.
+  // `status: true` = not soft-deleted (address DELETE flips it to false); reads must
+  // use this predicate or deleted rows reappear.
   addresses: (customerId: number) =>
     prisma.customerAddress.findMany({ where: { userId: customerId, status: true }, orderBy: { created_at: "desc" } }),
 
-  // ── hydration (by id) ───────────────────────────────────────────────────────
   coursesByIds: (ids: number[]) =>
     ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true } }) : Promise.resolve([]),
   packagesByIds: (ids: number[]) =>
@@ -53,9 +45,8 @@ export const adminCustomerDetailsRepository = {
   statesByIds: (ids: number[]) =>
     ids.length ? prisma.customerState.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, state_code: true } }) : Promise.resolve([]),
 
-  // ── per-tab paginated lists (server-side page/limit for the admin detail view) ─
-  // The combined ws_package_course_subscription is split into courses (rows with a
-  // course_id) vs packages (course_id NULL, package_id set), mirroring the aggregate.
+  // Per-tab paginated lists. ws_package_course_subscription splits into courses
+  // (course_id set) vs packages (course_id NULL, package_id set).
   countCourseSubs: (customerId: number, status?: boolean) =>
     prisma.packageCourseSubscription.count({ where: { customerId, courseId: { not: null }, ...(status !== undefined ? { status } : {}) } }),
   pageCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
@@ -78,8 +69,8 @@ export const adminCustomerDetailsRepository = {
 
   countLiveCourseSubs: (customerId: number, status?: boolean) =>
     prisma.liveCourseSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),
-  // `order` carries every payment field the DTO renders (2026-08-25) — without the
-  // join this list would report paidAmount/discountAmount as null.
+  // `order` carries every payment field the DTO renders; without the join
+  // paidAmount/discountAmount would be null.
   pageLiveCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
     prisma.liveCourseSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take, include: { order: true } }),
 
@@ -103,8 +94,7 @@ export const adminCustomerDetailsRepository = {
   pageBookOrders: (customerId: number, skip: number, take: number) =>
     prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" }, skip, take }),
 
-  // Soft-delete aware (see `addresses` above). Count and page MUST share the same
-  // predicate, otherwise the pagination envelope drifts from the rows returned.
+  // Count and page must share the soft-delete predicate or the pagination envelope drifts.
   countAddresses: (customerId: number) =>
     prisma.customerAddress.count({ where: { userId: customerId, status: true } }),
   pageAddresses: (customerId: number, skip: number, take: number) =>

@@ -1,3 +1,4 @@
+// Client cart: HTTP handlers for book cart items and shipping.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -5,7 +6,6 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { getClientIp } from "../../utils/clientIp";
 import * as cartSql from "../../modules/client-cart/client-cart.service";
 
-// On the SQL branch ids are numeric strings, not ObjectIds.
 const numericId = z.string().regex(/^[1-9]\d*$/, "Invalid id");
 const sqlAddSchema = z.object({ bookId: numericId, qty: z.number().int().min(1).max(99).optional().default(1) });
 
@@ -13,8 +13,7 @@ const updateQtySchema = z.object({
   qty: z.number().int().min(1).max(99),
 });
 
-// POST /api/v1/client/cart
-// Adds a book to the active cart. If the book is already in the cart, increments qty.
+// Adds a book to the active cart, incrementing qty if already present.
 export const addToCart = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -26,7 +25,6 @@ export const addToCart = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL (ws_book_cart + ws_book_cart_item) ──────────────────
     const cid = cartSql.parseCartId(userId);
     const { bookId, qty } = sqlAddSchema.parse(req.body);
     const numBook = cartSql.parseCartId(bookId);
@@ -44,8 +42,7 @@ export const addToCart = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/client/cart/items/:bookId
-// Sets the line's qty to an absolute value (1..99). Use DELETE to remove a line.
+// Sets the line's qty to an absolute value (1..99); use DELETE to remove a line.
 export const updateCartItemQty = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -57,7 +54,6 @@ export const updateCartItemQty = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL ─────────────────────────────────────────────────────
     const cid = cartSql.parseCartId(userId);
     const numBook = cartSql.parseCartId(String(req.params.bookId));
     const { qty } = updateQtySchema.parse(req.body);
@@ -75,8 +71,6 @@ export const updateCartItemQty = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/cart/items/:bookId
-// Removes a single line from the active cart.
 export const removeCartItem = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -88,7 +82,6 @@ export const removeCartItem = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL ─────────────────────────────────────────────────────
     const cid = cartSql.parseCartId(userId);
     const numBook = cartSql.parseCartId(String(req.params.bookId));
     if (!cid || !numBook) return res.status(400).json({ success: false, message: "Invalid id." });
@@ -105,8 +98,7 @@ export const removeCartItem = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/cart/shipping
-// Attaches a saved address to the active cart for delivery.
+// Attach a saved address as cart shipping and return recalculated pricing.
 export const attachShippingToCart = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -127,9 +119,8 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
       if (r.reason === "phone") return res.status(400).json({ success: false, message: "No phone number on file. Please update your profile before using this address for delivery." });
       return res.status(400).json({ success: false, message: "Address is missing a city. Please update the address before using it for delivery." });
     }
-    // Return the recalculated pricing too, so the client needs ONE call (no
-    // attach + re-GET dance). Shipping uses the same free-shipping logic as
-    // /cart and create-order, so all three agree.
+    // Returns recalculated pricing so the client needs one call. Shipping uses the same
+    // free-shipping logic as /cart and create-order, so all three agree.
     const priced = await cartSql.getCart(cid);
     return res.status(200).json({
       success: true,
@@ -146,8 +137,6 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/cart
-// Returns the customer's active cart with each item populated and a total summary.
 export const getCart = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

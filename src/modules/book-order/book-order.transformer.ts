@@ -1,3 +1,4 @@
+// Book orders: row to DTO mapping (response shape is frozen).
 import type { BookOrder, BookOrderItem, Book, CustomerShipping } from "@prisma/client";
 import { buildTrackingUrl } from "../../config/courier";
 import type {
@@ -13,7 +14,7 @@ import type {
 const idStr = (v: number | null): string | null =>
   v != null && v > 0 ? String(v) : null;
 
-/** AWB bigint → number (fits a JS double; ~1.19e11). */
+/** AWB bigint → number; null when it exceeds MAX_SAFE_INTEGER. */
 const awbToNumber = (v: bigint | null): number | null => {
   if (v == null) return null;
   return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
@@ -26,7 +27,6 @@ const toNum = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Order row → minimal owner-lookup/dispatch row. */
 export const toBookOrderRow = (o: BookOrder): BookOrderRow => ({
   id: o.id,
   orderKey: o.receiptId, // @map("order_id") — the VARCHAR business key
@@ -45,12 +45,7 @@ const toItemDto = (it: BookOrderItem): BookOrderItemDto => ({
   shippingPrice: it.shipping_price,
 });
 
-/**
- * SQL ws_book_order (+ item rows) → the Mongo-shaped BookOrder doc the verify
- * book branch returns as `data.order`. The tracking `history[]` is SYNTHESIZED
- * (signed-off D-B3): SQL persists only the flat status, so on a verified order we
- * emit the single "Order Placed / Payment received" entry the Mongo path writes.
- */
+/** The tracking `history[]` is synthesized; see `buildTracking`. */
 export const toBookOrderDto = (
   o: BookOrder,
   items: BookOrderItem[]
@@ -80,12 +75,9 @@ export const toBookOrderDto = (
   };
 };
 
-// ── customer-facing order views (listMyOrders / getMyOrderById) ──────────────
-
 /**
- * Synthesized tracking sub-doc (SQL persists only the flat status row). Verified
- * orders emit the single "Order Placed / Payment received" entry the Mongo verify
- * path writes; otherwise a pending shell. Same rule as `toBookOrderDto` (D-B3).
+ * Tracking is synthesized: only the flat status is persisted, so a verified order
+ * gets a single "Order Placed / Payment received" entry.
  */
 const buildTracking = (o: BookOrder): BookOrderTrackingDto => {
   const trackingId = awbToNumber(o.trackingId ?? null);
@@ -103,7 +95,6 @@ const buildTracking = (o: BookOrder): BookOrderTrackingDto => {
 const nullableStr = (v: string | null | undefined): string | null =>
   v == null || v === "" ? null : v;
 
-/** ws_customer_shipping row → the populated Mongo-shaped shipping sub-doc. */
 const toShippingDto = (s: CustomerShipping): MyOrderShippingDto => ({
   _id: String(s.id),
   name: nullableStr(s.name),
@@ -120,7 +111,6 @@ const toShippingDto = (s: CustomerShipping): MyOrderShippingDto => ({
   updatedAt: s.updated_at ?? null,
 });
 
-/** Line item with `bookId` left as a string (list view — unpopulated). */
 const toMyItemDto = (it: BookOrderItem): MyOrderItemDto => ({
   bookId: idStr(it.bookId),
   qty: it.qty,
@@ -129,7 +119,6 @@ const toMyItemDto = (it: BookOrderItem): MyOrderItemDto => ({
   shippingPrice: it.shipping_price,
 });
 
-/** Line item with `bookId` populated (detail view — Mongo `.populate`). */
 const toMyItemDtoPopulated = (
   it: BookOrderItem & { Book?: Book | null }
 ): MyOrderItemDto => {
@@ -171,13 +160,11 @@ const buildBase = (
   };
 };
 
-/** listMyOrders row → Mongo-shaped DTO (unpopulated shipping + book ids). */
 export const toMyOrderListDto = (
   o: BookOrder,
   items: BookOrderItem[]
 ): MyOrderDto => buildBase(o, items.map(toMyItemDto), idStr(o.shippingId));
 
-/** getMyOrderById row → Mongo-shaped DTO with populated shipping + books. */
 export const toMyOrderDetailDto = (
   o: BookOrder & { shipping?: CustomerShipping | null },
   items: (BookOrderItem & { Book?: Book | null })[]

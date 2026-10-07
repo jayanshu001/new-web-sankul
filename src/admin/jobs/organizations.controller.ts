@@ -1,3 +1,4 @@
+// Admin jobs portal: HTTP handlers for recruiting organization CRUD.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";

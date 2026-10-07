@@ -1,23 +1,12 @@
 /**
- * Customer-master lookups — MySQL (Prisma) branch. Wave 8.
- *
- * Gated behind `isMysqlModule("customer-master")`. Four flat lookup tables —
- * CustomerState, CustomerDistrict, CustomerEducation, CustomerTargetGoal — each
- * a trivial admin CRUD with NO new DDL (the Prisma models already exist). The
- * legacy `src/admin/customer-master/customer-master.controller.ts` branches each
- * handler on `isCustomerMasterMysql()` and delegates here.
- *
- * DTOs mirror the Mongo response shape (`_id` string, same keys) so the admin UI
- * is unchanged. Field drift vs Mongo: SQL state uses `state_code` (Mongo
- * `stateCode`), district FK is `stateId`→`state` col, education uses `status`
- * (others `active`), target-goal has a required `image` (defaulted to "").
+ * Customer master: admin CRUD for the customer lookup tables (state, district, education, target
+ * goal). Column drift: state uses `state_code`, education uses `status` (others
+ * `active`), target-goal `image` is required (defaulted to "").
  */
 import { prisma } from "../../config/prisma";
 import { parseLabels } from "../../utils/goalSelection";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -25,7 +14,6 @@ export const parseId = (id: string): number | null => {
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
-// ─── States ─────────────────────────────────────────────────────────────────────
 const stateDto = (s: any) => ({ _id: String(s.id), name: s.name, stateCode: s.state_code, active: s.active });
 
 export const listStates = async (opts?: {
@@ -41,7 +29,7 @@ export const listStates = async (opts?: {
   const [rows, total] = await Promise.all([
     prisma.customerState.findMany({
       where,
-      orderBy: { id: "desc" }, // newest first (ws_customer_state has no created_at column)
+      orderBy: { id: "desc" }, // no created_at column
       skip: opts?.skip,
       take: opts?.take,
     }),
@@ -78,12 +66,11 @@ export const deleteState = async (id: number): Promise<Envelope<null>> => {
   return { ok: true, data: null };
 };
 
-// ─── Districts ──────────────────────────────────────────────────────────────────
 const districtDto = (d: any) => ({
   _id: String(d.id),
   name: d.name,
   active: d.active,
-  // populated state (matches Mongo's .populate("stateId", "_id name stateCode"))
+  // Populated state sub-object when the relation is included.
   stateId: d.state ? { _id: String(d.state.id), name: d.state.name, stateCode: d.state.state_code } : (d.stateId != null ? String(d.stateId) : null),
 });
 
@@ -139,7 +126,6 @@ export const deleteDistrict = async (id: number): Promise<Envelope<null>> => {
   return { ok: true, data: null };
 };
 
-// ─── Educations ─────────────────────────────────────────────────────────────────
 const educationDto = (e: any) => ({ _id: String(e.id), name: e.name, status: e.status });
 
 export const listEducations = async (status?: boolean) => {
@@ -174,7 +160,6 @@ export const deleteEducation = async (id: number): Promise<Envelope<null>> => {
   return { ok: true, data: null };
 };
 
-// ─── Target Goals ───────────────────────────────────────────────────────────────
 const goalDto = (g: any) => ({
   _id: String(g.id),
   name: g.name,
@@ -184,9 +169,8 @@ const goalDto = (g: any) => ({
 });
 
 /**
- * Assign stable numeric ids to a target goal's labels (stored in the `labels`
- * JSON). On update an existing label keeps its id (matched by name); new labels
- * get the next free id. (Same stable-id scheme the retired ws_goal admin used.)
+ * Stable numeric ids for a target goal's `labels` JSON: an existing label keeps
+ * its id (matched by name); new labels get the next free id.
  */
 const withLabelIds = (
   labels: { name: string }[],

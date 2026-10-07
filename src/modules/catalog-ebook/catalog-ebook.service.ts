@@ -1,17 +1,4 @@
-/**
- * Catalog · eBook service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Module key: `catalog-ebook` (flag OFF until the ebook cluster flips). Reads
- * `ws_ebook` and COMPOSES the listing with two already-migrated modules:
- *   - commerce-price       → ebook plans (shared `ws_package_course_ebook_price`)
- *   - commerce-ebook-sub   → per-customer active entitlement (access window)
- * There is NO separate ebook-price module (no `ws_ebook_price` table).
- *
- * `listEbooksWithPlans` mirrors the Mongo `listEbooks` output. The per-request
- * deep link is NOT computed here (it needs the HTTP request) — the caller passes
- * a `buildShareLink(ebookId)` callback and the controller supplies it. Verify
- * via live-DB tsx, not HTTP, while OFF.
- */
+// Ebook catalog: ebook list and detail with plans and purchase state.
 import type { EBook } from "@prisma/client";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
@@ -29,8 +16,6 @@ import type {
   ListEbooksOptions,
 } from "./catalog-ebook.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseEbookId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -38,22 +23,15 @@ export const parseEbookId = (id: string): number | null => {
 
 const daysBetween = (from: Date, to: Date): number => computeDaysLeft(to, from) ?? 0;
 
-/** Single active ebook by id (no composition). */
 export const findActiveEbookById = async (id: number): Promise<EbookDto | null> => {
   const row = await repo.findActiveById(id);
   return row ? toEbookDto(row) : null;
 };
 
-// ── Shared/live split ────────────────────────────────────────────────────────
-// Everything about an ebook row EXCEPT the per-customer overlay is identical
-// for every caller — but unlike course/package, that overlay isn't just
-// isPurchased/daysLeft: toEbookDto also mints `demoMediaToken`/`bookMediaToken`,
-// short-lived customer-bound tokens (see catalog-ebook.transformer.ts). Those
-// must NEVER be cached — mirrors the video mediaToken reasoning in
-// client/categories/categories.controller.ts. So the cached "shared row" omits
-// both tokens (and isPurchased/isPaid/isNew/daysLeft/shareableLink, which are
-// also request- or customer-dependent), and `mergeEbookLive` mints/computes all
-// of that fresh on every request.
+// The cached shared row must exclude everything request- or customer-dependent:
+// the customer-bound `demoMediaToken`/`bookMediaToken` (never cache these) plus
+// isPurchased/isPaid/isNew/daysLeft/shareableLink. `mergeEbookLive` computes them
+// fresh on every request.
 type EbookSharedRow = Pick<
   EbookDto,
   "_id" | "name" | "thumbnail" | "image" | "description" | "termsAndConditions" |
@@ -121,10 +99,8 @@ const mergeEbookLive = (
 };
 
 /**
- * Single active ebook with its plans + per-customer purchase state — the
- * `getEbookDetail` composition. Returns null if the ebook is missing/inactive.
- * Shared row + plans cached (CacheEntity.CatalogEbook, already flushed by admin
- * ebook/plan/price writes); tokens + isPurchased/daysLeft always computed live.
+ * Shared row and plans are cached under CacheEntity.CatalogEbook (flushed by admin
+ * ebook/plan/price writes); tokens and isPurchased/daysLeft are always computed live.
  */
 export const getEbookDetailWithPlans = async (
   id: number,
@@ -165,14 +141,8 @@ export const getEbookDetailWithPlans = async (
 };
 
 /**
- * The MySQL equivalent of the Mongo `listEbooks`: active ebooks (name/author
- * search + language filter) each enriched with its active plans (commerce-price)
- * and per-customer purchase state (commerce-ebook-sub). `isPaid` is derived from
- * the plans (paid when ≥1 active plan price > 0) — exactly the controller's
- * fallback when the Mongo `isPaid` field is absent, which it always is for SQL.
- *
- * `buildShareLink(ebookId)` supplies the per-request deep link (HTTP concern).
- * Shared rows + plans cached; tokens + isPurchased/daysLeft always live.
+ * `isPaid` is derived from the plans (any active plan price > 0). Shared rows and
+ * plans are cached; tokens and isPurchased/daysLeft are always computed live.
  */
 export const listEbooksWithPlans = async (
   opts: ListEbooksOptions = {},
@@ -196,7 +166,7 @@ export const listEbooksWithPlans = async (
       if (!rows.length) return { sharedRows: [] as EbookSharedRow[], total, plansByEbook: {} as Record<string, EbookPlanDto[]> };
       const ebookIds = rows.map((r) => r.id);
       const prices = await listActivePricesByEbooks(ebookIds);
-      // Plain object, not a Map — Maps don't survive a JSON.stringify round-trip.
+      // Plain object, not a Map: Maps don't survive the cache's JSON round-trip.
       const plansByEbook: Record<string, EbookPlanDto[]> = {};
       for (const p of prices) {
         if (!p.ebookId) continue;

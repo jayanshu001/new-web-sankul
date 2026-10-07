@@ -1,3 +1,4 @@
+// Jobs suggested products: admin CRUD with jobs-api cache revalidation.
 import { Prisma } from "@prisma/client";
 import { HttpError } from "../../middlewares/errorHandler";
 import { suggestedProductRepository } from "./suggested-product.repository";
@@ -13,11 +14,9 @@ import type {
 
 export const parseSuggestedProductId = (id: string): bigint | null => (/^\d+$/.test(id) ? BigInt(id) : null);
 
-// Best-effort side effect of a write that already succeeded — never turns a
-// successful create/update/delete into a failure response for the caller.
-// No placement id passed: the two repos' enum encodings (JobSuggestedPlacement
-// here vs SuggestedProductPlacement there) aren't guaranteed to line up
-// byte-for-byte, so a broad clear of this entity is the safe choice.
+// Best-effort: never fails a successful write. Broad clear (no placement id)
+// because JobSuggestedPlacement and the jobs-api SuggestedProductPlacement
+// encodings aren't guaranteed to match.
 const safeRevalidateSuggestedProducts = async () => {
   try {
     await revalidateJobsApiCache("suggestedproducts");

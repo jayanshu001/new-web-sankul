@@ -1,3 +1,4 @@
+// Careers: job opening CRUD, applicant submissions and application review.
 import { careersRepository } from "./careers.repository";
 import { toCareerApplicationDto, toCareerOpeningDto } from "./careers.transformer";
 import type {

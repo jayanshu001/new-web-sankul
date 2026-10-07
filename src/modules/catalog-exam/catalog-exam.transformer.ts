@@ -1,10 +1,8 @@
+// Exam categories: row to DTO mapping (response shape is frozen).
 import type { ExamCategory } from "@prisma/client";
 import type { ExamCategoryDto } from "./catalog-exam.types";
 
-/**
- * `ws_exam_category` row → DTO. The display field is `name`; the Mongo handler
- * surfaces BOTH `title` and `name` set to the column value, so we do the same.
- */
+/** Clients read the display name from both `title` and `name`, so both carry the column value. */
 export const toExamCategoryDto = (row: ExamCategory): ExamCategoryDto => ({
   _id: String(row.id),
   title: row.name ?? null,

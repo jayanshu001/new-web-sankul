@@ -1,25 +1,10 @@
-// src/admin/live/streamos.v1.service.ts
-//
-// Client for the NEW StreamOS API (https://api.streamos.in/api/public/v1).
-//
-// This is a separate platform from the one `streamos.service.ts` talks to — not a
-// version bump. Auth, paths, payload shapes and the webhook contract all differ.
-// Full old→new comparison: docs/migration/STREAMOS_V1_CHANGE_MATRIX.md
-//
-// Deliberate choices worth knowing before editing:
-//
-//  - `StreamosError` is imported from the LEGACY service rather than redefined.
-//    Controllers branch on `err instanceof StreamosError` to map an upstream
-//    failure onto an HTTP status; a second error class would silently downgrade
-//    every one of those branches to a generic 500.
-//
-//  - 503 is NOT retried. On this API it means NO_SLOTS_AVAILABLE (live
-//    concurrency exhausted), which retrying cannot fix — it just delays an
-//    actionable error. Only network faults and 502/504 are retried.
-//
-//  - 429 fails fast, surfacing the server's `Retry-After` instead of a
-//    hardcoded back-off. Holding an admin request open is worse than a clear
-//    "try again in N seconds".
+// StreamOS v1: HTTP client for the v1 API (https://api.streamos.in/api/public/v1), a separate
+// platform from streamos.service.ts (see docs/migration/STREAMOS_V1_CHANGE_MATRIX.md).
+//  - `StreamosError` is reused from the legacy service: controllers branch on
+//    `instanceof StreamosError`, and a second class would turn those into 500s.
+//  - 503 means NO_SLOTS_AVAILABLE and is not retried; only network faults and
+//    502/504 are.
+//  - 429 fails fast with the server's Retry-After rather than holding the request.
 
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import logger from "../../utils/logger";
@@ -28,14 +13,11 @@ import { streamosV1ApiKey, streamosV1Base } from "../../config/streamos";
 
 export { StreamosError };
 
-// Transient only. 503 is excluded on purpose (see header).
 const RETRY_STATUSES = new Set([502, 504]);
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 500;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-// ── Envelope ────────────────────────────────────────────────────────────────
-// Every v1 response is { success, message, data, meta, error }.
 interface V1Envelope<T> {
   success?: boolean;
   message?: string;
@@ -54,8 +36,7 @@ function authHeader(): Record<string, string> {
   return { Authorization: `Bearer ${key}` };
 }
 
-// Maps a v1 error response onto a StreamosError. The v1 API names its failures
-// via `error.code`, so we lead with that and fall back to the status.
+// Leads with v1's `error.code`, falling back to the HTTP status.
 function mapV1Error(res: AxiosResponse): StreamosError {
   const { status, data } = res;
   const code = (data as V1Envelope<unknown>)?.error?.code ?? "";
@@ -73,7 +54,6 @@ function mapV1Error(res: AxiosResponse): StreamosError {
       return new StreamosError("StreamOS resource not found (404).", 404, status, data);
     case "VALIDATION_ERROR":
     case "422":
-      // `details` is a field→message map; surface it so the admin sees which field.
       return new StreamosError(
         `StreamOS rejected the request: ${upstreamMessage ?? "validation failed"}.`,
         422,
@@ -124,7 +104,6 @@ async function request<T>(config: AxiosRequestConfig): Promise<T> {
       }
       if (res.status >= 400) throw mapV1Error(res);
 
-      // Unwrap the envelope. `data` is the payload on every documented endpoint.
       return (res.data?.data ?? (res.data as unknown)) as T;
     } catch (err: any) {
       lastError = err;
@@ -150,12 +129,9 @@ async function request<T>(config: AxiosRequestConfig): Promise<T> {
 const url = (path: string) => `${streamosV1Base()}${path}`;
 
 /**
- * Normalise a v1 quality label to the `<height>p` form used everywhere else.
- *
- * v1 emits `"P480"`; every consumer in this codebase — the promotion picker's
- * QUALITY_PREFERENCE list, `qualitiesFromSessionRecordings`, the app's quality
- * menu — expects `"480p"`. Converting here, at the API boundary, means none of
- * them need a v1 special case. Anything unrecognised is passed through as-is.
+ * v1 emits "P480"; every consumer (promotion picker, qualitiesFromSessionRecordings,
+ * the app's quality menu) expects "480p", so normalise at the boundary. Unrecognised
+ * labels pass through.
  */
 const normalizeQualityLabel = (raw: unknown): string => {
   const s = String(raw ?? "").trim();
@@ -167,41 +143,32 @@ const normalizeQualityLabel = (raw: unknown): string => {
   return s;                                   // "auto", or anything unexpected
 };
 
-// ── Live streams ────────────────────────────────────────────────────────────
-
 export type LiveStreamStatus = "SCHEDULED" | "READY_TO_STREAM" | "ENDED";
 
 export interface LiveStreamV1 {
   publicId: string;
-  // Empty until the stream is started — a SCHEDULED stream has no ingest yet.
+  // Empty until the stream is started.
   rtmpUrl: string | null;
   streamKey: string | null;
-  // The push URL split into its parts. Encoders like OBS ask for "server" and
-  // "stream key" in separate boxes, so surfacing these saves the admin from
-  // having to split `rtmpUrl` by hand.
+  // The push URL split into OBS's separate "server" and "stream key" fields.
   rtmpServerUrl: string | null;
   rtmpServerKey: string | null;
   pushDomain: string | null;
-  // Ingest credentials expire ~24h after they are minted. A stream provisioned
-  // days ahead CANNOT be pushed to; re-start it to mint fresh credentials.
+  // Ingest credentials expire ~24h after minting; re-start to mint fresh ones.
   pushExpiresAt: string | null;
   hlsUrl: string | null;
-  // Per-quality live playback URLs keyed by label. v1 DOES provide these —
-  // despite serving one adaptive master — so the app's quality picker keeps a
-  // source instead of falling back to auto-only.
+  // Per-quality live playback URLs, keyed by label.
   hlsUrls: QualityHlsUrls | null;
-  // Recording manifest. Null until the recording has finished processing.
+  // Null until the recording has finished processing.
   playbackUrl: string | null;
   status: LiveStreamStatus | string;
   latency: string | null;
   drmForRecording: boolean;
-  // Populated once a recording of this stream lands in the library.
   recordedAssetId: string | null;
   tags: Record<string, unknown> | null;
   raw: unknown;
 }
 
-/** Keys are quality labels, normalised to `<height>p`. */
 const toQualityMap = (raw: unknown): QualityHlsUrls | null => {
   if (!raw || typeof raw !== "object") return null;
   const out: QualityHlsUrls = {};
@@ -240,7 +207,7 @@ export interface CreateLiveStreamInput {
   customTags?: Record<string, string>;
 }
 
-/** Creates a stream that is immediately pushable (status READY_TO_STREAM). */
+/** Immediately pushable (status READY_TO_STREAM). */
 export async function createLiveStream(input: CreateLiveStreamInput): Promise<LiveStreamV1> {
   const payload = await request<any>({
     method: "POST",
@@ -261,9 +228,8 @@ export async function createLiveStream(input: CreateLiveStreamInput): Promise<Li
 }
 
 /**
- * Reserves a stream for a future time WITHOUT minting ingest credentials
- * (status SCHEDULED, empty rtmp_url). This is what makes the 24h push expiry
- * survivable: schedule far ahead, then `startLiveStream` at go-live.
+ * Reserves a future stream without minting ingest credentials, so the 24h push
+ * expiry is survivable: schedule ahead, then `startLiveStream` at go-live.
  */
 export async function scheduleLiveStream(
   input: CreateLiveStreamInput & { scheduledAt: string }
@@ -318,8 +284,6 @@ export async function listLiveStreams(): Promise<LiveStreamV1[]> {
   return (Array.isArray(arr) ? arr : []).map(toLiveStream);
 }
 
-// ── Assets (library / recordings) ───────────────────────────────────────────
-
 export type AssetStatus = "QUEUED" | "TRANSCODING" | "COMPLETED" | "ERROR";
 
 export interface AssetRendition {
@@ -333,7 +297,7 @@ export interface AssetV1 {
   status: AssetStatus | string;
   kind: "UPLOAD" | "LIVESTREAM_RECORDING" | string;
   durationSeconds: number | null;
-  /** StreamOS returns this as a decimal STRING; coerced to a number here. */
+  /** StreamOS returns a decimal string; coerced here. */
   sizeBytes: number | null;
   tags: Record<string, unknown> | null;
   /** Null on DRM assets — those emit DASH instead. */
@@ -352,9 +316,8 @@ const toNumber = (v: unknown): number | null => {
 
 const toAsset = (p: any): AssetV1 => {
   const video = p?.video ?? {};
-  // `renditions` sits at the ROOT of the asset, NOT inside `video` — only
-  // `hls_manifest_url` and `drm_content_id` live there. Reading the root is
-  // the documented shape; the `video` fallback is kept purely defensively.
+  // `renditions` is documented at the asset root, not inside `video`; the `video`
+  // fallback is defensive.
   const rawRends = Array.isArray(p?.renditions)
     ? p.renditions
     : Array.isArray(video?.renditions)
@@ -363,9 +326,8 @@ const toAsset = (p: any): AssetV1 => {
   const rends: AssetRendition[] = rawRends
     .map((r: any) => ({
       quality: normalizeQualityLabel(r?.quality),
-      // Live API (probed 2026-09-09) returns `playlist_url`, not `url` — the
-      // docs' field name. Reading only `url` dropped every rendition on the
-      // filter below, leaving COMPLETED recordings with nothing playable.
+      // The live API returns `playlist_url`, not the documented `url`; reading only
+      // `url` drops every rendition below.
       url: r?.playlist_url || r?.url || null,
       dashUrl: r?.dash_url || null,
     }))
@@ -414,17 +376,8 @@ export async function listAssets(folder?: string): Promise<ListAssetsResult> {
   };
 }
 
-/**
- * Internals exposed for `scripts/verify-streamos-v1.ts` only.
- *
- * Both of these had a wrong assumption baked in on first implementation —
- * renditions were read from the wrong nesting level, and v1's "P480" labels did
- * not match the "<height>p" form every consumer expects. Neither failure would
- * have shown up in a typecheck, so they are asserted directly.
- */
+/** Exposed for `scripts/verify-streamos-v1.ts` only (asserts what typecheck can't). */
 export const __test__ = { normalizeQualityLabel, toAsset };
-
-// ── Webhooks ────────────────────────────────────────────────────────────────
 
 export type StreamosV1Event =
   | "VIDEO_UPLOADED"
@@ -482,12 +435,6 @@ const toWebhook = (w: any): WebhookEndpointV1 => ({
   raw: w,
 });
 
-/**
- * Registered webhook endpoints.
- *
- * This is what makes a registration verifiable: the recording-health check can
- * confirm our URL is actually subscribed, rather than reporting "unknown".
- */
 export async function listWebhooks(): Promise<WebhookEndpointV1[]> {
   const payload = await request<any>({ method: "GET", url: url("/webhooks/") });
   const arr = Array.isArray(payload) ? payload : payload?.webhooks ?? payload?.results ?? [];
@@ -502,7 +449,6 @@ export async function deleteWebhook(endpointId: string): Promise<void> {
   });
 }
 
-// ── Video upload (presign → PUT → register) ─────────────────────────────────
 
 export interface UploadUrlResult {
   uploadUrl: string | null;

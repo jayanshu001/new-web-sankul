@@ -1,22 +1,17 @@
+// Client exams: Prisma queries for exams, attempts and results.
 import { prisma } from "../../config/prisma";
 import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 import { searchTokens } from "../../utils/searchFilter";
 
 /**
- * Prisma READ persistence for the client-exam MySQL branch.
- * Tables: ws_exam, ws_exam_category, ws_exam_question(_option),
- * ws_exam_result(_detail). Writes (saveAnswers scoring) are a deferred second
- * pass. type enum: 'subject' | 'daily' (ExamType). status boolean = published.
- *
- * ⚠ Legacy column quirks (handled in the service): result tables use the
- * `qresult_*` prefix; `exam.questions` is a count; `question.answer` stores the
- * correct answer (text), not surfaced to the client during an attempt.
+ * Legacy column quirks: result tables use the `qresult_*` prefix, `exam.questions`
+ * is a count, and `question.answer` holds the correct answer (never surfaced
+ * during an attempt).
  */
 export const clientExamRepository = {
   findPublishedExam: (id: number) =>
     prisma.exam.findFirst({ where: { id, status: true } }),
 
-  /** Active subject sub-categories of a parent (the "subjects" list). */
   subCategories: (parentId: number) =>
     prisma.examCategory.findMany({
       where: { parent: parentId, status: true, deleted: false },
@@ -25,9 +20,8 @@ export const clientExamRepository = {
     }),
 
   /**
-   * Published exams in a category SUBTREE, hiding scheduled exams whose window ended.
    * Takes the expanded id set (self + descendants): exams are filed only under leaf
-   * categories, so a parent id matches nothing on its own.
+   * categories. Scheduled exams whose window ended are hidden.
    */
   examsByCategory: (categoryIds: number[], now: Date, search?: string | null) =>
     prisma.exam.findMany({
@@ -42,11 +36,9 @@ export const clientExamRepository = {
       orderBy: [{ order_by: "asc" }, { createAt: "asc" }],
     }),
 
-  /** Single exam category (for the listing header). */
   findCategory: (id: number) =>
     prisma.examCategory.findFirst({ where: { id }, select: { id: true, name: true, image: true, order_by: true } }),
 
-  /** Published non-daily exams in a category subtree, paginated + optional title search. */
   examsByCategoryPaged: (categoryIds: number[], now: Date, search: string | null, skip: number, take: number) =>
     prisma.exam.findMany({
       where: {
@@ -73,7 +65,7 @@ export const clientExamRepository = {
       },
     }),
 
-  /** Questions of an exam (without revealing the answer field). */
+  /** Never selects the `answer` field. */
   questionsForExam: (examId: number) =>
     prisma.examQuestion.findMany({
       where: { exam: examId, status: true },
@@ -87,14 +79,12 @@ export const clientExamRepository = {
       orderBy: [{ id: "asc" }],
     }),
 
-  /** Latest result per exam for a customer (for the isCompleted/lastResult deco). */
   resultsForCustomerExams: (customerId: number, examIds: number[]) =>
     prisma.examResult.findMany({
       where: { customerId, examId: { in: examIds }, status: true },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
     }),
 
-  /** A customer's results, paginated (my-results), optional exam-name search. */
   myResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
       where: { customerId, status: true, ...(search ? { AND: searchTokens(search).map((t) => ({ Exam: { name: { contains: t } } })) } : {}) },
@@ -110,9 +100,8 @@ export const clientExamRepository = {
     prisma.examResult.findFirst({ where: { id, customerId } }),
 
   /**
-   * Lifetime analytics for a customer, aggregated live from submitted
-   * ws_exam_result rows (legacy migrated attempts included). The
-   * ws_exam_result_detail_analytics rollup is deliberately NOT used.
+   * Aggregated live from submitted ws_exam_result rows (legacy attempts included);
+   * the ws_exam_result_detail_analytics rollup is deliberately not used.
    */
   overallAnalytics: async (customerId: number) => {
     const agg = await prisma.$queryRawUnsafe<any[]>(
@@ -130,15 +119,13 @@ export const clientExamRepository = {
     };
   },
 
-  /** First result row for (customer, exam) — mirrors Mongo findOne natural order. */
+  /** Mirrors legacy natural order (no orderBy). */
   findResultByExam: (customerId: number, examId: number) =>
     prisma.examResult.findFirst({ where: { customerId, examId } }),
 
-  /** Set the rating on a single result row by id, returning the updated row. */
   rateResult: (id: number, ratting: string) =>
     prisma.examResult.update({ where: { id }, data: { ratting } }),
 
-  /** Past (submitted) attempts of DAILY-type exams, paginated, optional name search. */
   pastDailyResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
       where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}) } },
@@ -156,7 +143,6 @@ export const clientExamRepository = {
       where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}) } },
     }),
 
-  /** Daily-exam drill-down counts by year/month/week via raw SQL date grouping. */
   dailyYears: (now: Date) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT YEAR(COALESCE(start_date, created_at)) AS year, COUNT(*) AS testsCount
@@ -174,7 +160,6 @@ export const clientExamRepository = {
       where: { type: "daily", status: true, OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }] },
       orderBy: [{ startAt: "desc" }, { id: "desc" }],
     }),
-  /** Daily exams in a window, paginated + optional name search (tests level). */
   dailyInWindowPaged: (from: Date, to: Date, search: string | null, skip: number, take: number) =>
     prisma.exam.findMany({
       where: {
@@ -197,7 +182,6 @@ export const clientExamRepository = {
       },
     }),
 
-  // ─── saveAnswers WRITE path ────────────────────────────────────────────────
   findExam: (id: number) => prisma.exam.findUnique({ where: { id } }),
   findQuestion: (id: number, examId: number) =>
     prisma.examQuestion.findFirst({ where: { id, exam: examId } }),
@@ -205,20 +189,18 @@ export const clientExamRepository = {
     prisma.examQuestionOption.findFirst({ where: { id, question: questionId } }),
 
   /**
-   * Options by id — used to recognise LEGACY skip rows when reading stored answers
-   * back (a pre-cutover attempt/result points `answer_id` at an option titled
-   * "Skip"). Name only; nothing else is needed to classify it.
+   * Used to recognise legacy skip rows: a pre-cutover result points `answer_id` at
+   * an option named "Skip".
    */
   optionsByIds: (ids: number[]) =>
     ids.length
       ? prisma.examQuestionOption.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
       : Promise.resolve([]),
 
-  /** Insert the result + its details in one transaction. Returns the result row. */
   createResult: (input: {
     customerId: number; examId: number; total: number; attempt: number; skip: number;
     success: number; failed: number; score: number; timing: string; ratting: string | null;
-    // answerId is NULL for a skipped question (no option row involved).
+      // NULL for a skipped question.
     details: Array<{ questionId: number; answerId: number | null; result: "true" | "false" | "skip"; point: number }>;
   }) =>
     prisma.$transaction(async (tx) => {
@@ -242,10 +224,7 @@ export const clientExamRepository = {
       return result;
     }),
 
-  /**
-   * This customer's best submitted score for an exam. Uses
-   * idx_exam_result_cust_exam_status (customer, exam, status) — index-only.
-   */
+  /** Index-only via idx_exam_result_cust_exam_status (customer, exam, status). */
   myBestScoreForExam: async (customerId: number, examId: number): Promise<number> => {
     const r = await prisma.$queryRawUnsafe<any[]>(
       `SELECT COALESCE(MAX(qresult_result),0) best
@@ -257,15 +236,10 @@ export const clientExamRepository = {
   },
 
   /**
-   * Rank counters for an exam, aggregated IN SQL. Ties share a rank
-   * (rank = #customers strictly better + 1), matching the previous behaviour.
-   *
-   * ⚠ This replaced a `GROUP BY qresult_customer_id` that returned one row PER
-   * CANDIDATE to Node so the ranking could be done in JS — tens of thousands of
-   * rows over the wire per submit on a popular quiz. Both counts now need
-   * idx_exam_result_exam_status (qresult_qtest_id, qresult_status); the older
-   * (customer, exam, status) index cannot serve an exam-only filter because
-   * customer is its leading column.
+   * Ties share a rank (rank = customers strictly better + 1), aggregated in SQL
+   * rather than shipping one row per candidate to Node. Needs
+   * idx_exam_result_exam_status (qresult_qtest_id, qresult_status); the
+   * (customer, exam, status) index cannot serve an exam-only filter.
    */
   rankForExam: async (
     examId: number,
@@ -294,7 +268,6 @@ export const clientExamRepository = {
     };
   },
 
-  // ─── Solution view ──────────────────────────────────────────────────────────
   latestResultForExam: (customerId: number, examId: number) =>
     prisma.examResult.findFirst({
       where: { customerId, examId, status: true },
@@ -305,24 +278,20 @@ export const clientExamRepository = {
   detailsForResult: (resultId: number) =>
     prisma.examResultDetail.findMany({ where: { examResultId: resultId } }),
   /**
-   * Legacy (pre-cutover / old-app) attempts wrote their detail rows with a NULL
-   * qresult_detail_qresult_id — they link to the attempt only by (customer, exam).
-   * Legacy allowed one attempt per pair. Served by the `all_fields` index.
+   * Legacy attempts wrote detail rows with a NULL qresult_detail_qresult_id, linked
+   * only by (customer, exam); legacy allowed one attempt per pair.
    */
   legacyDetailsForExam: (customerId: number, examId: number) =>
     prisma.examResultDetail.findMany({ where: { examResultId: null, customerId, examId }, orderBy: { id: "asc" } }),
   questionsByIds: (ids: number[]) =>
     prisma.examQuestion.findMany({ where: { id: { in: ids } } }),
 
-  // ─── attempt lifecycle (resumable attempts) ────────────────────────────────
-  /** The customer's open (in-progress) attempt for an exam, if any. */
   findInProgressAttempt: (customerId: number, examId: number) =>
     prisma.examResult.findFirst({
       where: { customerId, examId, status: false },
       orderBy: [{ id: "desc" }],
     }),
 
-  /** Highest attempt number this customer has used for an exam (null if none). */
   maxAttemptNumber: async (customerId: number, examId: number): Promise<number> => {
     const r = await prisma.examResult.aggregate({
       where: { customerId, examId },
@@ -331,7 +300,6 @@ export const clientExamRepository = {
     return r._max.attemptNumber ?? 0;
   },
 
-  /** Open a fresh in-progress attempt row (status=false). */
   createInProgressAttempt: (input: {
     customerId: number; examId: number; attemptNumber: number; startedAt: Date;
   }) =>
@@ -344,11 +312,9 @@ export const clientExamRepository = {
       },
     }),
 
-  /** A specific attempt scoped to its owner + exam. */
   findAttempt: (id: number, customerId: number, examId: number) =>
     prisma.examResult.findFirst({ where: { id, customerId, examId } }),
 
-  /** Upsert a single saved answer detail by (attempt, question). */
   upsertAttemptDetail: async (input: {
     examResultId: number; customerId: number; examId: number; questionId: number;
     answerId: number | null; result: "true" | "false" | "skip"; point: number;
@@ -371,14 +337,9 @@ export const clientExamRepository = {
     });
   },
 
-  /** Published question ids for an exam (for submit's unanswered → skip fill). */
   questionIdsForExam: (examId: number) =>
     prisma.examQuestion.findMany({ where: { exam: examId, status: true }, select: { id: true } }),
 
-  /**
-   * Finalize an attempt: insert SKIP details for any unanswered question, then
-   * write the rolled-up totals + mark submitted. Returns the updated row.
-   */
   finalizeAttempt: (input: {
     attemptId: number; customerId: number; examId: number;
     missingQuestionIds: number[];
@@ -386,10 +347,8 @@ export const clientExamRepository = {
     score: number; timing: string; ratting: string | null; submittedAt: Date;
   }) =>
     prisma.$transaction(async (tx) => {
-      // ONE multi-row INSERT, not one per question. This used to be a serial
-      // `create()` loop: a quiz submitted with 100 unanswered questions cost 100
-      // sequential round-trips with the write transaction held open the whole
-      // time — a large part of the submit latency / gateway timeouts.
+      // One multi-row INSERT: a per-question loop held the write transaction open
+      // across N round-trips and caused submit timeouts.
       if (input.missingQuestionIds.length) {
         await tx.examResultDetail.createMany({
           data: input.missingQuestionIds.map((qid) => ({
@@ -409,7 +368,6 @@ export const clientExamRepository = {
       });
     }),
 
-  /** All of a customer's attempts for an exam (history, newest first), paginated. */
   attemptsForExam: (customerId: number, examId: number, skip?: number, take?: number) =>
     prisma.examResult.findMany({
       where: { customerId, examId },
@@ -420,7 +378,6 @@ export const clientExamRepository = {
   countAttemptsForExam: (customerId: number, examId: number) =>
     prisma.examResult.count({ where: { customerId, examId } }),
 
-  /** Aggregate stats across a customer's SUBMITTED attempts for an exam. */
   aggregateForExam: (customerId: number, examId: number) =>
     prisma.examResult.aggregate({
       where: { customerId, examId, status: true },

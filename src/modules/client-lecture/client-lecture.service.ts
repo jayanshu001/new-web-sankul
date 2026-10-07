@@ -1,20 +1,15 @@
 /**
- * Client lecture (video-URL) endpoint — SQL branch for GET /client/courses/lecture.
- * Gated behind `isMysqlModule("client-lecture")`. Returns the SAME encrypted
- * shape as the Mongo path (the controller owns encryptVideoSource — DB-agnostic).
- *
- * Reads ws_video + ws_video_category (course-membership check) + ws_package_course_subscription
- * (entitlement). Ids are SQL ints. payment_status has no SQL column → status=true.
+ * Client lecture: video lookup + entitlement checks. The controller owns encryptVideoSource (fixed video-URL contract).
+ * payment_status has no column, so status=true.
  */
 import { prisma } from "../../config/prisma";
-
 
 export const parseLecId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Fetch a live video by id (any price). null → 404, status:false → 403 handled by caller. */
+/** Any price. Caller maps null → 404 and status:false → 403. */
 export const findVideo = (id: number) =>
   prisma.video.findFirst({
     where: { id },
@@ -22,10 +17,8 @@ export const findVideo = (id: number) =>
   });
 
 /**
- * Does the video's category belong to the given course? SQL has no
- * VideoCategory.courseId column (Course↔category is via Course.videoCategoryId +
- * the relation DAG), so membership = the video's category is in the course's
- * reachable category set (same resolver the heartbeat uses).
+ * There is no VideoCategory.courseId column, so membership = the video's category is in the
+ * course's reachable category set (relation DAG; same resolver the heartbeat uses).
  */
 export const videoBelongsToCourse = async (videoCategoryId: number | null, courseId: number): Promise<boolean> => {
   if (videoCategoryId == null) return false;

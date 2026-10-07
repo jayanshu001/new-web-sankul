@@ -1,19 +1,8 @@
-// src/utils/presignUpload.ts
-//
-// Presigned direct-to-Spaces uploads for large files (e.g. eBook book PDFs up
-// to 500 MB). The browser PUTs the file straight to DigitalOcean Spaces using
-// a short-lived signed URL, so the bytes never pass through this server — no
-// request held open, no Express/proxy timeout, no server bandwidth. The server
-// only signs the URL and later records the resulting public file URL.
-//
-// Flow:
-//   1. Client → POST /admin/uploads/presign { fileName, contentType, kind }
-//      → server returns { uploadUrl, fileUrl, key, expiresIn }
-//   2. Client → PUT <uploadUrl> with the raw file bytes + the SAME Content-Type
-//   3. Client → create/update ebook with bookUrl = <fileUrl>
-//
-// NOTE: For step 2 to work from a browser, the Spaces bucket must have a CORS
-// rule allowing PUT from the admin origin (see docs/large-pdf-upload.md).
+// Presigned uploads: direct-to-Spaces uploads for large files (eBook PDFs up to 500 MB),
+// so the bytes never pass through this server. Flow: POST /admin/uploads/presign
+// → client PUTs the raw bytes to `uploadUrl` with the same Content-Type → client
+// saves `fileUrl` on the ebook. Browser PUTs need a Spaces CORS rule allowing the
+// admin origin (docs/large-pdf-upload.md).
 
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -21,18 +10,14 @@ import path from "path";
 import { s3Config, DO_BUCKET, publicUrlFor } from "../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 
-// How long the signed PUT URL stays valid. Long enough for a 500 MB upload on
-// a slow connection (~3 Mbps ≈ 22 min), short enough to limit URL leakage.
-const PRESIGN_EXPIRY_SECONDS = 30 * 60; // 30 minutes
+// Long enough for 500 MB on ~3 Mbps (~22 min), short enough to limit URL leakage.
+const PRESIGN_EXPIRY_SECONDS = 30 * 60;
 
-// Hard ceiling we advertise/enforce for presigned uploads. Spaces itself does
-// not enforce this for a simple PUT, so we also pin Content-Length at sign time
-// (see below) which makes the signed URL only usable for a file of that exact
-// size — the real guardrail.
-export const PRESIGN_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
+// Spaces does not enforce this on a simple PUT; the real guardrail is the
+// Content-Length pinned at sign time.
+export const PRESIGN_MAX_BYTES = 500 * 1024 * 1024;
 
-// Allowed upload "kinds" → (key prefix, allowed extensions, allowed mimetypes).
-// Keeps presign from being an open relay to write arbitrary keys/types.
+// Allowlist so presign is not an open relay for arbitrary keys/types.
 const KINDS = {
   ebookPdf: {
     prefix: UPLOAD_FOLDERS.ebookFull,
@@ -55,15 +40,15 @@ export interface PresignInput {
   kind: PresignKind;
   fileName: string;
   contentType: string;
-  fileSize: number; // bytes — required so we can pin Content-Length
+  fileSize: number; // bytes; pinned as Content-Length
 }
 
 export interface PresignResult {
-  uploadUrl: string; // PUT here with the raw bytes
-  fileUrl: string; // public URL to store as bookUrl after upload completes
+  uploadUrl: string;
+  fileUrl: string;
   key: string;
   expiresIn: number;
-  requiredHeaders: Record<string, string>; // headers the client MUST send on the PUT
+  requiredHeaders: Record<string, string>; // the client must send these on the PUT
 }
 
 const sanitizeName = (name: string) =>
@@ -73,10 +58,8 @@ const sanitizeName = (name: string) =>
     .slice(-120); // keep the tail (extension) if the name is very long
 
 /**
- * Build a presigned PUT URL for a direct-to-Spaces upload. Validates the kind,
- * extension, mimetype and size, then signs a URL pinned to the exact
- * Content-Type and Content-Length the client declared — so the URL can only be
- * used to upload that specific file shape.
+ * Validates kind, extension, mimetype and size, then signs a PUT URL pinned to
+ * the declared Content-Type and Content-Length.
  */
 export const buildPresignedUpload = async (
   input: PresignInput
@@ -102,8 +85,7 @@ export const buildPresignedUpload = async (
     throw new Error(`fileSize must be between 1 byte and ${mb} MB.`);
   }
 
-  // Date.now()-based key keeps uploads unique; Math.random suffix avoids
-  // collisions when two admins upload same-named files in the same ms.
+  // Random suffix avoids collisions for same-named files in the same ms.
   const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
   const key = `${cfg.prefix}/${unique}-${safeName}`;
 
@@ -111,13 +93,12 @@ export const buildPresignedUpload = async (
     Bucket: DO_BUCKET,
     Key: key,
     ContentType: input.contentType,
-    ContentLength: input.fileSize, // pins the URL to this exact size
-    ACL: "public-read", // match the rest of the bucket's public-CDN model
+    ContentLength: input.fileSize,
+    ACL: "public-read",
   });
 
-  // s3Config is an S3Client; a duplicate @aws-sdk/client-s3 in the dep tree
-  // surfaces two incompatible S3Client type declarations, so cast at the call
-  // site (runtime is unaffected — same client instance).
+  // Cast: a duplicate @aws-sdk/client-s3 in the dep tree yields two incompatible
+  // S3Client types; runtime is the same instance.
   const uploadUrl = await getSignedUrl(s3Config as any, command, {
     expiresIn: PRESIGN_EXPIRY_SECONDS,
   });

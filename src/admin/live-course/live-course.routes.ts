@@ -1,3 +1,4 @@
+// Admin live courses: course, plan, subscription, schedule, folder and video routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -72,19 +73,14 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// --- Plans (declared first so they don't collide with /:id patterns) -------
-// flush CacheEntity.LiveCourse — was unflushed (same gap as course/ebook plan
-// CRUD, fixed the same way): a plan/price edit is invisible in every cached
-// live-course-embedding read (client catalog-course/catalog-package/categories)
-// until this route's flush group cascades to them — see flushGroups.ts.
+// Plans and subscriptions are declared before the /:id patterns so they don't collide.
+// Plan writes flush LiveCourse so cached client reads embedding prices refresh.
 router.get("/plans/:planId",                 getLiveCoursePlan);
 router.put("/plans/:planId",                 autoFlushGroup(CacheEntity.LiveCourse), updateLiveCoursePlan);
 router.delete("/plans/:planId",              autoFlushGroup(CacheEntity.LiveCourse), deleteLiveCoursePlan);
 
-// --- Subscriptions (literal prefix — also declared before /:id patterns) ----
 router.get("/subscriptions",                 listLiveCourseSubscriptions);
-// Report exports — full filtered set, no pagination. Static paths registered
-// before `/subscriptions/:subscriptionId` so they aren't matched as an id.
+// Static export paths before `/subscriptions/:subscriptionId` so they aren't matched as an id.
 router.get("/subscriptions/export/csv",      exportLiveCourseSubscriptionsCsv);
 router.get("/subscriptions/export/excel",    exportLiveCourseSubscriptionsExcel);
 router.get("/subscriptions/:subscriptionId", getLiveCourseSubscription);
@@ -116,21 +112,15 @@ router.post(
   revertLiveCourseSubscriptionDeactivation
 );
 
-// --- Live course CRUD -------------------------------------------------------
-// Master reads cached; every write that changes course content (CRUD, popular,
-// schedule folders/entries, folder + video CRUD) flushes "live-course" (fans out
-// to catalog-course/dashboard/free/categories). Subscriptions/sessions/exports
-// are per-buyer/live and stay uncached; grant mutates a subscription, not catalog.
-// create/update/delete ALSO flush the "material" group: they rewrite
-// material_categories + the ws_material_category_live_course pivot, which the
-// client materials tab (/client/catalog/live-course/:id/materials) and the
-// /client/materials entitlement reads are cached on under "material", not
-// "live-course". Kept route-level (not in FLUSH_GROUPS[LiveCourse]) so the
-// frequent live-session writes that flush "live-course" don't wipe material caches.
+// Every write that changes course content flushes "live-course"; subscriptions,
+// sessions and exports are per-buyer/live and stay uncached.
+// create/update/delete also flush "material": they rewrite the
+// ws_material_category_live_course pivot that client material reads are cached on.
+// Kept route-level (not in FLUSH_GROUPS[LiveCourse]) so frequent live-session
+// writes that flush "live-course" don't wipe material caches.
 router.get("/",                              cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.LiveCourse }), listLiveCourses);
 router.post("/",                             uploadTo(UPLOAD_FOLDERS.liveCourse), uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), createLiveCourse);
-// Bulk drag-and-drop reorder. MUST stay above the "/:id" routes so "reorder" is
-// never parsed as a course id. Flushes the cached lists like any other write.
+// Must stay above the "/:id" routes so "reorder" is never parsed as a course id.
 router.post("/reorder",                      autoFlushGroup(CacheEntity.LiveCourse), reorderLiveCourses);
 router.get("/:id",                           cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.LiveCourse }), getLiveCourseById);
 router.put("/:id",                           uploadTo(UPLOAD_FOLDERS.liveCourse), uploadS3.single("image"), autoFlushGroup(CacheEntity.LiveCourse, CacheEntity.Material), updateLiveCourse);
@@ -141,11 +131,10 @@ router.get("/:id/plans",                     listLiveCoursePlans);
 router.post("/:id/plans",                    autoFlushGroup(CacheEntity.LiveCourse), createLiveCoursePlan);
 router.get("/:id/subscriptions",             listLiveCourseSubscriptions);
 router.post("/:id/grant",                    grantLiveCourseSubscription);
-// Deprecated: old flat schedule-entries PATCH → 410. Old timetable-files
-// route is intentionally NOT registered → 404 from the router.
+// Deprecated: old flat schedule-entries PATCH returns 410. The old timetable-files
+// route is intentionally not registered (404).
 router.patch("/:id/schedule-entries",        updateScheduleEntriesDeprecated);
 
-// --- Schedule folders + entries ---------------------------------------------
 router.get   ("/:id/schedule-folders",                                            listScheduleFolders);
 router.post  ("/:id/schedule-folders",                                            autoFlushGroup(CacheEntity.LiveCourse), createScheduleFolder);
 router.post  ("/:id/schedule-folders/reorder",                                    autoFlushGroup(CacheEntity.LiveCourse), reorderScheduleFolders);
@@ -157,13 +146,11 @@ router.post  ("/:id/schedule-folders/:folderId/entries/reorder",                
 router.patch ("/:id/schedule-folders/:folderId/entries/:entryId",                 autoFlushGroup(CacheEntity.LiveCourse), updateScheduleEntry);
 router.delete("/:id/schedule-folders/:folderId/entries/:entryId",                 autoFlushGroup(CacheEntity.LiveCourse), deleteScheduleEntry);
 
-// --- Folder CRUD (under a live course) --------------------------------------
 router.get("/:liveCourseId/folders",                       listFolders);
 router.post("/:liveCourseId/folders",                      autoFlushGroup(CacheEntity.LiveCourse), createFolder);
 router.patch("/:liveCourseId/folders/:folderId",           autoFlushGroup(CacheEntity.LiveCourse), updateFolder);
 router.delete("/:liveCourseId/folders/:folderId",          autoFlushGroup(CacheEntity.LiveCourse), deleteFolder);
 
-// --- Video CRUD (under a folder) --------------------------------------------
 router.get("/:liveCourseId/folders/:folderId/videos",                       listVideosInFolder);
 router.post("/:liveCourseId/folders/:folderId/videos",                      autoFlushGroup(CacheEntity.LiveCourse), createVideoInFolder);
 router.post("/:liveCourseId/folders/:folderId/videos/reorder",              autoFlushGroup(CacheEntity.LiveCourse), reorderVideosInFolder);
@@ -172,7 +159,7 @@ router.get("/:liveCourseId/folders/:folderId/videos/:videoId",              getV
 router.put("/:liveCourseId/folders/:folderId/videos/:videoId",              autoFlushGroup(CacheEntity.LiveCourse), updateVideoInFolder);
 router.delete("/:liveCourseId/folders/:folderId/videos/:videoId",           autoFlushGroup(CacheEntity.LiveCourse), deleteVideoInFolder);
 
-// --- Lecture preview (admin LectureWatch page) — uncached: fresh token per request.
+// Uncached: fresh token per request.
 router.get("/:liveCourseId/lecture/:videoId",                               getLectureForAdmin);
 
 export default router;

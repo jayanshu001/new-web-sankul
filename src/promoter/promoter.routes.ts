@@ -1,3 +1,4 @@
+// Promoter surface: master router (separate auth domain, email/password login).
 import { Router } from "express";
 import promoterAuthRoutes from "./auth/promoter.auth.routes";
 import promoterDashboardRoutes from "./dashboard/dashboard.routes";
@@ -6,13 +7,6 @@ import promoterCustomerRoutes from "./customer/customer.routes";
 import promoterSubscriptionRoutes from "./subscription/subscription.routes";
 
 const router = Router();
-
-/**
- * ==========================================
- * PROMOTER API ROUTES (/api/v1/promoter)
- * ==========================================
- * Separate auth domain for promoters. Login via email/password.
- */
 
 router.use("/auth", promoterAuthRoutes);
 router.use("/dashboard", promoterDashboardRoutes);

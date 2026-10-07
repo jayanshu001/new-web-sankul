@@ -1,9 +1,10 @@
+// Admin exams (quizzes): Prisma queries for exams, questions, results and analytics.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { examInCategoryWhere } from "../catalog-exam/exam-category-pivot.where";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
-/** Shape used by question create/bulk inserts (option image/order dropped — no columns). */
+/** Option image/order are dropped: ws_exam_question_option has no columns for them. */
 export interface QuestionWrite {
   examId: number;
   name: string;
@@ -17,9 +18,8 @@ export interface QuestionWrite {
 }
 
 /**
- * The exam's chosen categories, for the populated `categoryIds` DTO field. Excludes
- * soft-deleted categories: a link to one is inert everywhere else (every read filters
- * `deleted:false`), so surfacing it would render a chip the picker can't offer back.
+ * Excludes soft-deleted categories: a link to one is inert everywhere else, so
+ * surfacing it would render a chip the picker can't offer back.
  */
 const examCategoriesInclude = {
   examCategoryPivot: {
@@ -29,29 +29,20 @@ const examCategoriesInclude = {
   },
 } satisfies Prisma.ExamInclude;
 
-/** ws_exam.questions = count of ACTIVE (status=true) questions — mirrors the Mongo recompute. */
+/** ws_exam.questions = count of active (status=true) questions. */
 async function recomputeCount(tx: Prisma.TransactionClient, examId: number) {
   const count = await tx.examQuestion.count({ where: { exam: examId, status: true } });
   await tx.exam.update({ where: { id: examId }, data: { numberOfQuestions: count } });
 }
 
-/**
- * Prisma persistence for the admin-exam MySQL branch (READ-focused + invalidate).
- * Same ws_exam* tables as client-exam; admin-shaped queries (filters, populated
- * customer, per-exam/per-question aggregates). Result tables use qresult_*.
- */
 export const adminExamRepository = {
-  // ── exams ──────────────────────────────────────────────────────────────────
   listExams: (opts: { search?: string; categoryId?: number; type?: "subject" | "daily"; status?: boolean; isPaid?: boolean; skip: number; take: number }) => {
     const where = adminExamRepository.examListWhere(opts);
     return prisma.exam.findMany({
       where,
       include: { ExamCategory: { select: { id: true, name: true } }, ...examCategoriesInclude },
-      // `order_by` is a legacy field with no correlation to recency (1487 rows
-      // sit at 0, 2760 at 1, spanning the same 2018-2023 date range in both
-      // buckets), so sorting by it first forced every `order_by=0` row ahead
-      // of every `order_by=1` row regardless of actual creation date. Sort by
-      // creation date only; `id desc` breaks ties deterministically.
+      // `order_by` is a legacy field uncorrelated with recency; sorting by it first
+      // buried newer rows. Sort by creation date, `id desc` as tiebreaker.
       orderBy: [{ createAt: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
@@ -83,14 +74,11 @@ export const adminExamRepository = {
     }),
   countQuestionsForExam: (examId: number) => prisma.examQuestion.count({ where: { exam: examId } }),
 
-  // ── exam writes ──────────────────────────────────────────────────────────────
-  /** Minimal columns needed to merge an update / run the daily-overlap rule. */
   findExamMeta: (id: number) =>
     prisma.exam.findUnique({ where: { id }, select: { id: true, type: true, status: true, startAt: true, endAt: true, solution: true } }),
   /**
-   * Another PUBLISHED daily test whose availability window overlaps [startAt,endAt).
-   * Overlap = existing.startAt < candidate.endAt AND existing.endAt > candidate.startAt
-   * (strict, so back-to-back windows don't clash). `excludeId` drops the row being edited.
+   * Another published daily test whose window overlaps [startAt,endAt). Strict
+   * comparison, so back-to-back windows don't clash. `excludeId` skips the edited row.
    */
   findDailyOverlap: (opts: { startAt: Date; endAt: Date; excludeId?: number }) =>
     prisma.exam.findFirst({
@@ -111,7 +99,7 @@ export const adminExamRepository = {
   updateExam: (id: number, data: Prisma.ExamUncheckedUpdateInput) => prisma.exam.update({ where: { id }, data }),
   setExamStatus: (id: number, status: boolean) => prisma.exam.update({ where: { id }, data: { status, updatedAt: new Date() } }),
   setExamOrder: (id: number, order: number) => prisma.exam.update({ where: { id }, data: { order_by: order, updatedAt: new Date() } }),
-  /** Cascade delete: result-details → results → options → questions → exam (FK-safe order). */
+  /** Deletes in FK-safe order: result-details → results → options → questions → exam. */
   deleteExamCascade: (id: number) =>
     prisma.$transaction([
       prisma.examResultDetail.deleteMany({ where: { examId: id } }),
@@ -121,7 +109,6 @@ export const adminExamRepository = {
       prisma.exam.delete({ where: { id } }),
     ]),
 
-  // ── questions ────────────────────────────────────────────────────────────────
   listQuestions: (opts: { examId?: number; search?: string; status?: boolean; skip: number; take: number }) => {
     const where: Prisma.ExamQuestionWhereInput = {};
     if (opts.examId !== undefined) where.exam = opts.examId;
@@ -142,13 +129,11 @@ export const adminExamRepository = {
   optionsForQuestions: (questionIds: number[]) =>
     prisma.examQuestionOption.findMany({ where: { question: { in: questionIds } }, orderBy: { id: "asc" } }),
 
-  // ── question writes ────────────────────────────────────────────────────────
   examExists: (id: number) => prisma.exam.findUnique({ where: { id }, select: { id: true } }),
   maxQuestionOrder: async (examId: number): Promise<number> => {
     const top = await prisma.examQuestion.findFirst({ where: { exam: examId }, orderBy: { order_by: "desc" }, select: { order_by: true } });
     return top?.order_by ?? -1;
   },
-  /** ws_exam_question_option has only title + question_id — option image/order are dropped (no columns). */
   createQuestion: (input: QuestionWrite) =>
     prisma.$transaction(async (tx) => {
       const now = new Date();
@@ -204,7 +189,6 @@ export const adminExamRepository = {
   setQuestionOrder: (id: number, order: number) =>
     prisma.examQuestion.update({ where: { id }, data: { order_by: order, updatedAt: new Date() } }),
 
-  // ── submissions / results ──────────────────────────────────────────────────
   listSubmissions: (examId: number, skip: number, take: number) =>
     prisma.examResult.findMany({
       where: { examId },
@@ -227,7 +211,6 @@ export const adminExamRepository = {
   invalidateResult: (id: number) =>
     prisma.examResult.update({ where: { id }, data: { status: false, score: 0 } }),
 
-  // ── analytics (raw SQL aggregates on qresult_* columns) ──────────────────────
   examOverall: (examId: number) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT COUNT(*) totalCandidates, ROUND(AVG(qresult_result),2) avgScore,

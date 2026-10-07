@@ -1,3 +1,4 @@
+// Jobs content: content enums, DTO and input types.
 export const JOB_CONTENT_TYPES = [
   "job",
   "result",
@@ -45,18 +46,10 @@ export type JobStepGroup = (typeof JOB_STEP_GROUPS)[number];
 export const JOB_PRODUCT_TYPES = ["course", "package", "book", "ebook"] as const;
 export type JobProductType = (typeof JOB_PRODUCT_TYPES)[number];
 
-// ─── DTO ────────────────────────────────────────────────────────────────────
-//
-// `wsj_content_seo`/`_facts`/`_products`/`_sections`(+items)/`_steps`/
-// `_date_items`/`_fee_items`/`_payment_modes`/`_notes`/`_related_posts` and
-// every `wsj_*_details`/`wsj_syllabus_*` table were dropped from prod. All of
-// that now lives in one JSON blob (`wsj_contents.detail`) instead of 20+
-// child tables. Per-item `_id`s are generated at write time (the repository
-// already does a full replace on every save, so there was never any
-// expectation of id stability across edits). Categories are no longer used —
-// listings filter by organization; the old `category_id` column is left untouched. `wsj_content_categories` (the
-// many-to-many join) is also gone — a content row now has at most ONE
-// category via the plain `category_id` column, not many.
+// Child data lives in the `wsj_contents.detail` JSON. Per-item `_id`s are
+// generated at write time (every save is a full replace, so ids are not stable
+// across edits). A content row has at most one category (`category_id`), and
+// listings filter by organization instead.
 
 export interface RefDto {
   _id: string;
@@ -223,8 +216,6 @@ export interface JobContentDto {
   updatedAt?: Date;
 }
 
-// ─── Write input (flat, from the admin editor) ─────────────────────────────
-
 export interface ContentWriteInput {
   type: JobContentType;
   title: string;
@@ -268,7 +259,7 @@ export interface ContentWriteInput {
     applicationStart?: Date | null;
     applicationEnd?: Date | null;
     location?: string;
-    /** Legacy single value — still accepted; folded into `qualifications`. */
+    /** Legacy single value; folded into `qualifications`. */
     qualification?: string;
     qualifications?: string[];
     excerpt?: string;

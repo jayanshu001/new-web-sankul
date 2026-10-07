@@ -1,3 +1,4 @@
+// Admin rank predictor: mounts paper, submission and answer-key routes.
 import { Router } from "express";
 import { setAnswerKeyStatus } from "./answerKeys.controller";
 import papersRoutes from "./papers.routes";

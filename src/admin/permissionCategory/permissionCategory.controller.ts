@@ -1,3 +1,4 @@
+// Admin permission categories: HTTP handlers for list, read, update and delete.
 import { Request, Response } from "express";
 import { formatZodIssues as formatZodErrors } from "../../utils/httpResponse";
 import {
@@ -12,8 +13,6 @@ import {
   deleteCategory as sqlDeleteCategory,
 } from "../../modules/permission-category/permission-category.service";
 
-
-// GET /api/v1/admin/permission-categories
 export const listPermissionCategories = async (req: Request, res: Response) => {
   try {
     const parsed = listQuerySchema.safeParse(req.query);
@@ -35,7 +34,7 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
       sortDir: sort_dir,
     });
     // House-standard list envelope: `data` is the page array, `pagination` a
-    // sibling with total + totalPages. See permissions-categories-list-server-side.md.
+    // sibling with total + totalPages.
     const total = result.pagination.total;
     return res.status(200).json({
       success: true,
@@ -47,7 +46,6 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/permission-categories/:id
 export const getPermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -66,7 +64,6 @@ export const getPermissionCategory = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/permission-categories/:id
 export const updatePermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -113,7 +110,7 @@ export const updatePermissionCategory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/permission-categories/:id
+// Refuses (409) while any permission is assigned to the category.
 export const deletePermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;

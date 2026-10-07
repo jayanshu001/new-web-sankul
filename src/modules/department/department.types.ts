@@ -1,15 +1,8 @@
+// Departments: DTO and input types.
+
 /**
- * Department (contact-us master) — stable API shape.
- *
- * Schema bridge: Mongo embeds `contacts[]` inside each department doc, while
- * legacy MySQL splits into two tables:
- *   ws_department          (name, decscription [typo], order, active)
- *   ws_department_contact  (department FK, mobile, isCallAvailable,
- *                           isWhatsAppAvailable, order, active)
- *
- * The transformer joins contact rows under each department's `contacts[]` and
- * maps `decscription` → `description`. Contact rows keep the legacy
- * `isCallAvailable` / `isWhatsAppAvailable` flags (additive vs the Mongo shape).
+ * API embeds `contacts[]` per department; storage is ws_department (with the
+ * legacy `decscription` typo) + ws_department_contact.
  */
 
 export interface DepartmentContactDto {

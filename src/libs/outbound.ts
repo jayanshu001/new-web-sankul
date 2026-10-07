@@ -1,27 +1,10 @@
-// src/libs/outbound.ts
-//
-// Wrappers around outbound calls (third-party HTTP, SMS, email, payment APIs).
-// Centralizes the three things every outbound call needs:
-//
-//   1. A timeout. Network calls without timeouts pin event-loop slots until
-//      the OS gives up, which is minutes. We default to 5s.
-//   2. Retries with exponential backoff + jitter. Retry only on retryable
-//      errors (network, 5xx, 429). 4xx other than 429 is a bug, not a
-//      transient failure — no retry.
-//   3. A circuit breaker. After N consecutive failures the breaker opens
-//      and short-circuits subsequent calls for a cooldown window. Stops
-//      us from hammering a downed dependency and lets it recover.
-//
-// All three pieces are intentionally tiny — no opossum / async-retry deps.
-// If you need fancier semantics (half-open, bulkheads, fallbacks) consider
-// pulling in `opossum`.
+// Outbound calls (HTTP, SMS, email, payment APIs): per-attempt timeout
+// (default 5s), retry with backoff + jitter on network/5xx/429 only (other 4xx is
+// a bug, not transient), and a circuit breaker that short-circuits a downed
+// dependency for a cooldown window.
 
 import logger from "../utils/logger";
 import { redisClient, isRedisReady } from "../config/redis";
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Errors
-// ──────────────────────────────────────────────────────────────────────────────
 
 export class OutboundTimeoutError extends Error {
   constructor(label: string, ms: number) {
@@ -37,10 +20,6 @@ export class CircuitOpenError extends Error {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Timeout
-// ──────────────────────────────────────────────────────────────────────────────
-
 const withTimeout = async <T>(fn: () => Promise<T>, ms: number, label: string): Promise<T> => {
   let timer: NodeJS.Timeout | null = null;
   return Promise.race([
@@ -53,22 +32,17 @@ const withTimeout = async <T>(fn: () => Promise<T>, ms: number, label: string): 
   });
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Retry
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface RetryOptions {
   attempts?: number; // total attempts including the first. Default 3.
-  baseDelayMs?: number; // initial backoff. Default 200.
-  maxDelayMs?: number; // cap on the backoff. Default 4000.
-  /** Custom predicate; defaults to "retry on network errors, 5xx, 429". */
+  baseDelayMs?: number; // Default 200.
+  maxDelayMs?: number; // Default 4000.
+  /** Defaults to retrying network errors, 5xx and 429. */
   shouldRetry?: (err: unknown, attempt: number) => boolean;
 }
 
 const defaultShouldRetry = (err: unknown): boolean => {
   if (!err) return false;
   const e = err as any;
-  // Network errors expose .code on Node's HTTP errors.
   if (
     e.code === "ECONNRESET" ||
     e.code === "ETIMEDOUT" ||
@@ -79,7 +53,6 @@ const defaultShouldRetry = (err: unknown): boolean => {
   ) {
     return true;
   }
-  // HTTP responses surfaced as errors by Axios / Got.
   const status = e?.response?.status ?? e?.status;
   if (typeof status === "number") {
     return status >= 500 || status === 429;
@@ -88,10 +61,6 @@ const defaultShouldRetry = (err: unknown): boolean => {
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Circuit breaker
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface BreakerOptions {
   /** Consecutive failures before the breaker opens. Default 5. */
@@ -108,18 +77,8 @@ interface BreakerStats {
   openedAt: number; // 0 when closed
 }
 
-// Breaker state lives in Redis so all pods see the same view. Previously each
-// pod kept its own in-memory Map, which defeated the whole point: if pod A
-// observed a Razorpay outage and opened its breaker, pods B/C/D would happily
-// keep hammering Razorpay and stall the load balancer. With Redis-backed
-// state, the first pod to see the threshold-th failure trips the breaker for
-// every pod.
-//
-// We use a single Redis HASH per label: { state, consecutiveFailures, openedAt }.
-// Reads + writes are 1 ROUNDTRIP each. On Redis unavailability we fall back to
-// a local in-memory Map — the fallback is per-pod, so it behaves like the
-// old code (degraded but functional). isRedisReady() flips back the moment
-// Redis recovers.
+// Breaker state is one Redis hash per label so a trip on any pod applies to every
+// pod. When Redis is unavailable it falls back to a per-pod in-memory Map.
 const localBreakers = new Map<string, BreakerStats>();
 
 const breakerKey = (label: string) => `breaker:${label}`;
@@ -135,7 +94,6 @@ const readBreaker = async (label: string): Promise<BreakerStats> => {
           openedAt: Number(raw.openedAt) || 0,
         };
       }
-      // No entry yet — closed by default.
       return { state: "closed", consecutiveFailures: 0, openedAt: 0 };
     } catch {
       // fall through to local
@@ -152,18 +110,14 @@ const readBreaker = async (label: string): Promise<BreakerStats> => {
 const writeBreaker = async (label: string, stats: BreakerStats): Promise<void> => {
   if (isRedisReady()) {
     try {
-      // HSET is atomic per-field; that's enough because each callOutbound
-      // invocation reads then writes the breaker once. We don't need MULTI
-      // because consecutive-failure overcounting at a 5-second granularity
-      // is harmless (worst case: breaker opens one attempt earlier across
-      // pods, which is the safe direction).
+      // No MULTI needed: cross-pod overcounting only opens the breaker slightly
+      // early, which is the safe direction.
       await redisClient.hset(breakerKey(label), {
         state: stats.state,
         consecutiveFailures: stats.consecutiveFailures,
         openedAt: stats.openedAt,
       });
-      // Bound the key's lifetime. After 10 minutes of no activity the
-      // breaker is implicitly closed (auto-recovery).
+      // 10 minutes of inactivity implicitly closes the breaker.
       await redisClient.expire(breakerKey(label), 600);
       return;
     } catch {
@@ -173,30 +127,19 @@ const writeBreaker = async (label: string, stats: BreakerStats): Promise<void> =
   localBreakers.set(label, { ...stats });
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Public API
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface CallOptions extends RetryOptions, BreakerOptions {
-  /** Identifier used for logs, breaker state, and timeout error messages. */
+  /** Used for logs, breaker state and timeout error messages. */
   label: string;
   /** Per-attempt timeout. Default 5000. */
   timeoutMs?: number;
-  /** Disable retry (single attempt). */
   noRetry?: boolean;
   /** Disable the circuit breaker (still respects timeout). */
   noBreaker?: boolean;
 }
 
 /**
- * Wrap an async function (typically an HTTP/SMS/email call) with:
- *   timeout → retry-with-backoff-and-jitter → circuit breaker.
- *
- * Usage:
- *   const sms = await callOutbound(
- *     () => axios.post(SMS_URL, { phone, otp }),
- *     { label: "sms.2factor", timeoutMs: 4000, attempts: 3 }
- *   );
+ * Wrap an outbound call with timeout → retry with backoff and jitter → circuit breaker.
+ * e.g. `callOutbound(() => axios.post(url, body), { label: "sms.2factor", timeoutMs: 4000 })`
  */
 export const callOutbound = async <T>(
   fn: () => Promise<T>,
@@ -219,11 +162,10 @@ export const callOutbound = async <T>(
     ? { state: "closed" as BreakerState, consecutiveFailures: 0, openedAt: 0 }
     : await readBreaker(label);
 
-  // Breaker gate ──────────────────────────────────────────────────────────────
   if (!noBreaker) {
     if (breaker.state === "open") {
       if (Date.now() - breaker.openedAt >= cooldownMs) {
-        // Cooldown elapsed — move to half-open and let ONE probe call through.
+        // Cooldown elapsed: half-open lets one probe call through.
         breaker.state = "half-open";
         await writeBreaker(label, breaker);
       } else {
@@ -239,7 +181,6 @@ export const callOutbound = async <T>(
     try {
       const result = await withTimeout(fn, timeoutMs, label);
 
-      // Success path — reset breaker if it had any failure state attached.
       if (!noBreaker && (breaker.state !== "closed" || breaker.consecutiveFailures > 0)) {
         await writeBreaker(label, {
           state: "closed",
@@ -257,7 +198,6 @@ export const callOutbound = async <T>(
         err: (err as Error)?.message,
       });
 
-      // Breaker accounting ─────────────────────────────────────────────────
       if (!noBreaker) {
         breaker.consecutiveFailures += 1;
         if (
@@ -280,13 +220,13 @@ export const callOutbound = async <T>(
         throw err;
       }
 
-      // Exponential backoff with full jitter (AWS-style).
+      // Exponential backoff with full jitter.
       const exp = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
       const wait = Math.floor(Math.random() * exp);
       await sleep(wait);
     }
   }
 
-  // Unreachable, but TypeScript wants it.
+  // Unreachable; satisfies the compiler.
   throw lastErr;
 };

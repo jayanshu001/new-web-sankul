@@ -1,17 +1,9 @@
-// Builds the "lecture" reference object the notes / audio-notes lists return
-// so the FE can render the lecture header card (title, lesson, video time) and
-// wire the "Go to Video" button straight to the right player at the right
-// position — without a second round-trip.
-//
-// This is intentionally scoped to the EXACT lecture in the query (the videoId /
-// liveSessionId the notes were taken on), unlike `buildResumeNextCard`, which
-// returns the parent course's last-watched lecture (dashboard "resume now"
-// semantics). The two are complementary: `lecture` = "this note's video",
-// `resumeNext` = "where to pick the course back up".
-//
-// `resume` mirrors LectureProgress: video duration and last position are stored
-// per (customer, lecture), so "Video time: 15:20" and the seek-on-open position
-// both come from there. Null/zero when the customer has never played it.
+// Lecture notes: lecture reference builder for the notes lists.
+// The "lecture" reference the notes / audio-notes lists return, so the FE can render
+// the header card and open the right player at the right position in one round-trip.
+// Scoped to the exact lecture the notes were taken on, unlike `buildResumeNextCard`
+// (the course's last-watched lecture). `resume` comes from the customer's
+// LectureProgress row; zero when never played.
 
 type Input =
   | { lectureType: "recorded"; userId: string; videoId: string }
@@ -23,18 +15,14 @@ export interface LectureRef {
   liveSessionId: string | null;
   title: string | null;
   topic: string | null;
-  // The lesson / chapter the lecture sits under (recorded only).
+  // Recorded lectures only.
   lessonTitle: string | null;
   videoCategoryId: string | null;
   courseId: string | null;
-  // Owning live course when this recorded lecture lives under a live-course
-  // folder (VideoCategory.liveCourseId). null for catalog-course videos. The FE
-  // opens the live player (getLiveLectureAPI) when this is set, skipping the
-  // category rail that 403s for live recordings.
+  // Set when the lecture lives under a live-course folder; the FE then opens the live
+  // player instead of the category rail, which 403s for live recordings.
   liveCourseId: string | null;
   resume: {
-    // Last watched position + the duration the player has observed, both from
-    // the customer's LectureProgress row for this lecture.
     positionSec: number;
     durationSec: number;
     completed: boolean;

@@ -1,3 +1,4 @@
+// Admin customer masters: HTTP handlers for state, district, education and target-goal lookups.
 import { Request, Response } from "express";
 import { z } from "zod";
 import {
@@ -13,8 +14,7 @@ import {
   listTargetGoals as sqlListTargetGoals, createTargetGoal as sqlCreateTargetGoal, updateTargetGoal as sqlUpdateTargetGoal, deleteTargetGoal as sqlDeleteTargetGoal,
 } from "../../modules/customer-master/customer-master.service";
 
-// District bodies carry stateId as a numeric int on the SQL path. Numeric-tolerant
-// variant used by the SQL branch.
+// District bodies carry stateId as a numeric id.
 const createDistrictSqlSchema = z.object({
   name: z.string().min(1).max(255),
   stateId: z.coerce.number().int().positive(),
@@ -23,12 +23,10 @@ const createDistrictSqlSchema = z.object({
 const updateDistrictSqlSchema = createDistrictSqlSchema.partial();
 const toBool = (v?: string) => (v === "true" ? true : v === "false" ? false : undefined);
 
-// ─── States ───────────────────────────────────────────────────────────────────
-
 export const getStates = async (req: Request, res: Response) => {
   try {
-    // Pagination is opt-in: only when page/limit is passed (preserves the full-list
-    // contract for dropdown consumers). `search` matches name + stateCode.
+    // Pagination is opt-in (page/limit) so dropdown consumers still get the full list.
+    // `search` matches name + stateCode.
     const { active, search, page, limit } = req.query as Record<string, string>;
     const paginate = page !== undefined || limit !== undefined;
     const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
@@ -90,8 +88,6 @@ export const deleteState = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Districts ────────────────────────────────────────────────────────────────
-
 export const getDistricts = async (req: Request, res: Response) => {
   try {
     const { stateId, active } = req.query as Record<string, string>;
@@ -147,8 +143,6 @@ export const deleteDistrict = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Educations ───────────────────────────────────────────────────────────────
-
 export const getEducations = async (req: Request, res: Response) => {
   try {
     const { status } = req.query as Record<string, string>;
@@ -195,8 +189,6 @@ export const deleteEducation = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── Target Goals ─────────────────────────────────────────────────────────────
 
 export const getTargetGoals = async (req: Request, res: Response) => {
   try {

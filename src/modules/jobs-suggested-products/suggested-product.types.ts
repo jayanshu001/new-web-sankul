@@ -1,3 +1,4 @@
+// Jobs suggested products: placement enums, DTO and input types.
 export const JOB_SUGGESTED_PLACEMENTS = [
   "home",
   "jobs",

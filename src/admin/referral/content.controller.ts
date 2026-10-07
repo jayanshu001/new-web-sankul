@@ -1,3 +1,4 @@
+// Admin referral content: HTTP handlers for referral terms and FAQ CRUD.
 import { Request, Response } from "express";
 import {
   createTermSchema,
@@ -7,9 +8,8 @@ import {
 } from "./content.validation";
 import * as rcService from "../../modules/referral-content/referral-content.service";
 
-// Shared list-query parsing for content lists. Pagination is opt-in: when
-// page/limit are present the response carries a `pagination` block; otherwise
-// the flat array is returned (back-compat for callers that read `data` directly).
+// Pagination is opt-in: with page/limit the response carries a `pagination` block;
+// otherwise the flat array is returned.
 const parseListQuery = (req: Request) => {
   const { search, sortBy, sortOrder, page, limit } = req.query as Record<string, string>;
   const paginate = page !== undefined || limit !== undefined;
@@ -18,8 +18,6 @@ const parseListQuery = (req: Request) => {
   const sortDir: "asc" | "desc" = sortOrder === "desc" ? "desc" : "asc";
   return { search, sortBy, sortDir, paginate, pageNum, limitNum };
 };
-
-// ─── Terms ───────────────────────────────────────────────────────────────────
 
 export const listTerms = async (req: Request, res: Response) => {
   try {
@@ -93,8 +91,6 @@ export const deleteTerm = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── FAQs ────────────────────────────────────────────────────────────────────
 
 export const listFaqs = async (req: Request, res: Response) => {
   try {

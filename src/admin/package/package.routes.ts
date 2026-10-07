@@ -1,3 +1,4 @@
+// Admin packages: package type, package, plan, category, video relation and chat routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -45,20 +46,17 @@ const router = Router();
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Route-level response cache + autoFlushGroup on every write (see docs/CACHING.md).
-// Master reads (types/list/detail) are cached; each write clears the entity + the
-// client caches that embed it (package → catalog-package/dashboard/free/… ; the
-// package-type group is separate).
+// Each write clears the entity + the client caches that embed it (package →
+// catalog-package/dashboard/free/…; the package-type group is separate).
 
-// Package Types (small master)
 router.get("/types", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.PackageType }), listPackageTypes);
 router.post("/types", validate({ body: createPackageTypeSchema }), autoFlushGroup(CacheEntity.PackageType), createPackageType);
 router.put("/types/:id", validate({ body: updatePackageTypeSchema }), autoFlushGroup(CacheEntity.PackageType), updatePackageType);
 router.delete("/types/:id", autoFlushGroup(CacheEntity.PackageType), deletePackageType);
 
-// Packages
 // create/update/delete + material-categories/reorder also flush "material": they
 // rewrite ws_material_category_package, which /client/catalog/package/:id/materials
-// and /client/materials read — cached under "material", not "package".
+// and /client/materials read, cached under "material", not "package".
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Package }), listPackages);
 router.post("/", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), autoFlushGroup(CacheEntity.Package, CacheEntity.Material), createPackage);
 router.post("/reorder", autoFlushGroup(CacheEntity.Package), reorderPackages);
@@ -67,17 +65,14 @@ router.put("/:id", uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image"), a
 router.delete("/:id", autoFlushGroup(CacheEntity.Package, CacheEntity.Material), deletePackage);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Package), togglePackageStatus);
 
-// Embedded reorders
 router.patch("/:id/specific-subjects/reorder", autoFlushGroup(CacheEntity.Package), reorderSpecificSubjects);
 router.patch("/:id/material-categories/reorder", autoFlushGroup(CacheEntity.Package, CacheEntity.Material), reorderMaterialCategories);
 router.patch("/:id/exam-categories/reorder", autoFlushGroup(CacheEntity.Package), reorderExamCategories);
 
-// Plans
 router.get("/:id/plans", listPackagePlans);
 router.post("/:id/plans/attach", autoFlushGroup(CacheEntity.Package), attachPlans);
 router.delete("/:id/plans/:planId", autoFlushGroup(CacheEntity.Package), detachPlan);
 
-// Subscribers + promoted codes + linked physical books (material tab)
 router.get("/:id/subscribers", listSubscribers);
 router.get("/:id/exam-categories", listExamCategories);
 router.get("/:id/material-categories", listMaterialCategories);
@@ -85,12 +80,11 @@ router.get("/:id/specific-subjects", listSpecificSubjects);
 router.get("/:id/promoted-codes", listPromotedCodes);
 router.get("/:id/books", listBooks);
 
-// Video-category relation management (descendant fan-out)
 router.get("/:id/video-relations", listVideoRelations);
 router.put("/:id/video-relations", autoFlushGroup(CacheEntity.Package), setVideoRelations);
 router.post("/:id/video-relations/expand", autoFlushGroup(CacheEntity.Package), expandSubjectsToRelations);
 
-// Chat (per-subscriber, not cached — no flush)
+// Chat is per-subscriber and not cached, so no flush.
 router.get("/:id/chat", listChatMessages);
 router.post("/:id/chat", postChatMessage);
 router.delete("/chat/:messageId", deleteChatMessage);

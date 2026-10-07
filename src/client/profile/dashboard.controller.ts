@@ -1,3 +1,4 @@
+// Client profile dashboard: badge counts for the My Profile screen.
 import { Request, Response } from "express";
 import { countActiveEbookDownloads } from "../ebook/ebook-downloads.controller";
 import * as folderSql from "../../modules/client-folder/client-folder.service";
@@ -6,18 +7,13 @@ import * as profileSql from "../../modules/customer-profile/profile-dashboard.sq
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// Saved-item counts via the SQL folder module. countActiveEbookDownloads already
-// dispatches internally.
 const savedCount = (uid: string, kind: "material" | "video") =>
   folderSql.countSavedItems(folderSql.parseFolderId(uid) ?? 0, kind);
 
 const unreadNotifCount = (uid: string) =>
   notifSql.unreadCount(notifSql.parseNotifId(uid) ?? 0);
 
-// GET /api/v1/client/profile/dashboard
-// Aggregator for the My Profile screen — returns just the badge counts the UI needs.
-// Each count maps to one row in the design (Saved Addresses, Downloads, My Subscriptions,
-// Notifications). Counts are computed in parallel; missing/not-yet-built sources return 0.
+// Badge counts for the My Profile screen; a missing source counts as 0.
 export const getProfileDashboardCounts = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -30,8 +26,7 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
     const uidNum = Number(userId);
     const sqlUid = Number.isInteger(uidNum) ? uidNum : null;
 
-    // userId is the numeric customer id (SQL). If it is not an integer we cannot
-    // key the SQL counts, so fall back to empty/zero counts.
+    // A non-integer userId cannot key the counts, so they fall back to zero.
     const savedAddressesP =
       sqlUid != null ? profileSql.savedAddressCount(sqlUid) : Promise.resolve(0);
     const subscriptionsP =
@@ -59,10 +54,8 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
       pastExamsP,
     ]);
     const downloads = savedMaterials + savedVideos + activeEbookDownloads;
-    // `activePlans` stays as the single headline number (now the correct
-    // deduped active total across all three types), with a per-type breakdown
-    // alongside so the FE can badge each My Subscriptions tab. `course` is the
-    // combined course+package tab, matching the listing endpoint.
+    // `activePlans` is the deduped total across all types; the per-type breakdown
+    // badges each My Subscriptions tab (`course` = course + package, as in the listing).
     const activePlans = subscriptions.total;
 
     logger.info("getProfileDashboardCounts success", { traceId, customerId: userId, savedAddresses, downloads, activePlans, subscriptions, unreadNotifications, pastExams });

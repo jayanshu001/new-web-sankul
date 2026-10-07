@@ -1,21 +1,15 @@
+// Admin RBAC: Prisma queries for roles, permissions and their pivots.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-rbac MySQL branch (spatie tables).
- * ws_roles / ws_permissions / ws_role_has_permissions (pivot). admin-auth
- * already READS ws_roles + ws_model_has_roles; this adds management writes.
- *
- * ⚠ No ws_permission_categories table in SQL — "category" is derived from the
- * permission name prefix (text before the first dot). The standalone
- * permissionCategory CRUD controller stays on Mongo.
- *
- * ids are bigint unsigned in MySQL; current values are small so we surface them
- * as Number in the service (consistent with commerce-educator's choice).
+ * Spatie tables: ws_roles / ws_permissions / ws_role_has_permissions (pivot).
+ * There is no permission-categories table here — "category" is derived from the
+ * permission name prefix (text before the first dot).
+ * ids are bigint unsigned; the service surfaces them as Number (values are small).
  */
 export const adminRbacRepository = {
-  // ─── Roles ────────────────────────────────────────────────────────────────
   listRoles: (opts: { guard?: string; search?: string; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
     const where: Prisma.AdminRoleRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
@@ -50,7 +44,6 @@ export const adminRbacRepository = {
   roleInUse: (roleId: bigint) =>
     prisma.adminModelHasRole.findFirst({ where: { roleId }, select: { roleId: true } }).then(Boolean),
 
-  // ─── Permissions ──────────────────────────────────────────────────────────
   listPermissions: (opts: { guard?: string; search?: string; categoryId?: number; skip?: number; take?: number }) => {
     const where: Prisma.AdminPermissionRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
@@ -84,17 +77,14 @@ export const adminRbacRepository = {
     prisma.adminPermissionRow.update({ where: { id }, data: { ...data, updatedAt: new Date() } }),
   deletePermission: (id: bigint) => prisma.adminPermissionRow.delete({ where: { id } }),
 
-  // ─── Pivot (ws_role_has_permissions) ───────────────────────────────────────
   /** Permission ids attached to a role. */
   permissionIdsForRole: (roleId: bigint) =>
     prisma.adminRoleHasPermission.findMany({ where: { roleId }, select: { permissionId: true } }),
-  /** Full permission rows attached to a role. */
   permissionsForRole: async (roleId: bigint) => {
     const links = await prisma.adminRoleHasPermission.findMany({ where: { roleId } });
     if (!links.length) return [];
     return prisma.adminPermissionRow.findMany({ where: { id: { in: links.map((l) => l.permissionId) } }, orderBy: { name: "asc" } });
   },
-  /** Role ids that have a given permission. */
   roleIdsForPermission: (permissionId: bigint) =>
     prisma.adminRoleHasPermission.findMany({ where: { permissionId }, select: { roleId: true } }),
   /** Replace a role's permissions (delete all + insert) in one transaction. */
@@ -134,7 +124,6 @@ export const adminRbacRepository = {
       arr.push(p);
       out.set(key, arr);
     }
-    // Keep each role's list stable (by catalog key).
     for (const arr of out.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
     return out;
   },

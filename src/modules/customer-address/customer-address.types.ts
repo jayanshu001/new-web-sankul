@@ -1,20 +1,9 @@
-/**
- * Customer address — MySQL (Prisma) branch types.
- *
- * NOTE ON CONTRACT DIVERGENCE (why this DTO differs from the Mongo one):
- * - Mongo stored `stateId` as an ObjectId and `.populate()`d it into a nested
- *   `{ _id, name, ... }` object; phones/pincode were strings; `label` was an
- *   enum (home|work|other).
- * - MySQL (`ws_customer_address`) stores `state` as an integer FK,
- *   `phone`/`alternate_phone` as BIGINT, `pincode` as INT, `label` as free
- *   VARCHAR(20). The city is stored as a plain **name string** (`city` column) —
- *   there is no city id reference.
- *
- * The MySQL DTO therefore returns **string ids** (to stay shape-compatible with
- * the Mongo `_id`/`stateId` string fields the client reads) and string
- * phones/pincode, but does NOT populate a nested state object.
- */
+// Customer addresses: DTO and input types.
 
+/**
+ * Ids, phones and pincode are returned as strings; state is an id, not a
+ * populated object. City is a plain name string (no city id).
+ */
 export interface AddressDto {
   _id: string;
   name: string;
@@ -23,7 +12,6 @@ export interface AddressDto {
   email: string | null;
   address: string;
   address2: string;
-  /** Freeform city name — `city` column is NOT NULL. */
   city: string;
   stateId: string | null;
   pincode: string;
@@ -35,7 +23,6 @@ export interface AddressDto {
   updatedAt: Date | null;
 }
 
-/** Normalized create input (controller maps validated body → this). */
 export interface AddressCreateInput {
   customerId: number;
   name: string;
@@ -44,7 +31,6 @@ export interface AddressCreateInput {
   email?: string | null;
   address: string;
   address2?: string;
-  /** Freeform city name (required — `city` column is NOT NULL). */
   city: string;
   stateId?: number | null;
   pincode: string;

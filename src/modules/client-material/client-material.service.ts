@@ -1,37 +1,19 @@
+// Client materials: category browsing, entitlement checks and download tracking.
 /**
- * Client material reads + entitlement — SQL branch. Gated behind
- * `isMysqlModule("client-material")`. Reads ws_material + ws_material_category +
- * the ws_material_category_(course|package) pivots + subscriptions.
- *
  * Entitlement: a paid material is owned if the customer holds an active sub to a
- * course/package/live-course whose material-category pivot points at the
- * material's category OR any ancestor.
- * 2026-07-31: live course joined the other two. It previously had no SQL pivot
- * (Wave-6 drift — attachments lived only in the ws_live_course.material_categories
- * JSON), so a verified live-course buyer got isPurchased:false + mediaToken:null
- * on every material. The pivot ws_material_category_live_course now carries the
- * attachments for entitlement; admin-live-course keeps it in sync with the JSON.
- *
- * ws_material was extended 2026-06-19 (+description/thumbnail/file_size/file_mime/
- * language/is_preview/is_paid/download_count) so the client shape has parity.
+ * course/package/live-course whose material-category pivot points at the material's
+ * category OR any ancestor. For live courses the pivot is ws_material_category_live_course
+ * (admin-live-course keeps it in sync with the ws_live_course.material_categories JSON,
+ * which stays the admin shape).
  */
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
-
 /**
- * Mint a material media token, or `null` when the material is NOT accessible
- * (unpurchased paid item, or no authenticated customer). The raw `file` /
- * `direct_link` URL NEVER leaves the server — the client exchanges this opaque
- * token at POST /client/media/resolve, which re-verifies entitlement and returns
- * a short-lived URL (presigned for Spaces objects, passthrough for external
- * direct links). Same contract as video/ebook/audio-note tokens.
- *
- * Paid materials carry a `trusted` scope; resolve independently re-checks
- * ownership for `k:"material"` via getPurchasedMaterialIds, so the token can't
- * outlive an expired subscription beyond its short TTL. Free materials get a
- * `free` token (no entitlement check).
+ * `null` when not accessible (unpurchased paid item, or no customer). The raw `file` /
+ * `direct_link` never leaves the server; POST /client/media/resolve exchanges the token.
+ * Paid materials carry a `trusted` scope, and resolve re-checks ownership itself.
  */
 export const materialMediaToken = (
   materialId: number,
@@ -59,18 +41,15 @@ const parseScopeId = (raw: unknown): number | null | "invalid" => {
 };
 
 /**
- * Parse the entitlement scope off a query string. Accepts exactly one of
- * `?courseId` / `?packageId` / `?liveCourseId`.
+ * Accepts exactly one of `?courseId` / `?packageId` / `?liveCourseId`.
  *
  *   `null`       — none present ⇒ unscoped (global OR), the documented default
  *   scope object — the single entry point the user navigated from
- *   `"invalid"`  — a value is present but not a positive int ⇒ caller MUST 400
- *   `"multiple"` — more than one given ⇒ caller MUST 400; the user came from ONE
- *                  place, and guessing which would be inventing an answer
+ *   `"invalid"`  — present but not a positive int ⇒ caller MUST 400
+ *   `"multiple"` — more than one given ⇒ caller MUST 400 (guessing would invent an answer)
  *
- * `"invalid"` exists on purpose: silently treating `?courseId=abc` as "no scope"
- * would WIDEN access on a typo, which is the exact failure scoping was added to
- * prevent. A repeated param (`?courseId=1&courseId=2`) is invalid for the same reason.
+ * Treating `?courseId=abc` (or a repeated param) as "no scope" would widen access on a typo,
+ * the exact failure scoping exists to prevent.
  */
 export const parseEntitlementScope = (
   query: Record<string, unknown>
@@ -89,16 +68,9 @@ export const parseEntitlementScope = (
 };
 
 /**
- * Ancestors (inclusive) of a material category via the single-parent tree.
- *
- * Roots are marked with `parent = 0`, NOT NULL (verified: 6 rows at parent=0, 0 at
- * parent IS NULL), and there is no category with id 0. So `parent IS NOT NULL` alone
- * let the sentinel 0 into the chain, and every root-level material carried a phantom
- * "ancestor 0". Harmless while no pivot row points at category 0 — but a single
- * `mcategory_id = 0` row in any of the three pivots would then unlock every
- * root-level material for everyone who owns that container. `parent > 0` stops the
- * walk at the real root. No behavior change today; this closes the leak by
- * construction rather than relying on the pivots staying clean.
+ * Ancestors (inclusive) via the single-parent tree. Roots use `parent = 0`, not NULL, so
+ * `parent > 0` is required: otherwise a single `mcategory_id = 0` pivot row would unlock every
+ * root-level material for everyone who owns that container.
  */
 const ancestorsInclusive = async (categoryIds: number[]): Promise<Map<number, Set<number>>> => {
   const out = new Map<number, Set<number>>();
@@ -122,21 +94,10 @@ const categoryUniverse = async (categoryIds: number[]): Promise<{ universe: Set<
 export type MatLite = { _id: number; materialCategoryId: number; isPaid: boolean };
 
 /**
- * Entitlement scope = the ONE container the client navigated FROM.
- *
- * A material category is attachable to many containers at once, so "does this customer
- * own anything that grants it" is the wrong question when the user is browsing inside
- * one specific product: owning Course 1 would otherwise mark a material
- * `isPurchased: true` while the student is looking at it inside **unpurchased** Live
- * Course 3 — a paid product leaking into an unpaid one. Same defect, and the same fix,
- * as the shared-live-session entry-point work (2026-07-30, `?liveCourseId`).
- *
- * All three container kinds are scopeable because all three can attach the same
- * category — scoping only live courses would leave the identical leak between two
- * courses, or between a course and a package.
- *
- * `null` (no param) keeps the unscoped global-OR reading, which is what the standalone
- * Study-Material tab wants — it is not entered from any container.
+ * The ONE container the client navigated from. A category can be attached to many
+ * containers, so owning Course 1 must not mark a material purchased while the student views
+ * it inside unpurchased Live Course 3. All three kinds are scopeable since all three can share
+ * a category. `null` = unscoped global OR, used by the standalone Study-Material tab.
  */
 export type MaterialEntitlementScope =
   | { kind: "course"; id: number }
@@ -145,11 +106,8 @@ export type MaterialEntitlementScope =
   | null;
 
 /**
- * Set of owned (purchased) material ids for a batch (free ones excluded).
- *
- * When `scope` names a container, ONLY that container can grant access — the other two
- * pivots are not consulted at all, and the scoped kind's pivot is narrowed to that one
- * id. Scoping can therefore only ever withhold access, never widen it.
+ * Owned paid material ids for a batch. With a `scope`, only that container can grant access
+ * (the other pivots are not consulted), so scoping can only withhold access, never widen it.
  */
 export const getPurchasedMaterialIds = async (
   customerId: number | null,
@@ -166,14 +124,6 @@ export const getPurchasedMaterialIds = async (
   const universeIds = [...universe];
   if (!universeIds.length) return owned;
 
-  // Containers (course/package/live-course) whose pivot attaches a universe
-  // category. All three read the same way — live course got its pivot on
-  // 2026-07-31 (ws_material_category_live_course); before that its attachments
-  // were JSON-only and live-course buyers saw isPurchased:false on everything.
-  //
-  // Scoped to container X, the other two kinds are deliberately NOT queried and X's
-  // own pivot is narrowed to that single id: inside product N the only question is
-  // whether the customer owns N. Unscoped, all three are read as before.
   const wants = (kind: "course" | "package" | "liveCourse") => scope == null || scope.kind === kind;
   const only = (kind: "course" | "package" | "liveCourse") => (scope?.kind === kind ? scope.id : undefined);
   const [courseRefs, packageRefs, liveRefs] = await Promise.all([
@@ -195,17 +145,13 @@ export const getPurchasedMaterialIds = async (
   const [ownedCourses, ownedPackages, ownedLiveCourses] = await Promise.all([
     courseIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { courseId: true } }) : [],
     packageIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in: packageIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { packageId: true } }) : [],
-    // Live-course entitlement predicate is the one used everywhere else
-    // (client-search, exam-countdown, lecture-progress): active, and a null endAt
-    // means lifetime. `paymentStatus` dropped 2026-08-25 — payment moved to
-    // ws_live_course_order and a sub row exists only for a paid order.
+    // Same live-course predicate as everywhere else: active, null endAt = lifetime.
     liveCourseIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, OR: [{ endAt: null }, { endAt: { gte: now } }] }, select: { liveCourseId: true } }) : [],
   ]);
   const ownedCourseSet = new Set(ownedCourses.map((r) => r.courseId!));
   const ownedPackageSet = new Set(ownedPackages.map((r) => r.packageId!));
   const ownedLiveCourseSet = new Set(ownedLiveCourses.map((r) => r.liveCourseId));
 
-  // Categories unlocked via an owned container.
   const unlocked = new Set<number>();
   for (const r of courseRefs) if (r.courseId != null && ownedCourseSet.has(r.courseId) && r.materialCategoryId != null) unlocked.add(r.materialCategoryId);
   for (const r of packageRefs) if (r.packageId != null && ownedPackageSet.has(r.packageId) && r.materialCategoryId != null) unlocked.add(r.materialCategoryId);
@@ -220,11 +166,8 @@ export const getPurchasedMaterialIds = async (
 };
 
 /**
- * DB-agnostic shaping. The raw `file` / `directLink` URLs are NEVER emitted —
- * they are replaced by an opaque `mediaToken` the client exchanges at
- * /client/media/resolve (null for unpurchased paid materials, same as the old
- * gated-empty behavior). `isDirectLink` tells the client whether the resolved
- * URL is an external link (open in browser) vs an uploaded PDF (in-app viewer).
+ * Raw `file` / `directLink` are never emitted; `mediaToken` (null for unpurchased paid)
+ * replaces them. `isDirectLink` tells the client whether to open externally or in-app.
  */
 export const shapeMaterial = (m: any, ownedIds: Set<number>, customerId: number | null = null) => {
   const isPaid = !!m.isPaid;
@@ -243,7 +186,6 @@ export const shapeMaterial = (m: any, ownedIds: Set<number>, customerId: number 
     isPurchased,
     order: m.order_by,
     createdAt: m.created_at ?? null,
-    // Encrypted media contract — raw URLs withheld; resolve via mediaToken.
     file: "",
     directLink: "",
     isDirectLink,
@@ -260,11 +202,9 @@ const MAT_SELECT = {
 
 const toLite = (m: any): MatLite => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid });
 
-/** Normalize an already-parsed scope; anything falsy ⇒ unscoped global OR. */
 const toScope = (scope?: MaterialEntitlementScope): MaterialEntitlementScope =>
   scope && Number.isInteger(scope.id) && scope.id > 0 ? scope : null;
 
-// ── leaf-count + newly-added (subtree) ──────────────────────────────────────
 const subtreeCategoryIds = async (rootId: number): Promise<number[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
     `WITH RECURSIVE tree (id) AS (SELECT ${rootId} UNION SELECT c.id FROM ws_material_category c JOIN tree t ON c.parent = t.id) SELECT id FROM tree`
@@ -284,10 +224,10 @@ export const hasNewlyAdded = async (categoryId: number, days = 10): Promise<bool
   return n > 0;
 };
 
-// ── handlers ────────────────────────────────────────────────────────────────
 export const findCategory = (id: number) =>
   prisma.materialCategory.findFirst({ where: { id, status: true }, select: { id: true, name: true, image: true, parent: true } });
 
+// Category node: child subjects, breadcrumbs and a page of its own leaf materials.
 export const getCategoryContents = async (
   categoryId: number,
   customerId: number | null,
@@ -306,8 +246,7 @@ export const getCategoryContents = async (
     return { _id: String(c.id), title: c.name, image: c.image, order: c.order_by, havingChildDirectory: grandChildren > 0, count, isNewlyAdded };
   }));
 
-  // Leaf materials at this node — the genuine collection we paginate. Child
-  // folders (`subjects`) + breadcrumbs are node metadata and stay intact.
+  // Only leaf materials are paginated; `subjects` + breadcrumbs are node metadata.
   const matsWhere: any = { materialCategoryId: categoryId, status: true };
   const matsSearch = buildPrismaSearch(opts.search, ["name"]);
   if (matsSearch) matsWhere.AND = matsSearch.AND;
@@ -318,7 +257,6 @@ export const getCategoryContents = async (
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite), toScope(opts.scope));
   const materials = matsRaw.map((m) => shapeMaterial(m, ownedIds, customerId));
 
-  // breadcrumbs: ancestor chain (root → current) via the parent walk.
   const chainRows = await prisma.$queryRawUnsafe<{ id: number; title: string | null; depth: number }[]>(
     `WITH RECURSIVE chain (id, title, parent, depth) AS (
        SELECT id, title, parent, 0 FROM ws_material_category WHERE id = ${categoryId}
@@ -331,12 +269,7 @@ export const getCategoryContents = async (
   return { current: { _id: String(current.id), title: current.name, image: current.image }, breadcrumbs, subjects, materials, materialsTotal };
 };
 
-/**
- * Paginated leaf materials directly under a category — SQL equivalent of the
- * Mongo `listMaterialsByCategory` (GET /client/material-categories/:id/materials).
- * Returns the category DTO, the shaped+entitlement-gated material list, and the
- * total for pagination. `type` mirrors the Mongo `?type=free|paid` filter.
- */
+/** GET /client/material-categories/:id/materials. `type` = `?type=free|paid`. */
 export const listMaterialsByCategoryPaged = async (
   categoryId: number,
   customerId: number | null,
@@ -362,9 +295,8 @@ export const listMaterialsByCategoryPaged = async (
 };
 
 /**
- * `liveCourseId` matters here as much as on the list: this is the mediaToken-refresh
- * path, so an unscoped detail call would hand back a token for a material the student
- * is opening from a live course they never bought.
+ * Scope matters here as much as on the list: this is the mediaToken-refresh path, so an
+ * unscoped call would mint a token for a material opened from a live course never bought.
  */
 export const getMaterialDetail = async (materialId: number, customerId: number | null, scope?: MaterialEntitlementScope) => {
   const m = await prisma.material.findFirst({ where: { id: materialId, status: true }, select: { ...MAT_SELECT, MaterialCategory: { select: { id: true, name: true } } } });
@@ -375,6 +307,7 @@ export const getMaterialDetail = async (materialId: number, customerId: number |
   return shaped;
 };
 
+// Increments the download counter; null if the material doesn't exist.
 export const trackDownload = async (materialId: number) => {
   const exists = await prisma.material.findFirst({ where: { id: materialId }, select: { id: true } });
   if (!exists) return null;

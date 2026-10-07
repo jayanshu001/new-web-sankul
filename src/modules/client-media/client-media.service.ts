@@ -1,15 +1,11 @@
+// Client media: resolves an opaque mediaToken into an entitlement-checked media URL.
 /**
- * Media resolve — the server side of the short-lived media-token contract.
+ * Server side of the media-token contract (POST /client/media/resolve). Client endpoints
+ * emit only an opaque `mediaToken`; this is the ONLY place a real media URL is produced,
+ * and only after: (1) signature + expiry verified, (2) the token's customer matches the
+ * caller, (3) entitlement re-checked live.
  *
- * Client list/detail endpoints emit only an opaque `mediaToken` (see
- * utils/mediaToken.ts). The client posts it to POST /client/media/resolve, which
- * calls resolveMediaToken() here. This is the ONLY place a real media URL is
- * produced, and only after: (1) token signature + expiry verified,
- * (2) the token's customer matches the caller, (3) entitlement re-checked live.
- *
- * Returned URLs are short-lived: S3/Spaces objects (audio notes, ebook PDFs) are
- * freshly PRESIGNED with a short TTL; video/live URLs are StreamOS/VideoCrypt/
- * YouTube URLs which are themselves natively time-limited.
+ * Spaces objects are presigned with a short TTL; video/live URLs are natively time-limited.
  */
 import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -30,23 +26,18 @@ export type ResolveResult =
   | { ok: true; kind: MediaClaims["k"]; media: any }
   | { ok: false; status: number; message: string };
 
-// Strip a full Spaces/CDN URL down to the bucket object key so it can be
-// re-presigned. Handles both virtual-host (bucket in the host) and path-style
-// (bucket as the first path segment) layouts. A value that is already a bare key
-// (no scheme) is returned unchanged.
+// Full Spaces/CDN URL (virtual-host or path-style) → bucket object key. A bare key is returned unchanged.
 const toObjectKey = (urlOrKey: string): string => {
   let s = urlOrKey.trim();
-  // Some legacy rows store a SCHEME-LESS path-style URL, e.g.
-  // "blr1.digitaloceanspaces.com/<bucket>/admin/…/x.pdf". Without a scheme URL()
-  // can't parse it and the whole host+bucket would be mistaken for the key. Add a
-  // scheme when the value looks like "<host.tld>/…" so the parse below is correct.
+  // Some legacy rows store a scheme-less path-style URL ("blr1.digitaloceanspaces.com/<bucket>/…");
+  // without a scheme the host+bucket would be mistaken for the key.
   if (!/^https?:\/\//i.test(s) && /^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\//i.test(s)) {
     s = `https://${s}`;
   }
   if (!/^https?:\/\//i.test(s)) return s.replace(/^\/+/, ""); // truly a bare key
   try {
     let key = new URL(s).pathname.replace(/^\/+/, "");
-    // Also strip stray trailing quote artifacts seen on some StreamOS/Spaces paths.
+    // Strip stray trailing quote artifacts seen on some StreamOS/Spaces paths.
     key = key.replace(/(?:"|%22|%2522)+$/i, "");
     if (DO_BUCKET && key.startsWith(`${DO_BUCKET}/`)) key = key.slice(DO_BUCKET.length + 1);
     return decodeURIComponent(key);
@@ -62,14 +53,10 @@ const presign = (urlOrKey: string): Promise<string> =>
     { expiresIn: PRESIGN_TTL_SECONDS }
   );
 
-// A legacy book/demo URL may reference OUR Spaces bucket in either layout:
-//   virtual-host:  https://<bucket>.<endpoint-host>/<key>
-//   path-style:    https://<endpoint-host>/<bucket>/<key>
-// isOwnBucketUrl only recognizes the virtual-host form, but old rows also stored
-// the path-style form. BOTH must be presigned (their objects are private); only a
-// TRULY external host (e.g. gpsconline.com) is public and may be passed through
-// as-is. Treating a path-style own-bucket URL as "external" served a raw,
-// unsigned URL that 403s/blanks in the client — a real old-data failure mode.
+// Legacy URLs may reference our bucket virtual-host style (https://<bucket>.<host>/<key>) or
+// path-style (https://<host>/<bucket>/<key>). isOwnBucketUrl only recognizes the former, but
+// both are private and must be presigned; only a truly external host (e.g. gpsconline.com) is
+// passed through. A path-style own-bucket URL served raw 403s in the client.
 const SPACES_HOST = (() => {
   try { return new URL(process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com").host; }
   catch { return "blr1.digitaloceanspaces.com"; }
@@ -84,11 +71,8 @@ const pointsAtOurSpaces = (src: string): boolean => {
   }
 };
 
-// Verify the object exists BEFORE handing out a signed URL. A stale/placeholder key
-// in book_url/book_demo_url would otherwise sign a URL that 404s (NoSuchKey) on
-// Spaces, which the RN PDF viewer saves as XML-as-PDF and fails to open. With this
-// check the client gets a clean 404 "not available" instead. Set
-// MEDIA_VERIFY_EBOOK_OBJECT=false to skip the extra HEAD if latency-sensitive.
+// HEAD the object before signing: a stale key would sign a URL that 404s on Spaces, which the
+// app's PDF viewer saves as XML-as-PDF. Set MEDIA_VERIFY_EBOOK_OBJECT=false to skip the HEAD.
 const MEDIA_VERIFY_EBOOK_OBJECT = process.env.MEDIA_VERIFY_EBOOK_OBJECT !== "false";
 
 const objectExists = async (urlOrKey: string): Promise<boolean> => {
@@ -130,10 +114,6 @@ const sanitizeRecs = (raw: unknown): Array<{ quality: string | null; file_size: 
       path: String(r.path).replace(/(?:"|%22|%2522)+$/i, ""),
     }));
 
-/**
- * Verify a media token and resolve the actual (short-lived) media for `customerId`.
- * Returns a discriminated result the controller maps to HTTP.
- */
 export const resolveMediaToken = async (token: string, customerId: number): Promise<ResolveResult> => {
   let claims: MediaClaims;
   try {
@@ -142,8 +122,7 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
     return { ok: false, status: err?.expired ? 410 : 401, message: err?.message ?? "Invalid media token." };
   }
 
-  // `bookDemo` is PUBLIC demo content (not customer-bound) — skip the issuer match
-  // so a demo token resolves for any caller. Every other kind stays account-bound.
+  // `bookDemo` is public demo content, so it skips the issuer match; every other kind is account-bound.
   if (claims.k !== "bookDemo" && claims.cust !== customerId) {
     return { ok: false, status: 403, message: "This media token was issued to a different account." };
   }
@@ -160,16 +139,12 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         });
         if (!v || !v.status) return { ok: false, status: 404, message: "Media not found." };
         const src = await resolveVideoSource(v as any);
-        // `hlsVariants` are the master's real per-quality playlist URLs, absolute and
-        // ready to GET. Offline download MUST use these verbatim — a URL built from
-        // the quality label alone (e.g. "…VOD480p.m3u8" instead of the real
-        // "…VOD480p30.m3u8") is a nonexistent key, and the upstream CDN answers a
-        // missing key with 403 AccessDenied rather than 404.
+        // Offline download must use `hlsVariants` verbatim: a URL built from the quality label
+        // ("…VOD480p.m3u8" vs the real "…VOD480p30.m3u8") is a missing key, which the CDN answers with 403.
         return { ok: true, kind: claims.k, media: { platform: v.platform, hlsUrl: src.hlsUrl, hlsVariants: src.hlsVariants, progressive: src.progressive, allow720: src.allow720 } };
       }
       case "liveRecording": {
-        // Promoted live-course recording. Playable URLs live on the source
-        // live session (StreamOS recordings columns).
+        // Promoted recording: playable URLs live on the source live session.
         const v = await prisma.video.findFirst({ where: { id: claims.id }, select: { id: true, status: true, liveSessionId: true } });
         if (!v || !v.status) return { ok: false, status: 404, message: "Media not found." };
         if (v.liveSessionId == null) return { ok: false, status: 404, message: "Recording has no source session." };
@@ -181,16 +156,12 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
       case "liveSession": {
         const s = await prisma.liveSession.findFirst({ where: { id: claims.id }, select: { id: true, streamId: true, hlsUrl: true, hlsUrls: true } });
         if (!s) return { ok: false, status: 404, message: "Live session not found." };
-        // Live sessions gate on full-OR-preview access, not pure entitlement —
-        // re-run the same preview-state check the detail endpoint used. `preview`
-        // (trial) is allowed; `preview_ended`/no-access is rejected.
+        // Gated on full-or-preview access (same check as the detail endpoint); `preview_ended` is rejected.
         const links = await prisma.liveSessionCourse.findMany({ where: { liveSessionId: s.id }, select: { liveCourseId: true }, orderBy: { id: "asc" } });
         const linkedCourseIds = links.map((l) => l.liveCourseId).filter((n): n is number => n != null);
-        // Honour the entry point the token was minted for (`lc`), so a token issued
-        // while browsing an UNPURCHASED course stays a preview here instead of
-        // being re-judged against every linked course and upgraded to full because
-        // some other linked course is owned. Absent `lc` = Live Now (any course).
-        // Re-verify linkage: a course unlinked since issue-time must stop granting.
+        // Honour the entry point the token was minted for (`lc`): a token issued inside an
+        // unpurchased course must stay a preview, not upgrade because another linked course is
+        // owned. Absent `lc` = Live Now (any course). A course unlinked since issue stops granting.
         let liveCourseIds = linkedCourseIds;
         if (claims.lc != null) {
           if (!linkedCourseIds.includes(claims.lc)) {
@@ -222,14 +193,9 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
       }
       case "ebook":
       case "ebookDemo": {
-        // `ebook` (purchased): no `active` filter — an owner (entitlement re-checked at
-        // `entitled()` above) can still open a DEACTIVATED ebook they paid for.
-        //
-        // `ebookDemo`: MUST be active. This filter is what the demo token's old 5-minute
-        // TTL was really buying — it bounded how long a demo could outlive the ebook being
-        // pulled. Demo tokens no longer expire (see NON_EXPIRING_KINDS in utils/mediaToken),
-        // so the liveness check has to be made explicitly here instead of being an implicit
-        // side effect of expiry.
+        // `ebook`: no `active` filter, so an owner can still open a deactivated ebook they paid for.
+        // `ebookDemo`: must be active. Demo tokens never expire (NON_EXPIRING_KINDS in
+        // utils/mediaToken), so this filter is what stops a demo outliving a pulled ebook.
         const isDemo = claims.k === "ebookDemo";
         const e = await prisma.eBook.findFirst({
           where: isDemo ? { id: claims.id, active: true } : { id: claims.id },
@@ -246,16 +212,12 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         return { ok: true, kind: claims.k, media: { url } };
       }
       case "bookDemo": {
-        // Free physical-book sample PDF (ws_book.demo_url). Same presign + object
-        // existence guard as the ebook demo; the token is `free` so no entitlement.
+        // Physical-book sample PDF; the token is `free`, so no entitlement check.
         const b = await prisma.book.findFirst({ where: { id: claims.id, active: true }, select: { demo_url: true } });
         if (!b) return { ok: false, status: 404, message: "Book not found." };
         const src = b.demo_url;
         if (!src) return { ok: false, status: 404, message: "This book has no demo PDF." };
-        // Legacy book demos are hosted EXTERNALLY (e.g. gpsconline.com), not in our
-        // Spaces bucket — those are already public, so return the URL as-is. Only
-        // objects that actually live in our bucket (virtual-host OR path-style) get
-        // the HEAD check + presign.
+        // Legacy demos on external hosts are already public; only our-bucket objects get HEAD + presign.
         if (/^https?:\/\//i.test(src) && !pointsAtOurSpaces(src)) {
           return { ok: true, kind: claims.k, media: { url: src } };
         }
@@ -267,10 +229,8 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         return { ok: true, kind: claims.k, media: { url } };
       }
       case "material": {
-        // Study material: an uploaded PDF in `file` (Spaces object) OR an external
-        // `direct_link`. Paid materials re-check ownership here (a `free` token
-        // skips it) — the same entitlement rule the list endpoints applied at
-        // issue time, so a token can't outlive an expired subscription.
+        // Paid materials re-check ownership (a `free` token skips it) so a token can't outlive
+        // an expired subscription.
         const m = await prisma.material.findFirst({
           where: { id: claims.id, status: true },
           select: { id: true, file: true, direct_link: true, fileMime: true, isPaid: true, materialCategoryId: true },
@@ -280,7 +240,6 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
           const owned = await getPurchasedMaterialIds(customerId, [{ _id: m.id, materialCategoryId: m.materialCategoryId as number, isPaid: true }]);
           if (!owned.has(m.id)) return { ok: false, status: 403, message: "Active subscription required to access this material." };
         }
-        // Prefer the uploaded file; fall back to the external direct link.
         const src = m.file || m.direct_link;
         if (!src) return { ok: false, status: 404, message: "This material has no file." };
         const isDirectLink = !m.file && !!m.direct_link;

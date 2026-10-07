@@ -1,14 +1,9 @@
-// RazorpayX (Payouts) HTTP client. The `razorpay` npm SDK only covers
-// the standard Payments product; Contacts / Fund Accounts / Payouts live
-// on the X API and must be called over HTTP with Basic Auth.
+// RazorpayX payouts: HTTP client; the `razorpay` SDK only covers Payments, so the
+// X API is called over HTTP with Basic Auth.
 //
-// ⚠️ DORMANT — NO CALLERS. Reward withdrawals moved to a manual (offline) bank
-// transfer worked from the admin queue, so nothing calls these any more. Kept
-// only as the counterpart to the drain-only payout webhook still mounted in
-// app.ts; delete this file together with that route. Note `accountNumber()`
-// reads RAZORPAYX_ACCOUNT_NUMBER, which was never registered in config/env.ts
-// — irrelevant while dormant, but it must be added there if payouts are ever
-// re-enabled, or it will throw at payout time instead of at boot.
+// Dormant: no callers since reward withdrawals became manual bank transfers. Kept as
+// the counterpart to the drain-only payout webhook in app.ts; delete both together.
+// RAZORPAYX_ACCOUNT_NUMBER is not in config/env.ts and must be added before re-enabling.
 
 import { callOutbound } from "../../libs/outbound";
 
@@ -28,11 +23,9 @@ const accountNumber = () => {
 };
 
 async function xPost<T>(path: string, body: unknown): Promise<T> {
-  // Wrapped in callOutbound: 6s per attempt, 3 attempts on network/5xx/429.
-  // Note RazorpayX is idempotent on `reference_id` (we pass one for payouts),
-  // so a retried POST either creates the resource or returns the existing one
-  // — never a duplicate. The label is path-scoped so a payout outage doesn't
-  // open the breaker on contact-creation calls.
+  // 6s per attempt, 3 attempts on network/5xx/429. Retries are safe because payouts
+  // pass `reference_id`. The label is path-scoped so a payout outage doesn't open the
+  // breaker on contact creation.
   return callOutbound(
     async () => {
       const res = await fetch(`${X_BASE_URL}${path}`, {

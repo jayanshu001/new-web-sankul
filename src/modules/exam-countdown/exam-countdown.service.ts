@@ -1,27 +1,16 @@
 /**
- * ExamCountdown + ExamCountdownCategory — dual-path SQL/Mongo. Net-new SQL
- * tables ws_exam_countdown(_category) (2026-06-19), backfilled from Mongo.
- * Gated behind `isMysqlModule("exam-countdown")`.
- *
- * Scope: the STANDALONE admin CRUD + client feed (categories, countdowns with
- * daysLeft, upcoming). The EMBEDDED examCountdownIds[] populated inside Book/
- * Course/Ebook/Package detail responses stays Mongo — those catalog SQL tables
- * carry no examCountdown columns (documented catalog drift).
- *
- * All ids are SQL ints at runtime; DTOs restringify to the Mongo doc shape so
- * the admin/client response contracts are unchanged.
+ * ExamCountdown + ExamCountdownCategory: admin CRUD, client feed, and the
+ * resolvers that populate countdown ids embedded on catalog rows.
  */
 import { prisma } from "../../config/prisma";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
-
 
 export const parseEcId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ── DTOs ───────────────────────────────────────────────────────────────────────
 const catDto = (r: any) => ({
   _id: String(r.id),
   name: r.name,
@@ -32,7 +21,7 @@ const catDto = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
-/** Admin countdown DTO — categoryId populated to {_id,name,colorHex} like Mongo. */
+/** Admin countdown DTO; categoryId populated to {_id,name,colorHex}. */
 const countdownAdminDto = (r: any) => ({
   _id: String(r.id),
   title: r.title,
@@ -46,10 +35,8 @@ const countdownAdminDto = (r: any) => ({
 });
 
 /**
- * Validate an optional goal/label pair (mirrors Package.assertGoalLabelPair).
- * goalLabelId requires goalId; goalId must reference an existing Goal; and the
- * label id must exist inside that goal's labels JSON ([{ id, name }]). Returns
- * an error string (→ 400/404 at the controller) or null when valid/omitted.
+ * goalLabelId requires goalId; goalId must exist; the label must exist in that
+ * goal's labels JSON. Returns an error string, or null when valid/omitted.
  */
 export const validateGoalPair = async (
   goalId: number | null | undefined,
@@ -67,13 +54,10 @@ export const validateGoalPair = async (
   return null;
 };
 
-// ── Embedded populate resolvers (C6) ────────────────────────────────────────
-// Catalog detail responses (book/course/ebook/live-course) store the attached
-// countdown/category ids as a JSON int array on the catalog row. These resolve
-// that array to the SAME populated shape Mongo's .populate() returned, order
-// preserved: examCountdownIds → {_id,title,examDate}; categories → {_id,name,colorHex}.
+// Catalog rows (book/course/ebook/live-course) store countdown/category ids as a
+// JSON int array; these resolve them to populated objects, order preserved.
 
-/** Coerce a stored JSON column (int[] | string[] | null) to a clean int[]. */
+/** Accepts int[] | string[] | null. */
 export const parseIdArray = (json: any): number[] => {
   const a = Array.isArray(json) ? json : [];
   const out: number[] = [];
@@ -111,7 +95,6 @@ export const resolveCountdownCategoryDtos = async (
     .map((r) => ({ _id: String(r.id), name: r.name, colorHex: r.colorHex }));
 };
 
-/** Convenience: resolve a catalog row's two stored JSON columns in one call. */
 export const populateExamCountdowns = async (row: {
   examCountdownIds?: any; examCountdownCategoryIds?: any;
 }): Promise<{
@@ -125,9 +108,7 @@ export const populateExamCountdowns = async (row: {
   return { examCountdownIds, examCountdownCategoryIds };
 };
 
-// ── Category CRUD ──────────────────────────────────────────────────────────────
-// Pagination is opt-in: pass skip/take to page, omit to return the full list
-// (preserves the legacy "all categories" behaviour for non-paginating callers).
+// Pagination is opt-in: omit skip/take for the full list.
 export const listCategoriesAdmin = async (opts?: { search?: string | null; status?: boolean; skip?: number; take?: number }) => {
   const where: any = {};
   const search = buildPrismaPrefixSearch(opts?.search, ["name"]);
@@ -142,7 +123,7 @@ export const listCategoriesAdmin = async (opts?: { search?: string | null; statu
   return { data: rows.map(catDto), total };
 };
 
-/** Single category by id — lets pickers resolve a saved id to its label without paging the list. */
+/** Lets pickers resolve a saved id to its label without paging the list. */
 export const getCategoryAdmin = async (id: number) => {
   const row = await prisma.examCountdownCategory.findUnique({ where: { id } });
   return row ? catDto(row) : null;
@@ -158,6 +139,7 @@ export const createCategory = async (input: { name: string; colorHex: string; or
   return { conflict: false as const, data: catDto(row) };
 };
 
+// Returns {notFound}, {conflict} on a duplicate name, or {data}.
 export const updateCategory = async (id: number, update: Partial<{ name: string; colorHex: string; order: number; status: boolean }>) => {
   const exists = await prisma.examCountdownCategory.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return { notFound: true as const };
@@ -169,7 +151,7 @@ export const updateCategory = async (id: number, update: Partial<{ name: string;
   return { data: catDto(row) };
 };
 
-/** Delete blocked if any countdown references the category (mirror Mongo guard). */
+/** Blocked while any countdown references the category. */
 export const deleteCategory = async (id: number) => {
   const exists = await prisma.examCountdownCategory.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return { notFound: true as const };
@@ -179,7 +161,6 @@ export const deleteCategory = async (id: number) => {
   return { ok: true as const };
 };
 
-// ── Countdown CRUD ─────────────────────────────────────────────────────────────
 export const listCountdownsAdmin = async (opts: {
   categoryIds: number[] | null; search: string | null; includePast: boolean; skip: number; limitNum: number; pageNum: number; todayUTC: Date;
 }) => {
@@ -199,7 +180,7 @@ export const listCountdownsAdmin = async (opts: {
   return { data: withCat.map(countdownAdminDto), pagination: { total, page: opts.pageNum, limit: opts.limitNum, totalPages: Math.ceil(total / opts.limitNum) } };
 };
 
-/** Manual category join (no Prisma relation declared on these flat models). */
+/** Manual join: no Prisma relation on these models. */
 const attachCategories = async (rows: any[]) => {
   const catIds = [...new Set(rows.map((r) => r.categoryId).filter((x) => x != null))] as number[];
   if (!catIds.length) return rows.map((r) => ({ ...r, category: null }));
@@ -226,6 +207,7 @@ export const createCountdown = async (input: { title: string; categoryId: number
   return { data: countdownAdminDto(withCat) };
 };
 
+// Same failure shapes as createCountdown; the goal pair is checked on merged values.
 export const updateCountdown = async (id: number, update: Partial<{ title: string; categoryId: number; examDate: Date; status: boolean; goalId: number | null; goalLabelId: number | null }>) => {
   const existing = await prisma.examCountdown.findUnique({ where: { id }, select: { id: true, goalId: true, goalLabelId: true } });
   if (!existing) return { notFound: true as const };
@@ -254,7 +236,6 @@ export const deleteCountdown = async (id: number) => {
   return { ok: true as const };
 };
 
-// ── Client feed ──────────────────────────────────────────────────────────────────
 const MS_PER_DAY = 86_400_000;
 const daysLeftOf = (examDate: Date, todayUTC: Date) => {
   const exam = new Date(Date.UTC(examDate.getUTCFullYear(), examDate.getUTCMonth(), examDate.getUTCDate()));
@@ -289,8 +270,7 @@ export const listCountdownsClient = async (opts: {
   if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };
   const [rows, total] = await Promise.all([
-    // ws_exam_countdown has no display-order column — examDate is the domain
-    // ordering; created_at ASC is appended so paging is deterministic.
+    // No display-order column: examDate is the ordering, created_at keeps paging deterministic.
     prisma.examCountdown.findMany({ where, orderBy: [{ examDate: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.limitNum }),
     prisma.examCountdown.count({ where }),
   ]);
@@ -298,6 +278,7 @@ export const listCountdownsClient = async (opts: {
   return { data: withCat.map((r) => clientRow(r, opts.todayUTC)), total };
 };
 
+// Active countdowns from today on, nearest exam first.
 export const upcomingCountdownsClient = async (opts: {
   search: string | null; skip: number; limit: number; page: number; todayUTC: Date;
 }) => {

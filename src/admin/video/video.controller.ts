@@ -1,3 +1,4 @@
+// Admin videos: HTTP handlers for video CRUD, status and ordering.
 import { Request, Response } from "express";
 import {
   createVideoSchema,
@@ -8,8 +9,6 @@ import {
 import * as videoSql from "../../modules/admin-video/admin-video.service";
 import { formatZodIssues as formatZodErrors } from "../../utils/httpResponse";
 
-
-// GET /
 export const listVideos = async (req: Request, res: Response) => {
   try {
     const parsed = listQuerySchema.safeParse(req.query);
@@ -30,7 +29,7 @@ export const listVideos = async (req: Request, res: Response) => {
   }
 };
 
-// GET /pre-requisites?search=&limit=  (category picker: server-side search + page size)
+// Searchable picker data for the video form (limit capped at 500).
 export const getVideoPreRequisites = async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string>;
@@ -43,7 +42,6 @@ export const getVideoPreRequisites = async (req: Request, res: Response) => {
   }
 };
 
-// GET /:id
 export const getVideo = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -57,7 +55,6 @@ export const getVideo = async (req: Request, res: Response) => {
   }
 };
 
-// POST /
 export const createVideo = async (req: Request, res: Response) => {
   try {
     const parsed = createVideoSchema.safeParse(req.body);
@@ -78,7 +75,6 @@ export const createVideo = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /:id
 export const updateVideo = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -103,7 +99,6 @@ export const updateVideo = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /:id
 export const deleteVideo = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -116,7 +111,6 @@ export const deleteVideo = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /:id/status
 export const toggleVideoStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -130,7 +124,6 @@ export const toggleVideoStatus = async (req: Request, res: Response) => {
   }
 };
 
-// POST /reorder
 export const reorderVideos = async (req: Request, res: Response) => {
   try {
     const parsed = reorderSchema.safeParse(req.body);

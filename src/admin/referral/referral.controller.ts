@@ -1,8 +1,6 @@
-// src/admin/referral/referral.controller.ts
-//
-// Thin controllers: parse → validate → call service → respond.
-// Mutating routes are protected by `idempotency` + `adminMutationLimiter`
-// middleware mounted in referral.routes.ts.
+// Admin referral: HTTP handlers for programs, withdrawals, rewards and referrers.
+// Mutating routes are protected by `idempotency` + `adminMutationLimiter` in
+// referral.routes.ts.
 
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
@@ -15,10 +13,6 @@ import {
   adjustRewardPointsSchema,
 } from "./referral.validation";
 import * as referralService from "./referral.service";
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Programs
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getPrograms = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await referralService.listPrograms(
@@ -49,10 +43,6 @@ export const deleteProgram = asyncHandler(async (req: Request, res: Response) =>
   return success(res, {}, "Program deleted.");
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Transactions
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const getTransactions = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await referralService.listTransactions(
     req.query as referralService.ListTransactionsQuery
@@ -75,10 +65,6 @@ export const rejectWithdrawal = asyncHandler(async (req: Request, res: Response)
   return success(res, {}, "Withdrawal rejected and refunded.");
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Withdrawal report + CSV
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const getWithdrawalsReport = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await referralService.getWithdrawalsReport(
     req.query as referralService.WithdrawalsReportQuery
@@ -95,10 +81,6 @@ export const exportWithdrawalsCsv = asyncHandler(async (req: Request, res: Respo
   return res.status(200).send(csv);
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Manual reward adjustment
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const adjustCustomerRewards = asyncHandler(async (req: Request, res: Response) => {
   const validated = adjustRewardPointsSchema.parse(req.body);
   const data = await referralService.adjustCustomerRewards(
@@ -107,10 +89,6 @@ export const adjustCustomerRewards = asyncHandler(async (req: Request, res: Resp
   );
   return res.status(201).json({ success: true, data });
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Referrers
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getReferrers = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await referralService.listReferrers(

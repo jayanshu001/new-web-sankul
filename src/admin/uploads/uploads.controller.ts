@@ -1,8 +1,6 @@
-// src/admin/uploads/uploads.controller.ts
-//
-// Issues presigned URLs so the admin dashboard can upload large files (e.g.
-// eBook book PDFs up to 500 MB) directly to DigitalOcean Spaces, bypassing
-// this server. See src/utils/presignUpload.ts for the full rationale.
+// Admin uploads: presigned direct-to-Spaces upload URLs.
+// They let the admin dashboard upload large files (e.g. eBook PDFs up to
+// 500 MB) directly to Spaces, bypassing this server. See utils/presignUpload.ts.
 
 import { Request, Response } from "express";
 import { z } from "zod";

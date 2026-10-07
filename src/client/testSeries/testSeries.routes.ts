@@ -1,3 +1,4 @@
+// Client test series: catalog, papers, checkout preview and subscription routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -18,12 +19,9 @@ router.use(authenticate);
 router.get("/my/subscriptions",       listMySubscriptions);
 router.post("/checkout/preview",      previewCheckout);
 
-// Tier-2 (per-user isPurchased overlay), so the key is per-user and the TTL is a
-// full day. That TTL is NOT the freshness mechanism — the `entity` tag is: every
-// admin test-series write carries autoFlushGroup(CacheEntity.TestSeries), which sweeps this
-// tag across ALL users. These routes previously passed no entity, which bucketed
-// them under "misc" where no flush could ever reach them; a newly added price plan
-// then stayed invisible per-user for the full 24h.
+// Per-user isPurchased overlay → per-user key. The 24h TTL is not the freshness
+// mechanism: admin test-series writes autoFlush CacheEntity.TestSeries across all
+// users. Without an entity these keys land in "misc", which no flush reaches.
 const TS = { ttl: CACHE_TTL.DAY, entity: CacheEntity.TestSeries as const, scope: CacheScope.User as const };
 
 router.get("/",                       cacheRoute(TS), listTestSeries);

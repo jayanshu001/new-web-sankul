@@ -1,3 +1,4 @@
+// Educator packages: own package list, detail, dashboard and subscriber routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {

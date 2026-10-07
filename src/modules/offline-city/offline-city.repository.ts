@@ -1,19 +1,17 @@
+// Offline cities: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
-// Populate the parent state (Mongo `stateId` populated shape) for city DTOs.
 const stateInclude = { State: { select: { id: true, name: true, state_code: true } } } as const;
 
-// Shared WHERE for the admin city list + count (status/state filters + name search).
 const adminCityWhere = (opts?: { status?: boolean; stateId?: number; search?: string }) => ({
   ...(opts?.status === undefined ? {} : { status: opts.status }),
   ...(opts?.stateId ? { state: opts.stateId } : {}),
   ...(buildPrismaPrefixSearch(opts?.search, ["name"]) ?? {}),
 });
 
-/** Prisma persistence for the offline-city MySQL branch (ws_offline_city). */
 export const offlineCityRepository = {
-  /** Active cities, by manual `order` then name — mirrors Mongo `{status:true}` sort `{order:1}`. */
+  /** Active cities, by manual `order` then creation time. */
   listActive: (opts?: { search?: string; stateId?: number }) =>
     prisma.offlineCity.findMany({
       where: {
@@ -25,16 +23,12 @@ export const offlineCityRepository = {
       orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     }),
 
-  /** Single city by id (cart `cityId` → name resolution + center listing). */
   findById: (id: number) => prisma.offlineCity.findUnique({ where: { id }, include: stateInclude }),
 
-  /** Name-only fetch for the cart shipping resolution. */
   findNameById: (id: number) =>
     prisma.offlineCity.findUnique({ where: { id }, select: { id: true, name: true } }),
 
-  // ── admin (Wave 8) ──────────────────────────────────────────────────────────
-  /** Admin list: optional status + state filter + name search (includes inactive),
-   *  newest first, paginated when skip/take are provided. */
+  /** Admin list (includes inactive), newest first; paginated when skip/take are provided. */
   listAll: (opts?: { status?: boolean; stateId?: number; search?: string; skip?: number; take?: number }) =>
     prisma.offlineCity.findMany({
       where: adminCityWhere(opts),
@@ -44,7 +38,6 @@ export const offlineCityRepository = {
       take: opts?.take,
     }),
 
-  /** Total admin cities matching the same filters (pagination count). */
   countAll: (opts?: { status?: boolean; stateId?: number; search?: string }) =>
     prisma.offlineCity.count({ where: adminCityWhere(opts) }),
 

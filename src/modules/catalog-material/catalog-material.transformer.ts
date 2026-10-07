@@ -1,7 +1,7 @@
+// Material categories: row to DTO mapping (response shape is frozen).
 import type { MaterialCategory } from "@prisma/client";
 import type { MaterialCategoryDto } from "./catalog-material.types";
 
-/** `ws_material_category` row → DTO (Mongo `MaterialCategory`-shaped). */
 export const toMaterialCategoryDto = (row: MaterialCategory): MaterialCategoryDto => ({
   _id: String(row.id),
   title: row.name,

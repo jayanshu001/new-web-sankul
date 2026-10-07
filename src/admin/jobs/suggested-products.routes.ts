@@ -1,3 +1,4 @@
+// Admin jobs portal: suggested-product placement CRUD routes.
 import { Router } from "express";
 import {
   getSuggestedProductList,

@@ -1,3 +1,4 @@
+// App version: row to DTO mapping (defaults when no row exists).
 import type { Version } from "@prisma/client";
 import type { VersionDto } from "./version.types";
 import { VERSION_DEFAULTS } from "./version.types";

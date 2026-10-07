@@ -1,3 +1,4 @@
+// Ebook subscriptions: row to DTO mapping (response shape is frozen).
 import type { EBookSubscription } from "@prisma/client";
 import type { EbookSubscriptionDto } from "./commerce-ebook-sub.types";
 
@@ -6,16 +7,9 @@ const ownerId = (v: number | null): string | null =>
   v != null && v > 0 ? String(v) : null;
 
 /**
- * `ws_ebook_subscription` row → entitlement DTO, shape-compatible with the
- * Mongo `EbookSubscription` document.
- *
- *  - `customerId` stays an int (the migrated id-space).
- *  - `price` (Decimal) → number.
- *  - `status` is nullable in SQL (default 1); a NULL is treated as `true`
- *    (active) to match the Mongo default and the "entitled unless explicitly
- *    revoked" intent.
- *  - Mongo-only promo fields (promocodeId/promoterId/referrerId) live on the
- *    order row / are 3b → not produced.
+ * `ws_ebook_subscription` row → entitlement DTO (frozen client shape).
+ * A NULL `status` is treated as active: entitled unless explicitly revoked.
+ * Promo fields (promocodeId/promoterId/referrerId) live on the order row and are not produced.
  */
 export const toEbookSubscriptionDto = (row: EBookSubscription): EbookSubscriptionDto => ({
   _id: String(row.id),

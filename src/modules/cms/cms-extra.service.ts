@@ -1,17 +1,10 @@
 /**
- * CMS extras — SocialLinkType / SocialLink / CurrentAffair / LiveBannerSlider
- * admin CRUD on MySQL (Prisma). Wave 8. Net-new tables ws_social_link(_type),
- * ws_current_affair, ws_live_banner_slider.
- *
- * Gated behind `isMysqlModule("cms-extra")`. DTOs mirror the Mongo doc shape
- * (`_id` string; SocialLink populates typeId→{_id,title}; LiveBanner exposes
- * liveCourseId as a string — full populate of the live course is NOT reproduced
- * here, the FE only needs the id for these admin lists).
+ * CMS extras: SocialLinkType / SocialLink / CurrentAffair / LiveBannerSlider CRUD. SocialLink populates
+ * typeId→{_id,title}; LiveBanner exposes liveCourseId as a string only (the FE needs just the id).
  */
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
-
 
 export const parseCmsId = (id: string): number | null => {
   const n = Number(id);
@@ -20,13 +13,11 @@ export const parseCmsId = (id: string): number | null => {
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
-// ─── SocialLinkType ──────────────────────────────────────────────────────────
 const sltDto = (r: any) => ({ _id: String(r.id), title: r.title, createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null });
 
 export const listSocialLinkTypes = async () =>
   (await prisma.socialLinkType.findMany({ orderBy: { title: "asc" } })).map(sltDto);
 
-// Client read: `?search=` (title) + pagination, ordered by title.
 export const listSocialLinkTypesPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
@@ -68,7 +59,6 @@ export const deleteSocialLinkType = async (id: number): Promise<Envelope<null>> 
   return { ok: true, data: null };
 };
 
-// ─── SocialLink ──────────────────────────────────────────────────────────────
 const slDto = (r: any) => ({
   _id: String(r.id),
   typeId: r.type ? { _id: String(r.type.id), title: r.type.title } : String(r.typeId),
@@ -76,8 +66,7 @@ const slDto = (r: any) => ({
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
 });
 
-// SocialLink has no Prisma relation to SocialLinkType (scalar typeId), so we
-// hydrate the type manually to mirror the Mongo .populate("typeId","_id title").
+// SocialLink has no Prisma relation to SocialLinkType (scalar typeId), so the type is hydrated manually.
 const hydrateTypes = async (rows: any[]) => {
   const typeIds = [...new Set(rows.map((r) => r.typeId))];
   const types = typeIds.length
@@ -94,7 +83,6 @@ export const listSocialLinks = async () => {
   return (await hydrateTypes(rows)).map(slDto);
 };
 
-// Client read: active links only, `order_by ASC, created_at ASC`.
 export const listClientSocialLinks = async () => {
   const rows = await prisma.socialLink.findMany({
     where: { status: true },
@@ -103,9 +91,6 @@ export const listClientSocialLinks = async () => {
   return (await hydrateTypes(rows)).map(slDto);
 };
 
-// Client read (paged): active links only, ordered by orderBy, with `?search=`
-// (title/link) + pagination. Mirrors listClientSocialLinks + count over the
-// identical where.
 export const listClientSocialLinksPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
@@ -172,7 +157,6 @@ export const deleteSocialLink = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// ─── CurrentAffair ───────────────────────────────────────────────────────────
 const caDto = (r: any) => ({
   _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink, status: r.status,
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
@@ -183,10 +167,7 @@ export const listCurrentAffairs = async () =>
 
 const CA_SORT_COLUMNS: Record<string, string> = { createdAt: "createdAt", title: "title", status: "status" };
 
-/**
- * Admin search + sort + opt-in pagination. `skip`/`take` apply only when
- * provided (absent → full filtered list). Always returns the total count.
- */
+/** `skip`/`take` apply only when provided (absent → full filtered list). */
 export const listCurrentAffairsPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
@@ -203,9 +184,7 @@ export const listCurrentAffairsPaged = async (q: {
   return { items: rows.map(caDto), total };
 };
 
-// Client read: active affairs, newest first, only the fields the client
-// renders (image, title, youtubeLink). `limit` (>0) caps the list. Mirrors the
-// Mongo CurrentAffair.find({status:true}).sort({createdAt:-1}).select(...).
+// `limit` (>0) caps the list.
 export const listClientCurrentAffairs = async (limit = 0) => {
   const rows = await prisma.currentAffair.findMany({
     where: { status: true },
@@ -216,9 +195,6 @@ export const listClientCurrentAffairs = async (limit = 0) => {
   return rows.map((r) => ({ _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink }));
 };
 
-// Client read (paged): active affairs, newest first, only the fields the client
-// renders, with `?search=` (title) + pagination. Mirrors listClientCurrentAffairs
-// + count over the identical where.
 export const listClientCurrentAffairsPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
@@ -266,7 +242,6 @@ export const deleteCurrentAffair = async (id: number): Promise<boolean> => {
   return true;
 };
 
-// ─── LiveBannerSlider ────────────────────────────────────────────────────────
 const lbDto = (r: any) => ({
   _id: String(r.id), image: r.image, liveCourseId: String(r.liveCourseId), orderBy: r.orderBy,
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
@@ -278,10 +253,7 @@ export const listLiveBanners = async () =>
 
 const LB_SORT_COLUMNS: Record<string, string> = { orderBy: "orderBy", createdAt: "createdAt" };
 
-/**
- * Admin search + sort + opt-in pagination. `skip`/`take` apply only when
- * provided (absent → full filtered list). Always returns the total count.
- */
+/** `skip`/`take` apply only when provided (absent → full filtered list). */
 export const listLiveBannersPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
@@ -302,8 +274,7 @@ export const listLiveBannersPaged = async (q: {
   return { items: rows.map(lbDto), total };
 };
 
-// Client read (paged): ordered by orderBy. Live-banner rows are image +
-// liveCourseId only (no natural text field) → pagination ONLY, no `search`.
+// No natural text field on these rows, so pagination only, no `search`.
 export const listLiveBannersClientPaged = async (q: {
   skip?: number; take?: number;
 }) => {
@@ -327,9 +298,7 @@ export const getLiveBanner = async (id: number) => {
 
 export const createLiveBanner = async (input: { image: string; liveCourseId: number; orderBy?: number }) => {
   const now = new Date();
-  // No explicit orderBy → previous row + 1 (utils/listOrdering), matching
-  // POST /admin/cms/banners so both banner lists behave identically. Single
-  // list, so the lookup is global.
+  // No explicit orderBy → previous row + 1 (utils/listOrdering), matching POST /admin/cms/banners.
   const orderBy =
     input.orderBy ??
     nextOrder((await prisma.liveBannerSlider.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
@@ -351,7 +320,7 @@ export const deleteLiveBanner = async (id: number): Promise<boolean> => {
   return true;
 };
 
-/** Reorder: apply [{id, orderBy}] updates. Returns count applied. */
+/** Returns the number of rows updated. */
 export const reorderLiveBanners = async (orders: { id: string; orderBy: number }[]): Promise<number> => {
   let count = 0;
   for (const o of orders) {

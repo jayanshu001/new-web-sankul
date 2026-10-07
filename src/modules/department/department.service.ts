@@ -1,3 +1,4 @@
+// Departments: admin CRUD and the client contact-us listing.
 import { departmentRepository } from "./department.repository";
 import { toDepartmentDto } from "./department.transformer";
 import type {
@@ -14,7 +15,7 @@ export const parseDepartmentId = (id: string): number | null => {
 export interface ListDepartmentsOptions {
   page?: number;
   limit?: number;
-  /** Filter by status (true/false). Omit for all departments. */
+  /** Omit for all departments. */
   active?: boolean;
 }
 
@@ -23,11 +24,7 @@ export interface ListDepartmentsResult {
   total: number;
 }
 
-/**
- * Admin list — departments (+ contacts), sorted by `order`. Supports an optional
- * `active` status filter and `page`/`limit` pagination; returns the matching
- * `total` alongside the page of items so the caller can build pagination meta.
- */
+// Admin list, newest first; paginates only when both page and limit are given.
 export const listDepartments = async (
   opts: ListDepartmentsOptions = {}
 ): Promise<ListDepartmentsResult> => {
@@ -42,10 +39,7 @@ export const listDepartments = async (
   return { items: rows.map(toDepartmentDto), total };
 };
 
-/**
- * Client contact-us — active departments only, each with active contacts
- * sorted by `order` (matches legacy `getContactUs` shaping).
- */
+/** Client contact-us: active departments, each with active contacts sorted by `order`. */
 export const listActiveContactDepartments = async (): Promise<DepartmentDto[]> => {
   const rows = await departmentRepository.findMany({ active: true });
   return rows.map(toDepartmentDto).map((d) => ({

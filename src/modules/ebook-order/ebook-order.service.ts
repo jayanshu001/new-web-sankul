@@ -1,19 +1,4 @@
-/**
- * Ebook · Order (WRITE — Phase 3b) service — dual-path (MySQL ↔ Mongo).
- *
- * Module key: `ebook-order`. Rides the commerce-order pattern. Gates the ebook
- * purchase flow across create-order/ebook + the verify ebook branch. See
- * ebook-order.types.ts for the scope/drift block.
- *
- * Exposes:
- *  - isEbookOrderMysql() / parseEbookOrderId()
- *  - findEbookPlanForOrder()       — read plan ebook/price/duration (create-order)
- *  - createEbookOrderMysql()       — write the pending order row
- *  - findEbookOrderForVerify()     — DUAL-READ owner lookup (rollback net)
- *  - verifyEbookOrderMysql()       — transactional fulfillment; idempotent
- *
- * Flag OFF until go-live sign-off.
- */
+// Ebook orders: checkout, payment verification and webhook fulfilment.
 import { computeEndAt } from "../../utils/planDuration";
 import type {
   PromocodeSnapshot,
@@ -29,18 +14,12 @@ import type {
   EbookOrderRow,
 } from "./ebook-order.types";
 
-
-
 export const parseEbookOrderId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/**
- * Read an active ebook plan for create-order: {ebookId, price, duration} or null
- * if the plan doesn't exist / has no ebook / is free / is deactivated
- * (`status=false`). Guarding on status stops a disabled price row being purchased.
- */
+/** Null when the plan is missing, has no ebook, is free, or is deactivated (so a disabled price row can't be bought). */
 export const findEbookPlanForOrder = async (
   planId: number
 ): Promise<{ ebookId: number; price: number; duration: number } | null> => {
@@ -49,38 +28,25 @@ export const findEbookPlanForOrder = async (
   return { ebookId: plan.ebookId, price: plan.price, duration: plan.duration ?? 0 };
 };
 
-// ── create-order ────────────────────────────────────────────────────────────
-
-/**
- * Write a pending ebook order to MySQL. `uniqueId` is required (NOT NULL on the
- * table) — we pass the receipt id. customerId is the int migrated id.
- */
+/** `uniqueId` is NOT NULL on the table; callers pass the receipt id. */
 export const createEbookOrderMysql = async (input: {
   customerId: number;
   planId: number;
   orderPrice: number;
   razorpayOrderId: string;
   uniqueId: string;
-  // The purchase-time snapshot of the redeemed code (promo OR referral) → the
-  // `promocode` column. This table has no separate refferalcode column, so both
-  // snapshot kinds land there; `referrerId` distinguishes them.
+  // Promo or referral snapshot, both stored in `promocode`; `referrerId` distinguishes them.
   code?: PromocodeSnapshot | ReferralSnapshot | null;
-  // Referrer to credit at verify when a referral code was applied (else null).
+  // Credited at verify.
   referrerId?: number | null;
-  // Wallet coins redeemed; debited at verify (stored in wallet_coin). 0/null = none.
+  // Debited at verify. 0/null = none.
   coin?: number | null;
 }): Promise<CreatedEbookOrder> => {
   const order = await repo.createPendingOrder(input);
   return { orderId: order.id };
 };
 
-// ── verify: dual-read owner lookup ──────────────────────────────────────────
-
-/**
- * Owner lookup for verify. Returns the ebook order row iff a MySQL order owns
- * this Razorpay id for this customer AND its plan resolves to an ebook. Returns
- * null on miss — the caller falls back to the Mongo lookup (dual-read fallback).
- */
+/** The order iff it owns this Razorpay id for this customer and its plan resolves to an ebook. */
 export const findEbookOrderForVerify = async (
   razorpayOrderId: string,
   customerId: number
@@ -92,16 +58,9 @@ export const findEbookOrderForVerify = async (
   return toEbookOrderRow(order);
 };
 
-// ── verify: transactional fulfillment ───────────────────────────────────────
-
 /**
- * Fulfill a verified ebook payment. Idempotent: an already-complete order
- * returns the existing order DTO without re-running side effects. Otherwise, in
- * ONE transaction: flip order → complete + extend-or-create the subscription.
- * `duration` is DAYS — endAt via planDuration `asDays:true`.
- *
- * Returns the Mongo-shaped EbookOrder DTO (the verify ebook branch returns the
- * ORDER, not the subscription).
+ * Idempotent: an already-complete order returns its DTO without re-running side
+ * effects. `duration` is in DAYS. Returns the ORDER DTO, not the subscription.
  */
 export const verifyEbookOrderMysql = async (
   order: EbookOrderRow,
@@ -117,7 +76,6 @@ export const verifyEbookOrderMysql = async (
     throw new Error("ebook-order: plan resolves to no ebook");
   }
 
-  // Idempotency: already complete → return the existing order DTO.
   if (order.status !== "pending") {
     const orderRow = await repo.findOrderByRazorpay(
       order.razorpayOrderId ?? "",
@@ -130,9 +88,8 @@ export const verifyEbookOrderMysql = async (
   const customerId = Number(order.customerIdStr);
   const price = order.orderPrice ?? 0;
 
-  // ONE ORDER = ONE SUBSCRIPTION ROW. The active sub is read only to place the new
-  // window (renewal continues from its endAt); it is never modified, so its price
-  // and order_id survive the renewal untouched.
+  // The active sub only places the new window (renewal continues from its endAt);
+  // it is never modified.
   const existingActive = await repo.findActiveEbookSub(customerId, ebookId, now);
   const startAt =
     existingActive?.endAt && existingActive.endAt.getTime() > now.getTime()
@@ -144,7 +101,7 @@ export const verifyEbookOrderMysql = async (
     razorpayPaymentId,
     customerId,
     ebookId,
-    // This order's own price — not a running total across renewals.
+    // This order's own price, not a running total across renewals.
     price,
     now,
     startAt,
@@ -152,8 +109,8 @@ export const verifyEbookOrderMysql = async (
     extended: !!existingActive,
   });
   if (!result) {
-    // Claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
-    // first. Return the order it completed; never create a second subscription.
+    // A concurrent /verify or webhook fulfilled this order first; never create a
+    // second subscription.
     const orderRow = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerIdStr ?? "");
     if (!orderRow) throw new Error("ebook-order: order is not pending and cannot be re-read");
     return toEbookOrderDto(orderRow, ebookId);
@@ -164,10 +121,8 @@ export const verifyEbookOrderMysql = async (
 };
 
 /**
- * Webhook fulfillment (paymentWebhook) — keyed by razorpayOrderId ALONE (the
- * razorpay payload carries no customer). Confirms an ebook order owns this id,
- * then runs the same idempotent verify fulfillment. Returns null on miss (→ caller
- * falls through to Mongo). Safe to run before or after the client /verify call.
+ * Keyed by razorpayOrderId alone (the payload carries no customer). Null when no
+ * ebook order owns it. Safe to run before or after the client /verify call.
  */
 export const fulfillEbookWebhookMysql = async (
   razorpayOrderId: string,

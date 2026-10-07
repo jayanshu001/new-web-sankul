@@ -1,20 +1,12 @@
+// Payment method: receipt display labels and payment reference resolution.
 /**
- * Payment-method display + reference resolution, shared by the PDF receipt
- * (libs/core/generate.ts) and the JSON receipt (client-purchase-history.service).
- *
- * Both used to answer "how was this paid?" differently — the PDF printed the raw
- * lowercase column, and the JSON hardcoded `"razorpay"` on four of its six
- * builders — so a bank transfer read as "razorpay" on the receipt screen and
- * "bank" on the PDF. One helper, one answer.
+ * Payment-method display + reference resolution, shared by the PDF receipt and
+ * the JSON receipt so both describe a payment the same way.
  */
 
 /**
- * Display label for a stored `payment_method`.
- *
- * The PaymentMethod enum is mixed-case by accident of history — `bank`, `cash`,
- * `razorpay`, `free` are lowercase while `Backend`, `Paykun`, `Paytm` are
- * capitalised. Capitalising the first letter normalises every value without a
- * lookup table that would silently print a raw value the day a method is added.
+ * The PaymentMethod enum is mixed-case (`bank` vs `Paytm`); capitalising the first
+ * letter normalises every value, including methods added later.
  */
 export const formatPaymentMethod = (raw?: string | null): string => {
   const v = (raw ?? "").trim();
@@ -23,9 +15,8 @@ export const formatPaymentMethod = (raw?: string | null): string => {
 };
 
 /**
- * `payment_type` (backend | online) is the ACTIVATION CHANNEL, not a payment
- * method — it is all a legacy order-less subscription carries. Map it to
- * something truthful rather than claiming a gateway that was never used.
+ * `payment_type` (backend | online) is the activation channel, not a payment
+ * method; it is all a legacy order-less subscription carries.
  */
 export const formatPaymentType = (raw?: string | null): string => {
   const v = (raw ?? "").trim().toLowerCase();
@@ -35,16 +26,10 @@ export const formatPaymentType = (raw?: string | null): string => {
 };
 
 /**
- * The reference number to show, and what to call it.
- *
- * A gateway payment id only exists for online payments. Bank transfers are
- * settled manually and carry their reference in a separate column
- * (`bank_transaction_id`, or `transaction_id` on the ebook/test-series tables).
- *
- * Falls back across both columns rather than switching hard on the method: an
- * order can be recorded as `bank` and still carry a gateway id (or the reverse)
- * after a manual correction, and showing the id that actually exists is more
- * useful than showing nothing because the method column disagrees.
+ * The reference number to show, and its label. Bank transfers carry their
+ * reference in `bank_transaction_id` (`transaction_id` on ebook/test-series).
+ * Falls back across both columns because manual corrections can leave the
+ * method column disagreeing with which id actually exists.
  */
 export const resolvePaymentReference = (
   method: string,
@@ -56,8 +41,6 @@ export const resolvePaymentReference = (
   const isBank = method.toLowerCase() === "bank";
   const value = isBank ? bank || gateway : gateway || bank;
   return {
-    // "Payment Id" is the gateway's language; a manual transfer has a
-    // transaction reference, not a payment id.
     paymentIdLabel: isBank || (!gateway && bank) ? "Transaction Id" : "Payment Id",
     paymentId: value || "-",
   };

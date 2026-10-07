@@ -1,14 +1,6 @@
-// src/middlewares/asyncHandler.ts
+// Async handler: forwards a rejected async handler to the global error middleware.
 import { Request, Response, NextFunction, RequestHandler } from "express";
 
-/**
- * Wraps an async route handler so any thrown error / rejected promise is
- * forwarded to Express's global error middleware. Removes the need for
- * per-handler try/catch boilerplate.
- *
- * Usage:
- *   router.get("/", asyncHandler(async (req, res) => { ... }))
- */
 type AsyncHandler = (
   req: Request,
   res: Response,

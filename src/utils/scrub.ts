@@ -1,15 +1,6 @@
-// src/utils/scrub.ts
-//
-// PII / secret deny-list scrubber. Used by the request logger and the crash
-// reporter so log/email payloads never carry plaintext passwords, OTPs,
-// tokens, or financial identifiers.
-//
-// Strategy: deny-list. We replace the VALUE (not the key) so the shape of the
-// logged body is preserved — helpful for debugging without leaking secrets.
-//
-// Adding a new sensitive field? Append it to SENSITIVE_KEYS below. Matching
-// is case-insensitive and substring-based, so `accessToken` matches `token`
-// and `currentPassword` matches `password`.
+// Log scrubber: deny-list redaction for the request logger and crash reporter. Replaces the
+// value (not the key) so the logged shape survives. Matching is case-insensitive
+// and substring-based (`accessToken` matches `token`).
 
 const SENSITIVE_KEYS = [
   "password",
@@ -29,8 +20,6 @@ const SENSITIVE_KEYS = [
   "apikey",
   "api_key",
   "x-api-key",
-  // Financial identifiers — bank/card details are the primary PII the
-  // referral + payment endpoints handle.
   "bankaccount",
   "accountnumber",
   "ifsccode",
@@ -42,17 +31,10 @@ const SENSITIVE_KEYS = [
   "upi",
 ];
 
-// Fields sensitive under their EXACT name only. Substring matching is too blunt
-// for short generic names — putting "key" in SENSITIVE_KEYS above would redact
-// every objectKey / subjectKey / cacheKey / keyword in every log line and gut
-// debuggability. These are compared whole.
-//
-//   key → PUT /client/downloads/encryption-key body: the per-user AES-256 key
-//         for offline downloads. Must never reach disk.
-//         Known collateral: two admin bodies also use a plain `key` field
-//         (cms `key` enum, offline `key` search term) and will now log as
-//         [REDACTED]. Both are low-value log fields; leaking the AES key is not
-//         a trade worth making to keep them readable.
+// Exact-name matches only: substring-matching "key" would redact every
+// objectKey/cacheKey/keyword. `key` is the per-user AES download key
+// (PUT /client/downloads/encryption-key); the admin cms `key` enum and offline
+// `key` search term are redacted too, as accepted collateral.
 const SENSITIVE_EXACT_KEYS = ["key"];
 
 const REDACTED = "[REDACTED]";
@@ -62,11 +44,7 @@ const isSensitiveKey = (key: string): boolean => {
   return SENSITIVE_EXACT_KEYS.includes(k) || SENSITIVE_KEYS.some((s) => k.includes(s));
 };
 
-/**
- * Deep-clones the input with sensitive values replaced by `[REDACTED]`.
- * Returns the original primitive unchanged. Handles circular refs by
- * tracking seen objects.
- */
+/** Deep-clones with sensitive values replaced by `[REDACTED]`; circular refs become `[CIRCULAR]`. */
 export const scrub = <T = unknown>(input: T, _seen?: WeakSet<object>): T => {
   if (input === null || input === undefined) return input;
   if (typeof input !== "object") return input;
@@ -79,7 +57,6 @@ export const scrub = <T = unknown>(input: T, _seen?: WeakSet<object>): T => {
     return input.map((v) => scrub(v, seen)) as unknown as T;
   }
 
-  // Buffers / Dates / etc. — leave as-is so toString/toJSON preserve shape.
   if (Buffer.isBuffer(input) || input instanceof Date || input instanceof RegExp) {
     return input;
   }

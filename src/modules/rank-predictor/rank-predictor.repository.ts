@@ -1,3 +1,4 @@
+// Rank predictor: Prisma and raw SQL queries.
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { SUBMISSION_STATUS, type LeaderboardRow } from "./rank-predictor.types";

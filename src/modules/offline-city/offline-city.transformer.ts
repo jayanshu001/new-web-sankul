@@ -1,6 +1,6 @@
+// Offline cities: row to DTO mapping (response shape is frozen).
 import type { CityDto, CityNameDto } from "./offline-city.types";
 
-// Row shape from queries that include the State relation (see repository stateInclude).
 type CityRowWithState = {
   id: number;
   name: string;

@@ -1,3 +1,4 @@
+// Admin subscriptions: course/package report, exports, grant/extend and summary reports.
 import ExcelJS from "exceljs";
 import { resolveShippingIdForAddress } from "../customer-shipping/customer-shipping.service";
 import type { ReportSource } from "../../utils/reportStream";
@@ -65,22 +66,17 @@ const promoCodeOf = (j: any): string | null => {
   return null;
 };
 
-// blankStrToNull / decToNum / rowHasMaterial / trackingToNumber moved to
-// utils/reportFilters on 2026-08-27 — the Live Course report emits the same columns
-// and the two must not drift. Imported above.
 const customerRef = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | undefined) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);
   return { _id: String(c.id), firstName, lastName, phoneNumber: c.phoneNumber, ...(c.emailAddress !== undefined ? { emailAddress: c.emailAddress ?? null } : {}) };
 };
 
-// ── course/package subscription list + export (Reports contract) ─────────────
-// Shared contract across the 4 admin subscription reports — see
-// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. list() returns { summary, data,
-// pagination } (summary respects all filters, ignores pagination); the SAME
-// filters drive the CSV/Excel export (which ignores pagination entirely).
-// `status` is the normalized active|expired|inactive; paymentMethod is the
-// coarse online|backend (= payment_type). Date ranges are independent:
+// Shared contract across the 4 admin subscription reports (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md):
+// list() returns { summary, data, pagination } (summary respects all filters, ignores
+// pagination); the same filters drive the CSV/Excel export (no pagination).
+// `status` is the normalized active|expired|inactive; paymentMethod is the coarse
+// online|backend (= payment_type). Date ranges are independent:
 // dateFrom/dateTo → createdAt, startFrom/startTo → startAt, endFrom/endTo → endAt.
 export interface CourseSubReportQuery {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
@@ -94,8 +90,8 @@ export interface CourseSubReportQuery {
   dateFrom?: string; dateTo?: string;
   startFrom?: string; startTo?: string;
   endFrom?: string; endTo?: string;
-  // Accepted so the FE param is honored once a source exists; there is no SQL
-  // column for Activation Type yet (see backend-request), so it is a no-op today.
+  // Accepted so the FE param is honored once a source exists; there is no column for
+  // Activation Type yet, so it is a no-op.
   activationType?: string;
   search?: string; sortBy?: string; sortOrder?: string; type?: string;
 }
@@ -144,7 +140,6 @@ const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
   return { listWhere, sortBy, sortDir };
 };
 
-// Hydrate raw subscription rows into the report DTO (shared by list + export).
 const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCourseSubsByWhere>>, now: Date) => {
   const uniq = (xs: (number | null | undefined)[]) => [...new Set(xs.filter((x): x is number => x != null && x > 0))];
   const [custs, courses, packages, plans, orders, shippings, promoters, admins] = await Promise.all([
@@ -193,16 +188,14 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
     return {
       id: r.id,
       ...base,
-      // courier tracking (set via subscriptions /tracking PATCH); null until assigned
       trackingId: trackingToNumber(r.trackingId),
-      // people (+ ids so the report can link to each detail page)
+      // + ids so the report can link to each detail page
       educatorName: educator?.name ?? null,
       educatorId: educator?.id ?? null,
       promoterName: promoter?.full_name ?? null,
       promoterId: promoter?.id ?? null,
       promocode,
       promocodeId: promocode ? promocodeIds.get(promocode) ?? null : null,
-      // amounts / coins
       courseAmount: decToNum(r.courseAmount),
       materialAmount: decToNum(r.materialAmount),
       wsCoin: order?.wsCoin ?? null,
@@ -210,13 +203,11 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
       // lowercased to match the orderMethod filter values; null when there's no order.
       orderMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : null,
       materialType: rowHasMaterial(r) ? "With Material" : "Without Material",
-      // NOTE: no SQL source for "Activation Type" — see backend-request open item.
+      // No source for "Activation Type" yet.
       activationType: null as string | null,
-      // gateway / payment ids
       razorpayOrderId: order ? blankStrToNull(order.gatewayOrderId) : null,
       razorpayPaymentId: order ? blankStrToNull(order.gatewayPaymentId) : null,
       bankTransactionId: order ? blankStrToNull(order.bankTransactionId) : null,
-      // shipping (report only needs address/city/pincode + alternate phone)
       shipping: ship
         ? {
             address: ship.address ?? null,
@@ -252,6 +243,7 @@ const withListDateDefaults = (q: CourseSubReportQuery): CourseSubReportQuery => 
   return { ...q, dateFrom: isoDay(from), dateTo: isoDay(to) };
 };
 
+// Report page with summary; an unscoped query defaults to the last 90 days.
 export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: number; limit: number }) => {
   const now = new Date();
   const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
@@ -276,13 +268,10 @@ export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: 
   };
 };
 
-// ── report export (CSV / Excel) ──────────────────────────────────────────────
-// Same filters as the list, but the ENTIRE filtered set (no pagination) and NO
-// row cap — a 300k-row filter must export every matching row. We page the result
-// set in keyset batches (id DESC ≈ the createdAt-DESC default, no deep OFFSET) and
-// hydrate one batch at a time, so memory stays bounded per batch instead of
-// loading the whole result set at once. Both formats share one column spec so
-// they stay in lockstep, and the async export job reuses these same builders.
+// Report export: same filters as the list but the entire filtered set, no pagination
+// and no row cap (a 300k-row filter must export every row). Paged in keyset batches
+// (id DESC, no deep OFFSET) and hydrated one batch at a time so memory stays bounded.
+// Both formats share one column spec, and the async export job reuses these builders.
 const EXPORT_BATCH = 5_000;
 
 async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
@@ -315,12 +304,10 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
   }
 }
 
-// Timestamps render as IST (Asia/Kolkata, UTC+5:30, no DST) in `YYYY-MM-DD HH:mm:ss`
-// 24-hour form, e.g. "2026-10-06 00:01:21" (was a raw UTC ISO string). Shift the
-// instant by +5:30 and read the wall-clock parts off the shifted value.
-// Column order: the client's Subscription-WithMaterial-Report.csv set first, then
-// the extra columns the on-screen report shows. A row is either a course OR a
-// package, so only the matching name column is filled.
+// Timestamps render as IST (UTC+5:30, no DST) as `YYYY-MM-DD HH:mm:ss`: shift the instant
+// by +5:30 and read the wall-clock parts off the shifted value.
+// Column order: the client's Subscription-WithMaterial-Report.csv set first, then the
+// extra on-screen columns. A row is a course OR a package, so only one name column is filled.
 const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
   { header: "Tracking ID", get: (r) => r.trackingId ?? "" },
@@ -340,11 +327,9 @@ const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
   { header: "End At", get: (r) => fmtExportDate(r.endAt) },
   { header: "Status", get: (r) => r.status ?? "" },
   { header: "Material Type", get: (r) => r.materialType ?? "" },
-  // Activation Type = how the sub was activated (online | backend). Sourced from
-  // the row's `paymentMethod` (= ws_package_course_subscription.payment_type), the
-  // same field the on-screen report maps to its Activation Type column — NOT the
-  // no-op `activationType` (which has no SQL source). Distinct from Order Method
-  // (the payment gateway). See docs/backend-requests/subscription-report-filters.md.
+  // Activation Type (online | backend) comes from `paymentMethod` (= payment_type), as on
+  // the on-screen report — not the no-op `activationType`. Distinct from Order Method
+  // (the gateway).
   { header: "Activation Type", get: (r) => r.paymentMethod ?? "" },
   { header: "Promoter Name", get: (r) => r.promoterName ?? "" },
   { header: "Promocode", get: (r) => r.promocode ?? "" },
@@ -392,9 +377,9 @@ export const buildCourseSubscriptionsXlsx = async (q: CourseSubReportQuery): Pro
   return Buffer.concat(chunks);
 };
 
-// Streamed export source (async job path). Same rows/columns as the sync builders
-// above, but exposed as a header + row-batch iterable so the worker can pipe it
-// straight into a multipart upload — no full-file buffer. See utils/reportStream.ts.
+// Streamed export source (async job path): same rows/columns as the sync builders, as a
+// header + row-batch iterable the worker pipes straight into a multipart upload. See
+// utils/reportStream.ts.
 export function courseSubExportSource(q: CourseSubReportQuery): ReportSource {
   const now = new Date();
   return {
@@ -421,9 +406,8 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
   const [course] = r.courseId ? await repo.coursesByIds([r.courseId]) : [undefined];
   const [pkg] = r.packageId ? await repo.packagesByIds([r.packageId]) : [undefined];
   const [plan] = r.planId ? await repo.plansByIds([r.planId]) : [undefined];
-  // The gateway refs and the order type live on ws_package_course_order, not on the
-  // subscription. Admin-granted subs carry no order_id (12k of package 91's 48k rows),
-  // so these stay null for them rather than being faked.
+  // Gateway refs and the order type live on ws_package_course_order. Admin-granted subs
+  // often carry no order_id, so these stay null for them rather than being faked.
   const [order] = r.orderId ? await repo.ordersByIds([r.orderId]) : [undefined];
   return {
     _id: String(r.id),
@@ -442,24 +426,21 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
     razorpayPaymentId: order?.gatewayPaymentId ?? null,
     bankTransactionId: order?.bankTransactionId ?? null,
     withMaterial: rowHasMaterial(r),
-    // courier tracking — same field/helper as the list row; null until assigned
     trackingId: trackingToNumber(r.trackingId),
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };
 };
 
-// ── course/package subscription update / delete (admin edit) ─────────────────
-// Date/status/shipping columns are patched on ws_package_course_subscription; the
-// PAYMENT fields (method + reference ids) live on the linked
-// ws_package_course_order and are patched there. The subscription itself carries
-// only `payment_type` (backend|online) — the activation channel, not a method.
+// Date/status/shipping columns are patched on ws_package_course_subscription; payment
+// fields (method + reference ids) live on the linked ws_package_course_order and are
+// patched there. The subscription only carries `payment_type` (the activation channel).
 export const updateCourseSubscription = async (
   id: number,
   patch: {
     startAt?: Date; endAt?: Date; status?: boolean;
     shippingId?: number | null; trackingId?: bigint | null; remark?: string;
     actingAdminId?: number | null;
-    // Payment correction — written to the linked order row (2026-08-21).
+    // Payment correction — written to the linked order row.
     paymentMethod?: string;
     bankTransactionId?: string | null;
     razorpayOrderId?: string | null;
@@ -475,9 +456,8 @@ export const updateCourseSubscription = async (
     patch.razorpayOrderId !== undefined ||
     patch.razorpayPaymentId !== undefined;
 
-  // A legacy order-less subscription has nowhere to record a payment method, so
-  // say so rather than accepting the edit and dropping it — the exact failure this
-  // change exists to remove.
+  // An order-less subscription has nowhere to record a payment method, so reject
+  // rather than accept the edit and drop it.
   if (touchesPayment && existing.orderId == null) return "no_order";
 
   const changes: string[] = [];
@@ -758,11 +738,9 @@ export const getSubscriptionHistory = async (id: number): Promise<"not_found" | 
 
 
 /**
- * The customer owning this subscription, or null if it doesn't exist.
- *
- * Read BEFORE an admin revoke (status flip / date change / delete) so the caller
- * can flush that customer's per-user route cache. On delete the row is gone
- * afterwards, so the id cannot be resolved after the mutation.
+ * The customer owning this subscription, or null. Read before an admin revoke (status
+ * flip / date change / delete) so the caller can flush that customer's per-user route
+ * cache — after a delete the owner can no longer be resolved.
  */
 export const getSubscriptionCustomerId = async (id: number): Promise<number | null> =>
   (await repo.findSubscriptionCustomerId(id))?.customerId ?? null;
@@ -773,11 +751,9 @@ export const deleteCourseSubscription = async (id: number): Promise<boolean> => 
   return true;
 };
 
-// ── course/package subscription create (admin manual grant) ──────────────────
-// MySQL model divergence vs Mongo: SQL has no payment_status (status conveys
-// active) and no material/shipping catalog wired into the admin form, so
-// `withMaterial` is reflected via `material_amount` (not a pc_material_id row),
-// and `customerShippingId` is stored in the `shipping` column as given.
+// No payment_status column (status conveys active), so `withMaterial` is reflected via
+// `material_amount` (not a pc_material_id row) and `customerShippingId` is stored in the
+// `shipping` column as given.
 export interface CreateCourseSubInput {
   customerId: number;
   courseId?: number | null;
@@ -799,13 +775,12 @@ export interface CreateCourseSubInput {
   customerShippingId?: number | null;
   remark?: string | null;
   status: boolean;
-  // extend=true → record a new subscription row that CONTINUES from the customer's
-  // existing active subscription for this target (new row starts at the prior plan's
-  // end date, floored at now); the prior row is left untouched. No existing active
-  // sub → behaves as a fresh grant starting now.
+  // extend=true → a new subscription row that continues from the customer's existing
+  // active sub for this target (starts at its end date, floored at now); the prior row
+  // is untouched. No active sub → a fresh grant starting now.
   extend?: boolean;
   // Acting admin id (resolved server-side from the JWT) → stamped on created_by +
-  // updated_by. An extend also creates a NEW row here, so both columns are set.
+  // updated_by (an extend also creates a new row).
   actingAdminId?: number | null;
 }
 
@@ -813,6 +788,7 @@ export type CreateCourseSubResult =
   | { ok: false; reason: "plan_not_found" | "course_mismatch" | "package_mismatch" | "shipping_required" | "shipping_invalid" }
   | { ok: true; extended: boolean; data: any };
 
+// Admin grant or extend: always writes a new order and a new subscription row.
 export const createCourseSubscription = async (input: CreateCourseSubInput): Promise<CreateCourseSubResult> => {
   // planId is optional: with a plan we derive price/duration from it (and validate
   // the course/package match); without one the grant is priced by `amount` and
@@ -823,10 +799,9 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   if (plan && input.packageId && Number(plan.packageId ?? 0) !== input.packageId) return { ok: false, reason: "package_mismatch" };
   if (input.withMaterial && !input.customerShippingId) return { ok: false, reason: "shipping_required" };
 
-  // The admin form posts an ADDRESS-BOOK id — the customer-details screen lists
-  // ws_customer_address rows and nothing else. Both rows written below key their
-  // shipping column to ws_customer_shipping, so snapshot the address into a real
-  // shipping row first and use THAT id for the order and the subscription alike.
+  // The admin form posts an address-book id (ws_customer_address). Both rows written
+  // below key their shipping column to ws_customer_shipping, so snapshot the address
+  // into a real shipping row first and use that id for the order and the subscription.
   let shippingIdSql: number | null = null;
   if (input.customerShippingId) {
     const resolved = await resolveShippingIdForAddress(input.customerId, input.customerShippingId);
@@ -840,9 +815,8 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     input.amount != null ? input.amount : (plan?.price || 0) + (input.withMaterial ? (plan?.materialPrice || 0) : 0);
   const now = new Date();
 
-  // The order row carrying the granular payment method + reference ids + amount.
-  // Written for both fresh grants and extends (an extend is still a paid txn); the
-  // Subscription Report reads these ids back via the subscription's order_id.
+  // Order row carrying the payment method + reference ids + amount, written for fresh
+  // grants and extends alike; the report reads these back via the sub's order_id.
   const makeOrder = () =>
     repo.createPaymentOrder({
       customerId: input.customerId,
@@ -856,13 +830,10 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
       now,
     });
 
-  // Subscription Type = Extend: business rule — an extension is recorded as a NEW
-  // subscription row tied to its own order (so each extension is its own line in the
-  // Subscription Report, based on its order id) instead of bumping the existing
-  // row's endAt in place. The prior subscription row is left untouched; the new row
-  // CONTINUES from the prior plan's end date so coverage is seamless (no overlap, no
-  // gap). If that end date is already in the past (the prior plan lapsed) — or the
-  // admin passed an explicit startAt — we fall back to that/now instead of backdating.
+  // Extend: recorded as a new subscription row tied to its own order (one line per
+  // extension in the report) rather than bumping endAt in place. The new row continues
+  // from the prior plan's end date for seamless coverage; if that date has passed — or
+  // the admin passed an explicit startAt — it starts at that/now instead of backdating.
   const existing =
     input.extend && (resolvedCourseId || resolvedPackageId)
       ? await repo.findActiveSubForTarget({ customerId: input.customerId, courseId: resolvedCourseId, packageId: resolvedPackageId })
@@ -881,17 +852,11 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
 
   const order = await makeOrder();
 
-  // Course/material money split — the SAME rule as the checkout path
-  // (commerce-order.computeMaterialSplit), so course_amount obeys one definition no
-  // matter who wrote the row: material is carved OUT of the granted amount, course
-  // takes the rest, floored at ₹100, and the two always sum back to `amount`.
-  //
-  // For a plan-priced grant this is byte-identical to the previous
-  // `courseAmount: plan.price` / `materialAmount: plan.materialPrice` — computedAmount
-  // is price + materialPrice there, so subtracting material hands back exactly price.
-  // It only changes the case that was wrong: when the admin OVERRIDES `amount` (a
-  // discounted manual grant), course_amount used to stay at the full plan price and
-  // could exceed what was actually granted — ₹6500 granted, ₹13000 booked to course.
+  // Course/material money split — same rule as checkout (commerce-order.computeMaterialSplit):
+  // material is carved out of the granted amount, course takes the rest (floored at ₹100),
+  // and the two always sum to `amount`. For a plan-priced grant this equals
+  // price/materialPrice; when the admin overrides `amount`, course_amount can never
+  // exceed what was actually granted.
   const grantSplit = computeMaterialSplit(computedAmount, {
     withMaterial: input.withMaterial,
     materialPrice: plan?.materialPrice ?? 0,
@@ -921,23 +886,19 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
 /**
  * Pricing plans for one course or package (Add-Subscription picker).
  *
- * `status`: true = active only, false = inactive only, undefined = both.
- * The CALLER decides — the controller defaults an absent `?status=` to `true`, so
- * today's "active only" behaviour is unchanged for every existing consumer
- * (including the customer-facing app, which must never see inactive plans).
+ * `status`: true = active only, false = inactive only, undefined = both. The controller
+ * defaults an absent `?status=` to `true`, which the customer-facing app relies on
+ * (it must never see inactive plans).
  *
- * `updatedAt` is emitted for parity with the live-course / test-series / ebook plan
- * DTOs. The admin picker ages inactive plans by it ("active, plus inactive updated in
- * the last 7 days"), so an inactive row without it cannot be shown. ⚠ It is
- * `updated_at`, NOT a deactivated-at — a plan switched off months ago but renamed
- * yesterday looks recent. No table has a deactivated-at column; see the handoff.
+ * `updatedAt` matches the live-course / test-series / ebook plan DTOs; the admin picker
+ * ages inactive plans by it. It is `updated_at`, not a deactivated-at — a plan switched
+ * off months ago but renamed yesterday looks recent (no table has a deactivated-at).
  */
 export const listPlansForTarget = async (courseId?: number, packageId?: number, status?: boolean) => {
   const plans = await repo.plansForTarget({ courseId, packageId, status });
   return plans.map((p) => ({ _id: String(p.id), name: p.name ?? null, duration: p.duration, price: p.price, materialPrice: p.materialPrice ?? 0, withMaterial: p.withMaterial, isDefault: p.isDefault, status: p.status, courseId: idStr(p.courseId), packageId: idStr(p.packageId), updatedAt: p.updated_at ?? null }));
 };
 
-// ── ebook subscriptions list ────────────────────────────────────────────────────
 export const listEbookSubscriptions = async (q: { customerId?: string; ebookId?: string; status?: string; fromDate?: string; toDate?: string; page: number; limit: number }) => {
   const opts = {
     customerId: q.customerId ? parseSubId(q.customerId) ?? undefined : undefined,
@@ -963,7 +924,6 @@ export const listEbookSubscriptions = async (q: { customerId?: string; ebookId?:
   return { data, pagination: { total, page: q.page, limit: q.limit, totalPages: Math.ceil(total / q.limit) } };
 };
 
-// ── reports ────────────────────────────────────────────────────────────────────
 const dateWhere = (fromDate?: string, toDate?: string) => {
   if (!fromDate && !toDate) return {};
   const createdAt: any = {};
@@ -972,6 +932,7 @@ const dateWhere = (fromDate?: string, toDate?: string) => {
   return { createdAt };
 };
 
+// Totals for course/ebook subscriptions plus ebook and book order revenue.
 export const reportSummary = async (fromDate?: string, toDate?: string) => {
   const dw = dateWhere(fromDate, toDate);
   const [totalCourse, activeCourse, totalEbook, activeEbook, ebookRev, bookRev, bookTotal] = await Promise.all([

@@ -1,8 +1,8 @@
+// Client courses: Zod schemas for order shipping and lecture queries.
 import { z } from "zod";
 
 export const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-// Accepts a 24-hex Mongo ObjectId OR a numeric MySQL id. Used where the SQL
-// branch resolves ids as ints (e.g. ws_video / ws_course / ws_package).
+// Accepts legacy 24-hex ids as well as numeric ids.
 export const idOrObjectIdRegex = /^([0-9a-fA-F]{24}|\d+)$/;
 
 const phoneSchema = z
@@ -19,10 +19,7 @@ const pincodeSchema = z
     return Number.isInteger(n) && n >= 100000 && n <= 999999;
   }, "Pincode must be 6 digits");
 
-// Keep source snake_case API contract. Field regex from source:
-//  - name: alphabetic (letters + spaces)
-//  - address: loose — letters, digits, spaces, comma/period/dash/slash/#
-//  - city: alphanumeric
+// Field names keep the snake_case API contract.
 const NAME_RE = /^[A-Za-z ]+$/;
 const ADDRESS_RE = /^[A-Za-z0-9 ,.\-\/#]+$/;
 const CITY_RE = /^[A-Za-z0-9 ]+$/;

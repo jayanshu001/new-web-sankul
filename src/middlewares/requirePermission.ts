@@ -1,27 +1,13 @@
-// src/middlewares/requirePermission.ts
-//
-// Per-endpoint RBAC enforcement — the actual security boundary behind the
-// frontend's permission gating (docs backend-request rbac-module-visibility.md
-// §4). `requireRole` only checks the coarse role string; this checks the
-// caller's EFFECTIVE catalog permission keys for the specific action.
-//
-// Rollout is shadow-first, controlled by the RBAC_ENFORCE env flag:
-//   - RBAC_ENFORCE unset / !== "true"  → SHADOW MODE (default): a caller missing
-//     the key is LOGGED (level: would-block) but the request proceeds. This lets
-//     us verify every role's grants from logs in prod before turning on hard
-//     denial — zero lock-out risk.
-//   - RBAC_ENFORCE === "true"          → ENFORCE MODE: a caller missing the key
-//     gets 403 { success:false, message:"Forbidden" }.
-//
-// Super-admins always bypass (role === super_admin, i.e. the "*" wildcard) and
-// never hit the resolver.
+// Per-endpoint RBAC: the real security boundary behind the frontend's permission
+// gating. `requireRole` checks only the coarse role; this checks the caller's effective
+// catalog permission keys. RBAC_ENFORCE !== "true" is shadow mode (missing key is logged
+// as would-block, request proceeds); "true" answers 403 "Forbidden". Super-admins bypass.
 
 import { Request, Response, NextFunction } from "express";
 import { failure } from "../utils/httpResponse";
 import logger from "../utils/logger";
 import { getEffectivePermissionKeys } from "../modules/admin-auth/admin-permission-resolver";
 
-/** Hard-enforce 403s only when RBAC_ENFORCE is explicitly "true"; else shadow. */
 export const isRbacEnforced = (): boolean =>
   String(process.env.RBAC_ENFORCE).trim().toLowerCase() === "true";
 
@@ -30,20 +16,15 @@ export const isSuperAdmin = (req: Request): boolean =>
   (Array.isArray(req.user?.permissions) && req.user!.permissions.includes("*"));
 
 /**
- * Restrict an admin endpoint to callers holding AT LEAST ONE of `requiredKeys`
- * (OR semantics — pass both view/list keys for a read route, e.g.
- * `requirePermission("books.view", "books.list")`).
- *
- * Must run AFTER `authenticate` (needs `req.user`). Intended for admin routes;
- * super-admins bypass. See the shadow/enforce behavior in the file header.
+ * Allows callers holding at least one of `requiredKeys` (OR semantics, e.g.
+ * `requirePermission("books.view", "books.list")`). Must run after `authenticate`.
  */
 export const requirePermission = (...requiredKeys: string[]) =>
   buildRequirePermission(requiredKeys, false);
 
 /**
- * Same check, but ALWAYS hard-denies (403) — ignores RBAC_ENFORCE. For routes
- * that are themselves the security boundary (role/permission/administrator
- * management): a shadow-mode "would-block" there is a real privilege hole.
+ * Same check, but always hard-denies regardless of RBAC_ENFORCE. For role/permission/
+ * administrator management, where a shadow-mode pass would be a privilege hole.
  */
 export const requirePermissionStrict = (...requiredKeys: string[]) =>
   buildRequirePermission(requiredKeys, true);
@@ -54,22 +35,18 @@ const buildRequirePermission = (requiredKeys: string[], strict: boolean) => {
     if (req.method === "OPTIONS") return next();
 
     if (!req.user) {
-      // authenticate should have populated req.user; if not, this is a 401 not
-      // a 403 (no identity to authorize).
+      // No identity to authorize: 401, not 403.
       return failure(res, "Authentication token is required.", 401);
     }
 
-    // Super-admins get everything without a resolver round-trip.
     if (isSuperAdmin(req)) return next();
 
     let effectiveKeys: string[];
     try {
       effectiveKeys = await getEffectivePermissionKeys(String(req.user.id));
     } catch (err) {
-      // Resolver/DB blip: fail OPEN with an error log rather than locking the
-      // whole panel out on a transient infra error (matches the customer-gate
-      // philosophy in authenticate.ts). Denial is reserved for a definitive
-      // "resolved successfully and the key is absent" outcome below.
+      // Resolver/DB blip: fail open (logged) rather than lock the panel out on a transient
+      // error. Denial is reserved for a successful resolve where the key is absent.
       logger.error("requirePermission resolver error — allowing (fail-open)", {
         adminId: req.user.id,
         method: req.method,
@@ -94,7 +71,6 @@ const buildRequirePermission = (requiredKeys: string[], strict: boolean) => {
       return failure(res, "Forbidden", 403);
     }
 
-    // Shadow mode: record what WOULD have been blocked, then allow.
     logger.warn("requirePermission would-block (shadow mode)", {
       adminId: req.user.id,
       role: req.user.role,

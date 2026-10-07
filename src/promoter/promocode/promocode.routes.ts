@@ -1,3 +1,4 @@
+// Promoter promocodes: own promocode list and detail routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { listMyPromocodes, getMyPromocode } from "./promocode.controller";

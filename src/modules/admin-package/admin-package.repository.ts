@@ -1,10 +1,10 @@
+// Admin packages: Prisma queries for packages, types, pivots, plans and subscribers.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
 /**
- * Prisma persistence for the admin-package MySQL branch.
- *  - types          → ws_package_type (id/name only — NO order/active columns)
+ *  - types          → ws_package_type (id/name only — no order/active columns)
  *  - packages       → ws_package
  *  - specificSubjects[] → ws_package_specific_subject (subject_id → VideoCategory)
  *  - materialCategories[] → ws_material_category_package (mcategory_id → MaterialCategory)
@@ -13,14 +13,10 @@ import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
  *  - subscribers    → ws_package_course_subscription (package_id = the package)
  *  - video relations→ ws_video_category_package_relation
  *
- * ⚠ Drift: ws_package has NO column for subtitle, notificationTopic, or the
- * examCountdown* arrays. It DOES have is_paid
- * and package_category_id (all wired through service write/read).
- * SQL has exam_id (→ goal), educator_id, package_type_id, goal_id and
- * goal_label_id (the latter stores the goal's JSON-label numeric id; the API
- * boundary resolves it to/from the label NAME). with_material/without_material
- * are descriptive VARCHAR text. package_type_id / exam_id are NOT NULL →
- * sentinels on write.
+ * ws_package has no column for subtitle or notificationTopic. goal_label_id stores the
+ * goal's JSON-label numeric id; the API boundary resolves it to/from the label NAME.
+ * with_material/without_material are descriptive VARCHAR text. exam_id is NOT NULL →
+ * sentinel on write.
  */
 const pkgInclude = { packageType: { select: { id: true, name: true } } };
 
@@ -28,7 +24,6 @@ const sortByCategoryId = <T extends { categoryId: number }>(orders: T[]): T[] =>
   [...orders].sort((a, b) => a.categoryId - b.categoryId);
 
 export const adminPackageRepository = {
-  // ── package types ─────────────────────────────────────────────────────────
   listTypes: () => prisma.packageType.findMany({ orderBy: [{ name: "asc" }] }),
   findTypeBare: (id: number) => prisma.packageType.findUnique({ where: { id } }),
   createType: (data: Prisma.PackageTypeUncheckedCreateInput) => prisma.packageType.create({ data }),
@@ -36,7 +31,6 @@ export const adminPackageRepository = {
   deleteType: (id: number) => prisma.packageType.delete({ where: { id } }),
   typeInUse: (id: number) => prisma.package.findFirst({ where: { packageTypeId: id }, select: { id: true } }),
 
-  // ── packages: list / get ────────────────────────────────────────────────────
   list: (opts: { search?: string; active?: boolean; packageTypeId?: number; skip: number; take: number }) =>
     // Recency is the contract on admin lists (see utils/listOrdering). ws_package.order_by
     // is still written and still drives the CLIENT catalog — it just isn't read here.
@@ -57,7 +51,6 @@ export const adminPackageRepository = {
       ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds }, status: true }, orderBy: { duration: "asc" } })
       : Promise.resolve([]),
 
-  // ── embedded category pivots ──────────────────────────────────────────────────
   specificSubjectsFor: (packageId: number) =>
     prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: { order_by: "asc" } }),
   materialCategoriesFor: (packageId: number) =>
@@ -80,7 +73,6 @@ export const adminPackageRepository = {
   countExamCategoriesFor: (packageId: number) =>
     prisma.examCategoryPackage.count({ where: { packageId } }),
 
-  // ── packages: write ───────────────────────────────────────────────────────────
   createPackage: (input: {
     data: Prisma.PackageUncheckedCreateInput;
     specificSubjects: Array<{ id: number; order: number; status: boolean }>;
@@ -138,11 +130,10 @@ export const adminPackageRepository = {
   setOrder: (id: number, order: number) => prisma.package.update({ where: { id }, data: { order_by: order, updated_at: new Date() } }),
   subscriberCount: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),
 
-  // ── embedded reorder (in place) ─────────────────────────────────────────────
-  // One drag writes every visible row's position, so the whole batch runs as a single
-  // sequential transaction: firing the updates concurrently makes them contend for the
-  // same package_id rows and InnoDB kills the request with a write conflict/deadlock.
-  // Sorted by category id so concurrent requests take the row locks in the same order.
+  // One drag writes every visible row's position, so the batch runs as a single
+  // sequential transaction: concurrent updates contend for the same package_id rows and
+  // InnoDB kills the request with a write conflict/deadlock. Sorted by category id so
+  // concurrent requests take the row locks in the same order.
   reorderSpecificSubjects: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
     prisma.$transaction(
       sortByCategoryId(orders).map(({ categoryId, order }) =>
@@ -162,19 +153,11 @@ export const adminPackageRepository = {
       )
     ),
 
-  // ── plans ────────────────────────────────────────────────────────────────────
   /**
-   * Every plan attached to the package — active AND inactive.
-   *
-   * `status: true` used to be baked in here and in countPlans, which made Packages
-   * the odd one out: none of the four sibling endpoints (course / ebook /
-   * live-course / test-series) filter. The consequence was that switching a package
-   * plan to Inactive made the row VANISH from the Pricing tab with no way to switch
-   * it back on from that screen.
-   *
-   * Ordered by duration only — NOT grouped by status. Active and inactive plans
-   * interleave in duration order so toggling a plan's status doesn't move its row.
-   * `id` is the tiebreaker so paging stays stable across equal durations.
+   * Every plan attached to the package — active and inactive, like the sibling
+   * modules, so a plan switched to Inactive stays visible on the Pricing tab.
+   * Ordered by duration only (not grouped by status) so toggling status doesn't move
+   * a row; `id` is the tiebreaker for stable paging.
    */
   listPlans: (packageId: number, skip?: number, take?: number, status?: boolean) =>
     prisma.packageCourseEbookPrice.findMany({
@@ -198,20 +181,8 @@ export const adminPackageRepository = {
   attachPlans: (packageId: number, planIds: number[]) =>
     prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: planIds } }, data: { packageId, courseId: 0, ebookId: 0 } }),
   /**
-   * REAL delete, scoped to the owning package so a stray planId cannot remove
-   * someone else's row.
-   *
-   * This used to `updateMany({ status: false })` — a silent deactivate that returned
-   * 200 and looked identical to a delete. It is why 251 "deleted" package plans are
-   * still in ws_package_course_ebook_price. Guarded by countPlanUsageOne in the
-   * service, matching the other four modules.
-   */
-  /**
-   * Promo-code plan links point at ws_package_course_ebook_price.id with NO foreign
-   * key, so deleting a plan without clearing them leaves rows in
-   * ws_promoted_package_course_ebook aimed at an id that no longer exists — the same
-   * orphan class the delete guards exist to prevent. admin-plan.deletePlan has always
-   * done this; the per-module deletes did not.
+   * Plan links point at ws_package_course_ebook_price.id with no foreign key, so a
+   * plan delete must clear them or ws_promoted_package_course_ebook keeps orphans.
    */
   deletePromotedForPlan: (planId: number) =>
     prisma.promotedPackageCourseEbook.deleteMany({ where: { planId } }),
@@ -220,7 +191,6 @@ export const adminPackageRepository = {
   findPlanInPackage: (packageId: number, planId: number) =>
     prisma.packageCourseEbookPrice.findFirst({ where: { id: planId, packageId }, select: { id: true } }),
 
-  // ── subscribers ───────────────────────────────────────────────────────────────
   listSubscribers: (packageId: number, skip: number, take: number) =>
     prisma.packageCourseSubscription.findMany({
       where: { packageId },
@@ -232,7 +202,6 @@ export const adminPackageRepository = {
     }),
   countSubscribers: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),
 
-  // ── video category relations ────────────────────────────────────────────────
   listVideoRelations: (packageId: number) =>
     prisma.packageVideoCategoryRelation.findMany({ where: { packageId } }),
   /** Set the package's active relation set: deactivate all, then upsert each id active. */

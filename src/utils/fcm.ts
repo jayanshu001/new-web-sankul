@@ -1,3 +1,4 @@
+// Push notifications: FCM multicast send with per-platform payloads and dead-token pruning.
 import admin from "firebase-admin";
 import logger from "./logger";
 import { callOutbound } from "../libs/outbound";
@@ -39,10 +40,8 @@ function initFirebase(): boolean {
 export interface FcmPayload {
   title: string;
   body: string;
-  // Rich (HTML) variants, present only when the composer applied real formatting.
-  // NOT used for the push tray on either platform — both Android and iOS show the
-  // plain title/body first. The HTML is carried in `data` (and persisted on the
-  // row) so the in-app inbox can render the formatted version when opened.
+  // HTML variants, only when the composer applied formatting. Never used for the
+  // push tray; carried in `data` for the in-app inbox to render.
   titleHtml?: string | null;
   bodyHtml?: string | null;
   image?: string | null;
@@ -58,27 +57,16 @@ export interface FcmSendResult {
   skipped: boolean;
 }
 
-// Build the multicast. The push TRAY is PLAIN on BOTH platforms (Android + iOS
-// show plain text first — raw <b>/<p> tags must never leak into a banner):
-//   • top-level notification → PLAIN.
-//   • android config         → PLAIN alert.
-//   • apns config            → PLAIN alert + fcmOptions.imageUrl + mutable-content
-//                              so the iOS Notification Service Extension can
-//                              download and attach the image to the banner.
-//   • data                   → carries plain + html; the in-app inbox uses the
-//                              html variant to render rich text when the
-//                              notification is opened. The tray never reads it.
+// The push tray is plain text on both platforms (raw HTML tags must never leak
+// into a banner); `data` carries plain + html for the in-app inbox.
 function buildMessage(
   payload: FcmPayload
 ): Omit<admin.messaging.MulticastMessage, "tokens"> {
   const plainTitle = payload.title;
   const plainBody = payload.body;
 
-  // Top-level `imageUrl` (serialized as `notification.image`) is the generic
-  // field FCM mirrors into whichever platform blocks it can. We ALSO set the
-  // image explicitly per-platform below (android.notification.imageUrl +
-  // apns.fcmOptions.imageUrl) — the explicit values win, and belt-and-braces is
-  // what the iOS integration doc asks for.
+  // The image is also set per-platform below; the explicit values win, and the
+  // iOS integration asks for both.
   const notification: admin.messaging.Notification = {
     title: plainTitle,
     body: plainBody,
@@ -92,18 +80,13 @@ function buildMessage(
       data[k] = typeof v === "string" ? v : JSON.stringify(v);
     }
   }
-  // Plain always available in data; html only when the composer formatted it —
-  // consumed by the in-app inbox, not the push tray.
   if (!("title" in data)) data.title = plainTitle;
   if (!("body" in data)) data.body = plainBody;
   if (payload.titleHtml) data.titleHtml = payload.titleHtml;
   if (payload.bodyHtml) data.bodyHtml = payload.bodyHtml;
-  // Flat, platform-neutral image keys. iOS never exposes the image on its
-  // `notification` object (that object is built from `aps.alert`, which carries
-  // only title/body/subtitle) — so the app reads the URL from here. Both
-  // spellings are sent because the foreground handlers differ per platform
-  // (Notifee reads `image`, the RN inbox reads `imageUrl`); every `data` value
-  // is a plain string, never a nested object.
+  // iOS never exposes the image on its `notification` object, so the app reads it
+  // from data. Both spellings are sent: Notifee reads `image`, the RN inbox reads
+  // `imageUrl`. Every `data` value must be a plain string.
   if (payload.image) {
     data.imageUrl = payload.image;
     data.image = payload.image;
@@ -117,23 +100,16 @@ function buildMessage(
 
   const android: admin.messaging.AndroidConfig = { notification: androidNotification };
 
-  // `mutableContent` is REQUIRED for an image: it is what lets the app's
-  // Notification Service Extension intercept the push, download the URL and
-  // attach it. Without the extension iOS still delivers the payload, it just
-  // renders a text-only banner.
-  // `apns-push-type: alert` + `apns-priority: 10` are stated explicitly rather
-  // than left to APNs inference: a push that gets classified as `background`
-  // never wakes the Notification Service Extension, so the image would silently
-  // never attach.
+  // `mutableContent` lets the iOS Notification Service Extension download and
+  // attach the image. Push type/priority are explicit because a push inferred as
+  // `background` never wakes the extension, so the image would silently not attach.
   const apns: admin.messaging.ApnsConfig = {
     headers: { "apns-push-type": "alert", "apns-priority": "10" },
     payload: { aps: { alert: { title: plainTitle, body: plainBody } } },
   };
   if (payload.image) {
-    // Serialized as `apns.fcm_options.image` — THE field iOS reads for the tray
-    // image when the app is backgrounded or killed.
+    // The field iOS reads for the tray image when backgrounded or killed.
     apns.fcmOptions = { imageUrl: payload.image };
-    // Serialized as `aps.mutable-content: 1`.
     apns.payload!.aps.mutableContent = true;
   }
 
@@ -145,6 +121,7 @@ function buildMessage(
   };
 }
 
+// Sends in batches of 500 and prunes tokens FCM reports invalid; skipped without Firebase.
 export async function sendPush(
   tokens: string[],
   payload: FcmPayload
@@ -167,20 +144,16 @@ export async function sendPush(
   let successCount = 0;
   let failureCount = 0;
   const invalidTokens: string[] = [];
-  // Aggregate per-device FCM error codes so failures are diagnosable. Without
-  // this, "All sends failed." hides whether it's a bad token, a project/
-  // credential mismatch (messaging/mismatched-credential, sender-id-mismatch),
-  // or a missing APNs key for iOS (messaging/third-party-auth-error).
+  // Per-device error codes distinguish bad tokens from credential mismatches or a
+  // missing APNs key (messaging/third-party-auth-error).
   const errorCodes: Record<string, number> = {};
   let sampleErrorMessage: string | null = null;
 
   for (let i = 0; i < unique.length; i += FCM_BATCH_SIZE) {
     const batch = unique.slice(i, i + FCM_BATCH_SIZE);
     try {
-      // Wrapped in callOutbound: per-batch 10s timeout, 3 attempts on
-      // network/5xx. Per-device invalid-token errors come back INSIDE a
-      // successful response (handled below) — they don't trigger a retry,
-      // which is correct: retrying with the same dead tokens won't help.
+      // Retries cover network/5xx only; invalid-token errors arrive inside a
+      // successful response, and retrying dead tokens would not help.
       const resp = await callOutbound(
         () =>
           messaging.sendEachForMulticast({
@@ -211,7 +184,6 @@ export async function sendPush(
 
   if (invalidTokens.length) {
     try {
-      // Clear the ws_customer.device column for any customer holding these tokens.
       await customerProfileRepository.pruneDeviceTokens(invalidTokens);
     } catch (err) {
       logger.error("Failed to prune invalid FCM tokens", {

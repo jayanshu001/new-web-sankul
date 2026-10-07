@@ -1,3 +1,4 @@
+// Educator auth: HTTP handlers for login, token refresh, logout and profile.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import {

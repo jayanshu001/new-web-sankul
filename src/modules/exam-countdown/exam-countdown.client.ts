@@ -1,20 +1,8 @@
 /**
- * Client exam-countdown LISTINGS — SQL branch (gated behind
- * `isMysqlModule("exam-countdown")`). Backs four controller handlers in
- * src/client/categories/categories.controller.ts:
- *   - GET /client/exam-countdown-categories/:id/packages
- *   - GET /client/exam-countdown/:id/packages          (packages + live courses)
- *   - GET /client/exam-countdown-categories/:id/books-ebooks
- *   - GET /client/exam-countdown/:id/books-ebooks
- *
- * Membership is by the JSON int-array columns added 2026-06-25:
- *   ws_package / ws_live_course / ws_book / ws_ebook .exam_countdown_category_ids
- *   and .exam_countdown_ids  (matched via JSON_CONTAINS).
- *
- * Entitlement reuses the same building blocks as the live listings: book
- * ownership via book-order, ebook ownership via ws_ebook_subscription, package /
- * live ownership via the subscription tables. Shapes mirror the Mongo handlers'
- * isPaid / isPurchased / daysLeft contract; ids restringified to Mongo form.
+ * Client exam-countdown listings (packages + live courses, books + ebooks) by
+ * countdown or countdown category. Membership is the JSON int-array columns
+ * `exam_countdown_category_ids` / `exam_countdown_ids` on ws_package,
+ * ws_live_course, ws_book and ws_ebook, matched via JSON_CONTAINS.
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -25,17 +13,14 @@ import { buildLikeTokens } from "../../utils/searchFilter";
 const idStr = (v: number | null | undefined): string | null => (v != null ? String(v) : null);
 const daysBetween = (from: Date, to: Date): number => computeDaysLeft(to, from) ?? 0;
 
-// ── id-membership lookups (JSON_CONTAINS on the countdown columns) ─────────────
-// Returns the matching row ids (status-active) for a table, honoring an optional
-// name search. skip/take are caller-controlled ints, inlined safely.
+// Active row ids for a table, with optional name search.
 const matchingIds = async (
   table: string,
   jsonCol: string,
   id: number,
   search: string | null,
-  // Ordering column differs per table: ws_package/ws_book/ws_ebook use
-  // `order_by`, but ws_live_course uses `ordered` (it has no `order_by` column).
-  // Caller-supplied fixed identifier (never user input) — safe to inline.
+  // ws_live_course uses `ordered` (no `order_by` column). Fixed identifier from
+  // the caller, never user input, so safe to inline.
   orderCol: string = "order_by"
 ): Promise<number[]> => {
   const nameSearch = buildLikeTokens(search, ["name"]);
@@ -49,17 +34,14 @@ const matchingIds = async (
   return rows.map((r) => Number(r.id));
 };
 
-// `undefined` = the customer has no active subscription for this product; an
-// active row that never expires (lifetime) is `null` — purchased, with no
-// daysLeft. Hence every isPurchased below tests `!== undefined` rather than
-// truthiness, which would call a lifetime entitlement "not purchased".
+// `undefined` = no active subscription; `null` = lifetime (purchased, no daysLeft).
+// isPurchased tests `!== undefined`, since truthiness would drop lifetime grants.
 type SubEndAt = Date | null | undefined;
 const purchaseState = (subEndAt: SubEndAt, now: Date) => ({
   isPurchased: subEndAt !== undefined,
   daysLeft: subEndAt ? daysBetween(now, subEndAt) : null,
 });
 
-// ── package DTO + plans + subscriber count + ownership ────────────────────────
 const packageDto = (p: any, plans: any[], subCount: number, subEndAt: SubEndAt, now: Date) => {
   const mine = plans.filter((pl) => pl.packageId === p.id);
   const planDto = (pl: any) => ({
@@ -101,23 +83,19 @@ const loadPackages = async (ids: number[], customerId: number | null) => {
     prisma.package.findMany({ where: { id: { in: ids } } }),
     prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: ids }, status: true }, orderBy: { duration: "asc" } }),
     prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: ids }, status: true }, _count: { _all: true } }),
-    // Per-customer entitlement, one query for the whole page. Canonical helper
-    // (latest-expiring row wins) — the same map GET /client/package-categories/:id
-    // builds, so a package card agrees wherever it is rendered.
+    // Same canonical map as GET /client/package-categories/:id, so a package card
+    // agrees wherever it is rendered.
     getActivePackageSubMap(customerId, ids),
   ]);
   const subByPkg = new Map<number, number>();
   for (const r of subAgg as any[]) if (r.packageId != null) subByPkg.set(r.packageId, r._count._all);
   const byId = new Map(packages.map((p) => [p.id, p]));
-  // preserve the matchingIds order (order_by asc)
   return ids.map((id) => byId.get(id)).filter(Boolean).map((p: any) =>
-    // `has` distinguishes "no subscription" (absent → undefined) from an active
-    // lifetime one (present, value null) — `get` alone cannot.
+    // `has` separates "no subscription" from a lifetime one (value null).
     packageDto(p, plans, subByPkg.get(p.id) ?? 0, ownedByPkg.has(p.id) ? ownedByPkg.get(p.id) ?? null : undefined, now)
   );
 };
 
-// ── live-course DTO + plans + subscriber count + ownership ─────────────────────
 const liveDto = (c: any, plans: any[], subCount: number, subEndAt: SubEndAt, now: Date) => ({
   _id: String(c.id),
   name: c.name,
@@ -144,8 +122,7 @@ const loadLiveCourses = async (ids: number[], customerId: number | null) => {
   const [courses, plans, subAgg, ownedSubs] = await Promise.all([
     prisma.liveCourse.findMany({ where: { id: { in: ids } } }),
     prisma.liveCoursePlan.findMany({ where: { liveCourseId: { in: ids }, status: true }, orderBy: { price: "asc" } }),
-    // `paymentStatus` dropped 2026-08-25: a live-course subscription row now exists
-    // only for a paid order, so `status` is the gate (payment lives on the order).
+    // A live-course subscription row exists only for a paid order, so `status` is the gate.
     prisma.liveCourseSubscription.groupBy({ by: ["liveCourseId"], where: { liveCourseId: { in: ids }, status: true }, _count: { _all: true } }),
     customerId
       ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: ids }, status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] }, select: { liveCourseId: true, endAt: true } })
@@ -167,7 +144,6 @@ const loadLiveCourses = async (ids: number[], customerId: number | null) => {
   );
 };
 
-// ── book + ebook DTOs (merged listing) ────────────────────────────────────────
 const bookDto = (b: any, ownedBookIds: Set<string>) => ({
   _id: String(b.id),
   type: "book" as const,
@@ -176,8 +152,8 @@ const bookDto = (b: any, ownedBookIds: Set<string>) => ({
   image: b.image ?? null,
   thumbnail: b.thumbnail ?? null,
   language: b.language ?? null,
-  // FE renders a strike-through original price → needs listPrice alongside the
-  // discounted one (same column the trending book card reads). FE↔BE mismatch fix.
+  // FE renders a strike-through original price, so listPrice ships alongside the
+  // discounted one (same column the trending book card reads).
   listPrice: b.list_price ?? b.listPrice ?? null,
   discountedPrice: b.discounted_price ?? null,
   isCombo: b.isCombo,
@@ -233,13 +209,11 @@ const loadBooksAndEbooks = async (bookIds: number[], ebookIds: number[], custome
   );
 };
 
-// ── handler-facing functions ──────────────────────────────────────────────────
 const page = <T>(arr: T[], skip: number, take: number) => ({ list: arr.slice(skip, skip + take), total: arr.length });
 
 const findCategory = (id: number) => prisma.examCountdownCategory.findUnique({ where: { id } });
 const catDto = (c: any) => ({ _id: String(c.id), name: c.name, colorHex: c.colorHex, order: c.order, status: c.status, createdAt: c.createdAt ?? null, updatedAt: c.updatedAt ?? null });
-// ExamCountdown has no `category` relation (just categoryId) → resolve the
-// category row separately and attach it in the populated {_id,name,colorHex} shape.
+// No `category` relation on ExamCountdown, so the category is resolved separately.
 const findCountdown = async (id: number) => {
   const e = await prisma.examCountdown.findUnique({ where: { id } });
   if (!e) return null;
@@ -264,7 +238,7 @@ export const listPackagesByCountdownCategory = async (
   return { category: catDto(category), list, total };
 };
 
-/** GET /client/exam-countdown/:id/packages — packages + live courses, tagged. */
+/** GET /client/exam-countdown/:id/packages: packages + live courses, tagged. */
 export const listProductsByCountdown = async (
   countdownId: number,
   customerId: number | null,

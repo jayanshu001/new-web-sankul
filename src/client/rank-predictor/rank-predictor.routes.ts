@@ -1,3 +1,4 @@
+// Client rank predictor: paper, submission, rank and profile routes.
 import { Router } from "express";
 import authenticate, { optionalAuthenticate } from "../../middlewares/authenticate";
 import { uploadRankPdfToMemory } from "../../middlewares/upload";
@@ -31,6 +32,7 @@ import {
 
 const router = Router();
 
+// Paper reads work without a token; the viewer is attached when one is sent.
 router.get("/papers", optionalAuthenticate, validate({ query: examListQuerySchema }), listExams);
 router.get(
   "/papers/:examId",

@@ -1,3 +1,4 @@
+// Admin customer details: a customer's subscriptions, book orders and addresses.
 import { adminCustomerDetailsRepository as repo } from "./admin-customer-details.repository";
 import {
   toCourseDto,
@@ -21,11 +22,9 @@ const sum = (xs: (number | null | undefined)[]): number =>
   xs.reduce((acc: number, x) => acc + (Number(x) || 0), 0);
 
 /**
- * Builds the admin customer-details aggregate (addresses + purchases + summary)
- * from MySQL, matching the legacy Mongo handler's response shape exactly. The
- * combined ws_package_course_subscription model is split into courses (rows with
- * a course_id) vs packages (rows with a package_id and no course_id), mirroring
- * the Mongo courseId / targetPackageId split.
+ * Admin customer-details aggregate (addresses + purchases + summary). The shared
+ * ws_package_course_subscription table is split into courses (course_id set) vs
+ * packages (package_id set, no course_id).
  */
 export const getCustomerPurchaseDetails = async (customerId: number, now: Date) => {
   const [pkgSubs, liveSubs, testSubs, ebookSubs, bookOrders, addrRows] = await Promise.all([
@@ -40,9 +39,8 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
   const courseRows = pkgSubs.filter((s) => s.courseId != null);
   const packageRows = pkgSubs.filter((s) => s.courseId == null && s.packageId != null);
 
-  // Hydrate every referenced entity in parallel, then index by id. (mapById is
-  // applied after the await — passing it point-free to `.then` widens the element
-  // type to `{ id }` because of the empty-array fallback in the repository.)
+  // mapById is applied after the await: passing it point-free to `.then` widens the
+  // element type to `{ id }` because of the repository's empty-array fallback.
   const [
     courseArr, packageArr, planArr, liveArr, livePlanArr,
     tsArr, tsPriceArr, ebookArr, ebookOrderArr, enrichedBookOrders, stateArr,
@@ -110,10 +108,8 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
   return { addresses, purchases, summary };
 };
 
-// ─── Per-tab paginated lists ─────────────────────────────────────────────────
-// Each returns { data, total } for one tab of the admin customer-detail page,
-// paging the DB query server-side (skip/take) and hydrating only the page's
-// referenced entities. DTO shapes are identical to the aggregate's `purchases`.
+// Per-tab paginated lists: { data, total }, paged in the DB and hydrating only the
+// page's referenced entities. Row DTOs match the aggregate's `purchases`.
 
 type ListArgs = { skip: number; take: number; status?: boolean };
 

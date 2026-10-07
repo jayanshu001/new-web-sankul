@@ -1,3 +1,4 @@
+// Client notifications: HTTP handlers for the feed, unread count and image banners.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -5,22 +6,10 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { pickList } from "../../utils/pick";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
 
-// Mobile feed reads only these row fields; drop customerId/readAt/broadcast/
-// status/updatedAt metadata. Envelope unreadCount + pagination kept.
-//
-// The second line is the TAP-ROUTING set, added 2026-07-28. Tapping a row in the
-// in-app Notification screen must land on the same destination as tapping the
-// push that created it, and this projection is what previously made that
-// impossible: the service DTO has always carried the routing, but this keep-list
-// silently dropped `deepLink`/`data`, so the app could only ever open the detail
-// modal. Presence is meaningful to the app's router (first match wins), and
-// `pick` skips keys the row does not have — so an announcement with no
-// destination still ships zero routing keys rather than a row of nulls.
-//
-// The raw `data` blob stays OUT: its values are FCM-stringified (`params` as a
-// JSON string, ids as numeric strings). The flattened fields below are the same
-// information in real JSON types, and exposing both would invite the app to read
-// whichever it found first and disagree with the push.
+// Mobile feed fields; the second line is the tap-routing set, so tapping a row lands
+// where the originating push would. `pick` skips absent keys, so a row with no
+// destination ships no routing keys. The raw `data` blob stays out: its values are
+// FCM-stringified, and exposing both forms would let the app read the wrong one.
 const NOTIFICATION_CLIENT_FIELDS = [
   "_id", "title", "titleHtml", "body", "bodyHtml", "image", "type", "isRead", "createdAt",
   "viewType", "deepLink", "clickAction", "screen", "params", "liveCourseId", "sessionId", "streamId",
@@ -32,14 +21,7 @@ const ROUTING_KEYS = [
   "viewType", "deepLink", "clickAction", "screen", "params", "liveCourseId", "sessionId", "streamId",
 ] as const;
 
-/**
- * Drop routing keys that came through nullish.
- *
- * The service DTO sets `deepLink: n.deepLink ?? null` unconditionally, so a
- * notification with no destination would otherwise ship `"deepLink": null`.
- * The app's tap router is presence-based, and the FE contract is explicit:
- * "Omit a field when unused; do not invent placeholders."
- */
+/** Drops nullish routing keys: the app's tap router is presence-based (omit, never null). */
 const dropEmptyRouting = <T extends Record<string, any>>(row: T): T => {
   for (const k of ROUTING_KEYS) {
     if (row[k] === null || row[k] === undefined) delete row[k];
@@ -48,7 +30,6 @@ const dropEmptyRouting = <T extends Record<string, any>>(row: T): T => {
 };
 import * as adminNotifSql from "../../modules/admin-notification/admin-notification.service";
 
-// GET /api/v1/client/notifications — feed for current customer (personal + broadcast)
 export const listMyNotifications = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -70,10 +51,7 @@ export const listMyNotifications = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/notifications/count — lightweight unread badge count.
-// Purpose-built so the client can refresh the bell badge WITHOUT re-fetching the
-// full paginated feed. Stays in sync with every action: it counts only visible,
-// unread, NOT-dismissed notifications, so mark-read / mark-all / delete all move it.
+// unread, non-dismissed rows so read/read-all/delete all move it.
 export const getUnreadCount = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -94,7 +72,6 @@ export const getUnreadCount = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/notifications/:id/read
 export const markAsRead = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -115,7 +92,6 @@ export const markAsRead = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/notifications/read-all
 export const markAllAsRead = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -135,9 +111,7 @@ export const markAllAsRead = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/notifications/delete — one endpoint for single / multi / all.
-//   Body { all: true }        → dismiss the entire visible feed.
-//   Body { ids: number[] }    → dismiss those ids (single = a one-element array).
+// Delete the given ids, or clear the whole feed with `{ all: true }`.
 export const deleteNotifications = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -169,7 +143,7 @@ export const deleteNotifications = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/image-notifications — active in-app banners
+// Active image banners (public, shared-cached, pagination only).
 export const listActiveImageNotifications = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("listActiveImageNotifications invoked", { traceId, path: _req.originalUrl });

@@ -1,3 +1,4 @@
+// Admin rank predictor: shared request-parsing and message helpers.
 import type { Request } from "express";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
@@ -14,6 +15,7 @@ export const bigIntParam = (req: Request, name: string): bigint =>
 export const toBooleanFlag = (value: unknown): boolean =>
   value === true || value === 1 || String(value) === "true";
 
+// Read isActive (or status) from the body; 400 when missing.
 export const requireStatusFlag = (body: Record<string, unknown> | undefined): boolean => {
   const value = body?.isActive ?? body?.status;
   if (value === undefined) {

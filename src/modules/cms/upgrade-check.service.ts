@@ -1,3 +1,4 @@
+// App upgrade check: compares the client version against update and version settings.
 import { getAppUpdateSettings } from "../app-update/app-update.service";
 import { getVersionSettings } from "../version/version.service";
 
@@ -10,6 +11,7 @@ export interface UpgradeCheckResult {
   isForceUpdate: boolean;
 }
 
+// Force update below the last supported version; app-update settings win over version ones.
 export const checkClientUpgrade = async (
   clientVersion: number
 ): Promise<UpgradeCheckResult> => {

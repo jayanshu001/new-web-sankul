@@ -1,3 +1,4 @@
+// Admin live-course subscriptions: report, export, grant, update and delete handlers.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, failureFrom, getErrorMessage, actionFailure, type ActionError } from "../../utils/httpResponse";
@@ -9,14 +10,12 @@ import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { PaymentMethod } from "../../shared/enums";
 import { assertReportStatus } from "../../utils/reportFilters";
 
-// SQL grant: numeric ids (the Mongo schema enforces ObjectId). Extended from the
-// original free-grant to a full paid grant via the standardized payment section:
-// method + amount + reference ids persist inline on ws_live_course_subscription
-// (this table has no sibling order table). Ref ids arrive only for their method.
+// Payment method, amount and reference ids persist inline on the subscription row.
+// Ref ids arrive only for their method.
 const grantSqlSchema = z.object({
   customerId:        z.coerce.string().min(1),
-  // Optional: without a plan the grant is priced by `amount` and its window is
-  // driven by durationDays/durationMonths/endAt (one of which is then required).
+  // Without a plan the grant is priced by `amount` and its window comes from
+  // durationDays/durationMonths/endAt (one of which is then required).
   planId:            z.coerce.string().min(1).optional(),
   durationDays:      z.number().int().positive().optional(),
   durationMonths:    z.number().int().positive().optional(),
@@ -30,7 +29,7 @@ const grantSqlSchema = z.object({
   bankTransactionId: z.string().optional().nullable(),
   razorpayOrderId:   z.string().optional().nullable(),
   razorpayPaymentId: z.string().optional().nullable(),
-  // Subscription Type = Extend: top up the existing sub instead of a fresh row.
+  // Top up the existing subscription instead of creating a fresh row.
   extend:            z.boolean().optional(),
 }).strict().refine(
   (v) => !!(v.planId || v.durationDays || v.durationMonths || v.endAt),
@@ -52,9 +51,8 @@ const updateSubscriptionSchema = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
 
-// Shared filter mapping for the report list + its CSV/Excel exports, so all three
-// honor an identical param contract (docs/backend-requests/live-course-report-
-// detailed-export.md). `:id` (when present) pins the liveCourseId filter.
+// Shared by the report list and its CSV/Excel exports so all three honor one param
+// contract. `:id` (when present) pins the liveCourseId filter.
 export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
   liveCourseId: paramsId ? String(paramsId) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
   customerId: q.customerId ? String(q.customerId) : undefined,
@@ -62,9 +60,8 @@ export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string
   status: assertReportStatus(q.status),
   paymentMethod: q.paymentMethod,
   activationType: q.activationType,
-  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
-  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
-  // fromDate/toDate kept as legacy aliases.
+  // Bounds `createdAt` at IST day edges. dateFrom/dateTo and fromDate/toDate are
+  // legacy aliases of createdFrom/createdTo.
   dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
   dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
   startFrom: q.startFrom,
@@ -74,12 +71,7 @@ export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string
   sortOrder: q.sortOrder,
 });
 
-// GET /api/v1/admin/live-courses/subscriptions
-// GET /api/v1/admin/live-courses/:id/subscriptions   (:id → liveCourseId filter)
-// Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md): filters customerId,
-// liveCourseId, status (active|expired|inactive), paymentMethod (online|backend),
-// search (customer name/phone/email), dateFrom/dateTo, sortBy/sortOrder, page/limit.
-// Envelope is hand-rolled { success, summary, data, pagination } (siblings — NOT
+// Envelope is hand-rolled { success, summary, data, pagination } (siblings, not
 // nested under success()'s `data`), matching the course/package report endpoint.
 export const listLiveCourseSubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -92,7 +84,7 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
     const r = await liveSql.listSubscriptions({ ...buildSubReportQuery(q, req.params.id), page, limit });
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
-    // Summary cards are super-admin only (2026-09-23).
+    // Summary cards are super-admin only.
     return res.status(200).json({ success: true, summary: isSuperAdmin(req) ? r.summary : undefined, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -100,7 +92,7 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
   }
 };
 
-// GET /api/v1/admin/live-courses/subscriptions/export/csv — full filtered set, no pagination.
+// Full filtered set, no pagination.
 export const exportLiveCourseSubscriptionsCsv = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportLiveCourseSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -118,7 +110,7 @@ export const exportLiveCourseSubscriptionsCsv = async (req: Request, res: Respon
   }
 };
 
-// GET /api/v1/admin/live-courses/subscriptions/export/excel — full filtered set, no pagination.
+// Full filtered set, no pagination.
 export const exportLiveCourseSubscriptionsExcel = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportLiveCourseSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -136,7 +128,6 @@ export const exportLiveCourseSubscriptionsExcel = async (req: Request, res: Resp
   }
 };
 
-// GET /api/v1/admin/live-courses/subscriptions/:subscriptionId
 export const getLiveCourseSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.subscriptionId ?? "");
@@ -154,9 +145,7 @@ export const getLiveCourseSubscription = async (req: Request, res: Response) => 
   }
 };
 
-// POST /api/v1/admin/live-courses/:id/grant
-// The "free-grant" flow: hand a customer an active, verified subscription with
-// no payment. Window comes from the plan unless overridden.
+// Grants an active, verified subscription. Window comes from the plan unless overridden.
 export const grantLiveCourseSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.id ?? "");
@@ -167,14 +156,13 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
     if (!cid) return failure(res, "Invalid live course id.", 422);
     let v: z.infer<typeof grantSqlSchema>;
     try { v = grantSqlSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
-    // Audit: acting admin from the JWT (never from the body).
+    // Acting admin comes from the JWT, never the body.
     const actingAdminId = liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
     const r = await liveSql.grantSubscription(cid, { ...v, actingAdminId });
     if (!r.ok) {
       const code = r.code === "course" || r.code === "customer" || r.code === "plan" ? 404 : 422;
       return failure(res, r.msg, code);
     }
-    // Admin granted live-course access → clear that customer's cached catalog reads.
     await flushUserRouteCache(v.customerId);
     return success(res, { subscription: r.data }, r.created ? "Subscription granted." : "Subscription extended.", r.created ? 201 : 200);
   } catch (err) {
@@ -183,7 +171,6 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
   }
 };
 
-// PUT /api/v1/admin/live-courses/subscriptions/:subscriptionId
 // Extend (endAt), revoke (status:false), or correct payment state.
 export const updateLiveCourseSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -195,17 +182,14 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
     if (!sid) return failure(res, "Invalid subscription id.", 422);
     let v: z.infer<typeof updateSubscriptionSchema>;
     try { v = updateSubscriptionSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
-    // Audit: acting admin from the JWT stamps updated_by.
     const actingAdminId = liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
-    // Revoking here (status:false) is the documented way to cut a customer's access,
-    // so resolve the owner before mutating and drop their cached catalog reads after.
+    // Resolve the owner before mutating so their cached catalog reads can be dropped;
+    // otherwise listings keep returning subscribed:true for up to the 24h cache TTL.
     const customerId = await liveSql.getSubscriptionCustomerId(sid);
     const r = await liveSql.updateSubscription(sid, { ...v, actingAdminId });
     if (r === "not_found") return failure(res, "Subscription not found.", 404);
     if (r === "bad_start") return failure(res, "startAt must be a valid date.", 422);
     if (r === "bad_end") return failure(res, "endAt must be a valid date.", 422);
-    // Without this, live listings/detail keep returning subscribed:true for up to
-    // 24h (per-user route cache TTL).
     if (customerId) await flushUserRouteCache(customerId);
     return success(res, { subscription: r }, "Subscription updated.");
   } catch (err) {
@@ -214,9 +198,8 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
   }
 };
 
-// DELETE /api/v1/admin/live-courses/subscriptions/:subscriptionId
-// Hard delete — for cleaning up test/erroneous rows. To revoke a real
-// customer's access prefer PUT { status: false }, which keeps the audit trail.
+// Hard delete for test/erroneous rows. To revoke a real customer's access prefer
+// PUT { status: false }, which keeps the audit trail.
 export const deleteLiveCourseSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.subscriptionId ?? "");
@@ -225,7 +208,7 @@ export const deleteLiveCourseSubscription = async (req: Request, res: Response) 
   try {
     const sid = liveSql.parseLiveId(id);
     if (!sid) return failure(res, "Invalid subscription id.", 422);
-    // Resolve the owner BEFORE deleting — the row is gone afterwards.
+    // Resolve the owner before deleting; the row is gone afterwards.
     const customerId = await liveSql.getSubscriptionCustomerId(sid);
     if (!(await liveSql.deleteSubscription(sid))) return failure(res, "Subscription not found.", 404);
     if (customerId) await flushUserRouteCache(customerId);

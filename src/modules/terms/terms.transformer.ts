@@ -1,3 +1,4 @@
+// Terms and conditions: row to DTO mapping (response shape is frozen).
 import type { TermsAndConditions } from "@prisma/client";
 import type { TermsCreateInput, TermsDto, TermsUpdateInput } from "./terms.types";
 

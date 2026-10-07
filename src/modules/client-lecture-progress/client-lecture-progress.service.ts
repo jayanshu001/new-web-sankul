@@ -1,3 +1,4 @@
+// Lecture progress: heartbeat upserts, resume pointers and My Learning progress feeds.
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import logger from "../../utils/logger";
@@ -5,28 +6,9 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 /**
- * Lecture-progress heartbeat + rollup reads on SQL (Wave 7 — net-new
- * ws_lecture_progress). Per-container model: ONE row per (customer, video) and one
- * per (customer, liveSession); container pointers (course/package/liveCourse) are
- * stamped additively and never cleared; `completed` is sticky. All ids are SQL ints
- * at runtime (customer-auth + catalog-*). See [[project_lecture_progress_per_container]].
- *
- * ⚠ FLAG-OFF (code-complete, not enabled): this is a 14-file content-join hub —
- * the heartbeat upsert here is clean + verifiable, but the resume/learning READS
- * (resumeCard.ts, learning/progress.controller.ts, course/dashboard rollups) span
- * many files and join Video/Course/Package/LiveSession content. The heartbeat
- * write + the profile-dashboard "completed" count are migrated here; the full read
- * surface flips once those consumer files are branched. Enabling reads-only while
- * heartbeats still write Mongo (or vice-versa) would split the data, so flag stays
- * OFF until the heartbeat + reads flip together.
- */
-
-/**
- * Dedicated sub-flag for the CONTAINER (course/package/liveCourse) progress path
- * — heartbeat writes + resume/learning reads. Kept separate from the base
- * free-slice flag because the container heartbeat write and the resume/learning
- * READ hub MUST flip together (enabling one alone splits progress data across
- * SQL/Mongo). Flip `lecture-progress-container` only when the whole hub is ready.
+ * ws_lecture_progress holds ONE row per (customer, video) and one per (customer, liveSession).
+ * Container pointers (course/package/liveCourse) are stamped additively and never cleared;
+ * `completed` is sticky. Per-enrollment "last watched" lives in ws_enrollment_resume.
  */
 
 export const parseLpId = (id: string): number | null => {
@@ -39,11 +21,7 @@ const isComplete = (pos: number, dur: number) => dur > 0 && pos / dur >= COMPLET
 
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 
-/**
- * SQL LectureProgress row → the Mongo document shape the player expects
- * (`_id`, stringified ObjectId-style ids). Keeps the heartbeat response
- * byte-compatible across backends.
- */
+/** The shape the player expects (`_id`, stringified ids); frozen. */
 export const toProgressDto = (r: any) => ({
   _id: String(r.id),
   customerId: r.customerId,
@@ -63,18 +41,10 @@ export const toProgressDto = (r: any) => ({
 });
 
 /**
- * Concurrency-safe upsert for the heartbeat writes below.
- *
- * `prisma.upsert()` alone is NOT enough here. Prisma only compiles an upsert
- * down to a native `INSERT ... ON DUPLICATE KEY UPDATE` when the model has a
- * single unique constraint; ws_lecture_progress has TWO (`uniq_customer_video`
- * and `uniq_customer_live_session`), so Prisma falls back to select-then-insert
- * and two simultaneous heartbeats for the same key both try to INSERT — one
- * dies on P2002. Verified experimentally: 12 concurrent heartbeats produced 11
- * P2002 failures without this wrapper.
- *
- * On P2002 the row provably exists now (a concurrent insert won the race), so
- * updating by the same unique key is always correct and terminal — no loop.
+ * `prisma.upsert()` alone is NOT race-safe here: Prisma only emits a native
+ * `INSERT ... ON DUPLICATE KEY UPDATE` when the model has a single unique constraint, and
+ * ws_lecture_progress has two, so concurrent heartbeats both INSERT and one dies on P2002.
+ * On P2002 the row provably exists, so updating by the same key is correct and terminal.
  */
 const upsertRacingSafe = async (
   where: any,
@@ -91,10 +61,7 @@ const upsertRacingSafe = async (
   }
 };
 
-/**
- * Heartbeat upsert keyed by (customer, video). Stamps the current container
- * pointer additively; never un-completes. Mirrors the Mongo findOneAndUpdate.
- */
+/** Stamps the current container pointer additively; never un-completes. */
 export const upsertVideoProgress = async (input: {
   customerId: number; videoId: number;
   courseId?: number | null; packageId?: number | null; liveCourseId?: number | null;
@@ -108,11 +75,7 @@ export const upsertVideoProgress = async (input: {
   if (input.liveCourseId) set.liveCourseId = input.liveCourseId;
   if (input.source) set.source = input.source;
   if (completedNow) { set.completed = true; set.completedAt = now; }
-  // Keyed on the `uniq_customer_video` unique index. This is the highest-
-  // frequency write on the platform (every playing student, on an interval, and
-  // the same student may have two players open), so the old find-then-create
-  // path could have two heartbeats both miss and both INSERT — one dying on
-  // P2002 and surfacing as a 500 mid-video. See upsertRacingSafe.
+  // Highest-frequency write on the platform (a student may have two players open); see upsertRacingSafe.
   return upsertRacingSafe(
     { uniq_customer_video: { customerId: input.customerId, videoId: input.videoId } },
     set,
@@ -120,7 +83,6 @@ export const upsertVideoProgress = async (input: {
   );
 };
 
-/** Heartbeat upsert keyed by (customer, liveSession). */
 export const upsertLiveSessionProgress = async (input: {
   customerId: number; liveSessionId: number; liveCourseId?: number | null;
   positionSec: number; durationSec: number;
@@ -130,7 +92,6 @@ export const upsertLiveSessionProgress = async (input: {
   const set: any = { positionSec: input.positionSec, durationSec: input.durationSec, lastWatchedAt: now, updatedAt: now };
   if (input.liveCourseId) set.liveCourseId = input.liveCourseId;
   if (completedNow) { set.completed = true; set.completedAt = now; }
-  // Keyed on `uniq_customer_live_session` — same race as the video heartbeat.
   return upsertRacingSafe(
     { uniq_customer_live_session: { customerId: input.customerId, liveSessionId: input.liveSessionId } },
     set,
@@ -139,13 +100,9 @@ export const upsertLiveSessionProgress = async (input: {
 };
 
 /**
- * Layer-2 enrollment "last watched" pointer upsert (see
- * docs/be-dashboard-resume-scope.md). LectureProgress is a GLOBAL per-(customer,
- * video) position store, so a lecture shared by a course AND a package can hold
- * only ONE last_watched_at — which made the two resume cards mirror each other.
- * This stamps a SEPARATE last-watched pointer per (customer, scopeKind, scopeId)
- * so each enrollment remembers its own last lecture. Called on every scoped
- * heartbeat; failure-isolated (never breaks the progress save).
+ * LectureProgress is global per (customer, video), so a lecture shared by a course AND a
+ * package holds one last_watched_at and their resume cards would mirror each other. This keeps
+ * a separate pointer per (customer, scopeKind, scopeId). See docs/be-dashboard-resume-scope.md.
  */
 export const upsertEnrollmentResume = async (input: {
   customerId: number;
@@ -169,7 +126,7 @@ export const upsertEnrollmentResume = async (input: {
   });
 };
 
-/** Per-container rollups for the "Resume Learning" feed (course/package/liveCourse). */
+// Latest-watched pointer + completed count per container, newest first.
 export const rollupByContainer = async (customerId: number, field: "courseId" | "packageId" | "liveCourseId") => {
   const rows = await prisma.lectureProgress.findMany({
     where: { customerId, [field]: { not: null } },
@@ -184,23 +141,16 @@ export const rollupByContainer = async (customerId: number, field: "courseId" | 
   return [...byContainer.values()];
 };
 
-/** Count of completed lectures in a container (resume-dashboard per-card stat). */
 export const completedCountInContainer = (customerId: number, field: "courseId" | "packageId" | "liveCourseId", id: number) =>
   prisma.lectureProgress.count({ where: { customerId, [field]: id, completed: true } });
 
-/** Profile-dashboard: total distinct lectures the customer has completed. */
 export const completedLectureCount = (customerId: number): Promise<number> =>
   prisma.lectureProgress.count({ where: { customerId, completed: true } });
 
 const percentOf = (pos: number, dur: number) =>
   dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 0;
 
-/**
- * Free-video "Resume Learning" feed (SQL). Self-contained slice: only joins
- * ws_video (must still be live + priceType=free) and ws_video_category
- * (title/image) — NO container/DAG/subscription joins. Mirrors the Mongo
- * listFreeVideoResume card shape exactly so the controller envelope is unchanged.
- */
+/** Free-video "Resume Learning" feed; no container/DAG/subscription joins. */
 export const listFreeResume = async (
   customerId: number,
   opts: { search?: string | null; skip?: number; limit?: number } = {}
@@ -215,10 +165,7 @@ export const listFreeResume = async (
   if (rows.length === 0) return { cards: [], resumeNext: null, total: 0 };
 
   const videoIds = rows.map((r) => r.videoId!).filter((v) => v != null);
-  // Only videos still live AND still free (a flip to paid/disabled drops them,
-  // matching the Mongo feed — tapping would 403 at /courses/lecture). `search`
-  // (video title) is pushed into the Prisma where so non-matching videos are
-  // simply absent from `byId` and drop out of the built cards.
+  // Only videos still live AND free: a video flipped to paid/disabled would 403 at /courses/lecture.
   const videoWhere: any = { id: { in: videoIds }, status: true, priceType: "free" };
   const videoSearch = buildPrismaSearch(opts.search, ["title"]);
   if (videoSearch) videoWhere.AND = videoSearch.AND;
@@ -258,23 +205,15 @@ export const listFreeResume = async (
     })
     .filter(Boolean);
 
-  // Hero card is the single most-recent match regardless of the requested page;
-  // `cards` is the paginated slice. `total` counts all matching cards.
+  // The hero card is the most recent match regardless of page.
   const total = allCards.length;
   const cards = allCards.slice(skip, skip + limit);
   return { cards, resumeNext: allCards[0] ?? null, total };
 };
 
 /**
- * Container heartbeat (course/package/liveCourse) on SQL — the int-space mirror
- * of course/progress.controller.reportLectureProgress. Reachability uses the SQL
- * DAG resolver (catalog-category-tree); entitlement uses the SQL subscription
- * tables. Returns a discriminated result the controller maps to its HTTP shape.
- *
- * ⚠ Drift parity (documented): ws_package_course_subscription has NO
- * payment_status column → the Mongo `paymentStatus:"verified"` gate collapses to
- * `status=true` (same rule as commerce-subscription). ws_live_course_subscription
- * DOES have payment_status, so the live gate keeps the verified check.
+ * Container heartbeat (course/package/liveCourse). Reachability uses the category-tree DAG
+ * resolver; entitlement is an active subscription (`status=true` is the verified gate).
  */
 export const reportContainerProgress = async (input: {
   customerId: number;
@@ -296,8 +235,7 @@ export const reportContainerProgress = async (input: {
   if (!video) return { ok: false, status: 404, message: "Lecture not found." };
   const isFree = video.priceType === "free";
 
-  // Reachability — same question the catalog answers (DAG down-walk off the
-  // product's linked roots). Free videos are exempt (surfaced via free catalog).
+  // Same question the catalog answers. Free videos are exempt (surfaced via the free catalog).
   const reachable = await reachableCategoryIds(input.scope.kind, input.scope.id);
   const leaf = video.videoCategoryId ?? null;
   const videoReachable = isFree || (leaf != null && reachable.has(leaf));
@@ -337,8 +275,7 @@ export const reportContainerProgress = async (input: {
       if (!lc) return { ok: false, status: 404, message: "Live course not found." };
     } else {
       const sub = await prisma.liveCourseSubscription.findFirst({
-        // `paymentStatus` dropped 2026-08-25 — a live-course subscription row exists
-        // only for a paid order now, so `status` + window IS the entitlement.
+        // A live-course subscription row exists only for a paid order, so `status` + window is the entitlement.
         where: { customerId: input.customerId, liveCourseId: input.scope.id, status: true, endAt: { gt: now } },
         select: { id: true },
       });
@@ -356,10 +293,7 @@ export const reportContainerProgress = async (input: {
     durationSec: input.durationSec,
   });
 
-  // Layer-2: stamp THIS enrollment's last-watched pointer so the resume card for
-  // this scope tracks the video the user watched *here*, independent of the same
-  // video's pointer in any other product. Failure-isolated — a pointer write must
-  // never fail the heartbeat (the global position in `row` is already saved).
+  // Failure-isolated: a pointer write must never fail the heartbeat (`row` is already saved).
   try {
     await upsertEnrollmentResume({
       customerId: input.customerId, scopeKind: input.scope.kind, scopeId: input.scope.id,
@@ -375,10 +309,8 @@ export const reportContainerProgress = async (input: {
 };
 
 /**
- * Live-session container heartbeat on SQL — int-space mirror of
- * learning/progress.controller.reportLiveSessionProgress. Entitlement: an active
- * verified LiveCourseSubscription for ANY live course the session is published
- * under (ws_live_session_course join). Stamps the first matching liveCourseId.
+ * Entitlement: an active LiveCourseSubscription for ANY live course the session is published
+ * under. Stamps the first matching liveCourseId.
  */
 export const reportLiveSessionProgress = async (input: {
   customerId: number;
@@ -411,7 +343,6 @@ export const reportLiveSessionProgress = async (input: {
     durationSec: input.durationSec,
   });
 
-  // Layer-2: stamp the live-course enrollment's last-watched pointer (session-based).
   try {
     await upsertEnrollmentResume({
       customerId: input.customerId, scopeKind: "liveCourse", scopeId: sub.liveCourseId,
@@ -426,21 +357,18 @@ export const reportLiveSessionProgress = async (input: {
   return { ok: true, row };
 };
 
-// ── Resume / Learning READ hub (SQL) ─────────────────────────────────────────
 const daysLeftOf = computeDaysLeft;
 const pct = (done: number, total: number) => (total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0);
 const educatorOf = (e: any) => (e ? { id: String(e.id), name: e.name ?? null, image: e.image ?? null } : null);
 
-/** Count active videos directly under a set of category ids. */
 const videosUnderCategories = async (catIds: number[]): Promise<number> => {
   if (!catIds.length) return 0;
   return prisma.video.count({ where: { status: true, videoCategoryId: { in: catIds } } });
 };
 
 /**
- * Per-container total published-lecture counts (the % bar denominator).
- * course/package → videos under the container's reachable category tree (DAG
- * resolver); liveCourse → number of sessions published under it.
+ * The % bar denominator: course/package → videos under the reachable category tree;
+ * liveCourse → sessions published under it.
  */
 const containerTotals = async (courseIds: number[], packageIds: number[], liveIds: number[]) => {
   const { reachableCategoryIds } = await import("../catalog-category-tree/category-tree.service");
@@ -463,7 +391,6 @@ const containerTotals = async (courseIds: number[], packageIds: number[], liveId
   return { courseTotal, packageTotal, liveTotal };
 };
 
-/** Resolve lecture cards (video → title/topic/chapter) for the resume targets. */
 const resolveLectures = async (videoIds: number[]) => {
   const ids = [...new Set(videoIds.filter((v) => v != null))];
   if (!ids.length) return new Map<number, any>();
@@ -485,31 +412,8 @@ const resolveSessions = async (sessionIds: number[]) => {
   return new Map(rows.map((s) => [s.id, { _id: String(s.id), title: s.title, topic: s.subject ?? null, videoCategoryId: null, chapterTitle: null }]));
 };
 
-/**
- * Unified "Resume Learning" feed (course + package + live cards), SQL mirror of
- * learning/progress.controller.listMyLearningProgress. Returns { cards, resumeNext }.
- *
- * `percentCompleted` is VIDEO-centric — progress through the last-watched lecture
- * (`percentOf(lastPositionSec, lastDurationSec)`), not course/package-wide completion.
- * `completedLectures`/`totalLectures` remain the container-wide counts for analytics.
- *
- * PURCHASED-ONLY: a course/package/live card is emitted ONLY when the customer has
- * an ACTIVE subscription for it (the `*Subs` queries below already scope to
- * status=true + endAt>now, plus paymentStatus=verified for live). Preview / free
- * watches inside a paid container stamp a container pointer but must NOT surface a
- * card here, and an expired subscription drops the card. Genuinely-free standalone
- * videos surface via the separate free feed (`listFreeResume`, type:"free"), not
- * this container feed. Each card carries `isPurchased: true` for defensive client
- * filtering. See docs/client/DASHBOARD_RESUME_PROGRESS.md + the FE purchased-only
- * request (home-my-courses-subject-progress).
- */
-// Layer-2 read helpers — the per-enrollment last-watched pointer + the Layer-1
-// (global) position of the video/session that pointer names. See
-// docs/be-dashboard-resume-scope.md.
-
 type ResumePtr = { scopeId: number; videoId: number | null; liveSessionId: number | null; lastWatchedAt: Date | null };
 
-/** Per-enrollment last-watched pointers for one scope kind, newest first. */
 const resumePointers = async (customerId: number, kind: "course" | "package" | "liveCourse"): Promise<ResumePtr[]> => {
   const rows = await prisma.enrollmentResume.findMany({
     where: { customerId, scopeKind: kind },
@@ -521,7 +425,6 @@ const resumePointers = async (customerId: number, kind: "course" | "package" | "
 
 type Pos = { positionSec: number; durationSec: number };
 
-/** Global (Layer-1) playback position keyed by videoId. */
 const videoPositions = async (customerId: number, videoIds: number[]): Promise<Map<number, Pos>> => {
   const ids = [...new Set(videoIds)];
   if (!ids.length) return new Map();
@@ -529,7 +432,6 @@ const videoPositions = async (customerId: number, videoIds: number[]): Promise<M
   return new Map(rows.map((r) => [r.videoId!, { positionSec: r.positionSec, durationSec: r.durationSec }]));
 };
 
-/** Global (Layer-1) playback position keyed by liveSessionId. */
 const sessionPositions = async (customerId: number, sessionIds: number[]): Promise<Map<number, Pos>> => {
   const ids = [...new Set(sessionIds)];
   if (!ids.length) return new Map();
@@ -537,31 +439,32 @@ const sessionPositions = async (customerId: number, sessionIds: number[]): Promi
   return new Map(rows.map((r) => [r.liveSessionId!, { positionSec: r.positionSec, durationSec: r.durationSec }]));
 };
 
-/** Completed-lecture count per container (the % bar numerator), one grouped query. */
 const completedCounts = async (customerId: number, field: "courseId" | "packageId" | "liveCourseId", ids: number[]): Promise<Map<number, number>> => {
   if (!ids.length) return new Map();
   const grp = await prisma.lectureProgress.groupBy({ by: [field], where: { customerId, completed: true, [field]: { in: ids } }, _count: { _all: true } });
   return new Map(grp.map((g: any) => [g[field] as number, g._count._all as number]));
 };
 
+/**
+ * Unified "Resume Learning" feed.
+ *
+ * `percentCompleted` is VIDEO-centric (progress through the last-watched lecture), not
+ * container-wide; `completedLectures`/`totalLectures` are the container-wide counts.
+ *
+ * PURCHASED-ONLY: a card is emitted only with an ACTIVE subscription. Preview/free watches
+ * inside a paid container stamp a pointer but must not surface a card; free standalone
+ * videos use `listFreeResume`. See docs/client/DASHBOARD_RESUME_PROGRESS.md.
+ */
 export const listMyLearningProgress = async (
   customerId: number,
   opts: { search?: string; skip?: number; limit?: number } = {}
 ): Promise<{ cards: any[]; resumeNext: any; total: number }> => {
   const now = new Date();
-  // Container set + last-watched pointer come from the enrollment-scoped Layer-2
-  // table (NOT LectureProgress, which is global-per-video and would leak one
-  // product's last video onto another's card for a shared lecture).
-  // LIVE COURSES ARE DELIBERATELY EXCLUDED from this feed (2026-07-30, FE request).
-  // A live session is not a resumable lecture — there is nothing to seek back to —
-  // so no `type: "live"` card may appear in GET /client/learning/progress/my or in
-  // GET /client/dashboard/resume (which is built on this function).
-  //
-  // Implemented by leaving the live pointer set EMPTY rather than by deleting the
-  // live branches below: every live query is already guarded by `liveIds.length`,
-  // so an empty set short-circuits all of them (no liveCourse/liveSub/liveDone/
-  // sessionPositions/resolveSessions round-trips) and the `perLive` card loop
-  // iterates zero times. To re-enable, restore the third `resumePointers` call.
+  // Pointers come from ws_enrollment_resume, NOT LectureProgress (global per video, which
+  // would leak one product's last video onto another's card for a shared lecture).
+  // Live courses are deliberately excluded (FE request): a live session is not resumable.
+  // The live pointer set is left EMPTY so every `liveIds.length`-guarded branch below
+  // short-circuits; to re-enable, restore a third `resumePointers` call.
   const [coursePtrs, packagePtrs] = await Promise.all([
     resumePointers(customerId, "course"),
     resumePointers(customerId, "package"),
@@ -577,9 +480,7 @@ export const listMyLearningProgress = async (
 
   const [courses, packages, liveCourses, courseSubs, packageSubs, liveSubs, totals,
          courseDone, packageDone, liveDone, videoPos, sessionPos] = await Promise.all([
-    // Owned-item hydration (ids come from the customer's progress) → NO container status
-    // filter, so a DEACTIVATED-but-owned course/package/live still shows in the dashboard /
-    // continue-watching. Deleted rows still drop out (no row for the id).
+    // No status filter: a deactivated-but-owned container still shows; deleted rows drop out.
     courseIds.length ? prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }) : [],
     packageIds.length ? prisma.package.findMany({ where: { id: { in: packageIds } }, select: { id: true, name: true, image: true, educator_id: true } }) : [],
     liveIds.length ? prisma.liveCourse.findMany({ where: { id: { in: liveIds } }, select: { id: true, name: true, image: true, educatorId: true } }) : [],
@@ -594,10 +495,7 @@ export const listMyLearningProgress = async (
     sessionPositions(customerId, ptrSessionIds),
   ]);
 
-  // Assemble per-scope rollup rows in the shape the card builders below consume,
-  // sourcing the pointer (video/session + timestamp) from Layer-2 and the
-  // position from Layer-1. `lastCourseId` is intentionally null — a package's
-  // resume pointer is package-scoped, not tied to a specific inner course.
+  // `lastCourseId` is intentionally null: a package's pointer is package-scoped.
   const posOf = (videoId: number | null, liveSessionId: number | null): Pos => {
     if (videoId != null && videoPos.has(videoId)) return videoPos.get(videoId)!;
     if (liveSessionId != null && sessionPos.has(liveSessionId)) return sessionPos.get(liveSessionId)!;
@@ -616,7 +514,6 @@ export const listMyLearningProgress = async (
     return { _id: p.scopeId, lastWatchedAt: p.lastWatchedAt, lastVideoId: p.videoId, lastLiveSessionId: p.liveSessionId, lastCourseId: null, lastPositionSec: pos.positionSec, lastDurationSec: pos.durationSec, completedCount: liveDone.get(p.scopeId) ?? 0 };
   });
 
-  // Educators for packages + live courses (Course has its relation inline).
   const eduIds = [...new Set([...packages.map((p) => p.educator_id), ...liveCourses.map((l) => l.educatorId)].filter((x) => x != null))] as number[];
   const educators = eduIds.length ? await prisma.courseEducator.findMany({ where: { id: { in: eduIds } }, select: { id: true, name: true, image: true } }) : [];
   const eduById = new Map(educators.map((e) => [e.id, e]));
@@ -635,7 +532,7 @@ export const listMyLearningProgress = async (
   for (const p of perCourse) {
     const c = courseById.get(p._id); if (!c) continue;
     const sub = courseSubBy.get(p._id);
-    if (!sub) continue; // purchased-only: no active subscription ⇒ no card
+    if (!sub) continue; // purchased-only
     const total = totals.courseTotal.get(p._id) ?? 0;
     cards.push({
       type: "course", id: String(c.id), courseId: String(c.id), liveCourseId: null, packageId: null,
@@ -650,7 +547,7 @@ export const listMyLearningProgress = async (
   for (const p of perPackage) {
     const pkg = packageById.get(p._id); if (!pkg) continue;
     const sub = packageSubBy.get(p._id);
-    if (!sub) continue; // purchased-only: no active subscription ⇒ no card
+    if (!sub) continue; // purchased-only
     const total = totals.packageTotal.get(p._id) ?? 0;
     cards.push({
       type: "package", id: String(pkg.id), packageId: String(pkg.id), courseId: p.lastCourseId ? String(p.lastCourseId) : null, liveCourseId: null,
@@ -665,7 +562,7 @@ export const listMyLearningProgress = async (
   for (const p of perLive as any[]) {
     const lc = liveById.get(p._id); if (!lc) continue;
     const sub = liveSubBy.get(p._id);
-    if (!sub) continue; // purchased-only: no active verified subscription ⇒ no card
+    if (!sub) continue; // purchased-only
     const total = totals.liveTotal.get(p._id) ?? 0;
     const edu = lc.educatorId ? eduById.get(lc.educatorId) : null;
     cards.push({
@@ -680,8 +577,7 @@ export const listMyLearningProgress = async (
   }
   cards.sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime());
 
-  // `search` filters the flat card stream by course/package/live-course title;
-  // resumeNext = the most-recent matching card (hero), independent of the page.
+  // resumeNext = the most recent matching card, independent of the page.
   const matched = opts.search
     ? cards.filter((c) => matchesAllTokens(opts.search, [c.title]))
     : cards;
@@ -692,10 +588,7 @@ export const listMyLearningProgress = async (
   return { cards: paged, resumeNext: matched[0] ?? null, total };
 };
 
-/**
- * "My Courses" resume feed (course-only), SQL mirror of
- * course/progress.controller.listMyCoursesForResume → { courses, resumeNext }.
- */
+/** "My Courses" resume feed (course-only). */
 export const listMyCoursesForResume = async (
   customerId: number,
   opts: { search?: string; skip?: number; limit?: number } = {}
@@ -705,9 +598,7 @@ export const listMyCoursesForResume = async (
     .sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime());
   if (!perCourse.length) return { courses: [], resumeNext: null, total: 0 };
 
-  // Resolve the course rows for every started course first — the names drive the
-  // optional `search` filter. No container status filter: a deactivated-but-owned course
-  // stays in the list (deleted rows still drop out — no row for the id).
+  // No status filter: a deactivated-but-owned course stays; deleted rows drop out.
   const allCourseIds = perCourse.map((p) => p._id);
   const activeCourses = await prisma.course.findMany({
     where: { id: { in: allCourseIds } },
@@ -715,8 +606,6 @@ export const listMyCoursesForResume = async (
   });
   const courseById = new Map(activeCourses.map((c) => [c.id, c]));
 
-  // Candidate cards = started + active, optionally name-filtered; paginate the
-  // resolved array (total = full match count).
   let candidates = perCourse.filter((p) => courseById.has(p._id));
   if (opts.search) {
     candidates = candidates.filter((p) =>
@@ -767,7 +656,6 @@ export const listMyCoursesForResume = async (
   return { courses: courseCards, resumeNext, total };
 };
 
-// ── Lecture-ref + resume-next builders (SQL) — used by the notes lists ────────
 /** Collapse multiple progress rows (same video, different containers) → furthest. */
 const collapseRows = (rows: any[]): any | null => {
   if (!rows.length) return null;
@@ -779,7 +667,7 @@ const collapseRows = (rows: any[]): any | null => {
   }, null as any);
 };
 
-/** SQL buildLectureRef — the exact video/session a notes list belongs to. */
+/** The exact video/session a notes list belongs to. */
 export const buildLectureRefSql = async (input:
   | { lectureType: "recorded"; customerId: number; videoId: number }
   | { lectureType: "live"; customerId: number; liveSessionId: number }
@@ -787,10 +675,8 @@ export const buildLectureRefSql = async (input:
   if (input.lectureType === "recorded") {
     const video = await prisma.video.findFirst({
       where: { id: input.videoId },
-      // VideoCategory.liveCourseId is set on live-course "folder" categories (the
-      // recordings tab groups by it). Recorded lectures that live under such a
-      // folder must expose that liveCourseId so the FE opens the live player
-      // (getLiveLectureAPI) instead of the catalog category rail (which 403s).
+      // Lectures under a live-course folder (VideoCategory.liveCourseId) must expose it so the
+      // FE opens the live player instead of the catalog category rail (which 403s).
       select: { id: true, title: true, topic: true, videoCategoryId: true, VideoCategory: { select: { title: true, liveCourseId: true } } },
     });
     if (!video) return null;
@@ -813,8 +699,6 @@ export const buildLectureRefSql = async (input:
   }
   const session = await prisma.liveSession.findFirst({ where: { id: input.liveSessionId }, select: { id: true, title: true, subject: true } });
   if (!session) return null;
-  // Live note: resolve the owning live course from the session→course link so
-  // the shape carries liveCourseId on both branches.
   const link = await prisma.liveSessionCourse.findFirst({ where: { liveSessionId: input.liveSessionId }, select: { liveCourseId: true } });
   const rows = await prisma.lectureProgress.findMany({ where: { customerId: input.customerId, liveSessionId: input.liveSessionId }, select: { positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
   const p = collapseRows(rows);
@@ -827,9 +711,8 @@ export const buildLectureRefSql = async (input:
 };
 
 /**
- * SQL buildResumeNextCard — the parent container's "resume now" hero card for
- * the lecture in the query. Recorded → owning course; live → entitled live course.
- * Reuses listMyLearningProgress's card semantics scoped to one container.
+ * The parent container's "resume now" hero card for the lecture in the query: recorded →
+ * owning course; live → entitled live course. Same card semantics as listMyLearningProgress.
  */
 export const buildResumeNextCardSql = async (input:
   | { lectureType: "recorded"; customerId: number; videoId: number }
@@ -863,7 +746,6 @@ export const buildResumeNextCardSql = async (input:
       resume: { videoId: lastVideoId ? String(lastVideoId) : null, liveSessionId: null, positionSec: rollup?.lastPositionSec ?? 0, durationSec: rollup?.lastDurationSec ?? 0 },
     };
   }
-  // live
   const links = await prisma.liveSessionCourse.findMany({ where: { liveSessionId: input.liveSessionId }, select: { liveCourseId: true } });
   const liveCourseIds = links.map((l) => l.liveCourseId);
   if (!liveCourseIds.length) return null;
@@ -887,27 +769,15 @@ export const buildResumeNextCardSql = async (input:
 };
 
 /**
- * getResumeDashboard on SQL: { resumeLecture, recentCourse, recentPackage }
- * — the most-recent card of each container type. Built ON TOP of
- * listMyLearningProgress so the dashboard never disagrees with the resume feed
- * (the explicit invariant in dashboard.controller). Adds `minutesLeft` per card.
+ * The most recent card of each container type, built on listMyLearningProgress so the
+ * dashboard never disagrees with the resume feed. Adds `minutesLeft` per card.
  *
- * `resumeLecture` was the LIVE-course slot and is therefore now ALWAYS `null`:
- * live cards are excluded at the source (see listMyLearningProgress). The key is
- * kept — never dropped — so the response shape the app parses is unchanged; the
- * FE already renders this slot as absent when null. If the home screen wants that
- * slot to show the most-recent card of ANY type instead of staying empty, that is
- * a separate product decision, not this exclusion.
+ * `resumeLecture` was the live-course slot and is always `null` now (live cards are excluded
+ * at the source). The key is kept so the response shape the app parses is unchanged.
  */
 export const buildResumeDashboard = async (customerId: number): Promise<{ resumeLecture: any; recentCourse: any; recentPackage: any }> => {
   const { cards } = await listMyLearningProgress(customerId);
-  // Dashboard resume cards show VIDEO-centric progress — `percentCompleted` reflects
-  // how far through the current/last-watched lecture the user is
-  // (`positionSec / durationSec`), NOT course/package-wide completion.
-  // `listMyLearningProgress` already produces video-centric `percentCompleted`; this
-  // re-derivation is kept as a defensive, self-documenting guarantee for the dashboard
-  // and to add `minutesLeft`. `completedLectures`/`totalLectures` are preserved for
-  // analytics/the Progress screen. See docs/client/DASHBOARD_RESUME_PROGRESS.md.
+  // Re-derives the video-centric `percentCompleted` defensively and adds `minutesLeft`.
   const withVideoProgress = (c: any) => {
     if (!c) return null;
     const dur = c.resume?.durationSec ?? 0, pos = c.resume?.positionSec ?? 0;
@@ -918,15 +788,12 @@ export const buildResumeDashboard = async (customerId: number): Promise<{ resume
     };
   };
   return {
-    // Always null — `cards` can no longer contain a live entry. Written as an
-    // explicit null (not a `.find()` that is guaranteed to miss) so this reads as
-    // intentional rather than as a lookup that quietly stopped matching.
     resumeLecture: null,
     recentCourse: withVideoProgress(cards.find((c: any) => c.type === "course")),
     recentPackage: withVideoProgress(cards.find((c: any) => c.type === "package")),
   };
 };
 
-/** Does the video exist at all (live), regardless of price? (404 vs 403 split) */
+/** Any price; used for the 404 vs 403 split. */
 export const findLiveVideo = (videoId: number) =>
   prisma.video.findFirst({ where: { id: videoId, status: true }, select: { id: true, priceType: true } });

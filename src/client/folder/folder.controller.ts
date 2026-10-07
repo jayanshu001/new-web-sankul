@@ -1,5 +1,5 @@
+// Client saved folders: HTTP handlers for per-user video and material folders.
 import { Request, Response } from "express";
-// Folder classification types (formerly imported from the legacy Mongoose models).
 type FolderType = "video" | "material";
 type FolderItemKind = "material" | "video" | "ebook";
 import logger from "../../utils/logger";
@@ -16,16 +16,14 @@ function userId(req: Request): string | null {
   return req.user?.id ?? null;
 }
 
-/**
- * Ensure both default folders ("My Videos", "My Materials") exist for a customer.
- * Idempotent — safe to call on every signup and from backfill scripts.
- */
+/** Ensures the default "My Videos" / "My Materials" folders exist. Idempotent. */
 export async function ensureDefaultFolders(customerId: string | number) {
   const cid = folderSql.parseFolderId(String(customerId));
   if (cid != null) return folderSql.ensureDefaultFolders(cid);
   return;
 }
 
+// Builds the per-user folder handlers for one folder type (video or material).
 function makeFolderController(type: FolderType) {
   const allowedKind = ALLOWED_KIND[type];
 
@@ -131,6 +129,7 @@ function makeFolderController(type: FolderType) {
     }
   };
 
+  // Default folders are emptied rather than deleted.
   const remove = async (req: Request, res: Response) => {
     const traceId = req.traceId;
     const uid = userId(req);
@@ -151,6 +150,7 @@ function makeFolderController(type: FolderType) {
     }
   };
 
+  // Idempotent: re-adding an item returns 200 with `deduped: true`.
   const addItem = async (req: Request, res: Response) => {
     const traceId = req.traceId;
     const uid = userId(req);
@@ -194,10 +194,7 @@ function makeFolderController(type: FolderType) {
     }
   };
 
-  // GET /{video|material}-folders/all-items
-  // Returns every folder the customer owns for this type, with its items + joined refs.
-  // Mirrors the per-folder `detail` shape but in one call, and only counts items whose
-  // underlying Material/Video still exists — so list length matches the dashboard count.
+  // Counts only items whose Material/Video still exists, so it matches the dashboard count.
   const allItems = async (req: Request, res: Response) => {
     const traceId = req.traceId;
     const uid = userId(req);

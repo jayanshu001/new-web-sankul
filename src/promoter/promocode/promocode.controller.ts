@@ -1,3 +1,4 @@
+// Promoter promocodes: HTTP handlers for the promoter's own codes.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -7,7 +8,6 @@ import {
   getPromoterPromocode,
 } from "../../modules/promoter-data/promoter-data.service";
 
-// GET /api/v1/promoter/promocodes
 export const listMyPromocodes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;
@@ -16,7 +16,7 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("listMyPromocodes unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // SQL-faithful: no appliesTo.
+    // Rows carry no appliesTo field.
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await listPromoterPromocodes(pid);
@@ -28,7 +28,6 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/promoter/promocodes/:id
 export const getMyPromocode = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;

@@ -1,19 +1,12 @@
+// StreamOS webhook ledger: scheduled prune of old delivery-id rows.
 /**
- * Prunes the StreamOS v1 webhook delivery-id ledger.
+ * Prunes `ws_streamos_webhook_delivery`, the delivery-id ledger that makes the v1
+ * recording webhook idempotent. Retries are exhausted within minutes, so rows past
+ * the retention window are dead weight.
  *
- * `ws_streamos_webhook_delivery` exists to make the recording webhook idempotent:
- * v1 retries a failed delivery up to 6 times with the same X-Streamos-Delivery id,
- * and recording handling creates Video rows, so a replay would duplicate course
- * content. It therefore grows by one row per delivery, forever, unless something
- * trims it.
- *
- * Retries are exhausted within minutes, so a row older than the retention window
- * can no longer be replayed and is dead weight.
- *
- * Deletes are BATCHED — never one unbounded deleteMany. A single large delete on a
- * growing table is exactly the shape that took production down on the is_login
- * sweep: it holds locks and can overwhelm the binlog. Each tick removes at most
- * MAX_PER_TICK rows in DELETE_BATCH-sized pages and then stops until the next one.
+ * Deletes are batched, never one unbounded deleteMany: a large delete on a growing
+ * table holds locks and can overwhelm the binlog (this took production down on the
+ * is_login sweep). Each tick removes at most MAX_PER_TICK rows in DELETE_BATCH pages.
  */
 import logger from "../../utils/logger";
 import { prisma } from "../../config/prisma";
@@ -32,8 +25,7 @@ async function runOnce(): Promise<void> {
     let deleted = 0;
 
     while (deleted < MAX_PER_TICK) {
-      // Page the ids first, then delete that page by primary key — the same
-      // select-then-write shape the is_login sweep had to adopt.
+      // Select a page of ids, then delete by primary key.
       const page = await prisma.streamosWebhookDelivery.findMany({
         where: { receivedAt: { lt: cutoff } },
         select: { id: true },
@@ -52,7 +44,6 @@ async function runOnce(): Promise<void> {
       logger.info("[streamos-delivery] pruned webhook delivery ledger", { deleted, retentionDays: RETENTION_DAYS });
     }
   } catch (err) {
-    // Never throw out of a background sweep — a failed prune is harmless.
     logger.error("[streamos-delivery] prune failed", { error: (err as Error).message });
   }
 }

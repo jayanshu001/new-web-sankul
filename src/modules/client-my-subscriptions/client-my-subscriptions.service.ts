@@ -1,5 +1,5 @@
+// Client my subscriptions: active course, package, live-course and ebook cards.
 import { clientMySubscriptionsRepository as repo } from "./client-my-subscriptions.repository";
-
 
 export const parseMySubId = (id: string): number | null => {
   const n = Number(id);
@@ -13,12 +13,11 @@ const daysLeftOf = (endAt: Date | null, now: Date) =>
 const idStr = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 const emptyAction = { courseId: null as any, packageId: null as any, planId: null as any, testSeriesId: null as any, ebookId: null as any, liveCourseId: null as any };
 
-// ── course + package cards (dedup to furthest endAt per target, soonest-first) ──
+// Dedup to the furthest endAt per target, then order soonest-first.
 export const buildCourseAndPackageCards = async (customerId: number, now: Date) => {
   const all = await repo.activeCourseSubs(customerId, now); // already endAt desc
   const seen = new Set<string>();
   const deduped = all.filter((s) => {
-    // key by target: course → c:<id>, else package (package_id) → p:<id>, else row.
     const key = s.courseId && s.courseId > 0 ? `c:${s.courseId}` : s.packageId && s.packageId > 0 ? `p:${s.packageId}` : `s:${s.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -40,7 +39,7 @@ export const buildCourseAndPackageCards = async (customerId: number, now: Date) 
     return {
       _id: String(s.id),
       title: course?.name || pkg?.name || "Subscription",
-      author: null, // ws_course has no author column (Mongo-only)
+      author: null, // ws_course has no author column
       thumbnail: course?.image || pkg?.image || null,
       badge: type?.name || null,
       daysLeft: daysLeftOf(s.endAt ?? null, now),
@@ -52,12 +51,9 @@ export const buildCourseAndPackageCards = async (customerId: number, now: Date) 
   });
 };
 
-// endAt sort key: a lifetime sub (endAt null) sorts as "furthest out" (never
-// expires), so Infinity. Used both to dedup (keep the furthest) and to order the
-// merged course tab soonest-expiring first.
+// A lifetime sub (endAt null) never expires, so it sorts as furthest out.
 const endKey = (endAt: Date | null | undefined) => (endAt ? endAt.getTime() : Infinity);
 
-// ── live-course cards (dedup per liveCourseId, soonest-first) ──────────────────
 export const buildLiveCourseCards = async (customerId: number, now: Date) => {
   const all = await repo.activeLiveCourseSubs(customerId, now);
   // Dedup per live course, keeping the furthest-out entitlement (lifetime wins).
@@ -69,7 +65,7 @@ export const buildLiveCourseCards = async (customerId: number, now: Date) => {
     seen.add(key);
     return true;
   });
-  const subs = deduped.sort((a, b) => endKey(a.endAt) - endKey(b.endAt)); // soonest-first
+  const subs = deduped.sort((a, b) => endKey(a.endAt) - endKey(b.endAt));
   if (!subs.length) return [];
 
   const courses = new Map((await repo.liveCoursesByIds([...new Set(subs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
@@ -93,7 +89,6 @@ export const buildLiveCourseCards = async (customerId: number, now: Date) => {
   });
 };
 
-// ── ebook cards (dedup per ebookId, soonest-first) ─────────────────────────────
 export const buildEbookCards = async (customerId: number, now: Date) => {
   const all = await repo.activeEbookSubs(customerId, now);
   const seen = new Set<string>();

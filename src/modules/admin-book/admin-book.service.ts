@@ -1,3 +1,4 @@
+// Admin books: book CRUD, order report/exports and book settings logic.
 import ExcelJS from "exceljs";
 import { nextOrder } from "../../utils/listOrdering";
 import { PassThrough } from "node:stream";
@@ -18,15 +19,14 @@ export const parseBookId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// Parse a date-range bound. A bare "YYYY-MM-DD" is pinned to the IST day edge
-// (from → 00:00:00.000, to → 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's
-// calendar-date pick includes the full IST day (a naive UTC parse drops the last
-// 5.5h); full timestamps pass through unchanged. Invalid input → undefined.
+// A bare "YYYY-MM-DD" is pinned to the IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at +05:30) so a calendar pick covers the full IST day; a naive UTC
+// parse drops the last 5.5h. Full timestamps pass through; invalid → undefined.
 const parseDayBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
-  // "YYYY-MM-DDTHH:mm" (the report date-time picker) is IST wall-clock too; the
-  // to-bound covers the whole picked minute.
+  // "YYYY-MM-DDTHH:mm" (report date-time picker) is IST wall-clock too; the to-bound
+  // covers the whole picked minute.
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
     ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`)
     : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)
@@ -35,35 +35,22 @@ const parseDayBound = (v: string | undefined, end: boolean): Date | undefined =>
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
-// The Mongo defaults for the SQL-absent publication / deliveryEta fields
-// (mirror catalog-book.transformer).
+// Defaults for publication / deliveryEta, which have no column (same as catalog-book.transformer).
 const DEFAULT_PUBLICATION = "WebSankul Publication";
 const DEFAULT_DELIVERY_ETA = "5-7 days";
 
 /**
- * `ws_book` row → admin Book DTO, shape-compatible with the Mongo `Book`
- * document. isTrending is read from ws_book.is_trending (settable on
- * create/update + the trending toggle). Other SQL-absent fields are synthesized:
- * publication/deliveryEta defaults, demoFileName/bookFileName=null, bookUrl=null
- * (only demo_url exists), and packageIds = [] (no SQL column/table).
- * termsAndConditions is NO LONGER synthesized — it persists to
- * ws_book.terms_and_conditions (added 2026-08-18), the same way the ebook stores it.
- *
- * examCountdownIds / examCountdownCategoryIds are stored as JSON int-arrays on
- * ws_book (C6). This base DTO returns the raw ID ARRAYS — the columns are already
- * on the row (`repo.list` uses no `select`), so emitting them costs no extra
- * query. The single-book detail (`getBook`) overlays the Mongo `.populate()`
- * shape (ids → {_id, name, …}) via `populateExamCountdowns` on top of these.
+ * Fields with no ws_book column are synthesized: publication/deliveryEta defaults,
+ * demoFileName/bookFileName/bookUrl null, packageIds []. examCountdown* are returned
+ * as raw id arrays; `getBook` overlays the populated shape via populateExamCountdowns.
  */
-// ws_book.thumbnail is NOT NULL, so create stores a " " (space) sentinel when no
-// thumbnail is given. Normalise blank/whitespace back to null on read so the API
-// signals "no thumbnail" correctly instead of leaking the sentinel.
+// ws_book.thumbnail is NOT NULL, so create stores a " " sentinel; normalise blank back
+// to null on read so the sentinel never leaks.
 const blankToNull = (v: string | null | undefined): string | null =>
   v != null && v.trim() !== "" ? v : null;
 
 export const toBookDto = (row: Book) => {
-  // Ids go out as strings to match the populated shape's `_id` (and every other
-  // id this API emits) — the admin drops non-string ids when normalising.
+  // Ids go out as strings to match `_id` everywhere; the admin drops non-string ids.
   const countdownCategoryIds = parseIdArray(row.examCountdownCategoryIds).map(String);
   const countdownIds = parseIdArray(row.examCountdownIds).map(String);
   return {
@@ -81,8 +68,7 @@ export const toBookDto = (row: Book) => {
     termsAndConditions: row.termsAndConditions ?? null,
     demoUrl: row.demo_url ?? null,
     bookUrl: null,
-    // Original demo-PDF upload name (books have no full-book PDF, so bookFileName
-    // stays null). Columns: demo_file_name.
+    // Books have no full-book PDF, so bookFileName stays null.
     demoFileName: blankToNull(row.demoFileName),
     bookFileName: null,
     weight: row.weight ?? 0,
@@ -104,7 +90,6 @@ export const toBookDto = (row: Book) => {
   };
 };
 
-// ── customer / shipping / item DTOs (order surfaces) ───────────────────────────
 const toCustomerDto = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | null) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);
@@ -127,11 +112,9 @@ const toShippingDto = (s: any | null) => {
   };
 };
 
-// ── books: list / get ──────────────────────────────────────────────────────────
 /**
- * Sortable columns exposed as `?sortBy=`. Anything else (or nothing) falls back
- * to recency — `created_at DESC, id DESC`. `orderBy` is listed for the reorder
- * UI's benefit but is intercepted in listBooks; see utils/listOrdering.
+ * `?sortBy=` columns; anything else falls back to recency (`created_at DESC, id DESC`).
+ * `orderBy` is intercepted in listBooks (see utils/listOrdering).
  */
 const BOOK_SORT_COLUMNS: Record<string, keyof Prisma.BookOrderByWithRelationInput> = {
   name: "name",
@@ -154,8 +137,8 @@ export const listBooks = async (q: {
   limit: number;
 }) => {
   const opts = { search: q.search, language: q.language, isMagazine: q.isMagazine, isCombo: q.isCombo, status: q.status };
-  // `sortBy=orderBy` means "the default list view" — recency wins there, so it is
-  // NOT forwarded as a column. See utils/listOrdering (RECENCY IS THE CONTRACT).
+  // `sortBy=orderBy` is the default list view, where recency wins, so it is not
+  // forwarded as a column (utils/listOrdering).
   const column = q.sortBy && q.sortBy !== "orderBy" ? BOOK_SORT_COLUMNS[q.sortBy] : undefined;
   const direction: Prisma.SortOrder = q.sortOrder === "asc" ? "asc" : "desc";
   // `id` breaks ties so paging stays stable when the sort column repeats.
@@ -170,7 +153,6 @@ export const listBooks = async (q: {
 export const getBook = async (id: number) => {
   const row = await repo.findById(id);
   if (!row) return null;
-  // C6: resolve the stored JSON int-arrays to the Mongo `.populate()` shapes.
   const ec = await populateExamCountdowns(row);
   return {
     ...toBookDto(row),
@@ -180,15 +162,13 @@ export const getBook = async (id: number) => {
   };
 };
 
-// ── books: write ────────────────────────────────────────────────────────────────
 export interface BookWriteInput {
   name?: string;
   thumbnail?: string;
   author?: string;
   image?: string;
   description?: string;
-  // Per-book T&C → ws_book.terms_and_conditions. The admin form has always sent
-  // this; before 2026-08-18 there was no column, so it was silently discarded.
+  // Per-book T&C → ws_book.terms_and_conditions.
   termsAndConditions?: string | null;
   demoUrl?: string;
   demoFileName?: string | null;
@@ -208,7 +188,7 @@ export interface BookWriteInput {
   examCountdownCategoryIds?: any;
 }
 
-// ws_book NOT-NULL columns with no DB default → write-time sentinels.
+// ws_book NOT NULL columns with no DB default → write-time sentinels.
 const SENTINEL = { name: "", thumbnail: " ", pages: 0, dynamic_link: "", weight: 0, shipping_price: 0, order_by: 0 };
 
 export const createBook = async (d: BookWriteInput) => {
@@ -236,7 +216,6 @@ export const createBook = async (d: BookWriteInput) => {
     isCombo: d.isCombo ?? false,
     isTrending: d.isTrending ?? false,
     active: d.status ?? true,
-    // C6: store the attached countdown/category SQL ids as JSON int-arrays.
     examCountdownIds: parseIdArray(d.examCountdownIds),
     examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
     created_at: now,
@@ -272,8 +251,8 @@ export const updateBook = async (id: number, d: BookWriteInput): Promise<ReturnT
   if (d.isCombo !== undefined) data.isCombo = d.isCombo;
   if (d.isTrending !== undefined) data.isTrending = d.isTrending;
   if (d.status !== undefined) data.active = d.status;
-  // C6: only persist the JSON int-arrays when the payload includes them, so an
-  // unrelated update doesn't wipe the stored countdown attachments.
+  // Only persist when the payload includes them, so an unrelated update doesn't wipe
+  // the stored countdown attachments.
   if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
   const updated = await repo.update(id, data);
@@ -309,12 +288,8 @@ export const reorderBooks = async (orders: Array<{ id: string; orderBy: number }
   );
 };
 
-// ── orders: line items ─────────────────────────────────────────────────────────
-// Legacy book orders keep their line items in the `order_items` JSON column;
-// only orders created by the migrated book-order WRITE path have child
-// ws_book_order_item rows. So we PREFER child rows and fall back to the JSON
-// snapshot (the authoritative source for legacy orders) — matching the Mongo
-// embedded items[] contract.
+// Legacy book orders keep line items in the `order_items` JSON column; only newer
+// orders have ws_book_order_item rows. Prefer child rows, fall back to the JSON snapshot.
 type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number; shippingPrice: number };
 
 const itemsFromChildRows = (rows: any[]): OrderItemShape[] =>
@@ -349,21 +324,18 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
     name: it.name ?? book?.name ?? null,
     qty: it.qty,
     price: it.price,
-    // PER-UNIT shipping charge, same basis as the sibling `price` — 0 when the
-    // order qualified for free shipping (the waiver is baked into the stored
-    // value at checkout) or the legacy JSON snapshot carried none. The report
-    // renders one row per line, so the order-level sum on the parent row cannot
-    // stand in for this: painting it onto every line multiply-counts shipping on
-    // any multi-book order. Matches what the export already emits per line, and
-    // what the customer-facing toMyItemDto has always returned.
+    // Per-unit shipping, same basis as `price`; 0 when the order qualified for free
+    // shipping (waiver baked in at checkout) or the legacy JSON carried none. The report
+    // renders one row per line, so the order-level sum can't stand in: it would
+    // multiply-count shipping on multi-book orders. Matches the export and toMyItemDto.
     shippingPrice: it.shippingPrice ?? 0,
-    // Per-book unit weight (from the hydrated book row); null when unknown.
+    // Per-book unit weight; null when unknown.
     weight: book?.weight ?? null,
   };
 };
 
-// Shared query contract for the orders list + its CSV/Excel exports, so all three
-// honor the identical param mapping (minus page/limit on the exports).
+// Shared query contract for the orders list + its CSV/Excel exports (exports ignore
+// page/limit).
 export interface OrderReportQuery {
   customerId?: string;
   bookId?: string;
@@ -375,18 +347,16 @@ export interface OrderReportQuery {
   sortOrder?: string;
 }
 
-// Shared filter resolution for the orders list + its exports. Returns null when a
-// bookId filter matched no orders (force empty result, short-circuit before the
-// expensive read). `search` is resolved cross-table (customer name/phone/email +
-// book name on items) up front; receiptId is matched in-query (LIKE).
+// Shared filter resolution for the orders list + exports. Returns null when a bookId
+// filter matched no orders (short-circuit before the expensive read). `search` is
+// resolved cross-table up front; receiptId is matched in-query (LIKE).
 const resolveOrderOpts = async (q: OrderReportQuery) => {
   const customerId = q.customerId ? parseBookId(q.customerId) ?? undefined : undefined;
   const state = q.state ? parseBookId(q.state) ?? undefined : undefined;
   const fromDate = parseDayBound(q.fromDate, false);
   const toDate = parseDayBound(q.toDate, true);
 
-  // Optional server-side bookId filter: restrict to orders containing that book.
-  // Resolve the matching order keys up front; none → no orders, short-circuit.
+  // Optional bookId filter: resolve matching order keys up front; none → short-circuit.
   let bookOrderKeysIn: string[] | undefined;
   if (q.bookId) {
     const bookId = parseBookId(q.bookId);
@@ -404,7 +374,7 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
 
   return {
     customerId,
-    // Report is paid (verified) orders only — no status filter.
+    // Report is paid (verified) orders only.
     status: BookOrderStatus.VERIFIED,
     state,
     fromDate,
@@ -418,8 +388,8 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
   };
 };
 
-// An order row hydrated with its resolved line items, the referenced book map and
-// the derived report totals. Shared intermediate for the list DTO + the export.
+// Order row + resolved line items, book map and derived report totals; shared by the
+// list DTO and the export.
 export type EnrichedOrder = {
   row: any;
   lineItems: OrderItemShape[];
@@ -428,8 +398,7 @@ export type EnrichedOrder = {
   shippingPrice: number | null;
 };
 
-// Resolve each order's line items (child rows preferred, else order_items JSON),
-// hydrate the referenced books in one query, and derive the report totals.
+// Line items (child rows preferred, else JSON), books hydrated in one query, report totals derived.
 export const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
   const childRows = await repo.findOrderItems(rows.map((r) => r.receiptId));
   const childByKey = new Map<string, any[]>();
@@ -444,16 +413,13 @@ export const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
     itemsByOrder.set(r.id, child?.length ? itemsFromChildRows(child) : itemsFromJson(r.orderItems));
   }
 
-  // Hydrate all referenced book ids in one query.
   const books = await loadBooks([...itemsByOrder.values()].flat());
 
   return rows.map((r) => {
     const lineItems = itemsByOrder.get(r.id) ?? [];
-    // Derive report totals from the line items: total weight = Σ(unit weight × qty)
-    // over books with a known weight; shipping price = Σ(unit shipping × qty).
-    // Both scale by qty because both stored values are PER UNIT — this is the
-    // total shipping actually charged on the order, the figure that reconciles
-    // against ws_book_order.amount (= Σ (price + shipping) × qty at checkout).
+    // Both stored values are per unit, so both scale by qty: total weight = Σ(unit weight
+    // × qty) over books with a known weight; shipping = Σ(unit shipping × qty), which
+    // reconciles against ws_book_order.amount (= Σ (price + shipping) × qty at checkout).
     let totalWeight = 0;
     let anyWeight = false;
     let shippingPrice = 0;
@@ -480,7 +446,7 @@ const toOrderListDto = ({ row: r, lineItems, books, totalWeight, shippingPrice }
   trackingId: r.trackingId != null ? String(r.trackingId) : null,
   totalWeight,
   shippingPrice,
-  // Razorpay identifiers; empty gateway id (non-razorpay order) → null.
+  // Empty gateway id (non-razorpay order) → null.
   razorpayOrderId: r.gatewayOrderId ? r.gatewayOrderId : null,
   razorpayPaymentId: r.gatewayPaymentId ?? null,
   items: lineItems.map((it) => toOrderItemDto(it, books)),
@@ -501,14 +467,10 @@ export const listOrders = async (q: OrderReportQuery & { page: number; limit: nu
   return { items: enriched.map(toOrderListDto), total };
 };
 
-// ── orders: CSV / Excel export ───────────────────────────────────────────────
-// Entire filtered set (no pagination) and NO row cap — keyset-paged (id DESC, no deep
-// OFFSET), enriched per batch (lakhs OK). One export ROW per book LINE — each order's
-// items[] is flattened, repeating the order-level fields, to mirror the on-screen table.
+// Exports cover the entire filtered set with no row cap, keyset-paged (no deep OFFSET)
+// and enriched per batch. One row per book line, repeating order-level fields like
+// the on-screen table.
 const ORDERS_EXPORT_BATCH = 5000;
-
-// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
-// — unified with the Subscription / Test Series exports (was raw UTC ISO).
 
 type OrderExportRow = {
   orderDate: string;
@@ -532,7 +494,6 @@ type OrderExportRow = {
   status: string;
 };
 
-// Flatten one enriched batch of orders into export ROWS (one per book line).
 const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrders>>): OrderExportRow[] => {
   const out: OrderExportRow[] = [];
   for (const e of enriched) {
@@ -568,8 +529,7 @@ const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrd
         price: it.price,
         shippingPrice: it.shippingPrice ?? "",
         qty: it.qty,
-        // (unit price + unit shipping) × qty — the same arithmetic checkout used
-        // to build ws_book_order.amount, so this column now sums back to it.
+        // Same arithmetic checkout used for ws_book_order.amount, so this column sums back to it.
         totalPrice: (it.price + (it.shippingPrice ?? 0)) * it.qty,
         weight: bk?.weight ?? "",
       });
@@ -578,8 +538,7 @@ const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrd
   return out;
 };
 
-// Walk the whole filtered set in keyset batches (no cap); yields flattened export
-// rows per batch. `opts` is the resolved order filter (caller handles the empty case).
+// Walks the whole filtered set in keyset batches; the caller handles the empty case.
 async function* iterateOrderExportRows(opts: NonNullable<Awaited<ReturnType<typeof resolveOrderOpts>>>) {
   // Tracked orders first (tracking_id ASC), then the untracked tail (id ASC).
   let cursor: OrderExportCursor = { untracked: false };
@@ -595,7 +554,7 @@ async function* iterateOrderExportRows(opts: NonNullable<Awaited<ReturnType<type
   }
 }
 
-// Column order matches the on-screen orders table (19 cols, one row per book line).
+// Column order matches the on-screen orders table (one row per book line).
 const ORDER_EXPORT_COLUMNS: { header: string; get: (r: OrderExportRow) => string | number }[] = [
   { header: "Order Date", get: (r) => r.orderDate },
   { header: "Tracking ID", get: (r) => r.trackingId },
@@ -653,7 +612,7 @@ export const buildOrdersXlsx = async (q: OrderReportQuery): Promise<Buffer> => {
   return Buffer.concat(chunks);
 };
 
-// Streamed export source (async job path) — same rows/columns as the sync builders.
+// Streamed export source (async job path); same rows/columns as the sync builders.
 export async function orderExportSource(q: OrderReportQuery): Promise<ReportSource> {
   const opts = await resolveOrderOpts(q);
   return {
@@ -670,7 +629,6 @@ export async function orderExportSource(q: OrderReportQuery): Promise<ReportSour
   };
 }
 
-/** Batch-load the books referenced by a set of line items, keyed by id. */
 const loadBooks = async (items: OrderItemShape[]): Promise<Map<number, any>> => {
   const ids = [...new Set(items.map((i) => i.bookId).filter((id): id is number => id != null))];
   const rows = await repo.findBooksByIds(ids);
@@ -700,8 +658,7 @@ export const getOrder = async (id: number) => {
   };
 };
 
-// ── book settings (ws_book_setting; single 'default' config row) ──────────────
-// Mirrors the Mongo BookSetting doc shape.
+// Single 'default' row in ws_book_setting.
 const toBookSettingDto = (r: any) => ({
   _id: String(r.id),
   key: r.settingKey,
@@ -713,6 +670,7 @@ const toBookSettingDto = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
+// Global book settings singleton; the row is created on first read.
 export const getBookSettings = async () => {
   let row = await prisma.bookSetting.findFirst({ where: { settingKey: "default" } });
   if (!row) {

@@ -1,3 +1,4 @@
+// Rank predictor storage: private Spaces keys, upload and signed URLs for rank PDFs.
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { DO_BUCKET, s3Config } from "../middlewares/upload";
@@ -38,6 +39,7 @@ export const getSignedRankPdfUrl = (
 ): Promise<string> =>
   getSignedUrl(client, new GetObjectCommand({ Bucket: DO_BUCKET, Key: key }), { expiresIn });
 
+// Best-effort: delete errors are swallowed.
 export const deleteRankPdf = async (key: string): Promise<void> => {
   try {
     await client.send(new DeleteObjectCommand({ Bucket: DO_BUCKET, Key: key }));

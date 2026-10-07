@@ -1,3 +1,4 @@
+// Client profile: profile, picture and device-token logic behind a Redis profile cache.
 import logger from "../../utils/logger";
 import { redisClient } from "../../config/redis";
 import type { GoalSelectionInput } from "../../utils/goalSelection";
@@ -18,9 +19,8 @@ import {
 
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
 const PROFILE_CACHE_PREFIX = "cache:client:profile:";
-const PROFILE_CACHE_TTL_SECONDS = 60 * 5; // 5m
+const PROFILE_CACHE_TTL_SECONDS = 60 * 5;
 
-/** Invalidate the per-customer profile + selected-goals caches (best-effort). */
 async function invalidateProfileCaches(customerId: string, traceId?: string) {
   try {
     await redisClient.del(
@@ -59,6 +59,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
   return result;
 }
 
+// Profile read through a 5-minute Redis cache; profile writes invalidate it.
 export async function getCustomerProfile(customerId: string, traceId?: string) {
   logger.info("getCustomerProfile service invoked", { traceId, customerId });
 
@@ -91,6 +92,7 @@ interface IProfilePictureUpsertData {
   image: string;
 }
 
+// Replace the picture; the old file is deleted from Spaces in the background.
 export async function upsertCustomerProfilePicture(
   customerId: string,
   data: IProfilePictureUpsertData,
@@ -113,6 +115,7 @@ export async function upsertCustomerProfilePicture(
   return { ok: true, message: result.message, data: { profilePicture: result.data.profilePicture } };
 }
 
+// Delete the account, then revoke its tokens and clear the session cache.
 export async function deleteCustomerAccount(customerId: string, traceId?: string) {
   logger.info("deleteCustomerAccount service invoked", { traceId, customerId });
 
@@ -120,7 +123,7 @@ export async function deleteCustomerAccount(customerId: string, traceId?: string
   if (!cid) return { ok: false, message: "Customer not found." };
   const result = await svcDeleteAccount(cid);
   if (!result.ok) return result;
-  // Revoke tokens (MySQL ws_customer_access_token) + clear session cache.
+  // Revoke access tokens + clear the session cache.
   await customerAuthRepository.deactivateTokens(cid);
   await invalidateCustomerGate(cid);
   try {

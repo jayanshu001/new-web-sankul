@@ -1,3 +1,4 @@
+// Admin careers: HTTP handlers for job applications (list, detail, status).
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";

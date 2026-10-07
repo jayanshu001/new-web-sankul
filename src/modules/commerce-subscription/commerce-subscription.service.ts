@@ -1,37 +1,13 @@
-/**
- * Commerce · Subscription (READ) service — dual-path (MySQL/Prisma ↔ Mongo).
- *
- * Module key: `commerce-subscription` (Phase 3a, READ-ONLY). Table:
- * `ws_package_course_subscription` (2 rows) — the **entitlement source of
- * truth**. Exposes purpose-built entitlement queries (active-ownership checks,
- * per-customer listings, active-owner counts) that mirror the dominant Mongo
- * consumer predicates 1:1.
- *
- * WRITES (create/extend on payment) are Phase 3b — NOT here.
- *
- * Built dual-path but kept flag OFF: subscription rows are joined by int-id
- * catalog (package/course/plan) and the int customer id-space, and read by
- * still-Mongo consumers (lecture/progress/dashboard/purchase-history). It flips
- * together with catalog + the rest of 3a in one consistent int id-space (the
- * commerce-wave flip). Verify via live-DB tsx, not HTTP, while OFF.
- *
- * C3 seam: `customerId` is an INT here (SQL `customer_id` is int). Callers
- * resolve any ObjectId string → int customer at this boundary.
- */
+// Package/course subscriptions: entitlement checks, lookups and counts.
 import { commerceSubscriptionRepository as repo } from "./commerce-subscription.repository";
 import { toSubscriptionDto } from "./commerce-subscription.transformer";
 import type { SubscriptionDto } from "./commerce-subscription.types";
 
-
-/** Whether the subscription read-path is served from MySQL. */
-
-/** Parse a string id to a positive int, else null. */
 export const parseSubscriptionId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Does this customer hold an ACTIVE, unexpired PACKAGE entitlement? */
 export const hasActivePackageSubscription = async (
   customerId: number,
   packageId: number,
@@ -41,7 +17,6 @@ export const hasActivePackageSubscription = async (
   return row !== null;
 };
 
-/** The active package entitlement row, or null. */
 export const getActivePackageSubscription = async (
   customerId: number,
   packageId: number,
@@ -52,15 +27,9 @@ export const getActivePackageSubscription = async (
 };
 
 /**
- * Per-package entitlement state for ONE customer over a PAGE of packages, in a
- * single query — `packageId → endAt` for every active package subscription.
- *
- * Use this on listings instead of calling `getActivePackageSubscription` per row
- * (that is 1 query per card). Presence in the Map is `isPurchased`; the value
- * feeds `computeDaysLeft`. A `null` value means an active row with no expiry.
- *
- * `customerId` may be null (anonymous / no bearer) → empty Map, so callers need
- * no separate branch.
+ * `packageId → endAt` for every active package subscription, in one query; use
+ * on listings instead of a per-row lookup. Presence = `isPurchased`; a `null`
+ * value is an active row with no expiry. A null customer yields an empty Map.
  */
 export const getActivePackageSubMap = async (
   customerId: number | null,
@@ -70,23 +39,18 @@ export const getActivePackageSubMap = async (
   const map = new Map<number, Date | null>();
   if (customerId == null || !packageIds.length) return map;
   const rows = await repo.findActivePackageSubsForPackages(customerId, packageIds, now);
-  // Rows arrive endAt ASC, so a later row overwrites an earlier one and the
-  // latest-expiring subscription wins — the same row `findFirst` + `endAt desc`
-  // would have picked for a single package.
+  // Rows arrive endAt ASC, so the latest-expiring subscription wins.
   for (const r of rows) {
     if (r.packageId != null) map.set(r.packageId, r.endAt ?? null);
   }
   return map;
 };
 
-// ── single / listings ───────────────────────────────────────────────────────
-
 export const findSubscriptionById = async (id: number): Promise<SubscriptionDto | null> => {
   const row = await repo.findById(id);
   return row ? toSubscriptionDto(row) : null;
 };
 
-/** Active (status + unexpired) subscriptions for a customer, newest first. */
 export const listActiveSubscriptionsByCustomer = async (
   customerId: number,
   now: Date = new Date()
@@ -95,12 +59,7 @@ export const listActiveSubscriptionsByCustomer = async (
   return rows.map(toSubscriptionDto);
 };
 
-/**
- * Active (incl. lifetime) subscriptions for a customer matching any of the
- * given courses or plans — for computing per-course purchase state in listings.
- * Returns minimal rows: `{courseId, planId, endAt}` (ids as numbers, the int
- * id-space). Empty input short-circuits to `[]`.
- */
+/** Active (incl. lifetime) subscriptions matching any of the given courses or plans. */
 export const listActiveForCoursesOrPlans = async (
   customerId: number,
   courseIds: number[],
@@ -111,11 +70,7 @@ export const listActiveForCoursesOrPlans = async (
   return repo.listActiveForCoursesOrPlans(customerId, courseIds, planIds, now);
 };
 
-/**
- * Admin date-edit: set a subscription's expiry (`endAt`) and return the updated
- * row as a DTO. Returns null when the id doesn't exist (→ 404 at the controller).
- * Mirrors `findByIdAndUpdate(id, {$set:{endAt}}, {new:true})`.
- */
+/** Returns null when the id doesn't exist. */
 export const updateSubscriptionEndAt = async (
   id: number,
   endAt: Date
@@ -126,15 +81,11 @@ export const updateSubscriptionEndAt = async (
   return toSubscriptionDto(row);
 };
 
-// ── active-owner counts ──────────────────────────────────────────────────────
-
-/** Count active owners of a package (SQL `package_id` — the actual package). */
 export const countActiveByPackage = async (
   packageId: number,
   now: Date = new Date()
 ): Promise<number> => repo.countActiveByPackage(packageId, now);
 
-/** Count active owners of a course. */
 export const countActiveByCourse = async (
   courseId: number,
   now: Date = new Date()

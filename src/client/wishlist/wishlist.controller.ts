@@ -1,3 +1,4 @@
+// Client wishlist: list, add, remove and check handlers.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -12,7 +13,6 @@ import {
   checkWishlistMysql,
 } from "../../modules/client-wishlist/client-wishlist.service";
 
-// GET /api/v1/client/wishlist
 export const listWishlist = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -23,7 +23,6 @@ export const listWishlist = async (req: Request, res: Response) => {
     const { itemType } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // ─── SQL branch (int id-space) — gated on `client-wishlist` ───
     const cidNum = parseWlId(String(userId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     const typeFilter = itemType && isWlType(itemType) ? itemType : null;
@@ -36,7 +35,7 @@ export const listWishlist = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/wishlist
+// Idempotent: an existing entry answers 200 "Already in wishlist."
 export const addToWishlist = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -45,7 +44,6 @@ export const addToWishlist = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("addToWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ─── SQL branch (int id-space) — itemId is an int, not 24-hex ───
     const cidNum = parseWlId(String(userId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     const itemType = String(req.body?.itemType ?? "");
@@ -69,7 +67,6 @@ export const addToWishlist = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/wishlist/:itemType/:itemId
 export const removeFromWishlist = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -80,7 +77,6 @@ export const removeFromWishlist = async (req: Request, res: Response) => {
     if (!userId) { logger.warn("removeFromWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     if (!isWlType(itemType)) { logger.warn("removeFromWishlist invalid itemType", { traceId, customerId: userId, itemType }); return res.status(400).json({ success: false, message: "Invalid itemType." }); }
 
-    // ─── SQL branch (int id-space) ───
     const cidNum = parseWlId(String(userId));
     const itemIdNum = parseWlId(String(itemId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
@@ -95,7 +91,6 @@ export const removeFromWishlist = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/wishlist/check/:itemType/:itemId
 export const checkWishlist = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -105,7 +100,6 @@ export const checkWishlist = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("checkWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ─── SQL branch (int id-space) ───
     const cidNum = parseWlId(String(userId));
     const itemIdNum = parseWlId(String(itemId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });

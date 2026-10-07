@@ -1,4 +1,4 @@
-// src/middlewares/idempotency.ts
+// Idempotency: Idempotency-Key replay/conflict guard for mutating endpoints.
 import { Request, Response, NextFunction, RequestHandler } from "express";
 import crypto from "crypto";
 import { redisClient, isRedisReady } from "../config/redis";
@@ -6,21 +6,10 @@ import { failure } from "../utils/httpResponse";
 import logger from "../utils/logger";
 
 /**
- * Idempotency middleware — for mutating endpoints (payments, referral credits,
- * order creation) where a retried client request must not double-apply.
- *
- * Contract:
- *   - Client sends `Idempotency-Key: <opaque string>` header on POST/PUT/PATCH.
- *   - First request: middleware stores a fingerprint + reserves the key.
- *     The wrapped handler runs; its response body is cached under the key.
- *   - Replay with same key + same payload: previously-cached response is
- *     replayed verbatim (same status + body).
- *   - Replay with same key + DIFFERENT payload: 409 conflict.
- *   - Missing key on a configured route: 400.
- *   - Redis unavailable: fail-open with a warn (do not block writes on cache).
- *
- * Storage: `idem:{scope}:{key}` -> JSON { fingerprint, status, body, ts }
- * TTL: 24h default.
+ * Idempotency for mutating endpoints (payments, referral credits, orders) keyed by the
+ * `Idempotency-Key` header. Same key + same payload replays the cached status + body;
+ * same key + different payload is 409; missing key on a required route is 400. Redis
+ * unavailable: fail-open with a warning. Stored at `idem:{scope}:{key}`, 24h TTL by default.
  */
 export interface IdempotencyOptions {
   scope: string; // logical namespace, e.g. "referral", "payment"
@@ -92,7 +81,6 @@ export const idempotency = (opts: IdempotencyOptions): RequestHandler => {
       return next();
     }
 
-    // Wrap res.json to capture and persist the first successful response.
     const originalJson = res.json.bind(res);
     (res as any).json = (body: any) => {
       const status = res.statusCode;

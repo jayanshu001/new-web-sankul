@@ -1,3 +1,4 @@
+// Admin administrators: Zod request schemas.
 import { z } from "zod";
 import { AdminRole } from "../../shared/enums";
 
@@ -6,7 +7,7 @@ const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 const roleValue = z.union(
   [
     z.enum([AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.EDITOR]),
-    // Mongo role id (24-hex ObjectId) OR MySQL spatie role id (numeric).
+    // 24-hex legacy role id or numeric spatie role id.
     z.string().regex(objectIdRegex, "Invalid role id"),
     z.string().regex(/^[1-9]\d*$/, "Invalid role id"),
   ],

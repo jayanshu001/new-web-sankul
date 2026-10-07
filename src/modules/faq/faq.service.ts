@@ -1,3 +1,4 @@
+// FAQs: listing, search, CRUD and the fixed FAQ type list.
 import { faqRepository } from "./faq.repository";
 import { toFaqDto, toFaqTypeDto } from "./faq.transformer";
 import { matchesAllTokens } from "../../utils/searchFilter";
@@ -18,41 +19,30 @@ export const parseFaqId = (id: string): number | null => {
 };
 
 /**
- * Normalise a caller-supplied FAQ type filter.
+ * Case- and space-insensitive, since the UI shows the label ("Referral") while
+ * the slug is lowercase.
  *
- * Case- and space-insensitive: the admin UI shows the LABEL ("Referral") while the
- * slug is lowercase ("referral"), so `?type=Referral` is a natural and very likely
- * mistake. It resolves rather than silently failing.
- *
- * Returns `{ ok: false }` for a value that is not a real category. That case MUST
- * NOT be treated as "no filter": dropping it returns general + referral mixed
- * together, so a typo in the app reads as "the referral sheet has extra content"
- * instead of an error. Callers turn it into a 422 — the same rule
- * `/client/subscriptions/access` applies to a bad `kinds`.
- *
- * `ws_faq.type` is a MySQL `enum('general','referral')`, so FAQ_TYPES cannot drift
- * from the database without a schema change.
+ * `{ ok: false }` (unknown category) must not be treated as "no filter": that
+ * would mix all types and hide the typo. Callers return 422, as
+ * `/client/subscriptions/access` does for a bad `kinds`.
  */
 export const resolveFaqTypeFilter = (
   typeId?: string
 ): { ok: true; type?: FaqCategory } | { ok: false } => {
   const raw = (typeId ?? "").trim();
-  if (!raw) return { ok: true, type: undefined }; // absent → all types, unchanged
+  if (!raw) return { ok: true, type: undefined }; // absent → all types
   const match = (FAQ_TYPES as readonly string[]).find(
     (t) => t.toLowerCase() === raw.toLowerCase()
   );
   return match ? { ok: true, type: match as FaqCategory } : { ok: false };
 };
 
-/** Human-readable list for the 422 message. */
 export const FAQ_TYPE_FILTER_MESSAGE = `Invalid \`type\`. Allowed: ${FAQ_TYPES.join(", ")}.`;
 
 const resolveCategoryFilter = (typeId?: string): FaqCategory | undefined => {
   const r = resolveFaqTypeFilter(typeId);
   return r.ok ? r.type : undefined;
 };
-
-// ─── FAQ CRUD ────────────────────────────────────────────────────────────────
 
 export const listFaqs = async (opts?: {
   typeId?: string;
@@ -62,10 +52,7 @@ export const listFaqs = async (opts?: {
   return rows.map(toFaqDto);
 };
 
-/**
- * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
- * when provided (absent → full filtered list). Always returns the total count.
- */
+/** `skip`/`take` are opt-in; without them the full filtered list is returned. */
 export const listFaqsPaged = async (q: {
   typeId?: string;
   search?: string;
@@ -83,11 +70,7 @@ export const listFaqsPaged = async (q: {
   return { items: rows.map(toFaqDto), total };
 };
 
-/**
- * Client list: created_at asc ordering, optional type filter + `?search=`
- * (question/answer) + pagination. Reuses the repository page/count helpers over
- * the identical where.
- */
+// Client list: oldest first, opt-in paging.
 export const listFaqsClientPaged = async (q: {
   typeId?: string;
   search?: string;
@@ -155,8 +138,6 @@ export const countFaqsByCategory = async (
   return faqRepository.countByType(type);
 };
 
-// ─── FAQ types (synthetic list on MySQL) ─────────────────────────────────────
-
 export const listFaqTypes = async (): Promise<FaqTypeDto[]> => {
   return FAQ_TYPES.map((t) => ({
     ...toFaqTypeDto(t),
@@ -165,10 +146,7 @@ export const listFaqTypes = async (): Promise<FaqTypeDto[]> => {
   }));
 };
 
-/**
- * Client faq-types list with `?search=` (title) + pagination. The catalogue is
- * a fixed synthetic list (no table), so search/paging apply in memory.
- */
+/** FAQ types are a fixed list (no table), so search/paging apply in memory. */
 export const listFaqTypesClientPaged = async (q: {
   search?: string;
   skip?: number;

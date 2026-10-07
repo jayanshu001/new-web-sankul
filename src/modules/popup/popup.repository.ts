@@ -1,3 +1,4 @@
+// Popups: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { PopupCreateInput, PopupUpdateInput } from "./popup.types";
@@ -22,11 +23,10 @@ const buildPopupWhere = (opts: PopupListOpts): Record<string, unknown> =>
   buildPrismaPrefixSearch(opts.search, ["title", "description", "discount", "promocode"]) ?? {};
 
 export const popupRepository = {
-  /** Admin list — newest first (matches Mongo default createdAt desc). */
+  /** Newest first. */
   findMany: () =>
     prisma.popupNotifications.findMany({ orderBy: { created_at: "desc" } }),
 
-  /** Admin paginated + search list. */
   findPage: (opts: PopupListOpts) =>
     prisma.popupNotifications.findMany({
       where: buildPopupWhere(opts),
@@ -41,10 +41,6 @@ export const popupRepository = {
   findById: (id: number) =>
     prisma.popupNotifications.findUnique({ where: { id } }),
 
-  /**
-   * Client active popup: status:true AND promo_expire_at > now, newest first.
-   * Returns the single most recent match (or null).
-   */
   findActive: (now: Date) =>
     prisma.popupNotifications.findFirst({
       where: { status: true, promo_expire_at: { gt: now } },

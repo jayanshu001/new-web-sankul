@@ -1,3 +1,4 @@
+// Promoter subscriptions: HTTP handlers for attributed subscriptions and the sales report.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -7,7 +8,6 @@ import {
 } from "../../modules/promoter-data/promoter-data.service";
 import { promoterDataRepository } from "../../modules/promoter-data/promoter-data.repository";
 
-// GET /api/v1/promoter/subscriptions — course/package + ebook subscriptions attributed to this promoter
 export const listMySubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;
@@ -43,7 +43,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/promoter/subscriptions/report — aggregate (by course/package/month)
+// Count, revenue and commission grouped by course and by month.
 export const subscriptionReport = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;

@@ -1,19 +1,9 @@
+// Book orders: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
 import type { CreateOrderItemInput } from "./book-order.types";
 
-/**
- * Prisma persistence for the book · order WRITE branch (Phase 3b, 5 tables). See
- * book-order.types.ts + docs/migration/BOOK_ORDER_SCOPE.md.
- *
- * order_id is the VARCHAR business key (child tables + tracking FK on it); the
- * int `id` is the PK. customer_id is INT (no VARCHAR split). The AWB is allocated
- * by inserting a ws_book_tracking row (bigint AUTO_INCREMENT).
- */
 export const bookOrderRepository = {
-  // ── cart reads (create-order) ──────────────────────────────────────────────
-
-  /** The customer's active cart with its item rows + book prices. */
   findActiveCart: (customerId: number) =>
     prisma.bookCart.findFirst({
       where: { userId: customerId, active: true },
@@ -21,32 +11,21 @@ export const bookOrderRepository = {
       orderBy: { id: "desc" },
     }),
 
-  /** Active books by id (availability + pricing for the order snapshot). */
   findBooksByIds: (ids: number[]) =>
     prisma.book.findMany({ where: { id: { in: ids }, active: true } }),
-
-  // ── owner lookup (verify) ──────────────────────────────────────────────────
 
   findOrderByRazorpay: (razorpayOrderId: string, customerId: number) =>
     prisma.bookOrder.findFirst({
       where: { gatewayOrderId: razorpayOrderId, userId: customerId },
     }),
 
-  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
+  /** Webhook context: the payload carries no customer. */
   findOrderByRazorpayOnly: (razorpayOrderId: string) =>
     prisma.bookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
 
-  /** Line items for an order (by VARCHAR business key) — for the DTO. */
   findOrderItems: (orderKey: string) =>
     prisma.bookOrderItem.findMany({ where: { order_id: orderKey } }),
 
-  // ── customer-facing order views (listMyOrders / getMyOrderById) ────────────
-
-  /**
-   * A page of the customer's own orders (newest first) + the matching total.
-   * Mirrors `BookOrder.find({customerId,[status]}).sort({createdAt:-1})` +
-   * `countDocuments`.
-   */
   findMyOrders: (input: {
     customerId: number;
     status?: string;
@@ -68,30 +47,21 @@ export const bookOrderRepository = {
     ]);
   },
 
-  /** Line items for a set of order keys (one query for the whole page). */
   findOrderItemsByKeys: (orderKeys: string[]) =>
     prisma.bookOrderItem.findMany({ where: { order_id: { in: orderKeys } } }),
 
-  /** A single owned order with its populated shipping — for the detail view. */
   findMyOrderById: (orderId: number, customerId: number) =>
     prisma.bookOrder.findFirst({
       where: { id: orderId, userId: customerId },
       include: { shipping: true },
     }),
 
-  /** Line items for one order, with the populated Book (detail view). */
   findOrderItemsWithBook: (orderKey: string) =>
     prisma.bookOrderItem.findMany({
       where: { order_id: orderKey },
       include: { Book: true },
     }),
 
-  // ── cart/purchase state reads (catalog-book composition) ───────────────────
-
-  /**
-   * The customer's active cart (id + item rows) — for the listing's `cartId` +
-   * per-book `qty`. Mirrors `BookCart.findOne({customerId, status:true})`.
-   */
   findActiveCartState: (customerId: number) =>
     prisma.bookCart.findFirst({
       where: { userId: customerId, active: true },
@@ -99,11 +69,7 @@ export const bookOrderRepository = {
       orderBy: { id: "desc" },
     }),
 
-  /**
-   * Distinct book ids the customer has PURCHASED — any order in a fulfilled
-   * status (verified/shipped/delivered), joined to its item rows. Mirrors
-   * `BookOrder.distinct("items.bookId", {customerId, status:{$in:[...]}})`.
-   */
+  /** Distinct book ids from the customer's orders in a fulfilled status (verified/shipped/delivered). */
   findPurchasedBookIds: async (customerId: number): Promise<number[]> => {
     const orders = await prisma.bookOrder.findMany({
       where: { userId: customerId, status: { in: ["verified", "shipped", "delivered"] } },
@@ -116,8 +82,6 @@ export const bookOrderRepository = {
     });
     return [...new Set(items.map((i) => i.bookId).filter((b): b is number => b != null))];
   },
-
-  // ── write: create the pending order + its item rows (ONE txn) ──────────────
 
   createPendingOrder: (input: {
     orderKey: string;
@@ -132,9 +96,7 @@ export const bookOrderRepository = {
     userIp?: string | null;
   }) =>
     prisma.$transaction(async (tx) => {
-      // ws_book_order has no DB default / Prisma @default on created_at/updated_at,
-      // so they must be set explicitly (the legacy Laravel app stamped them; the
-      // SQL path was leaving them NULL). Stamp both at insert.
+      // ws_book_order has no DB default on created_at/updated_at, so stamp both.
       const now = new Date();
       const order = await tx.bookOrder.create({
         data: {
@@ -169,16 +131,11 @@ export const bookOrderRepository = {
       return order;
     }),
 
-  // ── write: verify fulfillment (ONE txn) ────────────────────────────────────
-
   /**
-   * Transactional book fulfillment. Within one $transaction:
-   *  1. claim the order: pending → verified + gateway_transaction_id
-   *  2. insert a ws_book_tracking row → bigint AUTO_INCREMENT hands out the AWB
-   *  3. stamp tracking_id on the order
-   *  4. deactivate the matching active cart(s) (status=0; cart_item rows kept)
-   * Returns null when the order was not pending (a concurrent /verify or webhook
-   * already fulfilled it) — nothing is written, no second AWB is allocated.
+   * In one transaction: claim the order (pending → verified), insert a
+   * ws_book_tracking row to allocate the AWB, stamp tracking_id on the order, and
+   * deactivate the matching cart. Returns null when the order was no longer
+   * pending; nothing is written and no second AWB is allocated.
    */
   verifyBookTx: (input: {
     orderId: number;
@@ -188,28 +145,23 @@ export const bookOrderRepository = {
     shippingId: number | null;
   }) =>
     prisma.$transaction(async (tx) => {
-      // Claim FIRST, before the AWB insert: only a still-pending order flips. The
-      // loser of a concurrent /verify + webhook matches 0 rows and stops here, so
-      // it never allocates a second AWB (a rolled-back insert would still burn the
-      // AUTO_INCREMENT value) and the parcel ships once.
+      // Claim first: only a still-pending order flips. The loser of a concurrent
+      // /verify + webhook matches 0 rows and stops before the AWB insert (a
+      // rolled-back insert would still burn an AUTO_INCREMENT value), so the parcel
+      // ships once.
       const claim = await tx.bookOrder.updateMany({
         where: { id: input.orderId, status: "pending" },
         data: {
           status: "verified",
-          // Razorpay payment id → gateway_transaction_id (the gateway ref).
-          // The `transaction_id` column that used to receive a duplicate copy of
-          // this same id was dropped 2026-08-18 — nothing ever read it. paid_at
-          // marks when the payment cleared; bump updated_at on this state change.
+          // Razorpay payment id → gateway_transaction_id.
           gatewayPaymentId: input.razorpayPaymentId,
           paidAt: new Date(),
           updatedAt: new Date(),
         },
       });
       if (claim.count === 0) return null;
-      // NOTE: ws_book_tracking.status is varchar(10) — "Order Placed" (12) would
-      // overflow. Store the short code "verified" (matches existing rows' short
-      // statuses like "pending"/"completed"); the DTO synthesizes the human
-      // "Order Placed" display text + history (signed-off D-B3).
+      // ws_book_tracking.status is varchar(10), too short for "Order Placed"; store
+      // the short code and let the DTO synthesize the display text and history.
       const tracking = await tx.bookTracking.create({
         data: { orderId: input.orderKey, status: "verified" },
       });
@@ -217,8 +169,7 @@ export const bookOrderRepository = {
         where: { id: input.orderId },
         data: { trackingId: tracking.tracking_id },
       });
-      // Deactivate the active cart that placed this order (match shipping, like
-      // the Mongo path). cart_item rows are left intact (signed-off D-B2).
+      // Deactivate the cart that placed this order (matched by shipping); cart_item rows are kept.
       const carts = await tx.bookCart.updateMany({
         where: {
           userId: input.customerId,

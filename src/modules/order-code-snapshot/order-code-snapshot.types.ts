@@ -1,41 +1,28 @@
+// Order code snapshot: purchase-time promocode and referral JSON types.
 /**
- * Order · code snapshot types — the purchase-time JSON written into the order
- * `promocode` / `refferalcode` columns.
+ * Purchase-time JSON written into the order `promocode` / `refferalcode` columns.
  *
- * These are NOT free-form DTOs: the legacy V1 shape is a live read contract.
- * `modules/promoter-data` attributes every rupee of promoter commission by
- * JSON-path querying the order column directly:
+ * The legacy shape is a live read contract: `modules/promoter-data` attributes
+ * promoter commission by JSON-path querying the order column directly:
  *
  *   WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
  *   JSON_EXTRACT(o.promocode,'$.promocode')
  *   JSON_EXTRACT(o.promocode,'$.promotedPackageCourseEbook[0].promoterPercentage')
  *
- * so `promoterId`, `promocode` and `promotedPackageCourseEbook[0].promoterPercentage`
- * are load-bearing keys — renaming or flattening any of them silently zeroes the
- * promoter dashboard instead of failing. Keep these shapes byte-compatible with
- * the legacy objects.
- *
- * Field ORDER mirrors the legacy payload so a snapshot diffs cleanly against a
- * pre-migration row. Decimals are strings ("50", "5") because that is how the
- * legacy ORM serialized them and how `CAST(... AS DECIMAL)` in promoter-data
- * expects to read them back.
+ * Renaming or flattening any of those keys silently zeroes the promoter dashboard.
+ * Field order mirrors the legacy payload; decimals are strings ("50", "5") because
+ * `CAST(... AS DECIMAL)` in promoter-data reads them back that way.
  */
 
 /**
  * A plan row as embedded in a snapshot. Nullable int FKs render as 0 (legacy).
  *
- * Serves BOTH plan tables. `ws_package_course_ebook_price` (planKind "price") fills
- * ebookId / courseId / packageId; `ws_live_course_plan` (planKind "livePlan") has no
- * such parent, so those three stay 0 — the same "not this entity" sentinel V1 used —
- * and the parent is carried in the extra `liveCourseId` key.
+ * Price plans fill ebookId / courseId / packageId; live-course and test-series plans
+ * leave them 0 and carry their parent in `liveCourseId` / `testSeriesId`, which are
+ * omitted entirely for price plans (that snapshot must not gain keys).
  *
- * `liveCourseId` is OPTIONAL and is OMITTED entirely for price plans: the
- * package/course/ebook snapshot is a byte-compatible legacy contract and must not
- * gain keys. Live-course snapshots are a new column with no legacy rows to match.
- *
- * ⚠ `duration` is DAYS for a price plan but MONTHS for a live-course plan (see
- * LIVE_COURSE_DESIGN §3). The snapshot preserves the source value verbatim; the unit
- * is implied by which kind of plan it is, exactly as on the live rows.
+ * `duration` is DAYS for a price plan but MONTHS for a live-course plan (see
+ * LIVE_COURSE_DESIGN §3); the value is preserved verbatim.
  */
 export type SnapshotPlan = {
   id: number;
@@ -56,18 +43,13 @@ export type SnapshotPlan = {
 };
 
 /**
- * Which plan table a snapshot's `planId` points at — the same discriminator
- * `ws_promoted_package_course_ebook.plan_kind` uses, and the same three values
- * `promo-code.service` already writes and `promocode.validation` already accepts.
- *
- * ⚠ The three tables SHARE an id space and the link row's `pcb_price_id` FK is
- * declared against ws_package_course_ebook_price regardless of kind, so resolving a
- * live-course or test-series plan id without this discriminator silently returns an
- * unrelated course/package plan (and, worse, ITS promoter percentage).
+ * Which plan table `planId` points at; same values as
+ * `ws_promoted_package_course_ebook.plan_kind`. The tables share an id space, so
+ * resolving a plan id without this returns an unrelated plan (and its promoter percentage).
  */
 export type SnapshotPlanKind = "price" | "livePlan" | "testSeriesPrice";
 
-/** The promoter who owns the promocode (ws_promoter) — snake_case, as in V1. */
+/** snake_case, as in the legacy shape. */
 export type SnapshotPromoter = {
   id: number;
   email: string | null;
@@ -81,13 +63,9 @@ export type SnapshotPromoter = {
 };
 
 /**
- * One promocode→plan link (ws_promoted_package_course_ebook) with its plan
- * expanded under `planId`.
- *
- * ⚠ Only the link for the PURCHASED plan is ever snapshotted, because
- * promoter-data reads `promotedPackageCourseEbook[0].promoterPercentage` at a
- * FIXED index — embedding the promocode's full link list would make the
- * commission rate depend on row order and pay out a different plan's percentage.
+ * One promocode→plan link with its plan expanded under `planId`. Only the purchased
+ * plan's link is snapshotted: promoter-data reads index [0], so embedding the full
+ * link list would make the commission rate depend on row order.
  */
 export type SnapshotPlanLink = {
   id: number;
@@ -100,7 +78,6 @@ export type SnapshotPlanLink = {
   promoterPercentage: string;
 };
 
-/** Snapshot of a real promocode (ws_promocode) → the `promocode` column. */
 export type PromocodeSnapshot = {
   id: number;
   type: string;
@@ -118,13 +95,9 @@ export type PromocodeSnapshot = {
 };
 
 /**
- * Snapshot of a customer referral redemption → the `refferalcode` column. This
- * is the referral PROGRAM row (ws_refferal_program) plus the purchased plan and
- * the referring customer under `promoter`.
- *
- * Note `promoter` here is a CUSTOMER (camelCase fields), not a ws_promoter — the
- * legacy shape overloads the key name. A referral snapshot deliberately carries
- * no `promoterId`, so promoter-data's commission queries never match it.
+ * Referral program row + purchased plan + the referring customer under `promoter`.
+ * Here `promoter` is a CUSTOMER (camelCase fields), not a ws_promoter. A referral
+ * snapshot carries no `promoterId`, so promoter-data's commission queries never match it.
  */
 export type ReferralSnapshot = {
   id: number;
@@ -146,7 +119,6 @@ export type ReferralSnapshot = {
   initialRewardAmount: number;
 };
 
-/** What a create-order path writes into the two code columns. */
 export type OrderCodeSnapshots = {
   promocode: PromocodeSnapshot | null;
   refferalcode: ReferralSnapshot | null;

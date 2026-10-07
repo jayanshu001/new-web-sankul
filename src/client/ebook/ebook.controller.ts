@@ -1,3 +1,4 @@
+// Client ebooks: HTTP handlers for catalog, detail, subscriptions and invoices.
 import { Request, Response } from "express";
 import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
@@ -16,11 +17,9 @@ import type { EBookLanguage } from "@prisma/client";
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-// Legacy Mongo ObjectId shape (24-hex). Retained only to keep the invoice id
-// validation identical to the pre-migration contract; SQL order ids are ints.
+// Accepts legacy 24-hex ids as well as numeric ids.
 const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 
-// GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = (req as any).user?.id;
@@ -30,8 +29,7 @@ export const listEbooks = async (req: Request, res: Response) => {
     const { language } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // Composes catalog-ebook + commerce-price (plans) + commerce-ebook-sub
-    // (entitlement); returns the `{ ebooks: [...] }` contract.
+    
     const base = resolveBase(req);
     const custId = (req as any).user?.id != null ? parseEbookId(String((req as any).user.id)) : null;
     const { ebooks, total } = await listEbooksWithPlans(
@@ -44,11 +42,8 @@ export const listEbooks = async (req: Request, res: Response) => {
       },
       (id) => buildShareUrl("ebooks", id, base)
     );
-    // Slim the client list DTO to the fields the RN app actually reads (see
-    // docs/api-optimization/GET_client_ebooks.md). Drops unused top-level meta +
-    // unused nested plan/detail keys; pagination envelope is untouched.
-    // `isMostPopular` is KEPT — it drives the "Most Popular" plan badge, same as
-    // package/course/live/test-series listings (see plan-popularity module).
+    // Client fields only (see docs/api-optimization/GET_client_ebooks.md). `isMostPopular`
+    // is kept: it drives the "Most Popular" plan badge like the other listings.
     const slimEbooks = (ebooks as any[]).map((e) => ({
       ...omit(e, ["order", "link", "status", "isTrending", "updatedAt", "subscriptionEndAt"]),
       plans: omitList(e.plans, ["ebookId", "status"]),
@@ -62,7 +57,6 @@ export const listEbooks = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/ebooks/subscriptions
 export const listMySubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = (req as any).user?.id || (req as any).user?._id;
@@ -77,8 +71,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, data: { subscriptions: [] }, pagination: buildPagination(0, page, limit) });
     }
 
-    // Active ebook subscriptions (endAt soonest-first) spread into the ebook
-    // DTO + access window. Optional name/author search scopes by ebook.
+    // Active subscriptions (endAt soonest-first); optional name/author search.
     const base = resolveBase(req);
     const { subscriptions, total } = await listMyEbookSubscriptions(
       custId,
@@ -94,7 +87,6 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/ebooks/:id
 export const getEbookDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -102,8 +94,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
   logger.info("getEbookDetail invoked", { traceId, path: req.originalUrl, customerId, ebookId: id });
 
   try {
-    // A MySQL ebook id is an int. Ebooks aren't in the promocode appliesTo
-    // model, so the availablePromoCode list is always empty.
+    
     const ebookId = parseEbookId(id);
     if (ebookId == null) {
       logger.warn("getEbookDetail invalid id (mysql)", { traceId, customerId, ebookId: id });
@@ -120,9 +111,8 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Ebook not found." });
     }
     logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });
-    // availablePromoCode is always [] for ebooks (not in the promocode appliesTo
-    // model) and `isNew` is unused on the detail screen — drop both (see
-    // docs/api-optimization/GET_client_ebooks_id.md).
+    // Ebooks aren't in the promocode appliesTo model, so availablePromoCode is always []
+    // and dropped, as is unused `isNew` (see docs/api-optimization/GET_client_ebooks_id.md).
     return res.status(200).json({
       success: true,
       data: { ebook: omit(ebookData as any, ["isNew"]) },
@@ -133,7 +123,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/ebooks/orders/:orderId/invoice
+// Streams the ebook order receipt PDF (404 for unknown or unpaid orders).
 export const getEbookOrderInvoice = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = (req as any).user?.id;
@@ -146,8 +136,7 @@ export const getEbookOrderInvoice = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId; the
-    // receipt builder branches on isMysqlModule and re-validates ownership.
+    // The receipt builder re-validates ownership.
     if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       logger.warn("getEbookOrderInvoice invalid id", { traceId, customerId, orderId });
       return res.status(400).json({ success: false, message: "Invalid order id." });

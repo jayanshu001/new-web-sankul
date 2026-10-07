@@ -1,29 +1,17 @@
+// Plan usage: all-time order count per pricing plan (gates plan delete).
 import { prisma } from "../config/prisma";
 
 /**
- * "How many times has this pricing plan ever been ordered?" — the single number
- * behind the plan-immutability rules (backend-request 2026-08-21):
+ * All-time order count per pricing plan. A plan may be deleted only while it is 0;
+ * list rows expose it as `orderCount` so the panel can disable Delete.
  *
- *   • a plan may be DELETED only while this is 0
- *   • plan/price list rows expose it as `orderCount` so the panel can grey out
- *     Delete instead of firing a request it knows will 409
+ * Status-blind by contract: expired, cancelled and pending purchases all pin the
+ * plan. Do not add a `status` / `endAt` / `paymentStatus` filter; that narrowing
+ * is what let sold plans be hard-deleted.
  *
- * ALL-TIME and status-blind by contract. An expired subscription, a cancelled
- * one, and a pending order all pin the plan — "zero orders, ever", not "zero
- * active ones". Do not add a `status` / `endAt` / `paymentStatus` filter here;
- * that narrowing is exactly what let sold plans be hard-deleted.
- *
- * ── Why the count is a union, not one table ────────────────────────────────
- * A purchase writes an ORDER and (once settled) a SUBSCRIPTION, so counting both
- * and adding would double every normal sale. But neither table alone is enough:
- *
- *   • orders alone miss LEGACY subscriptions that predate the order table
- *     (`order_id IS NULL`) — they would report 0 and let a sold plan be deleted
- *   • subscriptions alone miss PENDING/FAILED orders, which reference the plan
- *     just as firmly and are the case the live-course guard was missing
- *
- * So: every order, plus only those subscriptions that have no order row. That is
- * the exact union with no double counting, in two grouped queries.
+ * Counted as every order plus subscriptions with no order row (`order_id IS NULL`,
+ * legacy). Orders alone miss legacy subs; subs alone miss pending/failed orders;
+ * summing both would double-count normal sales.
  */
 export type PlanKindForUsage = "price" | "livePlan" | "testSeriesPrice";
 
@@ -38,12 +26,9 @@ const tally = (into: Map<number, number>, rows: CountRow[]) => {
 };
 
 /**
- * planId → all-time order count, for a PAGE of plan ids. One grouped query per
- * source table, never one query per row.
- *
- * Ids absent from the returned map have zero usage; callers should read
- * `map.get(id) ?? 0` so a plan that was never ordered reports `0`, not `undefined`
- * (the FE contract treats a MISSING field as "unknown" and keeps Delete enabled).
+ * planId → all-time order count for a page of plan ids (one grouped query per table).
+ * Absent ids have zero usage; read `map.get(id) ?? 0`, since the FE treats a
+ * missing field as "unknown" and keeps Delete enabled.
  */
 export const countPlanUsage = async (
   kind: PlanKindForUsage,
@@ -54,12 +39,8 @@ export const countPlanUsage = async (
   if (!ids.length) return out;
 
   if (kind === "livePlan") {
-    // Live course gained an order table on 2026-08-25, so usage is counted the same
-    // way as test-series below: ORDERS of every status (a pending checkout still
-    // pins the plan — it no longer writes a subscription row, so counting only
-    // subscriptions would let an in-flight purchase's plan be deleted), plus legacy
-    // subscriptions the backfill has not linked to an order yet. The two sets are
-    // disjoint, so nothing is counted twice.
+    // A pending checkout writes only an order, not a subscription, so orders of every
+    // status are counted, plus subscriptions not yet linked to an order (disjoint sets).
     const [liveOrders, orphanLiveSubs] = await Promise.all([
       prisma.liveCourseOrder.groupBy({
         by: ["planId"],
@@ -89,13 +70,9 @@ export const countPlanUsage = async (
     return tally(out, orphanSubs as unknown as CountRow[]);
   }
 
-  // "price" — ws_package_course_ebook_price backs package, course AND ebook plans,
-  // so both order tables are consulted. A plan is owned by exactly one product, so
-  // the other table simply contributes nothing.
-  //
-  // ⚠ ws_ebook_subscription has NO plan_id column (it reaches the plan only through
-  // its order), so an order-less legacy EBOOK subscription cannot be attributed to a
-  // plan and is not counted. Package/course subs do carry `pcb_id` and are.
+  // ws_package_course_ebook_price backs package, course and ebook plans, so both
+  // order tables are consulted. ws_ebook_subscription has no plan_id, so order-less
+  // legacy ebook subscriptions cannot be attributed and are not counted.
   const [pcOrders, ebookOrders, orphanPcSubs] = await Promise.all([
     prisma.packageCourseOrder.groupBy({
       by: ["planId"], where: { planId: { in: ids } }, _count: { _all: true },
@@ -112,12 +89,11 @@ export const countPlanUsage = async (
   return tally(out, orphanPcSubs as unknown as CountRow[]);
 };
 
-/** Single-plan convenience for the delete guards. */
 export const countPlanUsageOne = async (
   kind: PlanKindForUsage,
   planId: number,
 ): Promise<number> => (await countPlanUsage(kind, [planId])).get(planId) ?? 0;
 
-/** The refusal message every plan-delete endpoint returns, so the panel can show it verbatim. */
+/** Shared by every plan-delete endpoint; the panel shows it verbatim. */
 export const planInUseMessage = (count: number): string =>
   `Cannot delete: ${count} order(s) reference this plan. Turn its status off instead.`;

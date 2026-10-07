@@ -1,3 +1,4 @@
+// Client auth: HTTP handlers for OTP login, refresh, logout and guest session.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { generateOtp, validateOtp, refreshCustomerToken, resendOtp, logoutCustomer } from "./auth.service";
@@ -5,11 +6,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../../utils/dbAvailability";
 import { guestToken, isGuestModeOn } from "../../libs/guestSession";
 
-/**
- * POST /api/v1/client/auth/guest
- * Body: none. Returns the static guest token (catalog browse only) while guest mode
- * is on (Firebase `maintain.env === "staging"`); refuses otherwise.
- */
+// Returns the static guest token while guest mode is on (Firebase `maintain.env === "staging"`).
 export const createGuestSessionHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createGuestSessionHandler invoked", { traceId, path: req.originalUrl });
@@ -24,10 +21,6 @@ export const createGuestSessionHandler = async (req: Request, res: Response) => 
   }
 };
 
-/**
- * POST /api/v1/auth/otp/generate
- * Body: { phoneNumber: string }
- */
 export const generateOtpHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("generateOtpHandler invoked", { traceId, path: req.originalUrl });
@@ -60,10 +53,6 @@ export const generateOtpHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * POST /api/v1/auth/otp/validate
- * Body: { phoneNumber: string; otp: string; os_type?: "android" | "ios" }
- */
 export const validateOtpHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("validateOtpHandler invoked", { traceId, path: req.originalUrl });
@@ -100,10 +89,7 @@ export const validateOtpHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * POST /api/v1/auth/otp/refresh
- * Body: { refreshToken: string }
- */
+// Rotate the token pair; 503 (not 401) on DB outage so the app keeps the session.
 export const refreshTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("refreshTokenHandler invoked", { traceId, path: req.originalUrl });
@@ -131,18 +117,13 @@ export const refreshTokenHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("refreshTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    // 503 (not 401, not 500) when the DB is unreachable: the refresh token is
-    // presumed fine, we simply cannot check it right now. The client must keep
-    // the session and retry — see docs/client/SERVICE_UNAVAILABLE_503.md.
+    // 503 (not 401/500) when the DB is unreachable: the refresh token is presumed fine,
+    // so the client keeps the session and retries (docs/client/SERVICE_UNAVAILABLE_503.md).
     if (isDatabaseUnavailableError(err)) return sendServiceUnavailable(res);
     return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
-/**
- * DELETE /api/v1/client/auth/logout
- * Requires: Bearer token
- */
 export const logoutHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -161,15 +142,8 @@ export const logoutHandler = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * GET /api/v1/client/auth/account-status
- * Lightweight "is my account still active?" probe the app calls on Home Screen
- * load. The heavy lifting is done by `authenticate`: a disabled/soft-deleted
- * account is already rejected there with 401 + `data.reason`
- * (ACCOUNT_DISABLED / ACCOUNT_DELETED) BEFORE this handler runs. So reaching
- * here means the account is good — just echo `{ active: true }`. The frontend
- * logs out + shows the reason on any non-2xx.
- */
+// `authenticate` already rejects disabled/deleted accounts with 401 + `data.reason`,
+// so reaching here means the account is active.
 export const accountStatusHandler = async (req: Request, res: Response) => {
   const userId = req.user?.id;
   if (!userId) {
@@ -178,10 +152,6 @@ export const accountStatusHandler = async (req: Request, res: Response) => {
   return success(res, { active: true }, "Account is active.", 200);
 };
 
-/**
- * POST /api/v1/auth/otp/resend
- * Body: { phoneNumber: string }
- */
 export const resendOtpHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("resendOtpHandler invoked", { traceId, path: req.originalUrl });

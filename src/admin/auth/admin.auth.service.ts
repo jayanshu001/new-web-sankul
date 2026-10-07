@@ -1,3 +1,4 @@
+// Admin auth: login, token refresh/rotation, logout, password and profile logic.
 import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
 import { redisClient } from "../../config/redis";
@@ -15,8 +16,6 @@ import {
   verifyRefreshToken,
 } from "../../utils/jwtSigner";
 
-// JWT secrets now flow through config/jwtKeys.ts → utils/jwtSigner.ts so we
-// can rotate keys without invalidating active sessions.
 const JWT_ACCESS_TTL_DAYS = 1;
 const JWT_REFRESH_TTL_DAYS = 30;
 const SALT_ROUNDS = 10;
@@ -25,7 +24,6 @@ function addDays(days: number): Date {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 }
 
-/** Parse a JWT/route admin id ("52") to bigint; null if not a valid id. */
 function parseAdminId(id: string): bigint | null {
   try {
     const n = BigInt(id);
@@ -36,11 +34,8 @@ function parseAdminId(id: string): bigint | null {
 }
 
 /**
- * Resolve the admin's *effective* permission set and build the shared admin DTO.
- * Effective = permissions granted via the assigned role(s) (spatie
- * ws_role_has_permissions) UNIONED with any directly-assigned per-user perms.
- * The transformer flattens + de-dupes to permission-key strings (and returns the
- * wildcard for super-admins).
+ * Effective permissions = role grants (ws_role_has_permissions) union direct
+ * per-user grants; the transformer de-dupes and returns the wildcard for super-admins.
  */
 async function buildSqlAdminDto(row: Awaited<ReturnType<typeof adminAuthRepository.findActiveByEmail>>) {
   if (!row) throw new Error("buildSqlAdminDto called with null row");
@@ -52,7 +47,7 @@ async function buildSqlAdminDto(row: Awaited<ReturnType<typeof adminAuthReposito
   return toAdminDto(row, roles, [...rolePermissions, ...directPermissions]);
 }
 
-// ─── Login ────────────────────────────────────────────────────────────────────
+// Verify credentials and issue tokens; single active device, so older sessions are retired.
 export async function adminLogin(
   email: string,
   password: string,
@@ -80,8 +75,8 @@ export async function adminLogin(
   const token = signAccessToken(tokenPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
   const refreshToken = signRefreshToken(tokenPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
 
-  // 1 active device: retire every earlier token row, then the Redis pointer
-  // below flips to this token. Mirrors validateOtp on the customer side.
+  // Single active device: retire earlier token rows; the Redis pointer below
+  // then flips to this token.
   await adminAuthRepository.deactivateAllTokens(row.id);
 
   await adminAuthRepository.createToken({
@@ -102,12 +97,9 @@ export async function adminLogin(
   return { ok: true, message: "Login successful.", token, refreshToken, admin: dto as unknown as Record<string, unknown> };
 }
 
-// ─── Session rehydrate (GET /admin/auth/me) ─────────────────────────────────
 /**
- * Return the current admin's DTO (same shape as login/refresh: permissions,
- * roles, isSuperAdmin). Lets the panel re-fetch EFFECTIVE permissions on
- * navigation so a mid-session role/grant change is picked up without a token
- * refresh (rbac-module-visibility.md §5). Resolves grants live each call.
+ * Same DTO as login/refresh, with grants resolved live so a mid-session role
+ * change is picked up without a token refresh.
  */
 export async function getAdminProfile(
   adminId: string,
@@ -126,7 +118,6 @@ export async function getAdminProfile(
   return { ok: true, message: "OK.", admin: dto as unknown as Record<string, unknown> };
 }
 
-// ─── Register (internal / seeder use) ────────────────────────────────────────
 export async function createAdminUser(data: {
   firstName: string;
   lastName?: string;
@@ -136,10 +127,8 @@ export async function createAdminUser(data: {
 }, traceId?: string): Promise<{ ok: boolean; message: string }> {
   logger.info("createAdminUser service invoked", { traceId, email: data.email });
 
-  // ws_users has no soft-delete column; an existing row (any status) blocks the
-  // email. Roles live in spatie pivots (no `role` enum column on ws_users), so
-  // the legacy string `role` is not persisted on this branch — the bootstrap
-  // create only writes the core administrator row.
+  // ws_users has no soft-delete column, so an existing row of any status blocks
+  // the email. Roles live in spatie pivots; `role` is not persisted here.
   if (await emailInUse(data.email)) {
     logger.warn("createAdminUser service conflict", { traceId, email: data.email });
     return { ok: false, message: "Admin with this email already exists." };
@@ -165,7 +154,6 @@ export async function createAdminUser(data: {
   return { ok: true, message: "Admin user created successfully." };
 }
 
-// ─── Change password ──────────────────────────────────────────────────────────
 export async function changeAdminPassword(
   adminId: string,
   currentPassword: string,
@@ -191,7 +179,6 @@ export async function changeAdminPassword(
   return { ok: true, message: "Password updated successfully." };
 }
 
-// ─── Validation & Refresh ─────────────────────────────────────────────────────
 export async function refreshAdminToken(refreshToken: string, traceId?: string) {
   logger.info("refreshAdminToken service invoked", { traceId });
 
@@ -244,8 +231,7 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, admin: dto };
   } catch (err) {
     logger.error("refreshAdminToken service error (sql)", { traceId, error: (err as Error).message });
-    // See refreshCustomerToken: a DB outage inside this try must not be reported
-    // as a bad token (→ 401 → the panel logs the admin out). Rethrow for a 503.
+    // A DB outage must not look like a bad token (401 logs the admin out); rethrow for a 503.
     if (isDatabaseUnavailableError(err)) throw err;
     return { ok: false, message: "Invalid or expired refresh token." };
   }
@@ -255,12 +241,9 @@ export async function logoutAdmin(adminId: string, traceId?: string) {
   logger.info("logoutAdmin service invoked", { traceId, adminId });
 
   try {
-    // NOTE: deliberately does NOT write a token-revocation cutoff, unlike the
-    // customer/educator/promoter logouts.
-    //
-    // Single-device: `adminLogin` retires prior token rows and authenticate.ts
-    // enforces the `admin_session` pointer, so deleting the pointer here ends the
-    // only live session immediately. `revokeAllTokensForUser` is not needed.
+    // No revocation cutoff (unlike customer/educator/promoter logout): admin is
+    // single-device and authenticate.ts enforces the admin_session pointer, so
+    // deleting it ends the only live session.
     const id = parseAdminId(adminId);
     if (id) await adminAuthRepository.deactivateAllTokens(id);
     await redisClient.del(`admin_session:${adminId}`);
@@ -272,7 +255,6 @@ export async function logoutAdmin(adminId: string, traceId?: string) {
   }
 }
 
-// ─── Profile Update ────────────────────────────────────────────────────────
 export async function updateAdminProfile(
   adminId: string,
   data: { firstName?: string; lastName?: string; image?: string },
@@ -287,7 +269,8 @@ export async function updateAdminProfile(
     logger.warn("updateAdminProfile service admin not found (sql)", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
-  // Replace the old S3 image when a new one is supplied (best-effort cleanup).
+  // Best-effort cleanup of the replaced S3 image.
+
   if (data.image !== undefined && existing.image && existing.image !== data.image) {
     deleteFromS3FileUrl(existing.image).catch((err) =>
       console.error("Non-fatal: Failed to delete old admin profile image from S3:", err)

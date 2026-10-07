@@ -1,6 +1,5 @@
-// Slug generation shared by every jobs sub-module. Ports the Laravel
-// `WsjContentService::uniqueSlug()` algorithm: kebab-case the source text, then
-// append `-2`, `-3`, ... until `existsFn` reports no collision.
+// Slugs: kebab-case; uniqueness appends `-2`, `-3`, ... until `existsFn` reports
+// no collision (same algorithm as the Laravel jobs admin).
 
 export const slugify = (text: string): string =>
   text

@@ -1,3 +1,4 @@
+// Promoter customers: attributed customer list and detail routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { listMyCustomers, getMyCustomerDetail } from "./customer.controller";

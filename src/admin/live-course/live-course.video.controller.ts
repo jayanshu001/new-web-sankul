@@ -1,3 +1,4 @@
+// Admin live-course videos: folder video CRUD, recording promotion and staff lecture preview.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -34,7 +35,7 @@ const fromRecordingSchema = z
     liveSessionId: objectId,
     // 0-based index into LiveSession.recordings, or omit to pick the first.
     recordingIndex: z.number().int().nonnegative().optional(),
-    // Convenience: pick by quality ("720p", "480p" etc.) if the index is unknown.
+    // Pick by quality ("720p", "480p", …) when the index is unknown.
     quality: z.string().trim().optional(),
     title:   z.string().trim().min(1).max(500).optional(),
     priceType: z.enum(["free", "paid"]).optional(),
@@ -42,9 +43,8 @@ const fromRecordingSchema = z
   })
   .strict();
 
-// PATCH/PUT — every field optional. No cross-field platform/id refinement here:
-// editing just the title or order is the common case, and the admin UI owns
-// keeping platform + its id field consistent.
+// No cross-field platform/id refinement: editing just the title or order is the
+// common case, and the admin UI keeps platform and its id field consistent.
 const updateVideoSchema = z
   .object({
     title:      z.string().trim().min(1).max(500).optional(),
@@ -73,7 +73,6 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
   return failure(res, "Validation failed.", 422, { errors: messages });
 }
 
-// GET /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos
 export const listVideosInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -97,8 +96,7 @@ export const listVideosInFolder = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos
-// Add a manual video — youtube link, vimeo id, or any URL via the "aws" channel.
+// Manual video: youtube link, vimeo id, or any URL via the "aws" channel.
 export const createVideoInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -132,11 +130,9 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/from-recording
-// Promote a Streamos recording from a LiveSession into a Video record in this
-// folder. Picks by recordingIndex (default 0) or quality. The recording URL is
-// stored on the Video as `aws_id` with `platform="aws"` — the frontend just
-// receives a playable URL.
+// Promotes a StreamOS recording of a LiveSession into a Video in this folder,
+// picked by recordingIndex (default 0) or quality. The recording URL is stored as
+// `aws_id` with `platform="aws"`.
 export const createVideoFromRecording = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -177,7 +173,6 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const deleteVideoInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -204,7 +199,6 @@ export const deleteVideoInFolder = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const getVideoInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -231,12 +225,10 @@ export const getVideoInFolder = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-courses/:liveCourseId/lecture/:videoId
-// Staff preview of a live-course lecture (admin LectureWatch page). Same
-// ownership check as the client GET /live-courses/:id/lecture/:videoId, but no
-// subscription gate (admins own none) — access is the admin role gate + the
+// Staff lecture preview. Same ownership check as the client lecture endpoint but
+// no subscription gate (admins own none); access is the admin role gate plus the
 // `live-courses.view` RBAC rule. Returns the `/v1/lecture` {token, videoURL}
-// contract: videoURL = platform source id encrypted via newEncryptor().
+// contract: videoURL is the platform source id encrypted via newEncryptor().
 export const getLectureForAdmin = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -260,7 +252,6 @@ export const getLectureForAdmin = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const updateVideoInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -294,9 +285,7 @@ export const updateVideoInFolder = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/reorder
-// Body: { orders: [{ id, order }] }. Only videos that actually live in this
-// folder are touched — ids from elsewhere are silently ignored.
+// Only videos in this folder are touched; ids from elsewhere are silently ignored.
 export const reorderVideosInFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");

@@ -1,3 +1,4 @@
+// Promoter customers: HTTP handlers for the promoter's attributed customers.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -7,7 +8,6 @@ import {
   listPromoterSubscriptions,
 } from "../../modules/promoter-data/promoter-data.service";
 
-// GET /api/v1/promoter/customers — unique customers attributed to this promoter
 export const listMyCustomers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;
@@ -35,7 +35,7 @@ export const listMyCustomers = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/promoter/customers/:id
+// Customer plus their course/ebook subscriptions; 404 unless attributed to this promoter.
 export const getMyCustomerDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const promoterId = req.user?.id;

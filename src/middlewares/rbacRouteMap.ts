@@ -1,23 +1,10 @@
-// src/middlewares/rbacRouteMap.ts
-//
-// Declarative route → permission-key map for admin RBAC enforcement (backend
-// request rbac-module-visibility.md §4). One auditable table instead of editing
-// ~35 route files; the FE/backend teams can diff it against the permission
-// catalog (admin/permission/permissions.catalog.ts).
-//
-// `resolveRequiredKeys(method, relPath)` returns the catalog keys that gate a
-// request (OR-semantics: holding ANY one grants access), or `null` when no rule
-// matches. The middleware (middlewares/rbacEnforce.ts) treats `null` as
-// "unmapped" — logged as a coverage gap and ALLOWED, so an incomplete map can
-// never lock the panel out; enforcement only ever denies an explicitly-mapped
-// route whose key the caller lacks.
-//
-// relPath is the admin-router-relative path, e.g. "/books/123/status" (the
-// mount prefix "/api/v1/admin" already stripped by the middleware).
-//
-// Rules are evaluated top-to-bottom, FIRST MATCH WINS — so register specific
-// sub-resource paths BEFORE the generic ":id" CRUD rules. `:param` segments
-// match a single path segment.
+// Admin RBAC route map: admin method + path to the permission keys it requires.
+// Declarative admin route → permission-key map, auditable against the catalog
+// (admin/permission/permissions.catalog.ts). Keys are OR-ed: holding any one grants
+// access. An unmatched route resolves to `null`, which rbacEnforce logs and allows, so
+// an incomplete map never locks the panel out. Paths are admin-router-relative
+// ("/books/123/status"). First match wins: register specific sub-resource paths before
+// the generic ":id" CRUD rules. `:param` matches a single segment.
 
 interface Rule {
   methods: Set<string>;
@@ -27,25 +14,18 @@ interface Rule {
 
 const rules: Rule[] = [];
 
-/** Register a rule. `method` may be pipe-joined ("PUT|PATCH"). */
+/** `method` may be pipe-joined ("PUT|PATCH"). */
 const R = (method: string, path: string, ...keys: string[]): void => {
   const methods = new Set(method.split("|").map((m) => m.toUpperCase()));
   const re = new RegExp("^" + path.replace(/:[^/]+/g, "[^/]+") + "/?$");
   rules.push({ methods, re, keys });
 };
 
-// Read access gates on `<m>.view` only. `list` was dropped from the `web` catalog
-// 2026-07-20 (the admin UI gates every list screen on `view`), so it must not be
-// enforced here either — otherwise the cleanup would keep the now-orphan `.list`
-// rows alive in the catalog API response.
+// Reads gate on `<m>.view` only; the catalog has no `.list` keys (the admin UI gates
+// list screens on `view`), and referencing one here would keep orphan rows alive.
 const view = (m: string): string[] => [`${m}.view`];
 
-/**
- * Standard CRUD rules for a REST resource mounted at `base` and gated by module
- * key `m`: list/read → view|list, POST → create, PUT/PATCH :id → edit, DELETE
- * → delete, PATCH :id/status → toggle-status. Call AFTER any resource-specific
- * R() rules so those win the first-match.
- */
+/** Standard CRUD rules for module `m`. Call after any resource-specific R() rules. */
 const crud = (base: string, m: string): void => {
   R("PATCH", `${base}/:id/status`, `${m}.toggle-status`);
   R("GET", base, ...view(m));
@@ -55,51 +35,37 @@ const crud = (base: string, m: string): void => {
   R("DELETE", `${base}/:id`, `${m}.delete`);
 };
 
-// ── /administrators → administrators ───────────────────────────────────────
 R("GET", "/administrators/pre-requisites", ...view("administrators"));
 R("PATCH", "/administrators/:id/status", "administrators.toggle-status");
 crud("/administrators", "administrators");
 
-// ── /roles → roles ─────────────────────────────────────────────────────────
 R("GET", "/roles/:id/permissions", ...view("roles"));
-R("PUT", "/roles/:id/permissions", "roles.edit"); // was roles.assign-permissions
+R("PUT", "/roles/:id/permissions", "roles.edit");
 crud("/roles", "roles");
 
-// ── /permissions → permissions (read-only catalog) ─────────────────────────
-// The catalog also feeds the Roles page permission tree, so a role manager
-// (roles.view) may read it without permissions.view. OR semantics.
+// The catalog also feeds the Roles page permission tree, so roles.view may read it.
 R("GET", "/permissions/catalog", ...view("permissions"), ...view("roles"));
 R("GET", "/permissions/:id/roles", ...view("permissions"));
 crud("/permissions", "permissions"); // create/edit/delete are 410'd upstream
 
-// ── /permission-categories → permission-categories (read-only) ─────────────
 crud("/permission-categories", "permission-categories");
 
-// ── /guards → guards (read-only) ───────────────────────────────────────────
 R("GET", "/guards", ...view("guards"));
 
-// ── /video-categories → videos.categories ──────────────────────────────────
-// Collapsed 2026-07-20: the legacy `video-categories` catalog module was dropped
-// (keep-list keeps `videos.categories`); these routes now gate on that key.
 R("GET", "/video-categories/pre-requisites", ...view("videos.categories"));
 R("GET", "/video-categories/:id/sub-categories", ...view("videos.categories"));
 R("GET", "/video-categories/:id/courses", ...view("videos.categories"));
 R("GET", "/video-categories/:id/videos", ...view("videos.categories"));
-R("POST", "/video-categories/:id/duplicate", "videos.categories.create"); // was .duplicate
+R("POST", "/video-categories/:id/duplicate", "videos.categories.create");
 crud("/video-categories", "videos.categories");
 
-// ── /videos → videos ───────────────────────────────────────────────────────
 R("GET", "/videos/pre-requisites", ...view("videos"));
 R("POST", "/videos/reorder", "videos.edit");
 crud("/videos", "videos");
 
-// ── /goals → goals ─────────────────────────────────────────────────────────
 crud("/goals", "goals");
 
-// ── /courses → courses (+ nested video-categories, materials, plans, videos) ─
-// Nested course sub-resources (video-categories, materials, videos, plans)
-// collapsed 2026-07-20 into the parent `courses` key — the admin panel gates the
-// whole Courses section on `courses.*`, so those sub-namespaces were dropped.
+// Nested course sub-resources gate on the parent `courses` key, like the admin panel.
 R("GET", "/courses/pre-requisites", ...view("courses"));
 R("GET|POST", "/courses/video-category-relations", "courses.edit");
 R("PUT|DELETE", "/courses/video-category-relations/:id", "courses.edit");
@@ -131,8 +97,6 @@ R("PUT", "/courses/:id/books/reorder", "courses.edit");
 R("PATCH", "/courses/:id/popular", "courses.edit");
 crud("/courses", "courses");
 
-// ── /master → educators / subject-categories / materials / video-categories /
-//    package-categories ──────────────────────────────────────────────────────
 R("GET", "/master/educators/:id/details", ...view("educators"));
 R("GET", "/master/educators", ...view("educators"));
 R("POST", "/master/educators", "educators.create");
@@ -147,7 +111,6 @@ R("POST", "/master/materials", "materials.create");
 R("PUT", "/master/materials/:id", "materials.edit");
 R("DELETE", "/master/materials/:id", "materials.delete");
 
-// ── /pc-materials → pc-materials (Master Data) ─────────────────────────────
 crud("/pc-materials", "pc-materials");
 R("GET", "/master/video-categories", ...view("videos.categories"));
 R("GET", "/master/video-categories/:id", ...view("videos.categories"));
@@ -159,21 +122,19 @@ R("POST", "/master/package-categories", "package-categories.create");
 R("PUT", "/master/package-categories/:id", "package-categories.edit");
 R("DELETE", "/master/package-categories/:id", "package-categories.delete");
 
-// ── /ebooks → ebooks (+ plans, subscriptions) ──────────────────────────────
 R("GET|POST", "/ebooks/reorder", "ebooks.edit");
 R("GET", "/ebooks/pdf-jobs/:id", ...view("ebooks"));
 R("POST", "/ebooks/:id/pdf", "ebooks.edit");
 R("PATCH", "/ebooks/:id/trending", "ebooks.edit");
-R("GET", "/ebooks/subscriptions/export/:format", ...view("ebooks.subscriptions")); // was unmapped
+R("GET", "/ebooks/subscriptions/export/:format", ...view("ebooks.subscriptions"));
 R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
 // ebooks.subscriptions is a view-only report; its write routes gate on parent `ebooks`.
-// "Add ebook subscription" from the Customers side also unlocks this (2026-09-11).
+// "Add ebook subscription" from the Customers side also unlocks this.
 R("POST", "/ebooks/subscriptions", "ebooks.create", "customers.ebook-subscriptions.create");
 R("GET", "/ebooks/subscriptions/:id", ...view("ebooks.subscriptions"));
 R("PUT", "/ebooks/subscriptions/:id", "ebooks.edit");
 R("POST", "/ebooks/subscriptions/:id/add-days", "customers.ebook-subscriptions.add-days");
 R("DELETE", "/ebooks/subscriptions/:id", "ebooks.delete");
-// ebooks.plans collapsed 2026-07-20 into parent `ebooks`.
 R("GET", "/ebooks/plans/:id", ...view("ebooks"));
 R("PUT", "/ebooks/plans/:id", "ebooks.edit");
 R("DELETE", "/ebooks/plans/:id", "ebooks.delete");
@@ -183,14 +144,11 @@ R("GET", "/ebooks/:id/prices", ...view("ebooks"));
 R("GET", "/ebooks/:id/promocodes", ...view("ebooks"));
 crud("/ebooks", "ebooks");
 
-// ── /customers → customers (+ addresses, course/ebook subscriptions) ───────
 R("GET", "/customers/pre-requisites", ...view("customers"));
 R("GET", "/customers/states/:id/districts", ...view("customers"));
-R("GET", "/customers/:id/details", ...view("customers")); // was customers.view-details
-// Every read under a customer (addresses, each subscription tab, book orders)
-// is `customers.view`. Adding a subscription is gated by the per-type
-// `customers.<type>-subscriptions.create` keys on the create endpoints below
-// (2026-09-11, mirrors the legacy customer.*subscription gates).
+R("GET", "/customers/:id/details", ...view("customers"));
+// Every read under a customer is `customers.view`. Adding a subscription is gated by
+// the per-type `customers.<type>-subscriptions.create` keys below.
 R("GET", "/customers/:id/addresses", ...view("customers"));
 R("GET", "/customers/:id/book-orders", ...view("customers"));
 R("GET", "/customers/:id/course-subscriptions", ...view("customers"));
@@ -201,10 +159,7 @@ R("GET", "/customers/:id/test-series-subscriptions", ...view("customers"));
 R("GET", "/customers/:id/ebook-subscriptions", ...view("customers"));
 crud("/customers", "customers");
 
-// ── /customer-masters → collapsed into `customers` ─────────────────────────
-// The `customer-masters.*` catalog modules were dropped 2026-07-20 (keep-list:
-// "the panel uses customers.*, never customer-masters"). These master-data routes
-// now gate on the parent `customers` key.
+// Customer master-data routes gate on the parent `customers` key.
 R("GET", "/customer-masters/districts", ...view("customers"));
 R("POST", "/customer-masters/districts", "customers.create");
 R("PUT", "/customer-masters/districts/:id", "customers.edit");
@@ -218,9 +173,7 @@ R("POST", "/customer-masters/target-goals", "customers.create");
 R("PUT", "/customer-masters/target-goals/:id", "customers.edit");
 R("DELETE", "/customer-masters/target-goals/:id", "customers.delete");
 
-// ── /referrals → referrers / report / transactions / terms / faqs ──────────
-// NOTE: "programs" has no catalog module yet — mapped to referrals.settings as
-// the closest configuration surface; revisit if a dedicated key is added.
+// "programs" has no catalog module yet; referrals.settings is the closest surface.
 R("GET", "/referrals/programs", "referrals.settings.view"); // module ships view/edit only
 R("POST|PUT|DELETE", "/referrals/programs", "referrals.settings.edit");
 R("POST|PUT|DELETE", "/referrals/programs/:id", "referrals.settings.edit");
@@ -230,7 +183,7 @@ R("GET", "/referrals/transactions", ...view("referrals.transactions"));
 // actions (approve/process transactions & withdrawals) gate on referrals.settings.edit.
 R("PATCH", "/referrals/transactions/:id", "referrals.settings.edit");
 R("POST", "/referrals/transactions", "referrals.settings.edit");
-R("GET", "/referrals/withdrawals/csv", ...view("referrals.report")); // was report.export
+R("GET", "/referrals/withdrawals/csv", ...view("referrals.report"));
 R("GET", "/referrals/withdrawals", ...view("referrals.report"));
 R("POST", "/referrals/withdrawals/:id", "referrals.settings.edit");
 R("GET", "/referrals/terms", ...view("referrals.terms"));
@@ -244,14 +197,12 @@ R("GET", "/referrals/faqs/:id", ...view("referrals.faqs"));
 R("PUT", "/referrals/faqs/:id", "referrals.faqs.edit");
 R("DELETE", "/referrals/faqs/:id", "referrals.faqs.delete");
 
-// ── /books → books (+ orders) ──────────────────────────────────────────────
 R("POST", "/books/reorder", "books.edit");
-// Free-delivery settings screen — the book-terms free-shipping threshold. Gated
-// by its own cms.free-delivery keys (NOT books.*) so it can be granted
+// Free-delivery threshold has its own cms.free-delivery keys so it can be granted
 // independently. Registered before crud("/books") so :id can't shadow it.
 R("GET", "/books/settings", "cms.free-delivery.view");
 R("PUT", "/books/settings", "cms.free-delivery.edit");
-R("GET", "/books/orders/export/:format", ...view("books.orders")); // was unmapped
+R("GET", "/books/orders/export/:format", ...view("books.orders"));
 R("GET", "/books/orders/list", ...view("books.orders"));
 R("GET", "/books/orders/:id", ...view("books.orders"));
 R("PATCH", "/books/orders/:id/status", "books.edit");
@@ -260,7 +211,6 @@ R("POST", "/books/orders/:id/tracking/events", "books.edit");
 R("PATCH", "/books/:id/trending", "books.edit");
 crud("/books", "books");
 
-// ── /quizzes (exam) → quizzes (+ categories, questions, submissions, analytics)
 R("GET", "/quizzes/categories/tree", ...view("quizzes.categories"));
 R("GET", "/quizzes/categories/:id/packages", ...view("quizzes.categories"));
 R("GET", "/quizzes/categories/:id/courses", ...view("quizzes.categories"));
@@ -269,8 +219,6 @@ R("POST", "/quizzes/categories", "quizzes.categories.create");
 R("GET", "/quizzes/categories/:id", ...view("quizzes.categories"));
 R("PUT", "/quizzes/categories/:id", "quizzes.categories.edit");
 R("DELETE", "/quizzes/categories/:id", "quizzes.categories.delete");
-// quizzes sub-resources (questions, submissions, analytics) collapsed 2026-07-20
-// into the parent `quizzes` key.
 R("GET", "/quizzes/questions/list", ...view("quizzes"));
 R("POST", "/quizzes/questions/bulk", "quizzes.edit");
 R("POST", "/quizzes/questions/reorder", "quizzes.edit");
@@ -286,12 +234,10 @@ R("GET", "/quizzes/analytics/customer/:id", ...view("quizzes"));
 R("POST", "/quizzes/reorder", "quizzes.edit");
 crud("/quizzes", "quizzes");
 
-// ── /materials (study materials + categories) ──────────────────────────────
-// NOTE: this mount is the Study Materials module (has categories + bulk ops);
-// master-data "Materials" lives under /master/materials above.
+// Study Materials module; master-data "Materials" is /master/materials above.
 R("GET", "/materials/categories", ...view("study-materials.categories"));
 R("POST", "/materials/categories/reorder", "study-materials.categories.edit");
-R("POST", "/materials/categories/:id/duplicate", "study-materials.categories.create"); // was .duplicate
+R("POST", "/materials/categories/:id/duplicate", "study-materials.categories.create");
 R("GET", "/materials/categories/:id/courses", ...view("study-materials.categories"));
 R("GET", "/materials/categories/:id/products", ...view("study-materials.categories"));
 R("GET", "/materials/categories/:id/materials", ...view("study-materials.categories"));
@@ -305,13 +251,11 @@ R("POST", "/materials/bulk-status", "study-materials.edit");
 R("POST", "/materials/bulk-delete", "study-materials.delete");
 crud("/materials", "study-materials");
 
-// ── /packages → packages (+ types, plans) ──────────────────────────────────
 R("GET", "/packages/types", ...view("packages.types"));
 R("POST", "/packages/types", "packages.types.create");
 R("PUT", "/packages/types/:id", "packages.types.edit");
 R("DELETE", "/packages/types/:id", "packages.types.delete");
 R("POST", "/packages/reorder", "packages.edit");
-// packages.plans collapsed 2026-07-20 into parent `packages` (attach/detach → edit).
 R("GET", "/packages/:id/plans", ...view("packages"));
 R("POST", "/packages/:id/plans/attach", "packages.edit");
 R("DELETE", "/packages/:id/plans/:pid", "packages.edit");
@@ -332,40 +276,31 @@ R("POST", "/packages/:id/chat", "packages.edit");
 R("DELETE", "/packages/chat/:id", "packages.edit");
 crud("/packages", "packages");
 
-// ── /pc-materials → (no dedicated catalog module) UNMAPPED, logged in shadow ─
-
-// ── /plans → plans ─────────────────────────────────────────────────────────
 R("POST", "/plans/bulk-status", "plans.edit");
 R("POST", "/plans/bulk-delete", "plans.delete");
 R("PATCH", "/plans/:id/default", "plans.edit");
 R("POST", "/plans/:id/clone", "plans.create");
 crud("/plans", "plans");
 
-// ── /plan-popularity → plans (Most Popular recompute; the /pin override was
-//    removed 2026-08-05 — the badge is fully automatic) ──────────────────────
 R("POST", "/plan-popularity/recompute", "plans.edit");
 
-// ── /promocodes → promocodes ───────────────────────────────────────────────
 R("GET", "/promocodes/plans", ...view("promocodes"));
-R("POST", "/promocodes/bulk-status", "promocodes.toggle-status"); // was .bulk-status
-R("POST", "/promocodes/bulk-delete", "promocodes.delete"); // was .bulk-delete
+R("POST", "/promocodes/bulk-status", "promocodes.toggle-status");
+R("POST", "/promocodes/bulk-delete", "promocodes.delete");
 crud("/promocodes", "promocodes");
 
-// ── /subscriptions → subscriptions (+ reports, customer addresses) ─────────
 R("GET", "/subscriptions/reports/summary", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/reports/by-course", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/reports/by-ebook", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/reports/book-orders", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/ebook", ...view("subscriptions"));
 R("GET", "/subscriptions/plans", ...view("subscriptions"));
-// customers.addresses collapsed 2026-07-20 into parent `customers`.
 R("GET", "/subscriptions/customer-addresses/:id", ...view("customers"));
 R("POST", "/subscriptions/customer-addresses", "customers.create");
 R("PUT", "/subscriptions/customer-addresses/:id", "customers.edit");
 R("DELETE", "/subscriptions/customer-addresses/:id", "customers.delete");
-// Manual course/package subscription (one endpoint, kind chosen in the body) —
-// "Add subscription" from the Customers side also unlocks this (2026-09-11).
-// Must precede crud() to win first-match.
+// Manual course/package subscription; "Add subscription" from the Customers side also
+// unlocks it. Must precede crud() to win first-match.
 R(
   "POST",
   "/subscriptions",
@@ -373,10 +308,9 @@ R(
   "customers.course-subscriptions.create",
   "customers.package-subscriptions.create"
 );
-// Subscription Report + Subscription Material Report share this list (they
-// differ only in filters), so either report key opens it (2026-09-23).
+// Subscription Report and Subscription Material Report share this list, so either key opens it.
 const subReport = [...view("subscriptions"), ...view("subscriptions.reports"), ...view("subscriptions.material-report")];
-R("GET", "/subscriptions/export/:format", ...subReport); // was unmapped
+R("GET", "/subscriptions/export/:format", ...subReport);
 R("GET", "/subscriptions", ...subReport);
 R("GET", "/subscriptions/:id", ...subReport);
 R("GET", "/subscriptions/:id/history", ...subReport, ...view("customers"));
@@ -395,7 +329,6 @@ R("GET", "/subscriptions/:id", ...view("subscriptions"));
 R("PUT|PATCH", "/subscriptions/:id", ...subAction("edit"));
 R("DELETE", "/subscriptions/:id", "subscriptions.delete");
 
-// ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
 for (const [seg, key] of [
   ["faqs", "cms.faqs"],
   ["faq-types", "cms.faq-types"],
@@ -416,16 +349,14 @@ R("PUT", "/cms/version", "cms.app-version.edit");
 R("GET", "/cms/app-update", "cms.app-update.view"); // module ships view/edit only
 R("PUT", "/cms/app-update", "cms.app-update.edit");
 
-// ── / (inquiry router) → inquiries / departments ───────────────────────────
 R("GET", "/inquiries", ...view("inquiries"));
 R("GET", "/inquiries/:id", ...view("inquiries"));
 R("DELETE", "/inquiries/:id", "inquiries.delete");
 crud("/departments", "departments");
 
-// ── /notifications → notifications ─────────────────────────────────────────
-R("POST", "/notifications/broadcast", "notifications.create"); // was notifications.send
+R("POST", "/notifications/broadcast", "notifications.create");
 R("GET", "/notifications/target-options", ...view("notifications"));
-R("POST", "/notifications/bulk-delete", "notifications.delete"); // was .bulk-delete
+R("POST", "/notifications/bulk-delete", "notifications.delete");
 R("POST", "/notifications/:id/cancel", "notifications.edit");
 R("GET", "/notifications/images", ...view("notifications"));
 R("POST", "/notifications/images", "notifications.create");
@@ -434,7 +365,6 @@ R("DELETE", "/notifications/images/:id", "notifications.delete");
 R("GET", "/notifications", ...view("notifications"));
 R("DELETE", "/notifications/:id", "notifications.delete");
 
-// ── /offline → banners / centers / batches / enquiries ─────────────────────
 R("POST", "/offline/banners/reorder", "offline.banners.edit");
 crud("/offline/banners", "offline.banners");
 crud("/offline/centers", "offline.centers");
@@ -444,29 +374,23 @@ R("DELETE", "/offline/enquiries/:id", "offline.enquiries.delete");
 R("GET", "/offline/batch-enquiries", ...view("offline.enquiries"));
 R("DELETE", "/offline/batch-enquiries/:id", "offline.enquiries.delete");
 
-// ── /promoters → promoters (+ subscriptions, dashboard) ────────────────────
-// Dashboard split out of `promoters.view` 2026-09-11 (was promoters.view-dashboard
-// → collapsed 2026-07-20 → own key again): listing promoters must not imply
-// seeing aggregated revenue.
+// The dashboard has its own key: listing promoters must not imply seeing revenue.
 R("GET", "/promoters/dashboard", ...view("promoters.dashboard"));
 R("GET", "/promoters/:id/dashboard", ...view("promoters.dashboard"));
 R("GET", "/promoters/:id/promocodes", ...view("promoters"));
-R("GET", "/promoters/:id/subscriptions", ...view("promoters")); // collapsed from promoters.subscriptions 2026-07-20
+R("GET", "/promoters/:id/subscriptions", ...view("promoters"));
 crud("/promoters", "promoters");
 
 // ── /dashboard → dashboard (read-only) ─────────────────────────────────────
 R("GET", "/dashboard/trending", "dashboard.view");
 R("GET", "/dashboard", "dashboard.view");
 
-// ── /tracking → tracking (read-only) ───────────────────────────────────────
 R("GET", "/tracking/summary", ...view("tracking"));
 R("GET", "/tracking", ...view("tracking"));
 
-// ── /address → states / cities ─────────────────────────────────────────────
 crud("/address/states", "address.states");
 crud("/address/cities", "address.cities");
 
-// ── /exam-countdowns → exam-countdowns (+ categories) ──────────────────────
 R("GET", "/exam-countdowns/categories", ...view("exam-countdowns.categories"));
 R("GET", "/exam-countdowns/categories/:id", ...view("exam-countdowns.categories"));
 R("POST", "/exam-countdowns/categories", "exam-countdowns.categories.create");
@@ -474,14 +398,10 @@ R("PUT", "/exam-countdowns/categories/:id", "exam-countdowns.categories.edit");
 R("DELETE", "/exam-countdowns/categories/:id", "exam-countdowns.categories.delete");
 crud("/exam-countdowns", "exam-countdowns");
 
-// ── /live-polls → live-sessions.polls ──────────────────────────────────────
-// live-sessions.polls collapsed 2026-07-20 into parent `live-sessions`.
 R("POST", "/live-polls", "live-sessions.create");
 R("GET", "/live-polls/:id/results", ...view("live-sessions"));
 R("GET", "/live-polls/:id", ...view("live-sessions"));
 
-// ── /live-chat → live-sessions.chat ────────────────────────────────────────
-// live-sessions.chat.moderate dropped 2026-07-20 → standard actions on the chat module.
 R("POST", "/live-chat/message", "live-sessions.chat.create");
 R("GET", "/live-chat/bans", ...view("live-sessions.chat"));
 R("POST", "/live-chat/bans", "live-sessions.chat.create");
@@ -491,14 +411,12 @@ R("GET", "/live-chat/:id/history", ...view("live-sessions.chat"));
 R("GET", "/live-chat/:id/settings", ...view("live-sessions.chat"));
 R("PATCH", "/live-chat/:id/settings", "live-sessions.chat.edit");
 
-// ── /live-sessions (live) → live-sessions (+ streamos) ─────────────────────
-// streamos/webhook is an external callback → UNMAPPED (allowed; it has its own
-// verification and no per-user permission concept).
+// streamos/webhook is an external callback with its own verification: left unmapped.
 R("GET", "/live-sessions/streamos/org", ...view("live-sessions.streamos"));
 R("GET", "/live-sessions/streamos/recordings/:id", ...view("live-sessions.streamos"));
-R("POST", "/live-sessions/end", "live-sessions.edit"); // was live-sessions.end
+R("POST", "/live-sessions/end", "live-sessions.edit");
 R("POST", "/live-sessions/:id/provision", "live-sessions.edit");
-R("POST", "/live-sessions/:id/start", "live-sessions.edit"); // was live-sessions.start
+R("POST", "/live-sessions/:id/start", "live-sessions.edit");
 R("POST", "/live-sessions/:id/promote-recording", "live-sessions.edit");
 R("GET", "/live-sessions/:id/attendance", ...view("live-sessions"));
 R("GET", "/live-sessions/:id/recording-health", ...view("live-sessions"));
@@ -506,15 +424,12 @@ R("GET", "/live-sessions", ...view("live-sessions"));
 R("POST", "/live-sessions", "live-sessions.create");
 R("GET", "/live-sessions/:id", ...view("live-sessions"));
 R("PATCH", "/live-sessions/:id", "live-sessions.edit");
-R("DELETE", "/live-sessions/:id", "live-sessions.delete"); // was cancel|delete
+R("DELETE", "/live-sessions/:id", "live-sessions.delete");
 
-// ── /live-courses → live-courses (+ plans, folders, videos, subscriptions) ─
-// live-courses sub-resources (plans, folders, videos, subscriptions) collapsed
-// 2026-07-20 into the parent `live-courses` key.
 R("GET", "/live-courses/plans/:id", ...view("live-courses"));
 R("PUT", "/live-courses/plans/:id", "live-courses.edit");
 R("DELETE", "/live-courses/plans/:id", "live-courses.delete");
-// Live Course Report: own key `live-courses.report` OR parent view (2026-09-23).
+// Live Course Report: own key `live-courses.report` or parent view.
 R("GET", "/live-courses/subscriptions/export/:format", ...view("live-courses"), ...view("live-courses.report"));
 R("GET", "/live-courses/subscriptions", ...view("live-courses"), ...view("live-courses.report"));
 R("GET", "/live-courses/subscriptions/:id", ...view("live-courses"), ...view("live-courses.report"));
@@ -543,8 +458,7 @@ R("GET", "/live-courses/:id/folders/:fid/videos/:vid", ...view("live-courses"));
 R("GET", "/live-courses/:id/lecture/:vid", ...view("live-courses"));
 R("PUT", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.edit");
 R("DELETE", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.delete");
-// Bulk drag-and-drop reorder — an edit, and it must be declared BEFORE crud()
-// (first match wins) so it isn't left unmatched.
+// Bulk reorder must precede crud() (first match wins).
 R("POST", "/live-courses/reorder", "live-courses.edit");
 R("GET", "/live-courses/:id/folders", ...view("live-courses"));
 R("POST", "/live-courses/:id/folders", "live-courses.create");
@@ -552,15 +466,13 @@ R("PATCH", "/live-courses/:id/folders/:fid", "live-courses.edit");
 R("DELETE", "/live-courses/:id/folders/:fid", "live-courses.delete");
 crud("/live-courses", "live-courses");
 
-// ── /test-series → test-series (+ prices/plans, subscriptions) ─────────────
 R("PUT", "/test-series/content-categories/:id", "test-series.edit");
 R("DELETE", "/test-series/content-categories/:id", "test-series.edit");
 R("PUT", "/test-series/papers/:id", "test-series.edit");
 R("DELETE", "/test-series/papers/:id", "test-series.edit");
-// test-series.plans + test-series.subscriptions collapsed 2026-07-20 into `test-series`.
 R("PUT", "/test-series/prices/:id", "test-series.edit");
 R("DELETE", "/test-series/prices/:id", "test-series.delete");
-// Test Series Report: own key `test-series.report` OR parent view (2026-09-23).
+// Test Series Report: own key `test-series.report` or parent view.
 R("GET", "/test-series/subscriptions/export/:format", ...view("test-series"), ...view("test-series.report"));
 R("GET", "/test-series/subscriptions", ...view("test-series"), ...view("test-series.report"));
 R("GET", "/test-series/subscriptions/:id", ...view("test-series"), ...view("test-series.report"));
@@ -577,35 +489,27 @@ R("POST", "/test-series/:id/prices", "test-series.create");
 R("POST", "/test-series/:id/grant", "test-series.create");
 crud("/test-series", "test-series");
 
-// ── /jobs/content → jobs.content ────────────────────────────────────────
 R("PATCH", "/jobs/content/:id/status", "jobs.content.toggle-status");
 R("POST", "/jobs/content/reorder", "jobs.content.edit");
 R("POST", "/jobs/content/inline-image", "jobs.content.create", "jobs.content.edit");
 R("POST", "/jobs/content/document", "jobs.content.create", "jobs.content.edit");
 crud("/jobs/content", "jobs.content");
 
-// ── /jobs/organizations → jobs.organizations ────────────────────────────
 crud("/jobs/organizations", "jobs.organizations");
 
-// ── /jobs/papers → jobs.previous-papers ─────────────────────────────────
 R("POST", "/jobs/papers/files", "jobs.previous-papers.create", "jobs.previous-papers.edit");
 crud("/jobs/papers", "jobs.previous-papers");
 
-// ── /jobs/suggested-products → jobs.suggested-products ──────────────────
 crud("/jobs/suggested-products", "jobs.suggested-products");
 
-// ── /careers/openings → careers.openings ─────────────────────────────────
 crud("/careers/openings", "careers.openings");
 
-// ── /careers/applications → careers.applications ─────────────────────────
 R("PUT", "/careers/applications/:id/status", "careers.applications.edit");
 R("GET", "/careers/applications", ...view("careers.applications"));
 R("GET", "/careers/applications/:id", ...view("careers.applications"));
 
-// ── /rank-predictor → rank-predictor.{papers,answer-keys,submissions} ─────
-//    Specific rules first: answer keys and submissions are separate catalog
-//    modules that live under the papers path, so `crud("/rank-predictor/papers")`
-//    would otherwise swallow them.
+// Answer keys and submissions are separate modules under the papers path, so their
+// rules must precede `crud("/rank-predictor/papers")`.
 R("GET", "/rank-predictor/papers/:examId/answer-keys", ...view("rank-predictor.answer-keys"));
 R("POST", "/rank-predictor/papers/:examId/answer-keys", "rank-predictor.answer-keys.create");
 R("PATCH", "/rank-predictor/answer-keys/:id/status", "rank-predictor.answer-keys.toggle-status");
@@ -619,12 +523,8 @@ R("PUT", "/rank-predictor/submissions/:id/answers", "rank-predictor.submissions.
 R("POST", "/rank-predictor/submissions/:id/rescore", "rank-predictor.submissions.edit");
 R("DELETE", "/rank-predictor/submissions/:id", "rank-predictor.submissions.delete");
 
-// ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────
+// /uploads (presigned upload helper) is intentionally unmapped.
 
-/**
- * Resolve the catalog keys gating (method, relPath), or null if unmapped.
- * First matching rule wins.
- */
 export const resolveRequiredKeys = (
   method: string,
   relPath: string
@@ -637,13 +537,8 @@ export const resolveRequiredKeys = (
 };
 
 /**
- * Every catalog permission key referenced by an enforcement rule (deduped).
- *
- * This is the authoritative set of keys the backend actually gates routes on.
- * A cleanup that prunes the permission catalog/DB MUST protect these — deleting
- * a key that still appears here would make the mapped route deny every
- * non-super-admin the moment `RBAC_ENFORCE` is turned on (no grantable id).
- * Consumed by scripts/cleanup-web-permissions.ts.
+ * Every key the backend gates routes on. Catalog cleanup (scripts/cleanup-web-permissions.ts)
+ * must protect these, or the mapped route denies every non-super-admin once RBAC_ENFORCE is on.
  */
 export const RBAC_ROUTE_KEYS: ReadonlySet<string> = new Set(
   rules.flatMap((r) => r.keys)

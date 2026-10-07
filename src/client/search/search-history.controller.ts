@@ -1,14 +1,5 @@
-/**
- * Recent Search History — client controllers.
- *
- * Endpoints (all Bearer-auth; mounted under /api/v1/client/search/history):
- *   GET    /            → latest 10 searches (newest first)
- *   DELETE /            → clear all history for the customer
- *   DELETE /:id         → remove a single history entry (scoped to the customer)
- *
- * Recording is NOT done here — it happens automatically (fire-and-forget) inside
- * `globalSearch` whenever a valid `q` is searched. See search.controller.ts.
- */
+// Client search history: list, clear and delete recent searches.
+// History is recorded fire-and-forget inside `globalSearch` (search.controller.ts), not here.
 import { Request, Response } from "express";
 import * as historyService from "../../modules/client-search-history/client-search-history.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -20,7 +11,6 @@ const customerIdOf = (req: Request): number | null => {
   return Number.isInteger(n) && (n as number) > 0 ? (n as number) : null;
 };
 
-// GET /api/v1/client/search/history
 export const listSearchHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
@@ -36,7 +26,6 @@ export const listSearchHistory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/search/history
 export const clearSearchHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
@@ -51,7 +40,6 @@ export const clearSearchHistory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/search/history/:id
 export const deleteSearchHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {

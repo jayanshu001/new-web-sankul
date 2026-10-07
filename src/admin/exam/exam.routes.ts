@@ -1,3 +1,4 @@
+// Admin quizzes: exam category, exam, question and result routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadS3Mixed, uploadQuestionImages, uploadTo } from "../../middlewares/upload";
@@ -40,11 +41,7 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// Route-level response cache + autoFlushGroup on writes (see docs/CACHING.md).
-// Category writes flush "exam-category"; exam + question writes flush "exam"
-// (questions are exam content). Submissions/analytics/results stay uncached (live).
-
-// Categories
+// Question writes flush "exam" because questions are exam content.
 router.get("/categories/tree", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ExamCategory }), getCategoryTree);
 router.get("/categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.ExamCategory }), getCategories);
 router.post("/categories", uploadTo(UPLOAD_FOLDERS.quizCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), createCategory);
@@ -54,7 +51,6 @@ router.get("/categories/:id/courses", getCategoryCourses);
 router.put("/categories/:id", uploadTo(UPLOAD_FOLDERS.quizCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.ExamCategory), updateCategory);
 router.delete("/categories/:id", autoFlushGroup(CacheEntity.ExamCategory), deleteCategory);
 
-// Exams
 const examUpload = [uploadTo(UPLOAD_FOLDERS.quizSolution), uploadS3Mixed.single("solutionPdfUrl")];
 
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Exam }), getExams);
@@ -65,7 +61,6 @@ router.put("/:id", examUpload, autoFlushGroup(CacheEntity.Exam), updateExam);
 router.delete("/:id", autoFlushGroup(CacheEntity.Exam), deleteExam);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Exam), updateExamStatus);
 
-// Questions
 router.get("/questions/list", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Exam }), getQuestions);
 router.post("/questions", uploadQuestionImages.any(), autoFlushGroup(CacheEntity.Exam), createQuestion);
 router.post("/questions/bulk", autoFlushGroup(CacheEntity.Exam), bulkCreateQuestions);
@@ -74,7 +69,8 @@ router.get("/questions/:id", getQuestionById);
 router.put("/questions/:id", uploadQuestionImages.any(), autoFlushGroup(CacheEntity.Exam), updateQuestion);
 router.delete("/questions/:id", autoFlushGroup(CacheEntity.Exam), deleteQuestion);
 
-// Submissions / Analytics (live per-attempt — not cached)
+// Live per-attempt data, deliberately uncached.
+
 router.get("/:examId/submissions", getExamSubmissions);
 router.get("/:examId/analytics", getExamAnalytics);
 router.get("/results/:id", getResultById);

@@ -1,3 +1,4 @@
+// Client lecture notes: HTTP handlers for text notes and saved-material groups.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -15,7 +16,6 @@ import { buildLectureRef } from "../learning/lectureRef";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as lnSql from "../../modules/client-lecture-note/client-lecture-note.service";
 
-// POST /api/v1/client/lecture-notes
 export const createNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -50,8 +50,7 @@ export const createNote = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/lecture-notes?lectureType=recorded&videoId=...
-//                                  | lectureType=live&liveSessionId=...
+// Lists the user's notes on one lecture, plus its lecture ref and resume card.
 export const listNotes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -86,9 +85,8 @@ export const listNotes = async (req: Request, res: Response) => {
       refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
     }
     const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
-    // Live-course recordings: surface the owning liveCourseId on every note (when
-    // the note row didn't store it) so the FE can open the live player straight
-    // from the notes list without the 403-hint fallback.
+    // Surface the owning liveCourseId on every note so the FE can open the live player
+    // straight from the list without the 403-hint fallback.
     const notesOut = lnSql.enrichNotesWithLiveCourse(notes, (lecture as any)?.liveCourseId ?? null);
     return success(res, { notes: notesOut, lecture, resumeNext, pagination: buildPagination(total, page, limit) }, "Notes fetched.", 200);
   } catch (err) {
@@ -97,14 +95,8 @@ export const listNotes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/lecture-notes/saved-materials
-// Grouped "Saved Materials" listing — one row per **lecture** (the actual
-// video or live session the notes were taken on), showing that lecture's
-// title and the customer's note counts for it. Combines:
-//   - recorded notes  → grouped by `videoId`       (lecture: Video)
-//   - live notes      → grouped by `liveSessionId` (lecture: LiveSession)
-// Each row is tagged with `kind` so the client can deep-link to the right
-// player.
+// One row per lecture (Video via `videoId`, LiveSession via `liveSessionId`) with the
+// customer's note counts; `kind` lets the client deep-link to the right player.
 export const listSavedMaterialNotes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -124,13 +116,9 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/lecture-notes/saved-materials
-// Bulk-delete EVERY text + audio note for one saved-material group (the trash
-// action on a Saved Notes row). Target mirrors the `kind` + id fields the
-// saved-materials listing returns. Accepts the target in the JSON body OR the
-// query string (body wins on conflict). Scoped to the authenticated user and
-// idempotent — deleting a group with no notes returns success with zero counts
-// so the app can clear a stale row.
+// Bulk-deletes every text + audio note for one saved-material group. Target comes
+// from body or query (body wins). Idempotent: an empty group returns zero counts so
+// the app can clear a stale row.
 export const deleteSavedMaterialNotes = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -147,8 +135,6 @@ export const deleteSavedMaterialNotes = async (req: Request, res: Response) => {
     if (cid == null) return failure(res, "Unauthorized.", 401);
 
     const d = parsed.data;
-    // Resolve exactly one id → int, matching the kind. Validation already
-    // guaranteed the required field is present.
     let target: SavedMaterialTarget;
     if (d.kind === "recorded") {
       const id = lnSql.parseLnId(String(d.videoId)); if (id == null) return failure(res, "kind and videoId are required for recorded materials", 400);
@@ -166,8 +152,7 @@ export const deleteSavedMaterialNotes = async (req: Request, res: Response) => {
 
     const { deletedTextNotes, deletedVoiceNotes, audioUrls } = await lnSql.deleteSavedMaterialNotes(cid, target);
 
-    // Best-effort S3 cleanup for the deleted audio notes — mirror single audio
-    // delete: a failed object delete must not fail the request (rows are gone).
+    // Best-effort storage cleanup: a failed object delete must not fail the request.
     for (const url of audioUrls) {
       try { await deleteFromS3FileUrl(url); }
       catch (s3err) { logger.warn("deleteSavedMaterialNotes S3 delete failed", { traceId, userId, url, error: getErrorMessage(s3err) }); }
@@ -181,7 +166,6 @@ export const deleteSavedMaterialNotes = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/client/lecture-notes/:id
 export const updateNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -200,7 +184,7 @@ export const updateNote = async (req: Request, res: Response) => {
     if (cid == null || nid == null) return failure(res, "Note not found.", 404);
     const existing = await lnSql.findOwnedNote(nid, cid);
     if (!existing) return failure(res, "Note not found.", 404);
-    // Re-check entitlement on write (lapsed sub locks editing).
+    // Re-check entitlement on write: a lapsed subscription locks editing.
     if (existing.lectureType === "recorded" && existing.videoId != null) {
       const g = await lnSql.authorizeRecorded(cid, existing.videoId);
       if ("error" in g) return failure(res, g.error, g.status);
@@ -216,7 +200,6 @@ export const updateNote = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/lecture-notes/:id
 export const deleteNote = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

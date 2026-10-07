@@ -1,3 +1,4 @@
+// Admin jobs portal: content (posts, admit cards, results...) CRUD and upload routes.
 import { Router } from "express";
 import { uploadS3, uploadS3Mixed, uploadS3Document, enforceMixedSizeLimits, uploadTo, watermarkPdfs } from "../../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../../config/uploadFolders";

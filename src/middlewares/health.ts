@@ -1,19 +1,7 @@
-// src/middlewares/health.ts
-//
-// Two distinct health endpoints, exposed by app.ts:
-//
-//   /healthz — Liveness. "Is the Node process alive enough to be useful?"
-//              Cheap, no I/O. K8s/PM2 uses this to decide whether to RESTART.
-//              Returns 200 unless the process is wedged (timeouts kick in).
-//
-//   /readyz  — Readiness. "Should the LB send traffic here right now?"
-//              Pings MySQL (Prisma) + Redis. Returns 503 if any dependency is
-//              unhealthy. K8s uses this to decide whether to KEEP traffic
-//              flowing; failing /readyz briefly during a DB/Redis blip is
-//              preferable to spraying 5xx at users.
-//
-// Both endpoints are mounted BEFORE the global rate limiter so a scrape
-// storm or LB health-check storm doesn't accidentally get throttled.
+// Health checks: liveness, readiness and status-report handlers.
+// /healthz = liveness (no I/O; drives restarts). /readyz = readiness (pings MySQL +
+// Redis, 503 on failure; drives LB traffic). Both are mounted before the global rate
+// limiter so health-check storms are never throttled.
 
 import type { RequestHandler } from "express";
 import { redisClient } from "../config/redis";
@@ -41,10 +29,6 @@ const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise
   }
 };
 
-/**
- * Liveness probe. Returns 200 with uptime + pid as long as the event loop
- * is responsive enough to serve the request. Never checks I/O.
- */
 export const livenessHandler: RequestHandler = (_req, res) => {
   res.status(200).json({
     status: "ok",
@@ -55,18 +39,11 @@ export const livenessHandler: RequestHandler = (_req, res) => {
 };
 
 /**
- * Readiness probe. Pings MySQL (Prisma) and Redis with a tight timeout each. Returns
- * 200 only if every check passes. Anything else → 503 + per-check status.
- *
- * Note: we don't ping the notification queue separately because it shares
- * the Redis connection backend — a healthy Redis implies the queue can
- * accept jobs. (BullMQ would need its own roundtrip to verify, and that
- * roundtrip is itself adding load that doesn't pay off in failure detection.)
+ * 200 only if every check passes, else 503 + per-check status. The notification queue
+ * isn't pinged separately: it shares Redis, so a healthy Redis implies it can accept jobs.
  */
 export const readinessHandler: RequestHandler = async (_req, res) => {
-  // If a SIGTERM has been received we want the load balancer to stop sending
-  // traffic immediately, even though Mongo + Redis are still healthy at this
-  // instant. Returning 503 here is the cleanest way to drain.
+  // After SIGTERM, 503 so the load balancer drains this instance even while dependencies are healthy.
   if (isShuttingDown()) {
     return res.status(503).json({
       status: "shutting_down",
@@ -76,8 +53,6 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
 
   const checks: Record<string, { ok: boolean; latencyMs?: number; error?: string }> = {};
 
-  // MySQL (Prisma): the primary datastore. A trivial `SELECT 1` confirms the
-  // connection pool can serve queries right now.
   const mysqlStart = Date.now();
   try {
     await withTimeout(prisma.$queryRaw`SELECT 1`, PING_TIMEOUT_MS, "mysql");
@@ -90,8 +65,6 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
     };
   }
 
-  // Redis: PING is the canonical check. ioredis short-circuits with a queued
-  // error if not connected, so the timeout is belt-and-suspenders.
   const redisStart = Date.now();
   try {
     const reply = await withTimeout(redisClient.ping(), PING_TIMEOUT_MS, "redis");
@@ -114,19 +87,11 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
 };
 
 /**
- * Public, unauthenticated full-status report. Unlike /readyz (which is a tight
- * pass/fail probe for the LB), this returns a human-readable snapshot of the
- * whole service: DB + Redis connectivity, the PDF-upload BullMQ queue's
- * per-state job counts, and whether its worker is running. Always returns 200
- * with the report — it's a dashboard endpoint, not a probe, so a degraded
- * dependency shows up in the body rather than as an HTTP failure.
- *
- * Mounted BEFORE the global rate limiter (see app.ts) and with no auth, so it
- * can be scraped by an uptime monitor. It leaks only connection booleans and
- * queue depths — nothing sensitive.
+ * Public status snapshot for uptime monitors (Redis, PDF-upload queue counts, worker
+ * state). Always 200: a degraded dependency shows in the body, not the status. Exposes
+ * only connection booleans and queue depths.
  */
 export const healthReportHandler: RequestHandler = async (_req, res) => {
-  // --- Redis ---
   let redis: "connected" | "disconnected" = "disconnected";
   try {
     const reply = await withTimeout(redisClient.ping(), PING_TIMEOUT_MS, "redis");
@@ -135,7 +100,6 @@ export const healthReportHandler: RequestHandler = async (_req, res) => {
     redis = "disconnected";
   }
 
-  // --- BullMQ PDF-upload queue ---
   const queue = getPdfUploadQueueOrNull();
   let workerPdfEmailQueue: "connected" | "disconnected" = "disconnected";
   let counts: Record<string, number> = {};
@@ -148,7 +112,6 @@ export const healthReportHandler: RequestHandler = async (_req, res) => {
     }
   }
 
-  // --- BullMQ worker ---
   const worker = getPdfUploadWorkerOrNull();
   const workerPdfEmailWorker = worker?.isRunning() ? "running" : "stopped";
 

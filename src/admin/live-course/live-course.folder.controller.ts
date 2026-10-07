@@ -1,3 +1,4 @@
+// Admin live-course folders: HTTP handlers for recording-folder CRUD.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -33,10 +34,8 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
   return failure(res, "Validation failed.", 422, { errors: messages });
 }
 
-// GET /api/v1/admin/live-courses/:liveCourseId/folders?search=<query>
-// Returns the flat list of folders for this course PLUS the parent/child
-// relation rows so the UI can build a tree. Optional `search` filters folders
-// whose title contains the query (case-insensitive) — the panel's folder picker.
+// Returns the flat folder list plus the parent/child relation rows so the UI can
+// build a tree. `search` filters by title (the panel's folder picker).
 export const listFolders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -58,9 +57,7 @@ export const listFolders = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/live-courses/:liveCourseId/folders
-// Creates a folder under this live course. If parentFolderId is given, also
-// inserts a relation row (parent → new child).
+// With parentFolderId, also inserts a relation row (parent → new child).
 export const createFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -102,7 +99,6 @@ export const createFolder = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/admin/live-courses/:liveCourseId/folders/:folderId
 export const updateFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
@@ -141,9 +137,7 @@ export const updateFolder = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/live-courses/:liveCourseId/folders/:folderId
-// Refuses to delete the root folder. Cascades: deletes all videos in this
-// folder, all relations referencing it.
+// Refuses to delete the root folder. Cascades to the folder's videos and relations.
 export const deleteFolder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");

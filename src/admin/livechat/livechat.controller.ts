@@ -1,3 +1,4 @@
+// Admin live chat: host messages, chat settings, moderation and bans for live sessions.
 import { Request, Response } from "express";
 import {
   io,
@@ -13,7 +14,7 @@ import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 
-// POST /api/v1/admin/live-chat/message
+// Host message under the current chat mode; private replies can target one student.
 export const sendAdminMessage = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("sendAdminMessage invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -31,9 +32,8 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
     if (text.length > 2000) { logger.warn("sendAdminMessage too long", { traceId, liveClassId, length: text.length }); return failure(res, "Message too long (max 2000 characters).", 422); }
 
     const admin = req.user as any;
-    // The admin JWT only carries { id, email, role } — no name. Look up the
-    // admin's real name from ws_users so the FE shows a person, not an email.
-    // If there's no name on record, fall back to "Super Admin" (never the email).
+    // The admin JWT carries no name; resolve it from ws_users and fall back to
+    // "Super Admin", never the email.
     let dbName = "";
     try {
       const adminIdBig = BigInt(String(admin.id));
@@ -47,15 +47,13 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
     // The host's message is stored under the mode active right now, exactly like a
     // viewer's, so it replays in the correct listing after a toggle or a reload.
     const settings = await liveSql.getChatSettings(liveClassId);
-    // Optional. Addresses a private reply to ONE student, so it reaches them and
-    // the admins only — a reply for one student must not land in another's thread.
-    // Omitted, a private host message goes to the whole room like a public one.
-    // Ignored while chat is public.
+    // Optional: addresses a private reply to one student (and the admins) so it never
+    // lands in another student's thread. Omitted, a private host message goes to the
+    // whole room. Ignored while chat is public.
     const targetCustomerId = settings.privateChat ? liveSql.parseLiveId(String(req.body?.targetCustomerId ?? "")) : null;
 
     const saved = await liveSql.sendAdminChatMessage({ liveClassId, adminId: liveSql.parseLiveId(String(admin.id)), userName: adminName, message: text, isPrivate: settings.privateChat, targetCustomerId });
-    // `role` lets the FE reliably detect a super admin (vs admin/editor) and
-    // style the message accordingly — see getChatHistory for the reload path.
+    // `role` lets the FE style super-admin messages; getChatHistory covers reloads.
     const payload = { _id: saved._id, liveClassId, adminId: admin.id, isAdmin: true, role: admin?.role ?? "admin", userName: adminName, message: text, isPrivate: settings.privateChat, targetCustomerId: targetCustomerId != null ? String(targetCustomerId) : null, createdAt: saved.createdAt };
 
     if (settings.privateChat) {
@@ -72,7 +70,6 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-chat/:liveClassId/settings
 // Returns the per-session chat settings { chatEnabled, privateChat }; defaults
 // to { chatEnabled: true, privateChat: false } when nothing has been saved.
 export const getChatSettings = async (req: Request, res: Response) => {
@@ -90,7 +87,6 @@ export const getChatSettings = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/admin/live-chat/:liveClassId/settings
 // Body: { chatEnabled?: boolean, privateChat?: boolean } (partial). Persists,
 // broadcasts `chat_settings` to the room so viewers + admins react live, and
 // returns the full updated object.
@@ -116,13 +112,10 @@ export const updateChatSettings = async (req: Request, res: Response) => {
     }
 
     const settings = await liveSql.updateChatSettings(liveClassId, patch);
-    // Broadcast so the admin panel + every viewer in the room hydrate live.
     io?.to(roomKey(liveClassId)).emit("chat_settings", settings);
-    // Then replace what they render. Without this the client keeps appending the
-    // new mode's messages onto the previous mode's list and the thread reads as a
-    // mix of both. Each socket gets the FULL saved history for the new mode,
-    // scoped to what that socket may see. Best-effort — a failed history push must
-    // not fail the settings write that already committed.
+    // Replace what clients render, otherwise they append the new mode's messages to
+    // the old mode's list. Each socket gets the full history for the new mode, scoped
+    // to what it may see. Best-effort: must not fail the already-committed write.
     void broadcastChatHistoryForMode(liveClassId, settings.privateChat).catch((e) =>
       logger.error("updateChatSettings history broadcast failed", { traceId, liveClassId, error: getErrorMessage(e) })
     );
@@ -135,7 +128,6 @@ export const updateChatSettings = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-chat/:liveClassId/history
 export const getChatHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const { liveClassId } = req.params;
@@ -151,7 +143,7 @@ export const getChatHistory = async (req: Request, res: Response) => {
     const priv = req.query.private;
     const scope = priv === undefined ? undefined : { isPrivate: priv === "true" || priv === "1" };
 
-    // NOTE: includeDeleted not supported on SQL (history excludes soft-deleted).
+    // includeDeleted is not supported; history always excludes soft-deleted rows.
     const messages = await liveSql.getChatHistory(String(liveClassId), limit, before && !isNaN(before.getTime()) ? before : undefined, scope);
     return success(res, { messages, total: messages.length }, "Chat history fetched.");
   } catch (err) {
@@ -160,7 +152,6 @@ export const getChatHistory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/live-chat/messages/:messageId
 // Soft-delete one chat message. Broadcasts `message_deleted` so every viewer
 // in the room removes it from their UI immediately.
 export const deleteChatMessage = async (req: Request, res: Response) => {
@@ -183,7 +174,6 @@ export const deleteChatMessage = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/live-chat/bans
 // Body: { customerId, reason? }
 // Bans a customer from sending any live-chat messages, globally. Disconnects
 // every active chat socket the customer has and emits `chat_banned` so their
@@ -213,7 +203,6 @@ export const banCustomerFromChat = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/live-chat/bans/:customerId
 export const unbanCustomerFromChat = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = String(req.params.customerId ?? "");
@@ -232,7 +221,7 @@ export const unbanCustomerFromChat = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/live-chat/bans
+// Global chat bans, paginated in memory.
 export const listChatBans = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listChatBans invoked", { traceId, userId: req.user?.id });

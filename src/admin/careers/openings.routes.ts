@@ -1,3 +1,4 @@
+// Admin careers: job opening CRUD routes.
 import { Router } from "express";
 import {
   getOpeningList,

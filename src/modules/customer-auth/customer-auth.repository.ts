@@ -1,19 +1,14 @@
+// Customer auth: Prisma queries for OTP login, login state and access tokens.
 import { prisma } from "../../config/prisma";
 import type { CreateTokenInput } from "./customer-auth.types";
 
-/**
- * Prisma persistence for the customer-auth MySQL branch.
- * Phone is stored as the 10-digit value (no country code), matching the dump
- * and the shared `formatPhone` helper.
- */
+/** Phone is stored as the 10-digit value (no country code), as `formatPhone` produces. */
 export const customerAuthRepository = {
-  /** Active, non-deleted customer by phone (the login lookup). */
   findActiveByPhone: (phone: string) =>
     prisma.customer.findFirst({
       where: { phoneNumber: phone, isAccountDeleted: false },
     }),
 
-  /** Same as above but also requires status=true (validate/refresh use this). */
   findLoginableByPhone: (phone: string) =>
     prisma.customer.findFirst({
       where: { phoneNumber: phone, isAccountDeleted: false, status: true },
@@ -25,9 +20,8 @@ export const customerAuthRepository = {
     }),
 
   /**
-   * Raw account gate state for the per-request authenticate check.
-   * Returns just status + isAccountDeleted (no row filter) so the middleware
-   * can tell "disabled" apart from "deleted". null = no such customer.
+   * Unfiltered so the per-request auth gate can tell "disabled" from "deleted".
+   * null = no such customer.
    */
   getAuthStateById: (id: number) =>
     prisma.customer.findUnique({
@@ -36,22 +30,13 @@ export const customerAuthRepository = {
     }),
 
   /**
-   * Does this customer still have a live token row?
+   * Makes ws_customer_access_token authoritative: `authenticate` rejects a
+   * customer with no live row, so revoking rows signs the device out.
    *
-   * This is what makes ws_customer_access_token AUTHORITATIVE for customer
-   * sessions: `authenticate` rejects a request whose customer has no live row,
-   * so deleting/flagging the rows actually signs the device out instead of
-   * only blocking the next refresh. Previously the table was invisible to the
-   * request path entirely.
-   *
-   * `findFirst` + `select: { id }`, not `count`: we only need existence, and
-   * this way MySQL stops at the first match. Covered by the prefix of
-   * idx_cust_access_token_live (customer_id, active, deleted, expires_at) —
-   * without that index this would full-scan on EVERY authenticated request.
-   *
-   * `expires_at` is deliberately NOT checked (2026-09-16): customer sessions
-   * have no time ceiling — only logout / account disable / account delete
-   * (which flag or remove the rows) end them.
+   * Existence-only `findFirst`, covered by the prefix of
+   * idx_cust_access_token_live; without that index this full-scans on every
+   * authenticated request. `expires_at` is deliberately not checked: customer
+   * sessions end only by logout, account disable or delete.
    */
   findLiveTokenId: (customerId: number) =>
     prisma.customerAccessToken.findFirst({
@@ -59,10 +44,7 @@ export const customerAuthRepository = {
       select: { id: true },
     }),
 
-  /**
-   * Create a stub customer for a brand-new phone.
-   * `state`/`district` are NOT NULL with no default in MySQL → default to 0.
-   */
+  /** `state`/`district` are NOT NULL with no default, so they start at 0. */
   createStub: (phone: string, otp: string, otpExpiresAt: Date) =>
     prisma.customer.create({
       data: {
@@ -82,7 +64,6 @@ export const customerAuthRepository = {
       },
     }),
 
-  /** Set/refresh OTP on an existing customer (generate path). */
   setOtpForLogin: (id: number, otp: string, otpExpiresAt: Date, loginCount: number) =>
     prisma.customer.update({
       where: { id },
@@ -95,27 +76,24 @@ export const customerAuthRepository = {
       },
     }),
 
-  /** Set/refresh OTP without bumping login count (resend path). */
+  /** Resend path: does not bump login count. */
   setOtpResend: (id: number, otp: string, otpExpiresAt: Date) =>
     prisma.customer.update({
       where: { id },
       data: { otp, otp_expires_at: otpExpiresAt, triedOtp: 0, otpBlockedAt: null },
     }),
 
-  /** Record an OTP in the history table (ws_customer_otp). */
   recordOtp: (customerId: number, otp: string) =>
     prisma.customerOtp.create({
       data: { customerId, otp, created_at: new Date() },
     }),
 
-  /** Bump the wrong-attempt counter (and optionally osType) on bad OTP. */
   bumpTriedOtp: (id: number, triedOtp: number, osType?: string) =>
     prisma.customer.update({
       where: { id },
       data: { triedOtp, ...(osType ? { os_type: osType as never } : {}) },
     }),
 
-  /** Mark verified + clear tried counter on successful validate. */
   markVerified: (id: number, osType?: string) =>
     prisma.customer.update({
       where: { id },
@@ -123,17 +101,13 @@ export const customerAuthRepository = {
         isPhoneVerified: true,
         verified: true,
         triedOtp: 0,
-        // `lastLogin` rides along on the existing UPDATE: a successful validateOtp
-        // IS the login, and `login_count` was already being maintained without a
-        // matching timestamp (you could see how often someone logged in, never
-        // when). Stamped here rather than in a separate query.
+        // A successful validateOtp is the login, so stamp it here.
         lastLogin: new Date(),
         isLoggedIn: true,
         ...(osType ? { os_type: osType as never } : {}),
       },
     }),
 
-  /** Clear tried counter on a returning user's successful validate. */
   clearTried: (id: number, osType?: string) =>
     prisma.customer.update({
       where: { id },
@@ -141,33 +115,18 @@ export const customerAuthRepository = {
     }),
 
   /**
-   * Clear the `is_login` flag on an explicit logout.
-   *
-   * Deliberately NOT folded into `deactivateTokens`: that runs mid-login too
-   * (validateOtp deactivates the previous token before issuing the new one), so
-   * clearing the flag there would immediately undo the login stamp above.
+   * Not folded into `deactivateTokens`: that also runs mid-login (validateOtp
+   * revokes the previous token), so clearing the flag there would undo the login.
    */
   markLoggedOut: (id: number) =>
     prisma.customer.update({ where: { id }, data: { isLoggedIn: false } }),
 
   /**
-   * One page of customers whose `is_login` is stale.
+   * One page of customers flagged `is_login` but holding no live token. The flag
+   * drifts because expiry, uninstalls and crashes never reach logout.
    *
-   * `is_login` is derived state, so it drifts: a token simply expiring runs no
-   * code, and an uninstall or a crash never reaches the logout route. Without
-   * the reconcile sweep the flag would report customers as logged in
-   * indefinitely. A row is stale when it is flagged `true` but holds no live
-   * token (active, not-deleted, unexpired).
-   *
-   * NOTE: expressed as "has at least one live session" so it stays correct
-   * regardless of the single-device gate in authenticate.ts.
-   *
-   * Read-only and keyset-paginated (`id > afterId`, ordered by id) so the sweep
-   * never runs one unbounded statement: the anti-join against
-   * ws_customer_access_token over the whole ws_customer table is the expensive
-   * half, and doing it as a bounded SELECT keeps it off the write path — no long
-   * UPDATE holding row locks and inflating one binlog event. See the batched
-   * loop in otp-unblock.scheduler.ts.
+   * Keyset-paginated read so the expensive anti-join never runs as one unbounded
+   * UPDATE (long row locks, huge binlog event). See otp-unblock.scheduler.ts.
    */
   findStaleLoggedInIds: (afterId: number, take: number) =>
     prisma.customer.findMany({
@@ -187,12 +146,8 @@ export const customerAuthRepository = {
     }),
 
   /**
-   * Clear `is_login` for one page of ids from `findStaleLoggedInIds`.
-   *
-   * The `isLoggedIn: true` guard is kept so the statement stays idempotent and
-   * concurrency-safe: a customer who logged back in between the SELECT and this
-   * UPDATE is simply skipped rather than being logged out under them, and a
-   * second worker running the same page updates 0 rows.
+   * The `isLoggedIn: true` guard keeps this idempotent: a customer who logged
+   * back in since the SELECT is skipped, and a concurrent worker updates 0 rows.
    */
   clearLoggedInByIds: (ids: number[]) =>
     prisma.customer.updateMany({
@@ -200,11 +155,7 @@ export const customerAuthRepository = {
       data: { isLoggedIn: false },
     }),
 
-  /**
-   * Block OTP login after too many wrong attempts: disable the account
-   * (status=false), stamp the block time, and pin the tried counter at the cap.
-   * The account is auto-restored 24h later by the otp-unblock sweep.
-   */
+  /** Disables the account; the otp-unblock sweep restores it after the block window. */
   blockOtp: (id: number, attempts: number, osType?: string) =>
     prisma.customer.update({
       where: { id },
@@ -217,10 +168,8 @@ export const customerAuthRepository = {
     }),
 
   /**
-   * Auto-unblock accounts whose OTP block is older than `cutoff`. Only touches
-   * rows blocked by OTP (`otpBlockedAt` set AND older than cutoff) — an
-   * admin-disabled account has `otpBlockedAt = null` and is left untouched.
-   * Atomic + idempotent (safe to run concurrently); returns the affected count.
+   * Only rows blocked by OTP: an admin-disabled account has `otpBlockedAt = null`
+   * and is left alone. Idempotent; safe to run concurrently.
    */
   unblockExpiredOtp: (cutoff: Date) =>
     prisma.customer.updateMany({
@@ -228,14 +177,12 @@ export const customerAuthRepository = {
       data: { status: true, otpBlockedAt: null, triedOtp: 0 },
     }),
 
-  /** Invalidate every token for a customer (validate re-issue, logout). */
   deactivateTokens: (customerId: number) =>
     prisma.customerAccessToken.updateMany({
       where: { customerId },
       data: { active: false, deleted: true },
     }),
 
-  /** Persist a freshly issued token pair. */
   createToken: (input: CreateTokenInput) =>
     prisma.customerAccessToken.create({
       data: {
@@ -249,13 +196,11 @@ export const customerAuthRepository = {
       },
     }),
 
-  /** Refresh-flow lookup: the active row matching this refresh token. */
   findActiveTokenByRefresh: (refreshToken: string, customerId: number) =>
     prisma.customerAccessToken.findFirst({
       where: { refreshToken, customerId, active: true, deleted: false },
     }),
 
-  /** Invalidate a single token row by id (refresh rotation). */
   deactivateToken: (id: number) =>
     prisma.customerAccessToken.update({
       where: { id },

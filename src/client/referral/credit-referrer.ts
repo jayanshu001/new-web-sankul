@@ -1,3 +1,4 @@
+// Referral rewards: credits the referrer after a verified purchase.
 import { creditReferrerMysql } from "../../modules/referral/referral.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -10,20 +11,14 @@ interface CreditOpts {
   source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 }
 
-// Credits the referrer with `ReferralProgram.referralReward` % of paidAmount.
-// Idempotent on (source, orderId, referrer) — a second call for the same order is
-// a no-op so the payment-verify path can be retried safely (Razorpay webhooks,
-// manual reverify, etc.).
-//
-// NEVER THROWS: crediting is a post-payment side effect. A verified purchase must
-// succeed even if the reward credit fails — errors are logged and swallowed so the
-// customer's fulfillment is never blocked by the referrer's wallet write.
+// Credits the referrer `ReferralProgram.referralReward` % of paidAmount. Idempotent
+// on (source, orderId, referrer) so payment verify can be retried safely.
+// Never throws: a failed credit is logged and swallowed so it can't block fulfillment.
 export async function creditReferrer(opts: CreditOpts): Promise<void> {
   const { referrerId, buyerId, orderId, paidAmount, source } = opts;
   if (!referrerId || !orderId || paidAmount <= 0) return;
   if (String(referrerId) === String(buyerId)) return;
 
-  // SQL int id-space: the payment-verify path passes int ids.
   const rid = Number(referrerId);
   const oid = Number(orderId);
   const bid = Number(buyerId);

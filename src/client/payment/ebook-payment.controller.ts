@@ -1,3 +1,4 @@
+// Client payments: ebook create-order (promo, wallet, Razorpay).
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
@@ -14,12 +15,9 @@ import {
 } from "../../modules/ebook-order/ebook-order.service";
 import { findActiveEbookById } from "../../modules/catalog-ebook/catalog-ebook.service";
 
-/** Non-null Razorpay client (the controller has already null-checked it). */
 type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
 
-// MySQL ebook write path: the plan id is an INT (the migrated id-space). Accepts
-// the same optional promo code as the Mongo branch (ebooks are digital — no
-// delivery address).
+// Ebooks are digital — no delivery address.
 const createEbookOrderMysqlSchema = z.object({
   planId: z.coerce
     .number({ invalid_type_error: "Please select a valid eBook plan." })
@@ -37,9 +35,8 @@ const createEbookOrderMysqlSchema = z.object({
     .optional(),
 });
 
-// POST /api/v1/client/payment/create-order/ebook
-// Creates an EbookOrder in PENDING status and a Razorpay order. /verify (or the
-// webhook) flips status to COMPLETE and provisions the EbookSubscription.
+// Creates a PENDING EbookOrder + Razorpay order; /verify (or the webhook) completes it
+// and provisions the EbookSubscription.
 export const createEbookOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -57,7 +54,6 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // C3 seam: coerce the string-typed token subject to the int customer id.
     const customerIdInt = Number(customerId);
     if (!Number.isInteger(customerIdInt)) {
       logger.warn("createEbookOrderPayment[mysql] non-int customer id", { traceId, customerId });
@@ -75,10 +71,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
   }
 };
 
-// MySQL ebook create-order. Reads plan + ebook from MySQL, writes the pending
-// ws_ebook_order row, creates the Razorpay order, returns the SAME response shape
-// as the Mongo branch (ebookOrderId = the MySQL order id). /verify (ebook branch)
-// completes it. Contract-safe: the client only round-trips the razorpay order id.
+// The client only round-trips the Razorpay order id; ebookOrderId is the order row id.
 const createEbookOrderMysqlPath = async (
   req: Request,
   res: Response,
@@ -102,8 +95,7 @@ const createEbookOrderMysqlPath = async (
     return res.status(404).json({ success: false, message: "Ebook not found or inactive." });
   }
 
-  // Resolve the promo code (if any) against THIS ebook; charge the reduced
-  // amount. Re-validated here — the /promocodes/apply preview is never trusted.
+  // Re-validated here — the /promocodes/apply preview is never trusted.
   let chargeAmount = plan.price;
   let promocodeIdNum: number | null = null;
   let originalAmount: number | null = null;
@@ -124,10 +116,9 @@ const createEbookOrderMysqlPath = async (
     referrerIdNum = result.referrerId ?? null;
   }
 
-  // Freeze the redeemed code into the order as the legacy snapshot OBJECT.
-  // ws_ebook_order has only a `promocode` column (no refferalcode), so whichever
-  // snapshot was built lands there and referrer_id tells the two kinds apart.
-  // promoter-data reads ebook commission off this column by JSON path.
+  // Freeze the redeemed code as the snapshot OBJECT. ws_ebook_order has only a
+  // `promocode` column, so referrer_id tells promo and referral apart; promoter-data
+  // reads ebook commission off this column by JSON path.
   const codeSnapshot = await buildOrderCodeSnapshots({
     promocodeId: promocodeIdNum,
     referrerId: referrerIdNum,
@@ -135,7 +126,7 @@ const createEbookOrderMysqlPath = async (
   });
   const codeJson = codeSnapshot.promocode ?? codeSnapshot.refferalcode;
 
-  // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
+  // Wallet ("coin") redemption reduces the charge here; the debit happens at verify.
   const walletUsage = await resolveWalletUsage(Number(customerId), coin, plan.price);
   if (walletUsage.error) {
     logger.warn("createEbookOrderPayment[mysql] wallet rejected", { traceId, customerId, coin, error: walletUsage.error });

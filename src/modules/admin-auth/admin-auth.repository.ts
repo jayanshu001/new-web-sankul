@@ -1,8 +1,8 @@
+// Admin auth: Prisma queries for admin users, roles, permissions and access tokens.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 
-/** Shared WHERE builder for the admin list + count (keeps both in lockstep). */
 const buildAdminListWhere = (opts: {
   search?: string;
   status?: boolean;
@@ -21,29 +21,23 @@ const buildAdminListWhere = (opts: {
 };
 
 /**
- * Prisma persistence for the admin-auth MySQL branch (ws_users).
- *
- * The legacy Laravel schema has no `role`/`deleted` column on ws_users; roles
- * and permissions are resolved from the spatie pivot tables
- * (ws_model_has_roles / ws_model_has_permissions). Tokens live in
- * ws_admin_access_tokens, mirroring the customer-auth token store.
+ * ws_users has no `role`/`deleted` column; roles and permissions come from the
+ * spatie pivots (ws_model_has_roles / ws_model_has_permissions). Tokens live in
+ * ws_admin_access_tokens.
  */
 export const adminAuthRepository = {
-  /** Active admin by email (the login lookup). status enum '1' = active. */
+  /** status enum '1' = active. */
   findActiveByEmail: (email: string) =>
     prisma.adminUser.findFirst({
       where: { email: email.toLowerCase().trim(), status: "active" },
     }),
 
-  /** Active admin by id (refresh/validate). */
   findActiveById: (id: bigint) =>
     prisma.adminUser.findFirst({ where: { id, status: "active" } }),
 
-  /** Admin by id regardless of status (change-password / profile update). */
   findById: (id: bigint) =>
     prisma.adminUser.findUnique({ where: { id } }),
 
-  /** Record login stats after a successful authentication. */
   touchLogin: (id: bigint, ip: string | undefined) =>
     prisma.adminUser.update({
       where: { id },
@@ -70,8 +64,6 @@ export const adminAuthRepository = {
       },
     }),
 
-  // ─── Roles / permissions (spatie pivots) ─────────────────────────────────
-  /** Role rows assigned to an admin (model_type is the Laravel model class). */
   findRoles: async (adminId: bigint) => {
     const links = await prisma.adminModelHasRole.findMany({
       where: { modelId: adminId },
@@ -82,9 +74,7 @@ export const adminAuthRepository = {
     });
   },
 
-  /** Role rows for MANY admins at once — { adminId(string) → role rows }.
-   * Batches the spatie pivot lookup so callers (e.g. live-chat history role
-   * resolution) avoid an N+1 across a page of messages. */
+  /** Batched role lookup ({ adminId → roles }) to avoid an N+1 across a page of messages. */
   findRolesForMany: async (adminIds: bigint[]): Promise<Map<string, { id: bigint; name: string }[]>> => {
     const out = new Map<string, { id: bigint; name: string }[]>();
     if (!adminIds.length) return out;
@@ -107,7 +97,6 @@ export const adminAuthRepository = {
     return out;
   },
 
-  /** Permissions directly assigned to an admin (not via role). */
   findDirectPermissions: async (adminId: bigint) => {
     const links = await prisma.adminModelHasPermission.findMany({
       where: { modelId: adminId },
@@ -118,19 +107,12 @@ export const adminAuthRepository = {
     });
   },
 
-  /**
-   * Permissions granted through the given role(s) via the spatie pivot
-   * ws_role_has_permissions. Used to build the *effective* permission set for a
-   * login (role-derived perms are how access is normally granted here; direct
-   * per-user perms are the exception). Returns [] for no roles / no grants.
-   */
   findRolePermissions: async (roleIds: bigint[]) => {
     if (!roleIds.length) return [];
     const links = await prisma.adminRoleHasPermission.findMany({
       where: { roleId: { in: roleIds } },
     });
     if (!links.length) return [];
-    // De-dup permission ids across roles before the row lookup.
     const uniqueIds = Array.from(
       new Map(links.map((l) => [String(l.permissionId), l.permissionId])).values()
     );
@@ -139,7 +121,6 @@ export const adminAuthRepository = {
     });
   },
 
-  // ─── Tokens (ws_admin_access_tokens) ─────────────────────────────────────
   createToken: (input: {
     adminUserId: bigint;
     token: string;
@@ -163,7 +144,7 @@ export const adminAuthRepository = {
       where: { refreshToken, adminUserId, active: true, deleted: false },
     }),
 
-  /** Any live token row for this admin — `authenticate` rejects admin requests without one. */
+  /** `authenticate` rejects admin requests without a live token row. */
   findLiveTokenId: (adminUserId: bigint) =>
     prisma.adminAccessToken.findFirst({
       where: { adminUserId, active: true, deleted: false },
@@ -182,12 +163,7 @@ export const adminAuthRepository = {
       data: { active: false, deleted: true },
     }),
 
-  // ─── Administrator CRUD (ws_users) ───────────────────────────────────────
-  /**
-   * Paginated list. `ws_users` has no soft-delete column, so "deleted" admins
-   * are represented purely by status=inactive — the list shows all rows and
-   * callers filter by status when needed.
-   */
+  /** ws_users has no soft-delete column; "deleted" admins are status=inactive. */
   listAdmins: (opts: {
     search?: string;
     status?: boolean;
@@ -205,7 +181,6 @@ export const adminAuthRepository = {
   countAdmins: (opts: { search?: string; status?: boolean; ids?: bigint[] }) =>
     prisma.adminUser.count({ where: buildAdminListWhere(opts) }),
 
-  /** Admin ids that carry a given spatie role (for the role filter). */
   adminIdsWithRole: async (roleId: bigint) => {
     const links = await prisma.adminModelHasRole.findMany({ where: { roleId } });
     return links.map((l) => l.modelId);
@@ -269,11 +244,7 @@ export const adminAuthRepository = {
       data: { status: status ? "active" : "inactive", updatedAt: new Date() },
     }),
 
-  /**
-   * Hard delete. `ws_users` has no soft-delete column, so deletion physically
-   * removes the row. Dependents are cleared first to avoid orphans / FK errors:
-   * access tokens (FK on admin_user_id) + the spatie role/permission pivots.
-   */
+  /** Hard delete; access tokens and spatie pivots are cleared first to avoid orphans / FK errors. */
   deleteAdmin: (id: bigint, modelType: string) =>
     prisma.$transaction([
       prisma.adminAccessToken.deleteMany({ where: { adminUserId: id } }),
@@ -282,8 +253,6 @@ export const adminAuthRepository = {
       prisma.adminUser.delete({ where: { id } }),
     ]),
 
-  // ─── Role assignment (spatie pivot ws_model_has_roles) ───────────────────
-  /** Replace an admin's role assignments with a single role id. */
   setAdminRole: async (adminId: bigint, roleId: bigint, modelType: string) => {
     await prisma.adminModelHasRole.deleteMany({ where: { modelId: adminId, modelType } });
     await prisma.adminModelHasRole.create({
@@ -291,7 +260,6 @@ export const adminAuthRepository = {
     });
   },
 
-  /** All assignable roles (the pre-requisites dropdown). */
   listRoles: () => prisma.adminRoleRow.findMany({ orderBy: { name: "asc" } }),
 
   roleExists: (roleId: bigint) =>

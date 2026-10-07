@@ -1,3 +1,4 @@
+// Admin promoters: Zod request schemas.
 import { z } from "zod";
 
 export const createPromoterSchema = z.object({

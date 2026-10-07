@@ -1,5 +1,5 @@
+// Client books: HTTP handlers for catalog, trending, orders, invoice and tracking.
 import { Request, Response } from "express";
-// Fully migrated to SQL (book-order module) — no mongoose / models imports.
 import { BookOrderStatus } from "../../shared/enums";
 import { generateBookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
@@ -28,7 +28,7 @@ import {
 import { pick, pickList, omit, omitList } from "../../utils/pick";
 import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 
-// Client payload slimming (api-optimization audit) — drop fields the RN app never reads.
+// Fields the app never reads are dropped from list payloads.
 const BOOK_LIST_OMIT = [
   "qty", "isPurchased", "weight", "dynamicLink", "orderBy",
   "isTrending", "status", "key", "isPaid", "daysLeft", "updatedAt",
@@ -42,8 +42,7 @@ const TRENDING_EBOOK_KEEP = ["_id", "name", "image", "thumbnail"] as const;
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-// ─── Catalogue ────────────────────────────────────────────────────────────────
-
+// List one book type (magazine / combo / regular) with the customer's cart qty and isPurchased.
 export const listBooks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -53,17 +52,15 @@ export const listBooks = async (req: Request, res: Response) => {
     const { language } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // `type` is REQUIRED — each book category (magazine / combo / regular) is its
-    // own independently searched + paginated list. magazine→isMagazine,
-    // combo→isCombo, regular→neither flag set.
+    // `type` is required: magazine / combo / regular are separate paginated lists
+    // (magazine→isMagazine, combo→isCombo, regular→neither flag).
     const type = String(req.query.type ?? "").trim().toLowerCase();
     if (type !== "magazine" && type !== "combo" && type !== "regular") {
       return res.status(422).json({ success: false, message: "Invalid or missing type. Use one of: magazine, combo, regular." });
     }
 
-    // ── MySQL book listing (catalog-book + book-order) ───────────
-    // catalog-book supplies the data + computed fields; book-order supplies the
-    // per-customer cart `qty`/`cartId` + `isPurchased`.
+    // catalog-book supplies the data; book-order supplies per-customer cart
+    // `qty`/`cartId` + `isPurchased`.
     const base = resolveBase(req);
     const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
     const custIdForToken = Number.isInteger(Number(customerId)) ? Number(customerId) : null;
@@ -72,7 +69,7 @@ export const listBooks = async (req: Request, res: Response) => {
     let cartId: string | null = null;
     let qtyByBookId = new Map<string, number>();
     let purchasedSet = new Set<string>();
-    const customerIdInt = Number(customerId); // C3 seam
+    const customerIdInt = Number(customerId);
     if (customerId && Number.isInteger(customerIdInt)) {
       const cart = await getActiveCartState(customerIdInt);
       cartId = cart.cartId;
@@ -93,7 +90,7 @@ export const listBooks = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/books/trending?type=paid|free&language=&search=&limit=
+// Trending books and ebooks merged and paginated in memory.
 export const listTrendingBooks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listTrendingBooks invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -103,11 +100,8 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     const { search, page, limit, skip } = parseListQuery(req.query);
     const wantFree = type === "free";
 
-    // ── SQL branch (client-trending) ─────────────────────────────────────────
-    // Combined trending: fetch books + ebooks from SQL (capped), merge by the
-    // client catalog rule (order_by ASC, created_at ASC) — the merge is
-    // in-memory, so paginate the resolved array via skip/take with `total` =
-    // full merged length.
+    // Books + ebooks (capped) merged in memory by the catalog rule
+    // (order_by ASC, created_at ASC), so pagination slices the merged array.
     const custIdForToken = Number.isInteger(Number(req.user?.id)) ? Number(req.user?.id) : null;
     const [bookRes, ebookRes] = await Promise.all([
       fetchTrendingBooksOnlySql({ type, search, language, limit: 100, customerId: custIdForToken }),
@@ -119,8 +113,7 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     const items = mergedAll
       .slice(skip, skip + limit)
       .map((item) => ({
-        // `orderBy` exists on the DTO only to drive the merge sort above — drop
-        // it so the trending response shape is unchanged.
+        // `orderBy` only drives the merge sort; it is not part of the response.
         ...omit(item as any, ["orderBy"]),
         shareableLink: buildShareUrl(
           item.type === "ebook" ? "ebooks" : "books",
@@ -141,7 +134,6 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/books/trending/books?type=paid|free&language=&search=&limit=
 export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listTrendingBooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -171,7 +163,6 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/books/trending/ebooks?type=paid|free&language=&search=&limit=
 export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listTrendingEbooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -181,7 +172,7 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
     const { search, page, limit, skip } = parseListQuery(req.query);
     const result = await fetchTrendingEbooksOnlySql({ type, search, language, limit, skip });
 
-    // Ultra-slim free ebook cards — RN reads only _id/name/image/thumbnail.
+    // The app reads only _id/name/image/thumbnail.
     const items = pickList(result.items, TRENDING_EBOOK_KEEP);
 
     logger.info("listTrendingEbooksOnly success", { traceId, type: result.type, count: items.length });
@@ -203,8 +194,6 @@ export const getBookDetail = async (req: Request, res: Response) => {
   logger.info("getBookDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ── MySQL book detail (catalog-book + book-order) ────────────
-    // A MySQL book id is an int.
     const bookIdInt = Number(id);
     if (!Number.isInteger(bookIdInt) || bookIdInt <= 0) {
       logger.warn("getBookDetail invalid id (mysql)", { traceId, customerId, id });
@@ -218,7 +207,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Book not found." });
     }
     let isPurchased = false;
-    const customerIdInt = Number(customerId); // C3 seam
+    const customerIdInt = Number(customerId);
     if (customerId && Number.isInteger(customerIdInt)) {
       const purchased = await getPurchasedBookIdSet(customerIdInt);
       isPurchased = purchased.has(dto._id);
@@ -230,12 +219,6 @@ export const getBookDetail = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// Shipping has moved to POST /api/v1/client/cart/shipping (src/client/cart/*).
-// Place-order has moved to POST /api/v1/client/payment/create-order
-// (src/client/payment/payment.controller.ts).
-
-// ─── Orders (customer view) ───────────────────────────────────────────────────
 
 export const listMyOrders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -281,6 +264,7 @@ export const listMyOrders = async (req: Request, res: Response) => {
   }
 };
 
+// Stream the book order receipt as a PDF (ownership checked by the builder).
 export const getMyOrderInvoice = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -293,7 +277,7 @@ export const getMyOrderInvoice = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // SQL int order id (MySQL id-space); the receipt builder re-validates ownership.
+    // The receipt builder re-validates ownership.
     if (parseBookOrderId(id) == null) {
       logger.warn("getMyOrderInvoice invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
@@ -351,9 +335,8 @@ export const getMyOrderById = async (req: Request, res: Response) => {
   }
 };
 
-// Shipment-tracking view for the post-payment screen. Shape matches the UI:
-// summary (from / to / consignee / booked-on / awb) + ordered history with
-// per-event location lines.
+// Shipment-tracking view for the post-payment screen: summary (from / to /
+// consignee / booked-on / awb) + ordered history with per-event location lines.
 export const getMyOrderTracking = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -368,7 +351,7 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
     if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
     const data = await getOrderTrackingMysql(oid, cid);
     if (!data) return res.status(404).json({ success: false, message: "Order not found." });
-    // Slim tracking DTO — drop fields the RN app never reads (trackingUrl/receiptId/courier/hubs/pincode/shipped/delivered/orderStatus).
+    // Fields the app never reads are dropped.
     const { from, to, ...rest } = data;
     return res.status(200).json({
       success: true,
@@ -384,11 +367,9 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
   }
 };
 
-// Live AWB status polled from the Tirupati courier API (Point 4 of
-// book-order-courier-tracking.md). Two-step: Redis-cached token, then AWB data.
-// Only meaningful for trackingIds in the Tirupati range (>= INITIAL_Number) —
-// Mahavir has no API, so below-threshold ids return a 422 with a hint to use
-// the static trackingUrl instead.
+// Live AWB status from the Tirupati courier API (Redis-cached token, then AWB data).
+// Only trackingIds >= INITIAL_Number are Tirupati; Mahavir has no API, so lower ids
+// return 422 with a hint to use the static trackingUrl.
 export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -405,7 +386,7 @@ export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
     if (!sqlOrder) return res.status(404).json({ success: false, message: "Order not found." });
     if (sqlOrder.status === BookOrderStatus.PENDING) return res.status(409).json({ success: false, message: "Order not yet verified." });
     if (!sqlOrder.trackingId) return res.status(404).json({ success: false, message: "Tracking not available yet." });
-    const awb = sqlOrder.trackingId; // number (BigInt→number in the service)
+    const awb = sqlOrder.trackingId;
     if (awb < COURIER.TIRUPATI.INITIAL_Number) {
       return res.status(422).json({
         success: false,

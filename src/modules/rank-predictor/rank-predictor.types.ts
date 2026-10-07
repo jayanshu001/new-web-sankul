@@ -1,3 +1,4 @@
+// Rank predictor: constants, DTO and input types.
 export const SUBMISSION_STATUS = {
   PROCESSING: "processing",
   PROCESSED: "processed",

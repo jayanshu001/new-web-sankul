@@ -1,3 +1,4 @@
+// Client promocodes: HTTP handlers for listing and applying codes.
 import { Request, Response } from "express";
 import { applyPromocodeSchema } from "./promocode.validation";
 import { computePromoDiscount } from "./applies-to";
@@ -5,8 +6,7 @@ import * as pcSql from "../../modules/promo-code/promo-code.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// Legacy 24-hex ObjectId shape — tolerated alongside the SQL integer ids so a
-// stray Mongo-style id doesn't hard-fail selection (real ids parse via parsePcId).
+// Accepts legacy 24-hex ids as well as numeric ids (real ids parse via parsePcId).
 const isObjectId = (v?: string | null) => !!v && /^([0-9a-fA-F]{24}|[1-9]\d*)$/.test(v);
 
 type PlanDoc = any;
@@ -28,11 +28,8 @@ export const listPromocodes = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    // Optional entity filter — show only the public codes whose `appliesTo`
-    // covers a specific entity. Requires BOTH `type` and `id` (or neither): a
-    // bare int id is ambiguous across modules, so the module `type` is needed
-    // to know which entity the id belongs to. type accepts kebab aliases
-    // (test-series / live-course / e-book).
+    // Optional entity filter: needs BOTH `type` and `id` (or neither), since a bare int
+    // id is ambiguous across modules. `type` accepts kebab aliases (test-series etc.).
     const hasType = typeof rawType === "string" && rawType.trim() !== "";
     const hasId = typeof rawId === "string" && rawId.trim() !== "";
     if (hasType !== hasId) {
@@ -47,7 +44,6 @@ export const listPromocodes = async (req: Request, res: Response) => {
     }
     const filterById = appliesToType !== null && hasId;
 
-    // Public, active-window promocode list from MySQL.
     let appliesTo: { type: NonNullable<typeof appliesToType>; id: number } | undefined;
     if (filterById) {
       const nid = pcSql.parsePcId(rawId.trim());
@@ -69,6 +65,7 @@ export const listPromocodes = async (req: Request, res: Response) => {
   }
 };
 
+// Price preview for a promocode or referral code across the target's plans (no writes).
 export const applyPromocode = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = (req as any).user?.id || (req as any).user?._id;
@@ -78,12 +75,10 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const parsed = applyPromocodeSchema.parse(req.body);
     const { promocode } = parsed;
 
-    // Preferred unified `targetId`, then the legacy per-type fields. We don't
-    // trust the field name OR the supplied `targetType` — the id's true entity
-    // type is detected below, so a mislabelled target can't break the apply.
+    // Prefer `targetId`, then the per-type fields. Neither the field name nor
+    // `targetType` is trusted; the id's real entity type is detected below.
     const rawId =
       parsed.targetId || parsed.package || parsed.course || parsed.ebook || null;
-    // The entity id is a positive integer (e.g. "3"); re-validated via parsePcId.
     const idLooksValid =
       isObjectId(rawId) || pcSql.parsePcId(rawId ?? "") != null;
     if (!idLooksValid) {
@@ -91,10 +86,8 @@ export const applyPromocode = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
     }
 
-    // liveCourse / testSeries discounts are previewed via their own dedicated,
-    // plan-based endpoints. If the FE explicitly targets one of those, point it
-    // there with a clear message instead of a confusing "not applicable" (this
-    // endpoint only knows the package/course/ebook appliesTo model).
+    // liveCourse / testSeries discounts are previewed via their own plan-based
+    // endpoints; this one only knows the package/course/ebook appliesTo model.
     if (parsed.targetType === "liveCourse" || parsed.targetType === "testSeries") {
       const endpoint =
         parsed.targetType === "liveCourse"
@@ -107,8 +100,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
       });
     }
 
-    // Resolve the entity, load SQL pricing plans, and apply SQL coverage +
-    // discount. The referral-code path is handled by dedicated endpoints.
+    
     const nid = pcSql.parsePcId(rawId!);
     if (nid == null) {
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
@@ -131,9 +123,8 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const code = promocode.toUpperCase();
     const promo = await pcSql.findActiveByCode(code);
     if (!promo) {
-      // Not a promocode — try it as a referral code so this ONE endpoint serves
-      // both. The app never needs to know the code type up front; the response's
-      // `codeType` tells it after the fact.
+      // Not a promocode: try it as a referral code so one endpoint serves both;
+      // the response's `codeType` tells the app which it was.
       const referral = await pcSql.resolveReferralCode(code);
       if (referral && pcSql.referralCovers(sqlEntity.type)) {
         if (referral.referrerId === Number(userId)) {
@@ -178,10 +169,9 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const promoDiscountType = promo.discountType as "flat" | "percentage";
     const promoDiscountValue = Number(promo.discountValue ?? 0);
 
-    // Per-plan link rows are the authoritative discount source (TASK 2
-    // checkout): each plan's discount = its own customerPercentage, and a plan
-    // with NO link row gets no discount. Legacy codes with no link rows at all
-    // fall back to the global discountValue so old promocodes keep working.
+    // Per-plan link rows are the authoritative discount (each plan's customerPercentage;
+    // a plan without a row gets none). Codes with no link rows at all fall back to the
+    // global discountValue.
     const planDiscounts = await pcSql.loadPlanDiscountsSql(promo.id);
     const hasLinks = planDiscounts.size > 0;
 
@@ -193,8 +183,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
     let matchedAny = false;
     pricingPlans.forEach((plan) => {
       plan.orginalPrice = plan.price;
-      // Resolve THIS plan's discount: per-plan % when link rows exist, else
-      // the legacy global discount for old codes.
+      
       let dType: "flat" | "percentage";
       let dValue: number;
       if (hasLinks) {

@@ -1,3 +1,4 @@
+// Admin plans: pricing-plan routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { cacheRoute } from "../../middlewares/cacheRoute";
@@ -21,9 +22,8 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// Route-level response cache + autoFlushGroup on writes (see docs/CACHING.md).
-// Plans are embedded in every product response, so "plan" fans out to
-// catalog-package/course/ebook + dashboard + free (flushGroups.ts).
+// Plans are embedded in every product response, so the "plan" flush group fans
+// out to catalog-package/course/ebook + dashboard + free (flushGroups.ts).
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Plan }), listPlans);
 router.post("/", autoFlushGroup(CacheEntity.Plan), createPlan);
 router.post("/bulk-status", autoFlushGroup(CacheEntity.Plan), bulkStatus);

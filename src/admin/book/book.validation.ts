@@ -1,8 +1,8 @@
+// Admin books: Zod schemas for book, order status, tracking and settings payloads.
 import { z } from "zod";
 import { BookLanguage, BookOrderStatus, BookCourier } from "../../shared/enums";
 
-// 24-char hex ObjectId shape (replaces the former mongoose.Types.ObjectId.isValid
-// check now that mongoose is no longer a dependency of this module).
+// Accepts a 24-hex ObjectId shape or a positive integer id.
 const isObjectIdLike = (id: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(id);
 
 const zBool = z.preprocess(
@@ -11,8 +11,8 @@ const zBool = z.preprocess(
 );
 
 // Accepts an array of ids, a single id string, or a JSON-stringified array
-// (multipart form-data flattens arrays), and normalizes to string[]. Empty
-// string / empty array clears the links. Each entry must be a valid ObjectId.
+// (multipart flattens arrays) and normalizes to string[]. Empty string / empty
+// array clears the links.
 const zObjectIdArray = z.preprocess((v) => {
   if (v === undefined) return undefined;
   if (Array.isArray(v)) return v.filter((s) => s !== "");

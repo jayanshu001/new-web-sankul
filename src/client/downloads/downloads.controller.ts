@@ -1,3 +1,4 @@
+// Client downloads: HTTP handlers for the per-user offline-download encryption key.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -8,12 +9,9 @@ import {
 } from "../../modules/client-download-key/client-download-key.service";
 import { putEncryptionKeySchema } from "./downloads.validation";
 
-/**
- * LOGGING RULE FOR THIS FILE: never log `key`, `req.body`, or a service DTO.
- * Log the customer id and a boolean/length at most. The request logger already
- * redacts the `key` body field (utils/scrub.ts), but these handlers are the one
- * place a stray `logger.info({ ...data })` would defeat that.
- */
+// Never log `key`, `req.body`, or a service DTO here — customer id and a
+// boolean/length at most. utils/scrub.ts redacts `key` in the request logger, but a
+// stray `logger.info({ ...data })` in these handlers would defeat it.
 
 /** Secrets must not sit in a proxy or browser cache after the response lands. */
 const noStore = (res: Response) => {
@@ -21,13 +19,8 @@ const noStore = (res: Response) => {
   res.setHeader("Pragma", "no-cache");
 };
 
-// GET /api/v1/client/downloads/encryption-key
-//
-// Returns the AES-256 key belonging to the AUTHENTICATED customer only. A 404 is
-// a meaningful state, not an error: it tells the app "you have never stored a
-// key — generate one now". That is why a DB failure must surface as a 500 and
-// never collapse into a 404, or the app would mint a second key and orphan every
-// file it had already downloaded.
+// 404 means "no key stored yet, generate one", so a DB failure must surface as 500,
+// never 404, or the app mints a second key and orphans every downloaded file.
 export const getEncryptionKeyHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -44,8 +37,7 @@ export const getEncryptionKeyHandler = async (req: Request, res: Response) => {
     noStore(res);
 
     if (!result.ok) {
-      // A vanished/soft-deleted account is an auth problem, not a "no key yet"
-      // one — answering 404 there would tell the app to mint a fresh key for a
+      // A vanished account is an auth problem: 404 would make the app mint a key for a
       // dead account instead of sending it back through login.
       if (result.reason === "customer_missing") {
         logger.warn("getEncryptionKey customer missing", { traceId, userId });
@@ -68,14 +60,8 @@ export const getEncryptionKeyHandler = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/client/downloads/encryption-key
-//
-// Upsert for the authenticated customer. Body `{ key: "<64 hex>" }`; any other
-// property (including a `userId`) is rejected by the strict schema — identity
-// comes from the token, never the payload.
-//
-// Re-sending the stored key is a no-op (`changed: false`) and still answers 200,
-// so the app's retry-on-failed-sync path is safe to run as often as it likes.
+// schema rejects any other property (identity comes from the token). Re-sending the
+// stored key is a no-op 200, so the app's sync retry is safe.
 export const putEncryptionKeyHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -88,10 +74,9 @@ export const putEncryptionKeyHandler = async (req: Request, res: Response) => {
       return failure(res, "Unauthorized.", 401);
     }
 
-    // Parsed here rather than via the `validate({ body })` middleware so the
-    // documented 400 + "Invalid encryption key" contract is preserved — the
-    // shared middleware answers 422 with a field map, which this client does not
-    // understand. Zod's own message rides along under `messages.key` for humans.
+    // Parsed here instead of `validate({ body })` to keep the documented 400
+    // "Invalid encryption key" contract; the middleware's 422 field map isn't understood
+    // by this client.
     const parsed = putEncryptionKeySchema.safeParse(req.body);
     if (!parsed.success) {
       const detail = parsed.error.issues[0]?.message ?? "key must be exactly 64 hexadecimal characters";

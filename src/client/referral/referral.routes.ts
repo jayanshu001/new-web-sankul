@@ -1,3 +1,4 @@
+// Client referral: rewards, withdrawal, bank account and Refer & Earn content routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";

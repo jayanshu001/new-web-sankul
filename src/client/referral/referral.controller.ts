@@ -1,3 +1,4 @@
+// Client referral: rewards, transactions, withdrawals, referral code and bank accounts.
 import { Request, Response } from "express";
 import {
   generateReferralCodeSchema,
@@ -32,8 +33,6 @@ import {
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
-// ─── Rewards Screen ───────────────────────────────────────────────────────────
-
 export const getRewardsOverview = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -42,13 +41,11 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("getRewardsOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
-    // ─── ws_customer + ws_refferal_program ────────────────────────────────
     const cid = parseRefCustomerId(customerId);
     if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
     const data = await svcRewardsOverview(cid);
     if (!data) return res.status(404).json({ success: false, message: "Invalid user." });
-    // RN reads only customer.rewardPoints + referralCode (identity fields +
-    // program[] unused). See docs/api-optimization Phase 3.
+    // RN reads only customer.rewardPoints + referralCode (see docs/api-optimization).
     return res.status(200).json({
       success: true,
       data: { customer: pick(data.customer as any, ["rewardPoints", "referralCode"]) },
@@ -58,8 +55,6 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── Transactions List ────────────────────────────────────────────────────────
 
 export const getMyTransactions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -72,7 +67,6 @@ export const getMyTransactions = async (req: Request, res: Response) => {
     const { type } = req.query as Record<string, string>;
     const { search, page: pageNum, limit: limitNum } = parseListQuery(req.query);
 
-    // ─── ws_refferal_transaction ──────────────────────────────────────────
     const cid = parseRefCustomerId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { items, total } = await svcListTransactions(cid, { type, search, page: pageNum, limit: limitNum });
@@ -93,8 +87,6 @@ export const getMyTransactions = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// ─── Transaction Detail ───────────────────────────────────────────────────────
 
 export const getTransactionById = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -117,8 +109,7 @@ export const getTransactionById = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Withdrawal Request ───────────────────────────────────────────────────────
-
+// Queues a manual-payout withdrawal; points are debited atomically up front.
 export const requestWithdrawal = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -137,7 +128,6 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
       });
     }
 
-    // ─── ws_customer + ws_customer_bank_account + ws_refferal_transaction ───
     const cid = parseRefCustomerId(customerId);
     const baId = parseBankAccountId(bankAccountId);
     if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
@@ -152,17 +142,10 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
     const bankAccount = await svcGetBankAccount(baId, cid);
     if (!bankAccount) return res.status(404).json({ success: false, message: "Bank account not found." });
 
-    // Atomic: decrement points + create pending DEBIT txn carrying a snapshot of
-    // the bank account.
-    //
-    // Payouts are MANUAL (offline). This endpoint only *records the request* —
-    // no money moves here and no payment gateway is called. Finance works the
-    // queue from the admin side:
-    //   GET   /admin/referral/withdrawals[/csv]      -> the pending queue
-    //   PATCH /admin/referral/transactions/:id/status -> mark paid (+ UTR)
-    //   POST  /admin/referral/transactions/:id/reject -> refund the coins
-    // The row therefore stays `pending` until an admin acts on it; `pending` is
-    // what separates "requested" from "actually paid".
+    // Atomically decrements points and creates a pending DEBIT txn with a bank-account
+    // snapshot. Payouts are manual: no money moves here. The row stays `pending` until
+    // finance marks it paid (PATCH /admin/referral/transactions/:id/status) or rejects
+    // it with a refund (POST /admin/referral/transactions/:id/reject).
     let txn;
     try {
       txn = await svcCreateWithdrawal({ customerId: cid, amount, bankAccount: bankAccount as any });
@@ -184,8 +167,7 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Generate Referral Code ───────────────────────────────────────────────────
-
+// One-time, user-chosen referral code (blacklist and uniqueness checked).
 export const generateReferralCode = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -226,8 +208,6 @@ export const generateReferralCode = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Bank Accounts (for withdrawal payouts) ───────────────────────────────────
-
 export const listBankAccounts = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -252,6 +232,7 @@ export const listBankAccounts = async (req: Request, res: Response) => {
   }
 };
 
+// Bank name, branch and city come from the IFSC lookup, not the client.
 export const createBankAccount = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;

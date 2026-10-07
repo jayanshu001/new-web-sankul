@@ -1,3 +1,4 @@
+// Jobs SEO: Zod schema for content SEO fields.
 import { z } from "zod";
 
 const zBool = z.preprocess((v) => (typeof v === "string" ? v === "true" : v), z.boolean());

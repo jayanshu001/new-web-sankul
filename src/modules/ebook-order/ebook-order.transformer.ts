@@ -1,3 +1,4 @@
+// Ebook orders: row to DTO mapping (response shape is frozen).
 import type { EBookOrder } from "@prisma/client";
 import type { EbookOrderDto, EbookOrderRow, EbookOrderStatus } from "./ebook-order.types";
 
@@ -5,7 +6,6 @@ import type { EbookOrderDto, EbookOrderRow, EbookOrderStatus } from "./ebook-ord
 const idStr = (v: number | null): string | null =>
   v != null && v > 0 ? String(v) : null;
 
-/** Order row → minimal owner-lookup/dispatch row. */
 export const toEbookOrderRow = (o: EBookOrder): EbookOrderRow => ({
   id: o.id,
   customerIdStr: o.userId != null ? String(o.userId) : null,
@@ -18,12 +18,7 @@ export const toEbookOrderRow = (o: EBookOrder): EbookOrderRow => ({
   walletCoin: o.walletCoin ?? null,
 });
 
-/**
- * SQL ws_ebook_order row → the Mongo-shaped EbookOrder doc that the verify ebook
- * branch returns as `data.order`. `ebookId` is re-derived from the plan (the
- * order table has no ebook_id column — see types.ts). `status` is the same string
- * on both sides (no translation).
- */
+/** Verify's `data.order`. `ebookId` comes from the plan: the order table has no ebook_id. */
 export const toEbookOrderDto = (
   o: EBookOrder,
   ebookId: number | null

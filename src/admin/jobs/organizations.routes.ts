@@ -1,3 +1,4 @@
+// Admin jobs portal: recruiting organization CRUD routes (with logo upload).
 import { Router } from "express";
 import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
 import { UPLOAD_FOLDERS } from "../../config/uploadFolders";

@@ -1,3 +1,4 @@
+// Client educators: educator profile route.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -9,8 +10,7 @@ const router = Router();
 
 router.use(authenticate, requireRole("customer"));
 
-// Tier-2 (embeds a per-user course isPurchased overlay via customerId) → cached
-// per-user + short TTL (ebook precedent). Admin educator writes flush "educator".
+// Cached per user (embeds isPurchased); admin educator writes flush "educator".
 router.get("/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Educator, scope: CacheScope.User }), getEducatorWithCoursesHandler);
 
 export default router;

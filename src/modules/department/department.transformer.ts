@@ -1,3 +1,4 @@
+// Departments: row to DTO mapping and Prisma write data (response shape is frozen).
 import type { Department, DepartmentContact } from "@prisma/client";
 import type {
   DepartmentContactDto,
@@ -15,11 +16,7 @@ const toContactDto = (c: DepartmentContact): DepartmentContactDto => ({
   isWhatsAppAvailable: c.isWhatsAppAvailable,
 });
 
-/**
- * MySQL row (+ joined contacts) → API DTO.
- * Bridges the legacy `decscription` typo → `description` and sorts contacts
- * by `order` to match the Mongo embedded-array ordering.
- */
+/** Maps the `decscription` column typo → `description`; contacts sorted by `order`. */
 export const toDepartmentDto = (row: DepartmentWithContacts): DepartmentDto => ({
   _id: String(row.id),
   name: row.name,
@@ -32,7 +29,6 @@ export const toDepartmentDto = (row: DepartmentWithContacts): DepartmentDto => (
     .map(toContactDto),
 });
 
-/** Department scalar fields → Prisma create/update data (no contacts). */
 export const toPrismaDepartmentScalars = (input: {
   name?: string;
   description?: string;
@@ -45,7 +41,7 @@ export const toPrismaDepartmentScalars = (input: {
   ...(input.active !== undefined ? { active: input.active } : {}),
 });
 
-/** Contact input → Prisma `ws_department_contact` row data (department FK added by caller). */
+/** Department FK is added by the caller. */
 export const toPrismaContactData = (
   c: DepartmentContactInput,
   fallbackOrder: number

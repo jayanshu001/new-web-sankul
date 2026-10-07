@@ -1,8 +1,8 @@
+// Admin promoters: HTTP handlers for promoter CRUD, codes, sales and dashboards.
 import { Request, Response } from "express";
 import { createPromoterSchema, updatePromoterSchema } from "./promoter.validation";
 import * as adminPromoterSql from "../../modules/admin-promoter/admin-promoter.service";
 
-// GET /api/v1/admin/promoters
 export const listPromoters = async (req: Request, res: Response) => {
   try {
     const { search, status, page = "1", limit = "20" } = req.query as Record<string, string>;
@@ -26,7 +26,6 @@ export const listPromoters = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/promoters/:id
 export const getPromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -41,7 +40,6 @@ export const getPromoter = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/promoters
 export const createPromoter = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
@@ -59,7 +57,6 @@ export const createPromoter = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/promoters/:id
 export const updatePromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -80,7 +77,6 @@ export const updatePromoter = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/promoters/:id — soft delete
 export const deletePromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -95,7 +91,6 @@ export const deletePromoter = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /api/v1/admin/promoters/:id/status
 export const togglePromoterStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -110,7 +105,6 @@ export const togglePromoterStatus = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/promoters/:id/promocodes
 export const getPromoterPromocodes = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -124,7 +118,6 @@ export const getPromoterPromocodes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/promoters/:id/subscriptions
 export const getPromoterSubscriptions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -138,7 +131,6 @@ export const getPromoterSubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/promoters/:id/dashboard?range=today|week|month|year|all
 // Admin view of a specific promoter's dashboard — same shape as the promoter's
 // self-view at /api/v1/promoter/dashboard/overview.
 export const getPromoterDashboard = async (req: Request, res: Response) => {
@@ -161,7 +153,6 @@ export const getPromoterDashboard = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/promoters/dashboard
 // Aggregate dashboard across all promoters. Same response shape as the
 // per-promoter view; supports the same range presets + custom date range.
 export const getAllPromotersDashboard = async (req: Request, res: Response) => {

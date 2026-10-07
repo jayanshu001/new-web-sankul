@@ -1,9 +1,4 @@
-// src/admin/package/package.controller.ts
-//
-// Thin controllers: parse + coerce → validate → call service → respond.
-// Errors flow through the global `errorHandler` via `asyncHandler`; services
-// throw `HttpError(code, message)` for predictable status codes.
-
+// Admin packages: HTTP handlers for packages, types, plans, relations and chat.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
@@ -19,13 +14,9 @@ import {
 import * as packageService from "./package.service";
 import { parseListQuery } from "../../utils/listQuery";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Multipart coercion helper
-// ──────────────────────────────────────────────────────────────────────────────
-
-// Reassemble `field[0]=a&field[1]=b` (multer flattens indexed keys to literal strings)
-// into a real array. Also accepts `field[]=""` (frontend's "clear to empty array" signal)
-// and a JSON-stringified array as a fallback. Mutates req.body in place.
+// Reassemble `field[0]=a&field[1]=b` (multer leaves indexed keys literal) into a real
+// array. Also accepts `field[]=""` (the FE's "clear to empty array" signal) and a
+// JSON-stringified array. Mutates req.body in place.
 const coerceIdArrayField = (req: Request, field: string) => {
   const body = req.body as Record<string, any>;
   if (Array.isArray(body[field])) return;
@@ -56,6 +47,7 @@ const coerceIdArrayField = (req: Request, field: string) => {
   }
 };
 
+// Map the uploaded image and multipart strings onto req.body before validation.
 const coercePackageBody = (req: Request) => {
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
@@ -67,17 +59,12 @@ const coercePackageBody = (req: Request) => {
   coerceIdArrayField(req, "examCountdownIds");
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Package Types
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const listPackageTypes = asyncHandler(async (_req: Request, res: Response) => {
   const data = await packageService.listPackageTypes();
   return res.status(200).json({ success: true, data });
 });
 
 export const createPackageType = asyncHandler(async (req: Request, res: Response) => {
-  // Body already validated + coerced by validate({ body: createPackageTypeSchema }).
   const data = await packageService.createPackageType(req.body);
   return res.status(201).json({ success: true, data });
 });
@@ -91,10 +78,6 @@ export const deletePackageType = asyncHandler(async (req: Request, res: Response
   await packageService.deletePackageType(req.params.id as string);
   return success(res, {}, "Package type deleted.");
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Packages CRUD
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listPackages = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await packageService.listPackages(
@@ -138,10 +121,6 @@ export const reorderPackages = asyncHandler(async (req: Request, res: Response) 
   return success(res, {}, "Package order updated.");
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Embedded reorders
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const reorderSpecificSubjects = asyncHandler(async (req: Request, res: Response) => {
   const { orders } = reorderEmbeddedSchema.parse(req.body);
   const data = await packageService.reorderEmbedded(
@@ -174,10 +153,6 @@ export const reorderExamCategories = asyncHandler(async (req: Request, res: Resp
   return res.status(200).json({ success: true, data });
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Plans
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const listPackagePlans = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await packageService.listPackagePlans(
     req.params.id as string,
@@ -202,10 +177,6 @@ export const detachPlan = asyncHandler(async (req: Request, res: Response) => {
   );
   return res.status(200).json({ success: true });
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Subscribers / Promoted / Relations
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listSubscribers = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await packageService.listSubscribers(
@@ -278,10 +249,6 @@ export const expandSubjectsToRelations = asyncHandler(
     return res.status(200).json({ success: true, count });
   }
 );
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Chat
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listChatMessages = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await packageService.listChatMessages(

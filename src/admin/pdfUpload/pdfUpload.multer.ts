@@ -1,8 +1,6 @@
-// Disk-staging multer for the single-PDF upload pipeline. Unlike the S3 uploaders
-// in middlewares/upload.ts, this writes the incoming bytes to LOCAL temp disk —
-// the BullMQ worker later streams the staged file to Spaces. We stage to disk
-// (not memory) so a large book PDF can't blow the heap, and so the worker can
-// process it after the HTTP request has already returned.
+// Ebook PDF upload: multer disk-staging middleware (PDF only, 500MB cap).
+// Stages the PDF on local temp disk (not memory, not S3) so a large book can't
+// blow the heap and the BullMQ worker can stream it to Spaces after the request returns.
 
 import multer from "multer";
 import path from "path";
@@ -10,7 +8,6 @@ import os from "os";
 import fs from "fs";
 import { randomUUID } from "crypto";
 
-// Per-batch temp dir under the OS tmp root. Created lazily on first file.
 const STAGE_ROOT = path.join(os.tmpdir(), "ws-pdf-uploads");
 
 const storage = multer.diskStorage({
@@ -20,13 +17,12 @@ const storage = multer.diskStorage({
     );
   },
   filename: (_req, file, cb) => {
-    // Unique on-disk name; original name is preserved on the job row.
     const ext = path.extname(file.originalname) || ".pdf";
     cb(null, `${randomUUID()}${ext}`);
   },
 });
 
-const PDF_MAX_BYTES = 500 * 1024 * 1024; // 500 MB per book PDF
+const PDF_MAX_BYTES = 500 * 1024 * 1024;
 
 const pdfOnly: multer.Options["fileFilter"] = (_req, file, cb) => {
   const extOk = /\.pdf$/i.test(path.extname(file.originalname));
@@ -35,12 +31,10 @@ const pdfOnly: multer.Options["fileFilter"] = (_req, file, cb) => {
   cb(new Error("Only PDF files are allowed."));
 };
 
-// One PDF under field `file` — used by the Edit-Ebook screen's Book/Demo PDF
-// field. Staged to disk, then processed by the BullMQ worker with live progress.
 export const uploadSinglePdfToDisk = multer({
-  // multer 2.x decodes multipart names as latin1 by default, which mojibakes
-  // Gujarati/Hindi PDF file names on `originalname` before they ever reach the
-  // DB. Mirrors MULTER_UTF8 in middlewares/upload.ts.
+  // multer 2.x decodes names as latin1 by default, mojibaking Gujarati/Hindi
+  // file names. Mirrors MULTER_UTF8 in middlewares/upload.ts.
+
   defParamCharset: "utf8",
   storage,
   limits: { fileSize: PDF_MAX_BYTES, files: 1 },

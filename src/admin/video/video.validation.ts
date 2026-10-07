@@ -1,11 +1,9 @@
+// Admin videos: Zod request schemas.
 import { z } from "zod";
 
 const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
-// validation works on both migration backends (admin-video runs on MySQL where
-// ids are integers). Mirrors the dual-id handling in administrator.validation.ts.
-// Coerce first: the FE sends MySQL category ids as JSON numbers (e.g. 12), so
-// without coercion z.string() rejects them with "Invalid id".
+// Accepts a 24-hex legacy id or a numeric id. Coerce first: the FE sends ids as
+// JSON numbers, which z.string() would reject.
 const objectIdSchema = z.coerce.string().refine(
   (v) => objectIdRegex.test(v) || /^[1-9]\d*$/.test(v),
   { message: "Invalid id" }
@@ -14,10 +12,8 @@ const objectIdSchema = z.coerce.string().refine(
 const baseShape = {
   name: z.string().min(1, "Name is required").max(255),
   slug: z.string().min(1, "Slug is required").max(255),
-  // No `.default(0)`: an omitted order must stay undefined so the service can
-  // assign previous-row + 1 (utils/listOrdering). Defaulting to 0 would tie the
-  // new row with every existing order=0 video in the client catalog.
-  // An explicit order is still honoured as-is.
+  // No `.default(0)`: an omitted order must stay undefined so the service assigns
+  // previous-row + 1 (utils/listOrdering); 0 would tie with every order=0 video.
   order: z.coerce.number().int().optional(),
   topic: z.string().max(500).optional().default(""),
   type: z.enum(["free", "paid"]).optional().default("free"),
@@ -26,9 +22,6 @@ const baseShape = {
 
   youtube: z.coerce.boolean().optional().default(false),
   youtubeId: z.string().max(255).optional().nullable(),
-
-  // vimeo: z.coerce.boolean().optional().default(false),
-  // vimeoId: z.string().max(255).optional().nullable(),
 
   aws: z.coerce.boolean().optional().default(false),
   awsId: z.string().max(255).optional().nullable(),
@@ -39,7 +32,7 @@ export const createVideoSchema = z
   .superRefine((val, ctx) => {
     const enabled = [
       ["youtube", val.youtube, val.youtubeId] as const,
-      // ["vimeo", val.vimeo, val.vimeoId] as const,
+
       ["aws", val.aws, val.awsId] as const,
     ].filter(([, on]) => on);
 
@@ -81,19 +74,17 @@ export const updateVideoSchema = z
 
     youtube: z.coerce.boolean().optional(),
     youtubeId: z.string().max(255).optional().nullable(),
-    // vimeo: z.coerce.boolean().optional(),
-    // vimeoId: z.string().max(255).optional().nullable(),
     aws: z.coerce.boolean().optional(),
     awsId: z.string().max(255).optional().nullable(),
   })
   .superRefine((val, ctx) => {
     const touchedAny =
-      val.youtube !== undefined || /* val.vimeo !== undefined || */ val.aws !== undefined;
+      val.youtube !== undefined || val.aws !== undefined;
     if (!touchedAny) return;
 
     const enabled = [
       ["youtube", val.youtube, val.youtubeId] as const,
-      // ["vimeo", val.vimeo, val.vimeoId] as const,
+
       ["aws", val.aws, val.awsId] as const,
     ].filter(([, on]) => on === true);
 

@@ -1,14 +1,11 @@
+// Customer profile: row to profile DTO mapping (response shape is frozen).
 import type { Customer } from "@prisma/client";
 import type { ProfileDto, ProfileGoalDto } from "./customer-profile.types";
 import { splitFullName } from "./customer-profile.name";
 
 const idStr = (v: number | null): string => (v === null || v === undefined ? "" : String(v));
 
-/**
- * Derive isProfileCompleted on the fly (decision: not stored on MySQL).
- * Mongo's rule is firstName + lastName present; the MySQL equivalent is a
- * full_name with at least one token. `verified` alone does not complete it.
- */
+/** Not stored: complete when full_name has a token. `verified` alone does not complete it. */
 export const deriveProfileCompleted = (row: Pick<Customer, "fullName">): boolean =>
   !!row.fullName && row.fullName.trim().length > 0;
 

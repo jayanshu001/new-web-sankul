@@ -1,3 +1,4 @@
+// Client educators: HTTP handler for an educator profile with their courses.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -11,8 +12,7 @@ import {
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-// GET /api/v1/client/educators/:id
-// Returns educator profile + list of active courses taught by them (with plans).
+// Educator profile + their active courses (with plans).
 export const getEducatorWithCoursesHandler = async (
   req: Request,
   res: Response
@@ -29,7 +29,6 @@ export const getEducatorWithCoursesHandler = async (
   });
 
   try {
-    // ─── ws_course_educator + ws_course + plans + subs ──────
     const eid = parseEducatorId(educatorId);
     if (!eid) return failure(res, "Please select valid educator", 400);
     const cid = userId ? parseEducatorId(userId) : null;
@@ -37,9 +36,7 @@ export const getEducatorWithCoursesHandler = async (
     const data = await getEducatorWithCourses(eid, cid, (kind, id) => buildShareUrl(kind, id, base));
     if (!data) return failure(res, "Educator not found", 404);
     logger.info("getEducatorWithCoursesHandler success (sql)", { traceId, userId, educatorId, totalCourses: (data as any).totalCourses });
-    // Slim: drop educator.view (server counter), top-level totalCourses, and per-
-    // course courseEducatorId/courseSubjectCategoryId/shareableLink (RN reads only
-    // the top-level shareableLink). See docs/api-optimization.
+    // Drop fields the app never reads (it uses only the top-level shareableLink).
     const d = data as any;
     const slim = {
       ...omit(d, ["totalCourses"]),

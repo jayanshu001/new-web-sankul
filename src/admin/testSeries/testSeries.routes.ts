@@ -1,3 +1,4 @@
+// Admin test series: series, content category, paper, price, subscription and order routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -39,7 +40,7 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// --- Literal-prefix routes first so they don't collide with /:id patterns ----
+// Literal-prefix routes first so they don't collide with /:id patterns.
 router.put("/content-categories/:categoryId",       autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("icon"), updateContentCategory);
 router.delete("/content-categories/:categoryId",    autoFlushGroup(CacheEntity.TestSeries), deleteContentCategory);
 
@@ -49,10 +50,10 @@ router.delete("/papers/:linkId",                    autoFlushGroup(CacheEntity.T
 router.put("/prices/:priceId",                      autoFlushGroup(CacheEntity.TestSeries), updatePrice);
 router.delete("/prices/:priceId",                   autoFlushGroup(CacheEntity.TestSeries), deletePrice);
 
-// Subscription writes deliberately carry NO autoFlushGroup: they change one
-// CUSTOMER's entitlement (isPurchased / activeSubscription), not the shared
-// catalog, so the controllers call flushUserRouteCache(customerId) instead —
-// an entity-wide sweep would cold-start every user's cache for a single grant.
+// Subscription writes deliberately carry no autoFlushGroup: they change one
+// customer's entitlement, not the shared catalog, so the controllers call
+// flushUserRouteCache(customerId); an entity-wide sweep would cold-start every
+// user's cache for a single grant.
 router.get("/subscriptions",                        listSubscriptions);
 // Export routes before `/subscriptions/:subscriptionId` so they aren't matched as an id.
 router.get("/subscriptions/export/csv",             exportSubscriptionsCsv);
@@ -68,14 +69,12 @@ router.post(
 
 router.get("/orders",                               listOrders);
 
-// --- Test Series CRUD -------------------------------------------------------
 router.get("/",                                     listTestSeries);
 router.post("/",                                    autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("thumbnail"), createTestSeries);
 router.get("/:id",                                  getTestSeriesById);
 router.put("/:id",                                  autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("thumbnail"), updateTestSeries);
 router.delete("/:id",                               autoFlushGroup(CacheEntity.TestSeries), deleteTestSeries);
 
-// --- Nested under a series --------------------------------------------------
 router.get("/:id/content-categories",               listContentCategories);
 router.post("/:id/content-categories",              autoFlushGroup(CacheEntity.TestSeries), uploadTo(UPLOAD_FOLDERS.testSeries), uploadS3.single("icon"), createContentCategory);
 

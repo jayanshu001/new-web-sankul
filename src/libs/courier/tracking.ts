@@ -1,27 +1,21 @@
+// Courier tracking: live Tirupati AWB status (token, then AWB lookup).
 import axios from "axios";
 import { COURIER } from "../../config/courier";
 import { redisClient, isRedisReady } from "../../config/redis";
 import logger from "../../utils/logger";
 
-// Live AWB status lookup against the Tirupati courier API (Point 4 of
-// book-order-courier-tracking.md). Two steps: fetch a token (Redis-cached 3h),
-// then query AWB data with that token + trackingId. Mahavir has no API, so live
-// status only works for trackingIds in the Tirupati range.
-// Mirrors websankul-api libs/utils.js (same URLs, 10s/15s timeouts, 3h cache).
+// Mahavir has no API, so this only works for Tirupati-range trackingIds.
 
 const TOKEN_CACHE_KEY = "courier_token_tirupati";
-const TOKEN_TTL_SECONDS = 10800; // 3 hours, matching the old backend.
+const TOKEN_TTL_SECONDS = 10800;
 
 // The courier answers HTTP 200 for everything: a bad UID/PWD comes back as the
 // plain text "UNAUTHORIZED ACCESS" from the token URL, and a bad token as
 // `OpStatus: "FAILED: UN-AUTHORIZED ACCESS.."` from the AWB URL.
 const isUnauthorized = (v: unknown) => /UN-?AUTHORI[SZ]ED/i.test(String(v ?? ""));
 
-// Fetch (and cache) the courier auth token. Cached in Redis under
-// `courier_token_tirupati` for 3h so we don't re-authenticate on every request.
-// Falls back to a live fetch when Redis is unavailable (graceful degradation —
-// the doc calls out the Redis dependency as a caution). Only a real token is
-// cached — a rejection is thrown, never stored for 3h.
+// Redis-cached for 3h, live fetch when Redis is down. A rejection is thrown,
+// never cached.
 export async function getTrackingUserTokenForCourier(): Promise<any> {
   if (isRedisReady()) {
     try {
@@ -53,7 +47,6 @@ export async function getTrackingUserTokenForCourier(): Promise<any> {
   return token;
 }
 
-// Fetch live AWB data for a given trackingId using a previously-obtained token.
 export async function getTrackingAWBDataForCourier(params: {
   userToken: any;
   trackingId: number | string;
@@ -64,10 +57,9 @@ export async function getTrackingAWBDataForCourier(params: {
   return resp?.data;
 }
 
-// Convenience: token + AWB data in one call. A cached token the courier no
-// longer accepts is evicted and re-fetched once; any remaining `FAILED`
-// OpStatus throws so callers answer 502 (FE falls back to the WebView) instead
-// of a 200 with an empty timeline.
+// A cached token the courier rejects is evicted and re-fetched once; any other
+// `FAILED` OpStatus throws so callers answer 502 (FE falls back to the WebView)
+// instead of a 200 with an empty timeline.
 export async function fetchLiveAWBData(
   trackingId: number | string
 ): Promise<any> {
@@ -102,10 +94,8 @@ function parseCourierDateTime(date?: string, time?: string): Date | null {
 
 const DELIVERED_RE = /(?<!UN|NOT )DELIVERED/i;
 
-// Normalised status on top of the raw courier payload. `CurStatus` is the LAST
-// scan, not the delivery state — the courier often logs an "In-Scan Reach At"
-// after the DRS delivery (e.g. AWB 119401175732), so delivery is read from the
-// scan events first.
+// `CurStatus` is the LAST scan, not the delivery state (the courier often logs an
+// "In-Scan Reach At" after delivery), so delivery is read from scan events first.
 export function deriveDeliveryStatus(data: any): {
   deliveryStatus: "delivered" | "in_transit" | "booked" | "awaiting_pickup";
   deliveredAt: Date | null;

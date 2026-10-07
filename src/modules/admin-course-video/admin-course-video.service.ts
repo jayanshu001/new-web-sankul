@@ -1,17 +1,8 @@
 /**
- * Admin course-scoped Video CRUD — SQL branch for src/admin/course/video.controller.ts
- *   getVideos / getVideoById / createVideo / updateVideo / deleteVideo / reorderVideos
- *
- * Gated behind `isMysqlModule("admin-course-video")`. Reads/writes ws_video +
- * ws_video_category. Response shapes mirror the Mongo controller exactly: each
- * handler returns `{ success, data }` where `data` is a video doc whose
- * `videoCategoryId` is a populated `{ _id, title, slug }` object (list/get) or a
- * bare id string (after create/update, matching an unpopulated Mongo save).
- *
- * NOTE: the controller's createVideoSchema/updateVideoSchema require
- * `videoCategoryId` to be a 24-hex ObjectId, which a numeric SQL id fails. The
- * SQL branch therefore validates the body itself (same field set / coercions)
- * before the Zod parse runs, so numeric category ids are accepted.
+ * Admin course videos: course-scoped video CRUD over ws_video + ws_video_category.
+ * `data.videoCategoryId` is a populated `{ _id, title, slug }` on list/get but a bare id
+ * string after create/update; clients depend on both shapes. The body is validated here so numeric
+ * category ids are accepted.
  */
 import { prisma } from "../../config/prisma";
 
@@ -40,7 +31,6 @@ const videoSelect = {
   VideoCategory: { select: { id: true, title: true, slug: true } },
 } as const;
 
-/** Shape a ws_video row like the Mongo doc returned by the controller. */
 const toDoc = (v: any) => ({
   _id: String(v.id),
   title: v.title,
@@ -63,7 +53,6 @@ const toDoc = (v: any) => ({
   updatedAt: v.updated_at ?? null,
 });
 
-// ── list / get ───────────────────────────────────────────────────────────────
 export const listVideos = async (opts: { videoCategoryId?: number; status?: boolean; skip: number; take: number }) => {
   const where: any = {};
   if (opts.videoCategoryId !== undefined) where.videoCategoryId = opts.videoCategoryId;
@@ -86,7 +75,6 @@ export const getVideoById = async (id: number) => {
   return v ? toDoc(v) : null;
 };
 
-// ── create / update / delete / reorder ───────────────────────────────────────
 export const categoryExists = async (id: number): Promise<boolean> =>
   !!(await prisma.videoCategory.findUnique({ where: { id }, select: { id: true } }));
 
@@ -104,7 +92,7 @@ export interface VideoCreateInput {
   status: boolean;
 }
 
-/** Create — returns a bare (unpopulated-category) doc, like the Mongo save(). */
+// Returns a bare doc (category not populated).
 export const createVideo = async (d: VideoCreateInput) => {
   const now = new Date();
   const created = await prisma.video.create({
@@ -128,7 +116,7 @@ export const createVideo = async (d: VideoCreateInput) => {
   return toDoc(created);
 };
 
-/** Update — returns a bare doc, like findByIdAndUpdate({ new: true }). */
+// Returns a bare doc (category not populated).
 export const updateVideo = async (id: number, patch: Partial<VideoCreateInput>): Promise<"not_found" | any> => {
   const existing = await prisma.video.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return "not_found";

@@ -1,3 +1,4 @@
+// Customer addresses: owner-scoped Prisma queries (soft delete, single default).
 import { prisma } from "../../config/prisma";
 import type { AddressCreateInput, AddressUpdateInput } from "./customer-address.types";
 
@@ -14,7 +15,6 @@ const toPincodeInt = (v: string): number => {
 };
 
 export const customerAddressRepository = {
-  /** Active addresses for a customer, newest first. */
   listByCustomer: (customerId: number) =>
     prisma.customerAddress.findMany({
       where: { userId: customerId, status: true },
@@ -22,15 +22,13 @@ export const customerAddressRepository = {
     }),
 
   /**
-   * Single address scoped to its owner (prevents cross-customer reads).
-   * Deliberately NOT filtered on `status` — `updateOwned` can flip status back to
-   * true (restore), and updateAddress reads the row back through here, so it must
-   * see soft-deleted rows. Use `findActiveOwned` for selectability checks.
+   * Deliberately not filtered on `status`: `updateOwned` can restore a row and
+   * updateAddress reads it back through here. Use `findActiveOwned` for
+   * selectability checks.
    */
   findOwned: (id: number, customerId: number) =>
     prisma.customerAddress.findFirst({ where: { id, userId: customerId } }),
 
-  /** Owner-scoped AND not soft-deleted — for "may this address be used?" gates. */
   findActiveOwned: (id: number, customerId: number) =>
     prisma.customerAddress.findFirst({ where: { id, userId: customerId, status: true } }),
 
@@ -55,7 +53,6 @@ export const customerAddressRepository = {
       },
     }),
 
-  /** Owner-scoped update; returns count so caller can 404 on 0. */
   updateOwned: (id: number, customerId: number, input: AddressUpdateInput) =>
     prisma.customerAddress.updateMany({
       where: { id, userId: customerId },
@@ -78,9 +75,7 @@ export const customerAddressRepository = {
     }),
 
   /**
-   * Soft-delete (status=false), owner-scoped. Returns count.
-   * `isDefault` is cleared too: leaving it set on a now-hidden row would give the
-   * customer a default address that no list can show or replace.
+   * Also clears `isDefault`: a hidden default could never be shown or replaced.
    */
   softDeleteOwned: (id: number, customerId: number) =>
     prisma.customerAddress.updateMany({
@@ -89,9 +84,8 @@ export const customerAddressRepository = {
     }),
 
   /**
-   * Set one address default: clear isDefault on the customer's other rows, then
-   * set it on the target. Wrapped in a transaction so reads never see two
-   * defaults. Returns the count set on the target (0 → not found / not owned).
+   * Transactional so reads never see two defaults. Returns the count set on the
+   * target (0 → not found / not owned).
    */
   setDefault: async (id: number, customerId: number) => {
     const [, setRes] = await prisma.$transaction([

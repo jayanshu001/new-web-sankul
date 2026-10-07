@@ -1,3 +1,4 @@
+// Client subscription access: offline download registration and entitlement snapshot.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -12,8 +13,7 @@ import { syncEntitlementCache } from "../../utils/entitlementWatch";
 const KIND_VALUES = ["course", "package", "liveCourse", "ebook"] as const;
 const KINDS_MESSAGE = "Invalid `kinds`. Allowed: course, package, liveCourse, ebook.";
 
-// Ids arrive as strings (the client API is id-as-string throughout) but every
-// SQL id is a positive int — coerce once here so the service never re-parses.
+// Ids arrive as strings but every SQL id is a positive int — coerce once here.
 const idString = z
   .string()
   .trim()
@@ -32,9 +32,8 @@ const bodySchema = z
     message: "For kind `ebook`, `videoId` must equal `id`.",
   });
 
-// `kinds` is an optional CSV filter; omitted → all four. An unknown kind is a
-// 422 rather than a silent no-op, so a typo in the app can't return an empty
-// snapshot that the FE would read as "everything was revoked" and delete files.
+// `kinds` is an optional CSV filter (omitted → all). An unknown kind is a 422, so a
+// typo can't return an empty snapshot the FE would read as "all revoked" and delete files.
 const querySchema = z.object({
   kinds: z
     .string()
@@ -43,19 +42,10 @@ const querySchema = z.object({
     .pipe(z.array(z.enum(KIND_VALUES)).nonempty().optional()),
 });
 
-// POST /api/v1/client/subscriptions/downloads
-//
-// Called after a PAID lecture or ebook finishes downloading, to record what was
-// downloaded and which product the user was looking at when they tapped it.
-//
-// The app sends exactly ONE product — the one on screen. It has no way to know
-// which other courses/packages also contain that lecture, and it is explicitly
-// not asked to: GET re-derives the full covering set itself (see the service).
-// So this is a record of the download, not a declaration of entitlement.
-//
-// Best-effort from the FE's side — a failure here must not undo the local file —
-// so the response stays small and the errors are precise enough for the app to
-// decide whether to retry (5xx) or give up (403/404).
+// Records a PAID lecture/ebook download plus the ONE product on screen. Not a
+// declaration of entitlement: GET re-derives every covering product itself.
+// Best-effort for the FE (a failure must not undo the local file), so errors are
+// precise enough to decide between retry (5xx) and give up (403/404).
 export const registerOfflineDownload = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -96,9 +86,8 @@ export const registerOfflineDownload = async (req: Request, res: Response) => {
     );
 
     if (!result.ok) {
-      // 404 = the thing does not exist; 403 = it exists but this user may not
-      // claim it. The FE treats both as terminal (no retry), but they mean
-      // different bugs, so they stay distinguishable.
+      // 404 = does not exist; 403 = exists but this user may not claim it. Both are
+      // terminal for the FE but signal different bugs.
       const [status, message] = {
         content_not_found: [404, "Video not found."],
         product_not_found: [404, "Product not found."],
@@ -118,24 +107,14 @@ export const registerOfflineDownload = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/subscriptions/access
-//
-// End times for every product this user is still entitled to that COVERS at least
-// one video they registered a download for. Not their whole subscription list — a
-// course containing none of their downloads has no offline file to govern, so it
-// has no row here — and not only the products they registered under either: the
-// app can POST just one product per file, so the other owners of a shared video
-// are expanded server-side. Each row carries the `videoIds` it covers.
-// Contract and FE usage: docs/client/SUBSCRIPTION_ACCESS.md.
-//
-// Two properties this endpoint must never lose:
-//   1. "Still entitled" is decided by the SAME builders that back
-//      GET /client/my-subscriptions (see activeEntitlements in the service). An
-//      admin revoke drops the product from both in the same request — a stale
-//      row here means a revoked download keeps playing.
-//   2. It is NOT cacheRoute-wrapped. A TTL would re-introduce exactly that
-//      staleness for the length of the TTL. The FE calls this on cold start and
-//      on every foreground; those reads must hit the DB.
+// End times for every still-entitled product that covers at least one registered
+// download video (expanded server-side to all owners of a shared video), each with
+// the `videoIds` it covers. Contract: docs/client/SUBSCRIPTION_ACCESS.md.
+// Invariants:
+//   1. "Still entitled" uses the same builders as GET /client/my-subscriptions, so
+//      an admin revoke drops the product from both at once.
+//   2. Not cacheRoute-wrapped: a TTL would let a revoked download keep playing. The
+//      FE calls this on cold start and every foreground.
 export const getSubscriptionAccess = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -162,16 +141,10 @@ export const getSubscriptionAccess = async (req: Request, res: Response) => {
         ? await offlineDl.buildAccessSnapshot(customerId, now, kinds)
         : [];
 
-    // Same change-detector My Subscriptions runs, on its own fingerprint key.
-    // The app hits this on every foreground, so it is in practice the fastest
-    // path to noticing a revoke/expiry and sweeping this customer's 24h-cached
-    // catalog overlay (isPurchased/daysLeft). Fail-open by design.
-    //
-    // Only fingerprint the UNFILTERED snapshot — a `kinds`-filtered set is a
-    // subset and would otherwise look like a mass revoke and flush every time.
-    // Note this set is download-scoped: it covers every active product holding a
-    // registered video (wider than the registered scopes since the expansion, but
-    // still not every subscription), so products the user has never downloaded
+    // Same change-detector as My Subscriptions on its own fingerprint key; the fastest
+    // path to sweeping this customer's cached catalog overlay after a revoke/expiry.
+    // Fail-open. Only the unfiltered snapshot is fingerprinted — a `kinds` subset would
+    // look like a mass revoke. The set is download-scoped, so products never downloaded
     // from are detected by the My Subscriptions screen instead.
     if (Number.isInteger(customerId) && customerId > 0 && !parsed.data.kinds) {
       await syncEntitlementCache(

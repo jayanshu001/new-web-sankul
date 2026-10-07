@@ -1,3 +1,4 @@
+// Admin exports: BullMQ queue and worker for async report exports.
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import {
@@ -8,10 +9,8 @@ import {
 } from "../../modules/export-job/export-job.service";
 import logger from "../../utils/logger";
 
-// BullMQ queue that generates report exports (CSV/XLSX) off-request and uploads
-// them to Spaces, then GC's the file after the retention window via a delayed job.
-// Modeled on admin/pdfUpload/pdfUpload.scheduler.ts (dedicated Redis connections,
-// boot rehydrate, graceful shutdown).
+// BullMQ queue that generates report exports (CSV/XLSX) off-request, uploads them
+// to Spaces, and deletes the file after the retention window via a delayed job.
 
 const QUEUE_NAME = "report-export";
 
@@ -39,12 +38,9 @@ function buildConnection(): RedisType {
   return new Redis({ host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD, maxRetriesPerRequest: null, enableReadyCheck: false });
 }
 
-// Ensure a PRODUCER queue exists so jobs can be enqueued. This is deliberately
-// independent of the worker: in a split deployment the HTTP process runs with
-// WORKER_ENABLED=false (so initExportScheduler / the worker never run here), yet it
-// still needs to enqueue from POST /admin/exports. It also covers the boot-race
-// window where the HTTP server accepts a request before startWorkers() has finished.
-// Idempotent — the worker's initExportScheduler reuses whatever this created.
+// Producer queue, deliberately independent of the worker: with WORKER_ENABLED=false
+// the HTTP process never runs initExportScheduler but must still enqueue, and this
+// also covers requests arriving before startWorkers() finishes. Idempotent.
 function ensureProducer(): Queue<ExportJobData> {
   if (!queue) {
     connection = connection ?? buildConnection();
@@ -86,7 +82,6 @@ async function processExportJob(job: Job<ExportJobData>): Promise<void> {
     return;
   }
   await runExportJob(job.data.jobRef);
-  // Success → arm the retention GC.
   await scheduleExpiry(job.data.jobRef);
 }
 
@@ -94,7 +89,6 @@ export async function initExportScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  // Reuse the producer queue if enqueue already lazily created it in this process.
   ensureProducer();
 
   worker = new Worker<ExportJobData>(QUEUE_NAME, processExportJob, {
@@ -121,7 +115,6 @@ export async function initExportScheduler(): Promise<void> {
   }
 }
 
-/** Graceful shutdown — close worker/events/queue + the dedicated connection. */
 export async function shutdownExportScheduler(): Promise<void> {
   try {
     await worker?.close();

@@ -1,3 +1,4 @@
+// Admin books: catalog CRUD, order report/export, tracking and store settings routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3Mixed, enforceMixedSizeLimits, uploadTo } from "../../middlewares/upload";
@@ -39,11 +40,9 @@ const bookUploadFields = [
   ]),
 ];
 
-// Books CRUD
-// Writes call autoFlushGroup(CacheEntity.Book) so an edit (incl. price columns) instantly
-// clears every cached read that embeds book data — book/catalog-book/dashboard/
-// exam-countdown AND the client cart (see flushGroups.ts). Otherwise a price
-// change would only surface after the cached read's TTL lapses.
+// Writes flush CacheEntity.Book so an edit (incl. price) instantly clears every
+// cached read embedding book data: book/catalog-book/dashboard/exam-countdown and
+// the client cart (see flushGroups.ts).
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Book }), getBooks);
 router.post("/", bookUploadFields, enforceMixedSizeLimits, autoFlushGroup(CacheEntity.Book), createBook);
 router.post("/reorder", autoFlushGroup(CacheEntity.Book), reorderBooks);
@@ -56,7 +55,6 @@ router.delete("/:id", autoFlushGroup(CacheEntity.Book), deleteBook);
 router.patch("/:id/status", autoFlushGroup(CacheEntity.Book), toggleBookStatus);
 router.patch("/:id/trending", autoFlushGroup(CacheEntity.Book), toggleBookTrending);
 
-// Orders
 router.get("/orders/list", getOrders);
 // Export routes registered BEFORE the `/orders/:id` param route so "export" is
 // never captured as an :id.

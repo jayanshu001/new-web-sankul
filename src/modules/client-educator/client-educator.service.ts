@@ -1,12 +1,6 @@
+// Educator profile: educator detail with their courses, plans and purchase state.
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
-
-/**
- * Client educator detail (profile + their active courses with plans + per-course
- * daysLeft). Composes already-migrated tables: ws_course_educator,
- * ws_course, ws_package_course_ebook_price (plans), ws_package_course_subscription
- * (entitlement). Read-only. View-counter bump is fire-and-forget.
- */
 
 export const parseEducatorId = (id: string): number | null => {
   const n = Number(id);
@@ -18,6 +12,7 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Null if missing/inactive; side effect: bumps the educator's view counter.
 export const getEducatorWithCourses = async (
   educatorId: number,
   customerId: number | null,
@@ -93,7 +88,6 @@ export const getEducatorWithCourses = async (
     };
   });
 
-  // Fire-and-forget view bump.
   prisma.courseEducator.update({ where: { id: educatorId }, data: { view: { increment: 1 } } }).catch(() => {});
 
   const shareableLink = buildShare("educators", String(educatorId));

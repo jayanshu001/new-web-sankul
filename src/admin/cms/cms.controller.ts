@@ -1,3 +1,4 @@
+// Admin CMS: HTTP handlers for FAQs, popups, banners, testimonials, links, terms and app version.
 import { Request, Response } from "express";
 import {
   listFaqsPaged as listFaqsPagedService,
@@ -88,20 +89,16 @@ import * as cmsx from "../../modules/cms/cms-extra.service";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { FAQ_TYPES, FAQ_TYPE_LABELS } from "../../modules/faq/faq.types";
 
-// Parse the standard admin list query: search/page/limit (via parseListQuery)
-// plus sortBy/sortOrder. `sortBy` stays a raw string — each service whitelists
-// its own sortable columns and falls back to that resource's default ordering.
+// `sortBy` stays a raw string; each service whitelists its own sortable columns
+// and falls back to that resource's default ordering.
 const parseSort = (query: Record<string, any>): { sortBy?: string; sortDir?: "asc" | "desc" } => {
   const sortBy = typeof query.sortBy === "string" && query.sortBy ? query.sortBy : undefined;
   const sortDir = query.sortOrder === "asc" ? "asc" : query.sortOrder === "desc" ? "desc" : undefined;
   return { sortBy, sortDir };
 };
 
-// Resolve search + sort + opt-in pagination for an admin list endpoint.
-// `skip`/`take` are only set when `page` or `limit` is present in the query, so
-// callers absent of pagination params still get the full filtered list (the
-// pagination block is then omitted from the response — back-compat with the
-// flat-array contract the FE relied on previously).
+// `skip`/`take` are set only when `page` or `limit` is present, so callers without
+// pagination params still get the full flat list (no `pagination` block).
 const parseAdminList = (query: Record<string, any>) => {
   const { search, page, limit, skip } = parseListQuery(query);
   const { sortBy, sortDir } = parseSort(query);
@@ -118,8 +115,7 @@ const parseAdminList = (query: Record<string, any>) => {
   };
 };
 
-// Build the standard list response: flat `data` plus a `pagination` block only
-// when pagination was requested.
+// `pagination` is attached only when the request asked to paginate.
 const listResponse = (
   res: Response,
   items: unknown[],
@@ -131,7 +127,7 @@ const listResponse = (
   return res.status(200).json(body);
 };
 
-// SQL body schemas: FK ids are numeric ints (not 24-hex) on the SQL path.
+// FK ids are numeric ints, not 24-hex.
 const socialLinkCreateSqlSchema = z.object({
   typeId: z.coerce.number().int().positive(),
   title: z.string().min(1).max(255),
@@ -148,15 +144,13 @@ const liveBannerCreateSqlSchema = z.object({
 });
 const liveBannerUpdateSqlSchema = liveBannerCreateSqlSchema.partial();
 
-// ─── FAQ ──
 export const listFaqs = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
     const q = parseAdminList(req.query as Record<string, any>);
     const typeId = typeof req.query.typeId === "string" ? req.query.typeId : undefined;
-    // Unknown type → 422 rather than a dropped filter that returns every category
-    // mixed together (which reads as "the filter is broken"). Case-insensitive, so
-    // the label casing "Referral" resolves.
+    // Unknown type → 422 rather than silently dropping the filter. Case-insensitive,
+    // so the label casing "Referral" resolves.
     const resolvedType = resolveFaqTypeFilter(typeId);
     if (!resolvedType.ok) {
       logger.warn("listFaqs invalid type filter", { traceId, typeId });
@@ -230,7 +224,6 @@ export const deleteFaq = async (req: Request, res: Response) => {
   }
 };
 
-// ─── FAQ Type ──
 export const listFaqTypes = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   try {
@@ -241,9 +234,8 @@ export const listFaqTypes = async (_req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-// FAQ categories are FIXED (general, referral) on the legacy MySQL schema —
-// `ws_faq.type` is an enum, there is no `ws_faq_types` table. So types are a
-// synthetic read-only list: get resolves against FAQ_TYPES; create/update/delete
+// FAQ categories are fixed (general, referral): `ws_faq.type` is an enum and there
+// is no `ws_faq_types` table. Get resolves against FAQ_TYPES; create/update/delete
 // are not representable and return a fixed-category message.
 const FAQ_CATEGORY_FIXED_MESSAGE =
   "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be modified.";
@@ -311,9 +303,6 @@ export const deleteFaqType = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Popup ──
-// Delegated to popup service (MySQL/Prisma when listed in
-// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
 // `promoExpireAt` is coerced to a Date inside the service/transformer.
 const popupIdInvalid = (id: string) => !parsePopupId(id);
 
@@ -382,9 +371,6 @@ export const deletePopup = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Banner ──
-// Data access delegated to banner-slider service (MySQL/Prisma when listed in
-// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
 const bannerIdInvalid = (id: string) => !parseBannerId(id);
 
 export const listBanners = async (req: Request, res: Response) => {
@@ -485,7 +471,7 @@ export const reorderBanners = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Live Banner ──
+// Live banners: banners that always deep-link to a live course.
 export const listLiveBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listLiveBanners invoked", { traceId, path: req.originalUrl });
@@ -562,9 +548,6 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Testimonial ──
-// Delegated to testimonial service (MySQL/Prisma when listed in
-// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
 const testimonialIdInvalid = (id: string) => !parseTestimonialId(id);
 
 export const listTestimonials = async (req: Request, res: Response) => {
@@ -632,7 +615,6 @@ export const deleteTestimonial = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Social Link Type ── (dual-path: cms-extra SQL flag)
 export const listSocialLinkTypes = async (_req: Request, res: Response) => {
   try {
     return res.status(200).json({ success: true, data: await cmsx.listSocialLinkTypes() });
@@ -680,7 +662,6 @@ export const deleteSocialLinkType = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Social Link ── (dual-path)
 export const listSocialLinks = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   try {
@@ -728,7 +709,6 @@ export const deleteSocialLink = async (req: Request, res: Response) => {
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 
-// ─── Current Affairs ── (dual-path)
 export const listCurrentAffairs = async (req: Request, res: Response) => {
   try {
     const q = parseAdminList(req.query as Record<string, any>);
@@ -775,9 +755,6 @@ export const deleteCurrentAffair = async (req: Request, res: Response) => {
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 
-// ─── Terms ──
-// Delegated to terms service (MySQL/Prisma when listed in
-// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
 const termsIdInvalid = (id: string) => !parseTermsId(id);
 
 export const listTerms = async (_req: Request, res: Response) => {
@@ -806,11 +783,11 @@ export const getTerms = async (req: Request, res: Response) => {
 export const createTerms = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
-    // MySQL `module` is a fixed enum; use the stricter schema.
+    // `module` is a fixed DB enum; use the stricter schema.
     const data = termsCreateSchemaMysql.parse(req.body);
     const doc = await createTermsService(data);
-    // 409, not 400: the payload is valid — the module is simply already taken. A
-    // second row would silently shadow the first on the client read (findFirst).
+    // 409, not 400: the payload is valid but the module is taken. A second row would
+    // silently shadow the first on the client read (findFirst).
     if (isTermsConflict(doc)) {
       logger.warn("createTerms duplicate module", { traceId, module: doc.module, existingId: doc.existingId });
       return res.status(409).json({ success: false, message: `Terms for "${doc.module}" already exist. Edit the existing entry instead.`, data: { existingId: String(doc.existingId) } });
@@ -855,7 +832,6 @@ export const deleteTerms = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Version (singleton) ──
 export const getVersion = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getVersion invoked", { traceId, path: _req.originalUrl });
@@ -870,6 +846,7 @@ export const getVersion = async (_req: Request, res: Response) => {
   }
 };
 
+// Singleton settings row: app version codes (forced-update floor).
 export const upsertVersion = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("upsertVersion invoked", { traceId, path: req.originalUrl });
@@ -886,7 +863,6 @@ export const upsertVersion = async (req: Request, res: Response) => {
   }
 };
 
-// ─── AppUpdate (singleton) ──
 export const getAppUpdate = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getAppUpdate invoked", { traceId, path: _req.originalUrl });

@@ -1,14 +1,6 @@
-// Shared parser for the standard client list query params: `search`, `page`,
-// `limit`. Centralised so every list endpoint reads these IDENTICALLY (param
-// names, defaults, caps) and the response `pagination` block stays uniform
-// project-wide.
-//
-// Conventions (matching the existing per-controller blocks):
-//   - page  : 1-based, default 1, floored at 1
-//   - limit : default 20, clamped to [1, 100]
-//   - search: trimmed; empty => undefined
-//
-// Pair with buildPrismaSearch(search, fields) from ./searchFilter to build the where.
+// List query: standard client list params so every list endpoint parses them identically:
+// page 1-based (default 1), limit default 20 clamped to [1, 100], search trimmed
+// (empty => undefined). Pair with buildPrismaSearch from ./searchFilter.
 
 export interface ListQuery {
   search?: string;
@@ -38,7 +30,6 @@ export function parseListQuery(
   };
 }
 
-// Build the uniform pagination envelope returned alongside `data`.
 export function buildPagination(total: number, page: number, limit: number) {
   return {
     total,

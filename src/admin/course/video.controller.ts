@@ -1,3 +1,4 @@
+// Admin course videos: HTTP handlers for video CRUD and reorder within a video category.
 import { Request, Response } from "express";
 import {
   parseAcvId,
@@ -10,7 +11,9 @@ import {
   reorderVideos as acvReorderVideos,
 } from "../../modules/admin-course-video/admin-course-video.service";
 
-// Body validation for the SQL branch (numeric category id; mirrors createVideoSchema fields).
+// Numeric category id; mirrors createVideoSchema fields.
+
+// Returns { data } or { error }; `partial` (update) only validates keys that are present.
 const acvParseBody = (body: any, partial: boolean) => {
   const out: any = {};
   const has = (k: string) => body && body[k] !== undefined && body[k] !== null;

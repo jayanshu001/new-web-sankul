@@ -1,15 +1,12 @@
+// Customer shipping: Prisma queries for address lookups and shipping snapshots.
 import { prisma } from "../../config/prisma";
 
-/**
- * Prisma persistence for `ws_customer_shipping` — the per-ORDER dispatch address.
- * Queries only; the address→shipping snapshot rule lives in the service.
- */
+/** `ws_customer_shipping` is the per-order dispatch address; the snapshot rule lives in the service. */
 export const customerShippingRepository = {
   /**
-   * Owner-scoped delivery address. `status: true` skips soft-deleted rows so a
-   * removed address can't be re-selected at checkout — the backfill passes
-   * `includeSoftDeleted` because an order placed against an address the customer
-   * has since deleted still has to be repaired.
+   * Skips soft-deleted rows so a removed address can't be re-selected at checkout.
+   * The backfill passes `includeSoftDeleted` to repair orders placed against
+   * since-deleted addresses.
    */
   findAddress: (id: number, userId: number, includeSoftDeleted = false) =>
     prisma.customerAddress.findFirst({
@@ -20,10 +17,8 @@ export const customerShippingRepository = {
     prisma.customer.findUnique({ where: { id }, select: { phoneNumber: true, emailAddress: true } }),
 
   /**
-   * Identity of a shipping row = (owner, name, phone, address, pincode). Same
-   * key the book-cart flow has always used; keeping it identical is what lets
-   * books and package/course orders share one snapshot per address instead of
-   * accumulating a near-duplicate row per checkout.
+   * Identity = (owner, name, phone, address, pincode), the book-cart key, so all
+   * order types share one snapshot per address instead of a row per checkout.
    */
   findShipping: (userId: number, name: string, phone: bigint, address: string, pincode: number) =>
     prisma.customerShipping.findFirst({ where: { userId, name, phone, address, pincode } }),
@@ -31,7 +26,7 @@ export const customerShippingRepository = {
   createShipping: (data: any) => prisma.customerShipping.create({ data }),
   updateShipping: (id: number, data: any) => prisma.customerShipping.update({ where: { id }, data }),
 
-  /** Does this id already denote a real shipping row? Used by the backfill. */
+  /** Used by the backfill. */
   shippingExists: (id: number) =>
     prisma.customerShipping.findFirst({ where: { id }, select: { id: true } }),
 };

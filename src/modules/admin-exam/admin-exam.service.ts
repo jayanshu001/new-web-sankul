@@ -1,3 +1,4 @@
+// Admin exams (quizzes): exam and question CRUD, results and analytics logic.
 import { adminExamRepository as repo } from "./admin-exam.repository";
 import { setExamCategories, validateLeafCategoryIds } from "../catalog-exam/exam-category-pivot.where";
 import { normalizeTiming, detailsForAttempt } from "../client-exam/client-exam.service";
@@ -24,13 +25,11 @@ const toExamDto = (e: any) => ({
   description: e.description ?? null,
   type: e.type,
   isPaid: e.isPaid,
-  // `exam_category_id = 0` is the legacy "no category assigned" sentinel (no
-  // ws_exam_category row has id 0 — same convention as parent_id=0 for root
-  // categories), so it must resolve to `null`, not the string "0".
+  // `exam_category_id = 0` is the legacy "no category" sentinel (no row has id 0), so
+  // it resolves to null, not "0".
   categoryId: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null } : (e.examCategoryId ? String(e.examCategoryId) : null),
-  // An exam is filed under one or more LEAF categories, held in ws_exam_category_pivot.
-  // Populated ({_id,name}) because the list renders a badge per entry and the edit
-  // modal prefills its chips from this — bare ids would show as raw numbers.
+  // Leaf categories from ws_exam_category_pivot, populated ({_id,name}) because the list
+  // renders a badge per entry and the edit modal prefills its chips from it.
   categoryIds: (e.examCategoryPivot ?? [])
     .map((p: any) => p.Category)
     .filter(Boolean)
@@ -74,7 +73,6 @@ const toResultDto = (r: any) => ({
   createdAt: r.created_at ?? null,
 });
 
-// ── exams ──────────────────────────────────────────────────────────────────
 export const listExams = async (opts: { search?: string; categoryId?: string; type?: string; status?: string; isPaid?: string; page: number; limit: number }) => {
   const where = {
     search: opts.search,
@@ -97,10 +95,8 @@ export const getExamById = async (id: number) => {
   return { ...toExamDto(exam), actualQuestionCount: qCount };
 };
 
-// ── exam writes ──────────────────────────────────────────────────────────────
-// ws_exam.type is ENUM('daily','subject'); the Mongo enum also has mock/weekly
-// which the SQL column can't hold, so they collapse to 'subject' (only 'daily'
-// participates in the availability-window rule anyway).
+// ws_exam.type is ENUM('daily','subject'); other types (mock/weekly) collapse to
+// 'subject'. Only 'daily' participates in the availability-window rule.
 const mapType = (t?: string): "daily" | "subject" => (t === "daily" ? "daily" : "subject");
 
 export interface ExamWriteInput {
@@ -108,10 +104,9 @@ export interface ExamWriteInput {
   description?: string | null;
   type?: string;
   /**
-   * Full-replace set of leaf category ids. Omitted → links left untouched; present
-   * but EMPTY clears the set (allowed for `type: "daily"` only — see
-   * requireCategoryForType). `categoryId` remains accepted as the legacy
-   * single-category form.
+   * Full-replace set of leaf category ids. Omitted → links untouched; present but empty
+   * clears the set (daily only, see requireCategoryForType). `categoryId` is still
+   * accepted as the legacy single-category form.
    */
   categoryIds?: string[];
   categoryId?: string | null;
@@ -128,14 +123,11 @@ export interface ExamWriteInput {
   status?: boolean;
 }
 
-/** Current state needed by the controller to merge an update + run the overlap rule. */
 export const getExamMeta = (id: number) => repo.findExamMeta(id);
 
 /**
- * Resolve a write's category set from `categoryIds` (preferred) or the legacy scalar
- * `categoryId`. Returns `null` when neither is supplied — on update that means "leave
- * the links untouched"; create rejects it separately. Every id must parse, exist, and
- * be a leaf.
+ * Category set from `categoryIds` (preferred) or legacy `categoryId`. null when neither
+ * is supplied (update: leave links untouched). Every id must parse, exist, and be a leaf.
  */
 const resolveCategoryIds = async (
   input: ExamWriteInput
@@ -161,14 +153,10 @@ const resolveCategoryIds = async (
 };
 
 /**
- * Daily tests are browsed by DATE (dailyInWindowPaged & friends never join
- * ws_exam_category), so they may be filed under no category at all. Every other type
- * is browsed BY category (examsByCategoryPaged is scoped to type "subject"), so a
- * category-less one would be unreachable in the app — those keep the original rule.
- *
- * Lives here rather than in the Zod schema because an update's payload may omit
- * `type` entirely; only the service can compare the empty set against the EFFECTIVE
- * type (payload merged over the stored row).
+ * Daily tests are browsed by date (never joined to ws_exam_category), so they may have
+ * no category. Every other type is browsed by category and would be unreachable without
+ * one. Enforced here, not in Zod, because an update may omit `type`; only the service
+ * knows the effective type (payload merged over the stored row).
  */
 const CATEGORY_REQUIRED_ERROR = "At least one parent category is required";
 
@@ -179,9 +167,8 @@ const requireCategoryForType = (
   effectiveType !== "daily" && !ids.length ? { error: CATEGORY_REQUIRED_ERROR } : null;
 
 /**
- * Returns the conflicting daily test as a Mongo-shaped clash ({_id,title,startAt,
- * endAt}) for the controller's 409, or null when no clash. Only PUBLISHED daily
- * tests with a complete window can clash — mirrors the Mongo `findDailyOverlap`.
+ * The conflicting daily test ({_id,title,startAt,endAt}) for the controller's 409, or
+ * null. Only published daily tests with a complete window can clash.
  */
 export const examDailyOverlap = async (c: {
   type?: string; published: boolean; startAt?: Date | null; endAt?: Date | null; excludeId?: number;
@@ -192,24 +179,19 @@ export const examDailyOverlap = async (c: {
 };
 
 export const createExam = async (input: ExamWriteInput): Promise<{ error: string } | ReturnType<typeof toExamDto>> => {
-  // A non-daily exam must be filed under at least one leaf category; a daily test may
-  // have none. On create an absent categoryIds is the same as an empty set — there are
-  // no existing links to "leave untouched".
+  // On create an absent categoryIds equals an empty set (no links to leave untouched).
   const resolved = await resolveCategoryIds(input);
   if (resolved && "error" in resolved) return resolved;
   const categoryIds = resolved?.ids ?? [];
   const typeError = requireCategoryForType(mapType(input.type), categoryIds);
   if (typeError) return typeError;
-  // exam_category_id stays the PRIMARY category — first of the chosen set — because
-  // several read paths still OR against the column (see examInCategoriesWhere); the
-  // pivot holds the full set. NULL when there is no set (daily); the column was made
-  // NULLable by 2026-08-20_exam_category_nullable.sql for exactly this.
+  // exam_category_id stays the primary category (first of the set) because several read
+  // paths still OR against the column (see examInCategoriesWhere); the pivot holds the
+  // full set. NULL when there is no set (daily).
   const catId = categoryIds[0] ?? null;
   const now = new Date();
-  // ws_exam.start_date is NOT NULL, so a missing start defaults to now.
-  // end_date is nullable (2026-07-27 migration): NULL means "no end date — the
-  // quiz stays open indefinitely". Never substitute a sentinel here — defaulting
-  // to now() used to make the quiz expire the instant it was created.
+  // start_date is NOT NULL, so a missing start defaults to now. end_date NULL means the
+  // quiz stays open indefinitely; never substitute a sentinel (now() would expire it at once).
   const row = await repo.createExam({
     name: input.title ?? "",
     type: mapType(input.type),
@@ -224,35 +206,31 @@ export const createExam = async (input: ExamWriteInput): Promise<{ error: string
     startAt: input.startAt ?? now,
     endAt: input.endAt ?? null,
     status: input.status ?? false,
-    // New quiz lands after the current last one (same max+1 rule as questions).
+    // Lands after the current last quiz (same max+1 rule as questions).
     order_by: (await repo.maxExamOrder()) + 1,
     send_push: input.sendPush ?? false,
     createAt: now,
     updatedAt: now,
   });
   await setExamCategories(row.id, categoryIds);
-  // Re-read so the response carries the populated categoryIds the caller just set
-  // (the create row has no pivot relation loaded).
+  // Re-read so the response carries the populated categoryIds (create has no pivot loaded).
   return toExamDto((await repo.findExam(row.id)) ?? row);
 };
 
 /**
- * Returns "not_found" or { data, orphanPdfUrl }. orphanPdfUrl is the previous
- * solution PDF when the caller cleared it (solutionPdfUrl === null), so the
+ * orphanPdfUrl is the previous solution PDF when the caller cleared it, so the
  * controller can best-effort delete it from S3 after the write.
  */
 export const updateExam = async (id: number, input: ExamWriteInput): Promise<"not_found" | { error: string } | { data: ReturnType<typeof toExamDto>; orphanPdfUrl: string | null }> => {
   const meta = await repo.findExamMeta(id);
   if (!meta) return "not_found";
 
-  // Full-replace semantics: an omitted categoryIds leaves the links alone, a present
-  // one is the exam's complete category set (empty = clear all). Resolved before the
-  // write so an invalid id fails the whole update rather than half-applying it.
+  // Resolved before the write so an invalid id fails the whole update instead of
+  // half-applying it.
   const resolved = await resolveCategoryIds(input);
   if (resolved && "error" in resolved) return resolved;
-  // Only a PRESENT set can violate the rule — an omitted one leaves whatever is
-  // already stored. Checked against the EFFECTIVE type (payload over stored row), so
-  // flipping a daily test to subject while clearing its categories is still rejected.
+  // Only a present set can violate the rule. Checked against the effective type, so
+  // flipping daily → subject while clearing categories is still rejected.
   if (resolved) {
     const typeError = requireCategoryForType(mapType(input.type ?? meta.type), resolved.ids);
     if (typeError) return typeError;
@@ -261,10 +239,8 @@ export const updateExam = async (id: number, input: ExamWriteInput): Promise<"no
   const data: any = { updatedAt: new Date() };
   if (input.title !== undefined) data.name = input.title;
   if (input.type !== undefined) data.type = mapType(input.type);
-  // Keep exam_category_id pointing at the primary (first) category — or NULL when the
-  // admin cleared the set. `?? null` is load-bearing: `resolved.ids[0]` on an empty
-  // array is `undefined`, which Prisma SKIPS, so the row would silently keep its stale
-  // primary category after a clear.
+  // `?? null` is load-bearing: `ids[0]` of an empty array is undefined, which Prisma
+  // skips, so the row would keep its stale primary category after a clear.
   if (resolved) data.examCategoryId = resolved.ids[0] ?? null;
   if (input.isPaid !== undefined) data.isPaid = input.isPaid;
   if (input.durationMinutes !== undefined) data.time = input.durationMinutes;
@@ -285,13 +261,12 @@ export const updateExam = async (id: number, input: ExamWriteInput): Promise<"no
     data.solution = input.solutionPdfUrl;
     if (input.solutionPdfName !== undefined) data.solutionName = input.solutionPdfName ?? null;
   } else if (input.solutionPdfName !== undefined) {
-    // Renaming without changing the file (uncommon, but supported).
     data.solutionName = input.solutionPdfName ?? null;
   }
 
   const row = await repo.updateExam(id, data);
   if (resolved) await setExamCategories(id, resolved.ids);
-  // Re-read for the populated categoryIds (updateExam returns no pivot relation).
+  // Re-read for the populated categoryIds.
   return { data: toExamDto((await repo.findExam(id)) ?? row), orphanPdfUrl };
 };
 
@@ -313,7 +288,6 @@ export const reorderExams = async (orders: Array<{ id: string; orderBy: number }
   return true;
 };
 
-// ── questions ────────────────────────────────────────────────────────────────
 export const listQuestions = async (opts: { examId?: string; search?: string; status?: string; page: number; limit: number }) => {
   const where = {
     examId: opts.examId ? parseExamId(opts.examId) ?? undefined : undefined,
@@ -337,7 +311,6 @@ export const getQuestionById = async (id: number) => {
   return toQuestionDto(q, options);
 };
 
-// ── question writes ────────────────────────────────────────────────────────────
 const normAns = (s: string) => (s ?? "").trim().toLowerCase();
 const answerMatches = (answer: string, options: { name: string }[]) =>
   options.some((o) => normAns(o.name) === normAns(answer));
@@ -402,7 +375,7 @@ export const updateQuestion = async (id: number, input: QuestionInput): Promise<
   const q = await repo.findQuestion(id);
   if (!q) return "not_found";
 
-  // Validate answer↔options when either changes (uses existing values for the unchanged side).
+  // Validate answer↔options when either changes (existing values fill the unchanged side).
   if (input.options || input.answer !== undefined) {
     const options = input.options ?? (await repo.optionsForQuestions([id])).map((o) => ({ name: o.name }));
     const answer = input.answer ?? q.answer ?? "";
@@ -445,7 +418,6 @@ export const reorderQuestions = async (orders: Array<{ id: string; orderBy: numb
   return true;
 };
 
-// ── submissions / results / analytics ────────────────────────────────────────
 export const getExamSubmissions = async (examId: number, page: number, limit: number) => {
   const [rows, total] = await Promise.all([
     repo.listSubmissions(examId, (page - 1) * limit, limit),
@@ -464,6 +436,7 @@ export const getResultById = async (id: number) => {
   };
 };
 
+// Marks an attempt result invalid; null when the result does not exist.
 export const invalidateResult = async (id: number) => {
   const r = await repo.findResult(id);
   if (!r) return null;

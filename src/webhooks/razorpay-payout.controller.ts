@@ -1,3 +1,4 @@
+// Razorpay payout webhook: HMAC-verified payout events to referral transaction status.
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { RefferalTransactionStatus } from "../shared/enums";
@@ -15,6 +16,7 @@ const EVENT_TO_STATUS: Record<string, RefferalTransactionStatus | undefined> = {
   "payout.rejected": RefferalTransactionStatus.FAILED,
 };
 
+// Idempotent: repeats and unknown payout ids answer 200 so Razorpay stops retrying.
 export const razorpayPayoutWebhook = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const event = req.body?.event as string | undefined;
@@ -54,7 +56,6 @@ export const razorpayPayoutWebhook = async (req: Request, res: Response) => {
       payout.failure_reason ?? payout.status_details?.description ?? undefined;
     const nextStatus = newStatus === RefferalTransactionStatus.SUCCESSFUL ? "successful" : "failed";
 
-    // ─── ws_refferal_transaction ─────────────────────────────────────────
     const result = await applyPayoutWebhook(referenceNumber, nextStatus, failureReason);
     if (result === "unknown") {
       logger.warn("razorpayPayoutWebhook unknown payout id", { traceId, event, referenceNumber });

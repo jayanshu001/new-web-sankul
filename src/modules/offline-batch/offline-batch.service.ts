@@ -1,13 +1,4 @@
-/**
- * Offline · Batch/Center service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Module key: `offline-batch` (flag OFF). Reproduces the offline browse reads:
- * centers (+ city / + nested batches), batches (+ center→city), and the offline
- * dashboard composition. Cities come from the `offline-city` module.
- *
- * READ only — `submitEnquiry` (POST → ws_offline_enquiry) is a WRITE path, not
- * built here. No SQL `status` column on center/batch → all rows treated active.
- */
+// Offline batches: center, batch and offline banner slider logic.
 import { offlineBatchRepository as repo } from "./offline-batch.repository";
 import {
   toOfflineBatchDto,
@@ -22,17 +13,11 @@ import type {
   OfflineCenterWithCityDto,
 } from "./offline-batch.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseOfflineId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ── centers ───────────────────────────────────────────────────────────────
-
-/** Centers (+ city ref), optional cityId + name search, paginated. Returns the
- *  page + total matching count for the pagination envelope. */
 export const listCenters = async (opts?: {
   cityId?: number;
   search?: string;
@@ -50,8 +35,6 @@ export const listCenters = async (opts?: {
   };
 };
 
-/** Admin centers (+ city ref): optional cityId + name search, newest first,
- *  paginated when skip/take are provided. Returns rows + total for the UI. */
 export const listCentersAdmin = async (opts?: {
   cityId?: number;
   search?: string;
@@ -69,7 +52,6 @@ export const listCentersAdmin = async (opts?: {
   };
 };
 
-/** Single center (+ city) with its batches nested, or null. */
 export const getCenterDetail = async (
   id: number
 ): Promise<(OfflineCenterWithCityDto & { batches: OfflineBatchDto[] }) | null> => {
@@ -83,10 +65,6 @@ export const getCenterDetail = async (
   };
 };
 
-// ── batches ───────────────────────────────────────────────────────────────
-
-/** Batches (+ center→city), optional center/city/upcoming/name filters,
- *  paginated. Returns the page + total matching count. */
 export const listBatches = async (opts?: {
   centerId?: number;
   cityId?: number;
@@ -99,7 +77,7 @@ export const listBatches = async (opts?: {
   data: Array<OfflineBatchDto & { center: OfflineCenterWithCityDto | null }>;
   total: number;
 }> => {
-  // city filter resolves to that city's center ids (the Mongo path does the same).
+  // City filter resolves to that city's center ids.
   let centerIds: number[] | undefined;
   if (opts?.centerId == null && opts?.cityId != null) {
     const centers = await repo.listCentersByCities([opts.cityId]);
@@ -129,8 +107,6 @@ export const listBatches = async (opts?: {
   };
 };
 
-/** Admin batches (+ center→city): optional center/name/upcoming filters, newest
- *  created first, paginated when skip/take are provided. Returns rows + total. */
 export const listBatchesAdmin = async (opts?: {
   centerId?: number;
   search?: string;
@@ -162,7 +138,6 @@ export const listBatchesAdmin = async (opts?: {
   };
 };
 
-/** Single batch (+ center→city), or null. */
 export const getBatchDetail = async (
   id: number
 ): Promise<(OfflineBatchDto & { center: OfflineCenterWithCityDto | null }) | null> => {
@@ -176,9 +151,7 @@ export const getBatchDetail = async (
   };
 };
 
-// ── dashboard composition ────────────────────────────────────────────────
-
-/** Centers (each with active batches) grouped under the given city ids. */
+// Centers with their batches, grouped by city id.
 export const getCentersWithBatchesByCities = async (
   cityIds: number[]
 ): Promise<Map<string, OfflineCenterWithBatchesDto[]>> => {
@@ -207,7 +180,6 @@ export const getCentersWithBatchesByCities = async (
   return byCity;
 };
 
-/** Upcoming active batches (+ center→city), soonest first, capped. */
 export const listUpcomingBatches = async (
   now: Date = new Date(),
   limit = 10
@@ -221,10 +193,8 @@ export const listUpcomingBatches = async (
   }));
 };
 
-// ── admin CRUD (Wave 8) ──────────────────────────────────────────────────────
-// Center/Batch have NO SQL `status` column → `status` is dropped on write and
-// synthesized true on read (toOfflineCenterDto/toOfflineBatchDto). `images[]`
-// stores into the JSON `image` column; `phone` → BigInt; `description`→`discription`.
+// Center/batch have no SQL `status` column: it is dropped on write and synthesized
+// true on read. `images[]` is stored in the JSON `image` column.
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
@@ -234,7 +204,6 @@ const batchWithCenter = (r: any) => ({
   center: r.center ? { ...toOfflineCenterDto(r.center), city: toOfflineCityRef(r.center.city) } : null,
 });
 
-// ── center writes ──
 export const createCenter = async (input: {
   name: string; images: string[]; address: string; latitude: number; longitude: number;
   phone: string | number; cityId: number;
@@ -278,7 +247,6 @@ export const deleteCenter = async (id: number): Promise<Envelope<null>> => {
   return { ok: true, data: null };
 };
 
-// ── batch writes ──
 export const createBatch = async (input: {
   name: string; image: string; description: string; startAt: string | Date; duration: string; centerId: number;
 }): Promise<Envelope<any>> => {
@@ -317,7 +285,6 @@ export const deleteBatch = async (id: number): Promise<Envelope<null>> => {
   return { ok: true, data: null };
 };
 
-// ── offline banner (OfflineBannerSlider; order_by added via Wave 8 ALTER) ─────
 const bannerDto = (r: any) => ({
   _id: String(r.id), image: r.image, key: r.key ?? null, keyId: r.keyId ?? null,
   orderBy: r.orderBy, createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
@@ -326,7 +293,6 @@ const bannerDto = (r: any) => ({
 export const listBanners = async () => (await repo.listBanners()).map(bannerDto);
 
 export const createBanner = async (input: { image: string; key?: string; keyId?: number; orderBy?: number }) => {
-  // No explicit order → previous row + 1 (see utils/listOrdering).
   const orderBy = input.orderBy ?? nextOrder((await prisma.offlineBannerSlider.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await repo.createBanner({
     image: input.image, key: input.key ?? null, keyId: input.keyId ?? null, orderBy,
@@ -351,7 +317,7 @@ export const deleteBanner = async (id: number): Promise<boolean> => {
   return true;
 };
 
-/** Reorder banners by [{id, orderBy}]; returns count applied. */
+// Bulk reorder; invalid ids are skipped, returns the number of rows updated.
 export const reorderBanners = async (orders: { id: string; orderBy: number }[]): Promise<number> => {
   let count = 0;
   for (const o of orders) {

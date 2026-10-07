@@ -1,3 +1,4 @@
+// FAQs: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { FaqCategory, FaqCreateInput, FaqUpdateInput } from "./faq.types";
@@ -12,7 +13,7 @@ export type FaqListOpts = {
   take?: number;
 };
 
-// Whitelist of sortable columns (DTO key → DB column).
+// Sortable columns: DTO key → DB column.
 const FAQ_SORT_COLUMNS: Record<string, string> = {
   createdAt: "created_at",
   updatedAt: "updated_at",
@@ -34,7 +35,6 @@ export const faqRepository = {
       orderBy: { created_at: "asc" },
     }),
 
-  /** Admin paginated + search list. Default (no sortBy) = recently added on top. */
   findPage: (opts: FaqListOpts) => {
     const col = FAQ_SORT_COLUMNS[opts.sortBy ?? ""] ?? "created_at";
     // No explicit sort → newest first; explicit sortBy without dir → asc (e.g. question A-Z).

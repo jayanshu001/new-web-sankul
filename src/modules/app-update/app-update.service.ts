@@ -1,3 +1,4 @@
+// App update settings: read and upsert the singleton config.
 import { appUpdateRepository } from "./app-update.repository";
 import { toAppUpdateDto } from "./app-update.transformer";
 import type { AppUpdateDto, AppUpdateUpsertInput } from "./app-update.types";

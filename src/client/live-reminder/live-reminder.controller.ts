@@ -1,3 +1,4 @@
+// Client live reminders: HTTP handlers to set, list and remove session reminders.
 import { Request, Response } from "express";
 import {
   upsertReminder,
@@ -13,7 +14,7 @@ import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
-// Shape a reminder (with its session populated, when available) for the client.
+// Public reminder shape from a session-populated reminder (upsert result).
 function publicReminder(reminder: any) {
   const session =
     reminder.liveSessionId && typeof reminder.liveSessionId === "object"
@@ -29,7 +30,7 @@ function publicReminder(reminder: any) {
     sessionScheduledAt: reminder.sessionScheduledAt,
     sessionScheduledAtDisplay: formatScheduledAt(reminder.sessionScheduledAt),
     status: reminder.status,
-    // Derived: the scheduled fire time has already passed (reminder likely sent).
+    // The scheduled fire time has passed (reminder likely sent).
     fired: reminder.remindAt ? new Date(reminder.remindAt).getTime() <= Date.now() : false,
     session: session
       ? {
@@ -48,9 +49,7 @@ function publicReminder(reminder: any) {
   };
 }
 
-// SQL branch: the admin-live-course service returns a flat reminder DTO (id,
-// liveSessionId, liveCourseId, minutesBefore, remindAt, sessionScheduledAt,
-// status, optional nested `session`). Shape it to the same public contract.
+// Shapes the flat service DTO to the same public contract as publicReminder.
 function sqlReminderToPublic(r: any) {
   const session = r.session ?? null;
   return {
@@ -81,14 +80,7 @@ function sqlReminderToPublic(r: any) {
   };
 }
 
-// setLiveSessionReminder / removeLiveSessionReminder delegate to the SQL service
-// (`client-live-reminder.service`), which provisions/cancels the scheduled
-// notification row + BullMQ job on the migrated tables. No Mongo path remains.
-//
-// POST /api/v1/client/live-reminders
-// Body: { liveSessionId, minutesBefore? }  — set (or replace) a reminder for a
-// SCHEDULED live session. minutesBefore defaults to 30; a notification fires
-// that many minutes before the session's scheduled start time.
+// Sets or replaces a reminder for a SCHEDULED session; minutesBefore defaults to 30.
 export const setLiveSessionReminder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -114,8 +106,7 @@ export const setLiveSessionReminder = async (req: Request, res: Response) => {
     const result = await upsertReminder(customerId, liveSessionId, minutesBefore, traceId);
     if (!result.ok) { logger.warn("setLiveSessionReminder upsert failed", { traceId, customerId, liveSessionId, message: result.message }); return failure(res, result.message, result.status); }
 
-    // The SQL service already returns a Mongo-shaped, session-populated reminder
-    // (`toReminderShape`), so the response is self-contained without a re-read.
+    // The service returns a session-populated reminder, so no re-read is needed.
     logger.info("setLiveSessionReminder success", { traceId, customerId, liveSessionId, reminderId: result.reminder._id });
     return success(
       res,
@@ -129,11 +120,8 @@ export const setLiveSessionReminder = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/live-reminders?upcoming=true&limit=2
-// The caller's reminders, soonest first. ?upcoming=true → only still-scheduled
-// reminders whose session start time is still in the future, sorted by the
-// session's scheduled start time so the next-to-start class is on top.
-// ?limit=N caps the response (default 50, max 100).
+// ?upcoming=true → only reminders whose session is still in the future, sorted by
+// session start. ?limit=N caps the response (default 50, max 100).
 export const listMyLiveSessionReminders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -143,8 +131,7 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
     if (!customerId) { logger.warn("listMyLiveSessionReminders unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const upcomingOnly = req.query.upcoming === "true";
-    // Standard list query: `search` filters on the session title; `page`/`limit`
-    // paginate the (in-memory, filtered+sorted) result set.
+    // `search` filters on session title; pagination is over the in-memory filtered set.
     const { search, page, limit, skip } = parseListQuery(req.query);
 
     const cid = liveSql.parseLiveId(String(customerId));
@@ -164,8 +151,7 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
     const total = reminders.length;
     reminders = reminders.slice(skip, skip + limit);
     logger.info("listMyLiveSessionReminders success", { traceId, customerId, total, upcomingOnly });
-    // Minimal reminder map: keep liveSessionId/minutesBefore (drives toggle state);
-    // drop unused reminder/session metadata. `pagination` is preserved.
+    // liveSessionId/minutesBefore drive the toggle state; `pagination` is preserved.
     const slim = reminders.map((r) =>
       omit(r, ["id", "liveCourseId", "remindAt", "remindAtDisplay", "status", "fired", "session", "createdAt", "updatedAt"])
     );
@@ -176,9 +162,7 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
   }
 };
 
-// GET /api/v1/client/live-reminders/session/:liveSessionId
-// Whether the caller already has a reminder on this session — drives the
-// per-session "reminder on/off" toggle in the UI.
+// Caller's reminder for one session; `reminder: null` (200) when none is set.
 export const getMyReminderForSession = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -199,8 +183,6 @@ export const getMyReminderForSession = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/live-reminders/:liveSessionId
-// Remove the caller's reminder for a session (cancels the pending notification).
 export const removeLiveSessionReminder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;

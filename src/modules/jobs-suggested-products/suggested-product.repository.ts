@@ -1,3 +1,4 @@
+// Jobs suggested products: Prisma queries.
 import { prisma } from "../../config/prisma";
 import type {
   SuggestedProductCreateInput,

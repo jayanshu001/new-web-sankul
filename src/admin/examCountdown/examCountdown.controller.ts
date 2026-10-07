@@ -1,3 +1,4 @@
+// Admin exam countdowns: HTTP handlers for countdown categories and countdowns.
 import { Request, Response } from "express";
 import * as ecSql from "../../modules/exam-countdown/exam-countdown.service";
 
@@ -9,6 +10,7 @@ function utcMidnight(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
+// Required exam date, bounded to -5..+10 years, normalized to UTC midnight.
 function parseExamDate(raw: any): { date: Date | null; error?: string } {
   if (!raw) return { date: null, error: "examDate is required." };
   const d = new Date(raw);
@@ -32,22 +34,18 @@ function parseOptionalId(raw: any, field: string): { value?: number | null; erro
   return { value: n };
 }
 
-// ─── Categories ─────────────────────────────────────────────────────────────
-
-// GET /admin/exam-countdowns/categories
 export const adminListCategories = async (req: Request, res: Response) => {
   try {
     const search = (req.query.search ?? "").toString().trim();
-    // Pagination is opt-in: if page/limit are sent we paginate + return a
-    // `pagination` block (same shape as GET /admin/exam-countdowns); if neither
-    // is sent we return the full list (legacy contract) for non-paging callers.
+    // Pagination is opt-in: page/limit → paginated with a `pagination` block;
+    // neither → full list (contract for non-paging callers).
     const paginate = req.query.page !== undefined || req.query.limit !== undefined;
     const pageNum = Math.max(parseInt(String(req.query.page ?? "1"), 10) || 1, 1);
     const limitNum = Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    // `status` is opt-in: absent → every category (legacy contract); "true"/"false"
-    // filters. Pickers send status=true so a page of 10 is 10 selectable categories.
+    // `status` is opt-in: absent → every category; "true"/"false" filters. Pickers
+    // send status=true so a page of 10 is 10 selectable categories.
     const rawStatus = req.query.status;
     const status =
       rawStatus === undefined || rawStatus === "" ? undefined : String(rawStatus) !== "false";
@@ -68,7 +66,6 @@ export const adminListCategories = async (req: Request, res: Response) => {
   }
 };
 
-// GET /admin/exam-countdowns/categories/:id
 export const adminGetCategory = async (req: Request, res: Response) => {
   try {
     const id = ecSql.parseEcId(String(req.params.id));
@@ -81,7 +78,6 @@ export const adminGetCategory = async (req: Request, res: Response) => {
   }
 };
 
-// POST /admin/exam-countdowns/categories
 export const adminCreateCategory = async (req: Request, res: Response) => {
   try {
     const name = (req.body?.name ?? "").toString().trim();
@@ -106,7 +102,6 @@ export const adminCreateCategory = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /admin/exam-countdowns/categories/:id
 export const adminUpdateCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -142,7 +137,6 @@ export const adminUpdateCategory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /admin/exam-countdowns/categories/:id
 export const adminDeleteCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -158,9 +152,6 @@ export const adminDeleteCategory = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Countdowns ─────────────────────────────────────────────────────────────
-
-// GET /admin/exam-countdowns
 export const adminListCountdowns = async (req: Request, res: Response) => {
   try {
     const {
@@ -200,7 +191,6 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
   }
 };
 
-// POST /admin/exam-countdowns
 export const adminCreateCountdown = async (req: Request, res: Response) => {
   try {
     const title = (req.body?.title ?? "").toString().trim();
@@ -211,7 +201,6 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
     if (title.length > 200)
       return res.status(400).json({ success: false, message: "title too long (max 200)." });
 
-    // Optional goal tagging (goalId → Goal, goalLabelId → a label within it).
     const g = parseOptionalId(req.body?.goalId, "goalId");
     if (g.error) return res.status(400).json({ success: false, message: g.error });
     const gl = parseOptionalId(req.body?.goalLabelId, "goalLabelId");
@@ -234,7 +223,6 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /admin/exam-countdowns/:id
 export const adminUpdateCountdown = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -260,8 +248,7 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
     }
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
 
-    // Optional goal tagging. Only included in the update when the key is sent,
-    // so existing values are preserved unless the admin explicitly changes them.
+    // Goal fields are only updated when the key is sent, preserving existing values.
     if (req.body?.goalId !== undefined) {
       const g = parseOptionalId(req.body.goalId, "goalId");
       if (g.error) return res.status(400).json({ success: false, message: g.error });
@@ -286,7 +273,6 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /admin/exam-countdowns/:id
 export const adminDeleteCountdown = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;

@@ -1,6 +1,7 @@
+// App update settings: DTO, input types and defaults.
 import type { UpdateType } from "../../shared/enums";
 
-/** Stable API / admin contract (matches Mongoose JSON shape). */
+/** Frozen API contract: live clients parse this shape. */
 export interface AppUpdateDto {
   _id?: string;
   latestVersion: number;

@@ -1,20 +1,14 @@
+// Jobs content: Prisma queries for job posts and other govt-job content.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { ContentListQuery, ContentWriteInput, JobContentType, JobProductType } from "./content.types";
 
-// `wsj_content_seo`/`_facts`/`_products`/`_sections`(+items)/`_steps`/
-// `_date_items`/`_fee_items`/`_payment_modes`/`_notes`/`_related_posts` and
-// every `wsj_*_details`/`wsj_syllabus_*` table were dropped from prod. Their
-// data was migrated (before this repository was rewritten) into the
-// `wsj_contents.card`/`.detail` JSON columns, using the SAME snake_case
-// shape the legacy Laravel admin (`App\Models\GovtJob\Content`) always used
-// — `card` = short/list-view fields, `detail` = long-form/detail-page
-// fields, and Laravel's own `Content::field()` reads card first, then
-// detail (see websankul-mobile-app-admin-panel). This repository preserves
-// that exact split and key naming on write, and content.transformer.ts
-// merges card+detail (card wins) the same way on read. DO NOT switch this
-// to camelCase or restructure it — it must stay byte-compatible with the
-// already-migrated production rows.
+// All child content data lives in the `wsj_contents.card` / `.detail` JSON
+// columns, in the snake_case shape of the legacy Laravel admin
+// (`App\Models\GovtJob\Content`): `card` = list-view fields, `detail` =
+// detail-page fields; reads merge them with card winning, as Laravel's
+// `Content::field()` does. Do not switch to camelCase or restructure: it must
+// stay byte-compatible with existing production rows.
 export const CONTENT_LIST_INCLUDE = {
   organization: true,
 } as const;
@@ -299,9 +293,7 @@ export const contentRepository = {
       orders.map(({ id, order }) => prisma.jobContent.update({ where: { id }, data: { sortOrder: order } }))
     ),
 
-  // `jobDetail` relation is gone — `application_end` now lives inside the
-  // `card` JSON (see comment above). Raw JSON_EXTRACT, same pattern as the
-  // purchase-history VARCHAR/INT fix (see MIGRATION_QUERY_CHANGES.md).
+  // `application_end` lives inside the `card` JSON, hence raw JSON_EXTRACT.
   findStaleJobIds: async (asOf: Date): Promise<bigint[]> => {
     const rows = await prisma.$queryRawUnsafe<{ id: bigint }[]>(
       `SELECT id FROM wsj_contents

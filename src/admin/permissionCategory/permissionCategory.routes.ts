@@ -1,3 +1,4 @@
+// Admin permission categories: strict-RBAC routes (create is retired with 410).
 import { Router } from "express";
 import { enforceRbacStrict } from "../../middlewares/rbacEnforce";
 import {
@@ -10,9 +11,8 @@ import {
 const router = Router();
 
 // Authn + admin-surface gate come from admin.routes.ts. Catalog RBAC
-// (`permission-categories.*` in rbacRouteMap) is HARD-enforced here regardless
-// of RBAC_ENFORCE — this router is the security boundary itself. Replaced the
-// old requireRole("super_admin") floor 2026-09-11.
+// (`permission-categories.*`) is hard-enforced here regardless of RBAC_ENFORCE
+// because this router is itself the security boundary.
 router.use(enforceRbacStrict);
 
 router.get("/", listPermissionCategories);

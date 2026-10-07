@@ -1,21 +1,15 @@
 /**
- * Client lecture notes (text + audio) — SQL branch. Gated behind
- * `isMysqlModule("client-lecture-note")`. Net-new tables ws_lecture_note +
- * ws_lecture_audio_note (2026-06-19). All ids SQL ints. The S3/multer handling
- * for audio stays controller-owned (DB-agnostic); this service does persistence
- * + the auth gates + the saved-materials aggregation.
+ * Lecture notes: text + audio notes and saved materials. Audio S3/multer handling is controller-owned.
  *
- * Auth parity with lecture.controller / progress.controller:
- *  - recorded: resolve owning course via the catalog-category-tree DAG resolver;
- *    free → allow; paid+course → require active sub (status=true, no
- *    payment_status col); paid+no-course → allow scoped to the video.
- *  - live: session must have ≥1 live course (ws_live_session_course) AND the
- *    customer holds an active verified LiveCourseSubscription to one of them.
+ * Auth gates (parity with lecture/progress controllers):
+ *  - recorded: owning course resolved via the category-tree DAG; free → allow;
+ *    paid+course → require an active sub; paid+no-course → allow scoped to the video.
+ *  - live: session must link ≥1 live course and the customer must hold an active
+ *    LiveCourseSubscription to one of them.
  */
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
-
 
 export const parseLnId = (id: string): number | null => {
   const n = Number(id);
@@ -24,7 +18,6 @@ export const parseLnId = (id: string): number | null => {
 
 type Guard<T> = T | { error: string; status: number };
 
-/** Recorded-lecture auth gate. Returns { courseId } or an error envelope. */
 export const authorizeRecorded = async (
   customerId: number,
   videoId: number
@@ -47,7 +40,6 @@ export const authorizeRecorded = async (
   return { courseId: null };
 };
 
-/** Live-session auth gate. Returns { liveCourseIds } or an error envelope. */
 export const authorizeLive = async (
   customerId: number,
   liveSessionId: number
@@ -60,8 +52,7 @@ export const authorizeLive = async (
   if (!liveCourseIds.length) return { error: "Notes are only available for subscribed live courses.", status: 403 };
 
   const ok = await prisma.liveCourseSubscription.findFirst({
-    // No `paymentStatus` filter: since 2026-08-25 a live-course subscription row
-    // exists only for a paid order, so `status` + the window IS the entitlement.
+    // A live-course subscription row exists only for a paid order, so `status` + the window is the entitlement.
     where: { customerId, liveCourseId: { in: liveCourseIds }, status: true, endAt: { gt: new Date() } },
     select: { liveCourseId: true },
   });
@@ -69,7 +60,6 @@ export const authorizeLive = async (
   return { liveCourseIds };
 };
 
-// ── DTOs ───────────────────────────────────────────────────────────────────────
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 export const noteDto = (r: any) => ({
   _id: String(r.id), customerId: r.customerId, lectureType: r.lectureType,
@@ -79,9 +69,8 @@ export const noteDto = (r: any) => ({
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
 });
 export const audioNoteDto = (r: any) => {
-  // No raw audio URL/key. A media token (bound to the owning customer) is
-  // exchanged at /media/resolve, which re-fetches the note scoped to that
-  // customer (ownership check) and returns a freshly PRESIGNED short-lived URL.
+  // No raw audio URL/key: the customer-bound media token is exchanged at /media/resolve,
+  // which re-checks ownership and returns a freshly presigned short-lived URL.
   const mediaToken = r.customerId != null ? signMediaToken({ k: "audioNote", id: r.id, cust: Number(r.customerId) }) : null;
   return {
   _id: String(r.id), customerId: r.customerId, lectureType: r.lectureType,
@@ -94,11 +83,9 @@ export const audioNoteDto = (r: any) => {
 };
 
 /**
- * Fill each note's `liveCourseIds` with `[liveCourseId]` when the stored row had
- * none. Live-course recorded notes are created with an empty `liveCourseIds`, so
- * the notes-list → player flow had no live-course scope to open with (fell back
- * to the catalog category rail, which 403s). The scoped `liveCourseId` comes
- * from the lecture ref (VideoCategory.liveCourseId). No-op when null or already set.
+ * Fills an empty `liveCourseIds` with `[liveCourseId]` (from VideoCategory.liveCourseId).
+ * Live-course recorded notes are stored with none, and without a scope the notes → player
+ * flow falls back to the catalog category rail, which 403s.
  */
 export const enrichNotesWithLiveCourse = <T extends { liveCourseIds?: string[] }>(
   notes: T[],
@@ -108,7 +95,6 @@ export const enrichNotesWithLiveCourse = <T extends { liveCourseIds?: string[] }
     ? notes.map((n) => (Array.isArray(n.liveCourseIds) && n.liveCourseIds.length ? n : { ...n, liveCourseIds: [liveCourseId] }))
     : notes;
 
-// ── Text notes CRUD ───────────────────────────────────────────────────────────
 export const createNote = async (data: {
   customerId: number; lectureType: string; timestampSec: number; content: string;
   videoId?: number | null; courseId?: number | null; liveSessionId?: number | null; liveCourseIds?: number[];
@@ -152,7 +138,6 @@ export const updateNote = async (id: number, patch: { content?: string; timestam
 
 export const deleteNote = (id: number) => prisma.lectureNote.delete({ where: { id } });
 
-// ── Audio notes CRUD ──────────────────────────────────────────────────────────
 export const createAudioNote = async (data: {
   customerId: number; lectureType: string; timestampSec: number; title: string;
   audioUrl: string; audioKey: string; mimeType?: string | null; sizeBytes?: number | null; durationSec?: number | null;
@@ -198,12 +183,9 @@ export const updateAudioNote = async (id: number, patch: { title?: string; times
 
 export const deleteAudioNote = (id: number) => prisma.lectureAudioNote.delete({ where: { id } });
 
-// ── Saved-materials grouped listing ───────────────────────────────────────────
 /**
- * One row per lecture (video or live session) with the customer's text/voice
- * note counts. Mirrors listSavedMaterialNotes: group text+voice by videoId
- * (recorded) and liveSessionId (live), join titles from ws_video / ws_live_session,
- * drop untitled, sort by last-note desc.
+ * One row per lecture (video or live session) with text/voice note counts, titled from
+ * ws_video / ws_live_session; untitled rows dropped; newest note first.
  */
 export const savedMaterials = async (
   customerId: number,
@@ -239,8 +221,7 @@ export const savedMaterials = async (
     ...[...live.entries()].map(([id, b]) => ({ kind: "live" as const, videoId: null as string | null, liveSessionId: String(id), title: sTitle.get(id) ?? null, textNotesCount: b.textNotesCount, voiceNotesCount: b.voiceNotesCount, lastNoteAt: b.lastNoteAt })),
   ].filter((r) => r.title !== null && r.title !== "").sort((a, b) => b.lastNoteAt.getTime() - a.lastNoteAt.getTime());
 
-  // Grouping/title contract stays intact — `search` (lecture title) filters the
-  // top-level group list, then we paginate that list. `total` = full match count.
+  // `search` filters the grouped list by lecture title before paging.
   const filtered = opts.search
     ? items.filter((r) => matchesAllTokens(opts.search, [r.title]))
     : items;
@@ -250,13 +231,9 @@ export const savedMaterials = async (
   return { items: filtered.slice(skip, skip + limit), total };
 };
 
-// ── Bulk delete of a saved-material group (text + audio) ───────────────────────
 /**
- * Target of a saved-material bulk delete — mirrors the `kind` + id fields a row
- * in `savedMaterials` carries. `recorded`/`live` are what the listing emits today
- * (grouped by videoId / liveSessionId); `course`/`live_course` are supported for
- * the forward-looking course-scoped rows in the FE contract (notes carry
- * `courseId` and the `liveCourseIds` JSON array respectively).
+ * The listing emits `recorded`/`live`; `course`/`live_course` are accepted for the
+ * course-scoped rows in the FE contract (matched on `courseId` / the `liveCourseIds` JSON).
  */
 export type SavedMaterialTarget =
   | { kind: "recorded"; videoId: number }
@@ -269,24 +246,20 @@ const whereForTarget = (customerId: number, t: SavedMaterialTarget): any => {
     case "recorded": return { customerId, lectureType: "recorded", videoId: t.videoId };
     case "live": return { customerId, lectureType: "live", liveSessionId: t.liveSessionId };
     case "course": return { customerId, courseId: t.courseId };
-    // liveCourseIds is a JSON array of ints — match rows whose array contains it.
     case "live_course": return { customerId, liveCourseIds: { array_contains: t.liveCourseId } };
   }
 };
 
 /**
- * Delete EVERY text + audio note for the authenticated customer under a saved-
- * material group. Scoped to the customer. Idempotent (0 matches ⇒ counts 0, not
- * an error). Returns the deleted audio note urls so the caller can clean the S3
- * objects (same cleanup as single audio delete). Both deletes run in one
- * transaction so a partial wipe can't leave one collection behind.
+ * Deletes every text + audio note in a saved-material group for the customer. Idempotent.
+ * Returns the deleted audio urls so the caller can clean S3. One transaction, so a partial
+ * wipe can't leave one table behind.
  */
 export const deleteSavedMaterialNotes = async (
   customerId: number,
   target: SavedMaterialTarget
 ): Promise<{ deletedTextNotes: number; deletedVoiceNotes: number; audioUrls: string[] }> => {
   const where = whereForTarget(customerId, target);
-  // Capture audio urls BEFORE deleting so we can clean S3 afterwards.
   const audioRows = await prisma.lectureAudioNote.findMany({ where, select: { audioUrl: true } });
   const [textDel, voiceDel] = await prisma.$transaction([
     prisma.lectureNote.deleteMany({ where }),

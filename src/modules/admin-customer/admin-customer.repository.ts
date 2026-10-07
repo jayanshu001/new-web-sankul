@@ -1,3 +1,4 @@
+// Admin customers: Prisma queries for customers and their profile lookups.
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
@@ -65,7 +66,6 @@ export const adminCustomerRepository = {
       include: lookupInclude,
     }),
 
-  /** Existence checks for unique phone / email (excluding a given id). */
   phoneInUse: (phone: string, exceptId?: number) =>
     prisma.customer.findFirst({
       where: {
@@ -95,7 +95,6 @@ export const adminCustomerRepository = {
   update: (id: number, data: Prisma.CustomerUncheckedUpdateInput) =>
     prisma.customer.update({ where: { id }, data, include: lookupInclude }),
 
-  /** Soft delete: keep the row, mark deleted + disabled. */
   softDelete: (id: number) =>
     prisma.customer.update({
       where: { id },
@@ -108,7 +107,6 @@ export const adminCustomerRepository = {
       data: { status, updatedAt: new Date() },
     }),
 
-  // ─── Pre-requisites (lookups) ────────────────────────────────────────────
   listStates: () =>
     prisma.customerState.findMany({
       where: { active: true },
@@ -124,10 +122,8 @@ export const adminCustomerRepository = {
     }),
 
   /**
-   * One education row by id, for validating a write. ws_customer has NO foreign
-   * keys (checked on staging: information_schema lists none), so an unknown
-   * education_id is accepted by MySQL and then reads back as `educationId: null`
-   * through the relation include — a silent data loss the caller never sees.
+   * ws_customer has no foreign keys, so an unknown education_id is accepted by
+   * MySQL and silently reads back as `educationId: null`. Validate writes with this.
    */
   findEducation: (id: number) =>
     prisma.customerEducation.findUnique({

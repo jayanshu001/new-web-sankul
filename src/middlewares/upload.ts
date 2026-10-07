@@ -1,3 +1,4 @@
+// File uploads: DigitalOcean Spaces client and multer uploaders (images, PDFs, docs, audio).
 import { S3Client, DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import multer from "multer";
 import multerS3 from "multer-s3";
@@ -5,14 +6,12 @@ import path from "path";
 import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 import { watermarkPdf } from "../utils/pdfWatermark";
 
-// Ensure credentials exist to prevent crypto/SDK crashes
 if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
   console.warn("⚠️ DigitalOcean Spaces credentials are not configured in .env!");
 }
 
 export const DO_BUCKET = process.env.DO_BUCKET || "websankul-staging";
 
-// Initialize the S3 Client (configured for DigitalOcean Spaces)
 export const s3Config = new S3Client({
   endpoint: process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com",
   region: process.env.DO_DEFAULT_REGION || "blr1",
@@ -20,14 +19,10 @@ export const s3Config = new S3Client({
     accessKeyId: process.env.DO_ACCESS_KEY_ID || "not-set",
     secretAccessKey: process.env.DO_SECRET_ACCESS_KEY || "not-set",
   },
-  forcePathStyle: false // Ensures DO virtual routing (bucket.blr1.digitaloceanspaces.com) works perfectly
+  forcePathStyle: false // virtual-host style: bucket.blr1.digitaloceanspaces.com
 });
 
-/**
- * Public URL for an object key: https://<bucket>.<region>.digitaloceanspaces.com/<key>.
- * The one place this URL is built — presign, the PDF scheduler and every multer
- * storage below go through it.
- */
+/** Public URL for an object key. The one place it is built (presign, PDF scheduler, multer storages). */
 export const publicUrlFor = (key: string): string => {
   const endpoint = (
     process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com"
@@ -37,10 +32,8 @@ export const publicUrlFor = (key: string): string => {
 };
 
 /**
- * multer-s3 copies `file.location` from @aws-sdk/lib-storage's `Location`, which
- * for a custom endpoint comes back path-style and scheme-less
- * ("blr1.digitaloceanspaces.com/<bucket>/<key>"). Controllers persist
- * `file.location` verbatim, so rewrite it here to the canonical public URL.
+ * multer-s3's `file.location` comes back path-style and scheme-less for a custom
+ * endpoint; controllers persist it verbatim, so rewrite it to the canonical public URL.
  */
 const withPublicUrl = <T extends multer.StorageEngine>(storage: T): T => {
   const handle = storage._handleFile.bind(storage);
@@ -52,10 +45,9 @@ const withPublicUrl = <T extends multer.StorageEngine>(storage: T): T => {
 };
 
 /**
- * Route-level folder pick for the multer uploaders below. Mount it right before
- * the multer middleware: `uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image")`,
- * or per field for multi-file forms: `uploadTo({ image: …, thumbnail: … })`.
- * All paths live in `config/uploadFolders.ts`.
+ * Picks the Spaces folder for the multer uploaders; mount right before them, e.g.
+ * `uploadTo(UPLOAD_FOLDERS.package), uploadS3.single("image")` or per field
+ * `uploadTo({ image: …, thumbnail: … })`. Paths live in `config/uploadFolders.ts`.
  */
 type FolderPick = string | Record<string, string>;
 
@@ -71,17 +63,13 @@ const folderFor = (req: any, fieldname: string): string => {
   return (pick && Object.prototype.hasOwnProperty.call(pick, fieldname) && pick[fieldname]) || UPLOAD_FOLDERS.default;
 };
 
-// Bare filename only (the old app keeps just the last path segment). The random
-// suffix keeps multi-file fields (e.g. offline center `images`) from colliding
-// in the same millisecond.
+// The random suffix keeps multi-file fields from colliding in the same millisecond.
 const uniqueName = (file: Express.Multer.File) =>
   `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`;
 
 /**
- * Route-level opt-in: PDFs in this request get the websankul.com watermark
- * (utils/pdfWatermark.ts) before they reach Spaces. Mount next to `uploadTo`:
- * `uploadTo(UPLOAD_FOLDERS.jobsPapers), watermarkPdfs, uploadS3Mixed.array(…)`.
- * Only govt-jobs routes use it — paid content (ebooks, materials) stays clean.
+ * Opt-in: PDFs in this request get the websankul.com watermark before reaching Spaces.
+ * Mount next to `uploadTo`. Only govt-jobs routes use it; paid content stays clean.
  */
 export const watermarkPdfs = (req: any, _res: any, next: () => void) => {
   req.watermarkPdfs = true;
@@ -92,10 +80,8 @@ const isPdfFile = (file: Express.Multer.File) =>
   file.mimetype === "application/pdf" || path.extname(file.originalname).toLowerCase() === ".pdf";
 
 /**
- * Wraps a multer-s3 storage so that, on `watermarkPdfs` routes, PDFs are
- * buffered, stamped and then PUT to the same bucket/key layout. Anything else
- * (images, CSVs, non-opted-in routes) streams through the wrapped storage
- * untouched. A PDF that can't be stamped (encrypted/corrupt) uploads as-is.
+ * On `watermarkPdfs` routes, PDFs are buffered, stamped and PUT to the same key layout;
+ * everything else streams through untouched. An unstampable PDF uploads as-is.
  */
 const withPdfWatermark = <T extends multer.StorageEngine>(storage: T): T => {
   const handle = storage._handleFile.bind(storage);
@@ -150,20 +136,16 @@ const withPdfWatermark = <T extends multer.StorageEngine>(storage: T): T => {
 const s3Storage = withPdfWatermark(withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
-  acl: "public-read", // Makes file publicly accessible via CDN URL
+  acl: "public-read",
   contentType: multerS3.AUTO_CONTENT_TYPE,
   key: function (req, file, cb) {
-    // e.g. uploads/package/1678123412-123456789.jpg — folder from `uploadTo(...)`
     cb(null, `${folderFor(req, file.fieldname)}/${uniqueName(file)}`);
   },
 })));
 
 /**
- * multer 2.x decodes multipart field/file names as **latin1** by default
- * (node_modules/multer/index.js:22). A Gujarati or Hindi file name therefore
- * arrives on `file.originalname` already mojibake — before any DB write — and
- * the garbled bytes then fail the insert. Every `multer({...})` instance below
- * must spread this so `originalname` is real UTF-8.
+ * multer 2.x decodes multipart names as latin1 by default, so Gujarati/Hindi file names
+ * arrive as mojibake and fail the DB insert. Every `multer({...})` below must spread this.
  */
 const MULTER_UTF8: Pick<multer.Options, "defParamCharset"> = {
   defParamCharset: "utf8",
@@ -177,11 +159,12 @@ const AUDIO_TYPES = /mp3|mpeg|m4a|aac|wav|webm|ogg|opus/;
 const DOCUMENT_EXT = /\.(pdf|csv|xlsx|xls|md|txt|doc|docx|ppt|pptx|zip)$/i;
 const DOCUMENT_MIME = /^(application\/pdf|text\/csv|text\/markdown|text\/plain|application\/octet-stream|application\/vnd\.ms-excel|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.ms-powerpoint|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation|application\/(x-)?zip|application\/x-zip-compressed)$/i;
 
+// Single-image uploader: JPEG/PNG/WebP, 3 MB cap.
 export const uploadS3 = multer({
   ...MULTER_UTF8,
   storage: s3Storage,
   limits: {
-    fileSize: 3 * 1024 * 1024, // 3 MB ceiling
+    fileSize: 3 * 1024 * 1024,
   },
   fileFilter: (req, file, cb) => {
     if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -198,12 +181,9 @@ export const uploadS3 = multer({
   },
 });
 
-// For routes that accept both images (image/thumbnail) and PDFs (demoUrl/bookUrl)
-// in a single multipart request — use with `.fields([...])`.
-// Multer applies one `fileSize` limit per uploader instance, so per-field
-// caps are enforced inside `fileFilter` by reading the multipart Content-Length
-// header part-by-part. The outer `limits.fileSize` is set to the largest
-// allowed (PDFs at 300 MB); images get rejected earlier inside the filter.
+// Images + PDFs in one multipart request (use with `.fields([...])`). Multer has one
+// `fileSize` limit per instance, so it is set to the largest (PDFs); image caps are
+// enforced afterwards by `enforceMixedSizeLimits`.
 const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const PDF_MAX_BYTES = 300 * 1024 * 1024;
 
@@ -234,9 +214,8 @@ export const uploadS3Mixed = multer({
   },
 });
 
-// Post-multer guard: multer streams the file before exposing its size, so the
-// only reliable per-field size check happens after upload. If an image field
-// exceeds 5 MB, delete it from S3 and reject the request.
+// Multer streams the file before its size is known, so per-field limits are checked
+// after upload: an oversized image is deleted from S3 and the request rejected.
 export const enforceMixedSizeLimits = async (
   req: any,
   _res: any,
@@ -260,9 +239,7 @@ export const enforceMixedSizeLimits = async (
   next(new Error(`${first.fieldname} exceeds the ${cap} limit.`));
 };
 
-// Reference documents attached inline in an editor (e.g. job content
-// download links: admit card/result/answer-key/syllabus PDFs, result CSVs,
-// syllabus sheets). Single file under the `file` field; folder from `uploadTo(...)`.
+// Reference documents attached inline in an editor (admit card/result PDFs, CSVs, sheets).
 const documentStorage = withPdfWatermark(withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
@@ -277,7 +254,7 @@ export const uploadS3Document = multer({
   ...MULTER_UTF8,
   storage: documentStorage,
   limits: {
-    fileSize: PDF_MAX_BYTES, // 300 MB — same ceiling as job paper PDFs
+    fileSize: PDF_MAX_BYTES,
   },
   fileFilter: (_req, file, cb) => {
     if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -289,9 +266,7 @@ export const uploadS3Document = multer({
   },
 });
 
-// Customer-recorded audio notes attached to a lecture moment. Single file
-// per upload under the `audio` fieldname; stored under a customer-scoped
-// prefix so the bucket browser stays readable.
+// Customer-recorded audio notes on a lecture moment, under a customer-scoped prefix.
 const audioStorage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
@@ -328,9 +303,7 @@ export const uploadS3Audio = multer({
   },
 });
 
-// Quiz-question images: question/solution/options. Accepts any field name
-// (the dynamic `optionImage_<i>` fields make a fixed allowlist impractical),
-// caps each file at 2 MB, restricts mimetype to png/jpeg/jpg/webp.
+// Quiz-question images. Any field name is accepted because `optionImage_<i>` fields are dynamic.
 const questionImageStorage = withPublicUrl(multerS3({
   s3: s3Config,
   bucket: process.env.DO_BUCKET || "websankul-staging",
@@ -360,11 +333,8 @@ export const uploadQuestionImages = multer({
 });
 
 /**
- * True if `url` points at OUR Spaces bucket — i.e. its host is
- * `<DO_BUCKET>.<endpoint-host>`. `deleteFromS3FileUrl` keys off the URL path
- * against DO_BUCKET, so only own-bucket URLs are safe to pass to it; an
- * externally-hosted link must never be sent for deletion. Use this to guard
- * "delete the replaced old file" cleanup paths.
+ * True if `url` is in our Spaces bucket. `deleteFromS3FileUrl` keys off the URL path
+ * against DO_BUCKET, so guard replaced-file cleanup with this; external links must never be deleted.
  */
 export const isOwnBucketUrl = (url?: string | null): boolean => {
   if (!url) return false;
@@ -380,29 +350,20 @@ export const isOwnBucketUrl = (url?: string | null): boolean => {
 };
 
 /**
- * Utility function to delete an object from DigitalOcean Spaces given its public URL.
- * Automatically extracts the File Key based on your endpoint domain.
- *
- * Wrapped in callOutbound so a Spaces outage can't pin every "update profile
- * with a new image" request indefinitely. Every caller in the codebase
- * already invokes this with `.catch(() => {})` (it's best-effort cleanup
- * of an orphaned file), so the wrapper's eventual throw on retry-exhaustion
- * is swallowed gracefully.
+ * Best-effort delete by public URL. Wrapped in callOutbound so a Spaces outage can't
+ * hang requests; callers `.catch(() => {})` the eventual throw.
  */
 export const deleteFromS3FileUrl = async (fileUrl: string) => {
   try {
     if (!fileUrl) return;
 
-    // Parse URL (e.g. https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/123.jpg)
     const urlObj = new URL(fileUrl);
 
-    // Remove the leading slash to get the strict S3 Object Key (e.g., admin/profiles/123.jpg)
     const fileKey = urlObj.pathname.startsWith("/")
       ? urlObj.pathname.substring(1)
       : urlObj.pathname;
 
-    // Lazy-load to avoid a circular import (libs/outbound → utils/logger →
-    // … this module is loaded very early in some entry points).
+    // Lazy-loaded to avoid a circular import; this module loads very early.
     const { callOutbound } = await import("../libs/outbound");
     await callOutbound(
       () =>
@@ -421,6 +382,7 @@ export const deleteFromS3FileUrl = async (fileUrl: string) => {
 
 const RANK_PDF_MAX_BYTES = 25 * 1024 * 1024;
 
+// Rank-predictor PDF (answer key or response sheet) kept in memory for parsing, never sent to Spaces; 25 MB cap.
 export const uploadRankPdfToMemory = multer({
   ...MULTER_UTF8,
   storage: multer.memoryStorage(),

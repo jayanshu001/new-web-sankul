@@ -1,3 +1,4 @@
+// Client promocodes: list and apply routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -9,8 +10,7 @@ const router = Router();
 
 router.use(authenticate);
 
-// Tier-1 (public active-window promocode list, identical for all users). Admin
-// promocode writes flush "promo-code" (see docs/CACHING.md).
+// Shared cache: identical for all users; admin promocode writes flush "promo-code".
 router.get("/", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.PromoCode, scope: CacheScope.Shared }), listPromocodes);
 router.post("/apply", applyPromocode);
 

@@ -1,24 +1,7 @@
-/**
- * Client test-series READ paths — SQL (Prisma) branch.
- *
- * Gated behind `isMysqlModule("client-testseries")`. Covers the two read
- * endpoints whose data lives entirely in already-migrated tables:
- *   GET /client/test-series                     (listTestSeries)
- *   GET /client/test-series/my/subscriptions    (listMySubscriptions)
- *
- * NOT covered (stay Mongo until net-new tables land): getTestSeriesDetail
- * (needs ws_test_series_content_category) and listSeriesPapers (needs
- * ws_test_series_content_category + ws_test_series_exam). The controller keeps
- * its Mongo branch for those two.
- *
- * Response contract is held identical to the Mongo path by `toListDto` /
- * `toSubscriptionDto`. `_id` is the SQL int stringified (matches every other
- * migrated module). Drift notes inline.
- */
+// Client test series: catalog, detail, papers and my-subscriptions reads.
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-
 
 export const parseCtsId = (id: string): number | null => {
   const n = Number(id);
@@ -28,10 +11,8 @@ export const parseCtsId = (id: string): number | null => {
 const num = (v: any): number => (v == null ? 0 : Number(v.toString?.() ?? v) || 0);
 
 /**
- * Resolve the `examCategoryIds` JSON array (stored on ws_test_series) into the
- * populated `[{ _id, name }]` shape the Mongo `.populate("examCategoryIds")`
- * returns. The JSON holds SQL int ids; any id with no matching ExamCategory row
- * is dropped (mirrors Mongo populate, which silently omits dangling refs).
+ * Resolves the `examCategoryIds` JSON array on ws_test_series into the frozen
+ * `[{ _id, name }]` shape. Ids with no matching ExamCategory row are silently dropped.
  */
 const buildExamCategoryMap = async (
   rawIdLists: any[]
@@ -67,8 +48,6 @@ const populateExamCategories = (
   return out;
 };
 
-// ── listTestSeries ────────────────────────────────────────────────────────────
-
 export type ListOpts = {
   search: string | null;
   page: number;
@@ -100,7 +79,7 @@ export const listTestSeriesMysql = async (opts: ListOpts) => {
 
   const seriesIds = rows.map((r) => r.id);
 
-  // Default-price preview: sort isDefault desc, price asc; first per series wins.
+  // Default-price preview: first per series wins.
   const defaultByid = new Map<number, any>();
   if (seriesIds.length) {
     const defaults = await prisma.testSeriesPrice.findMany({
@@ -112,7 +91,6 @@ export const listTestSeriesMysql = async (opts: ListOpts) => {
     }
   }
 
-  // Latest-expiring active sub per series → daysLeft.
   const latestEndAtByid = new Map<number, Date>();
   if (opts.customerId && seriesIds.length) {
     const subs = await prisma.testSeriesSubscription.findMany({
@@ -160,8 +138,6 @@ export const listTestSeriesMysql = async (opts: ListOpts) => {
   return { data, total };
 };
 
-// ── getTestSeriesDetail (needs net-new ws_test_series_content_category) ────────
-
 export type DetailOpts = {
   id: number;
   customerId: number | null;
@@ -170,10 +146,9 @@ export type DetailOpts = {
   buildShareUrl: (kind: string, id: string, base: string) => string;
 };
 
-/** Returns null when the series is missing/inactive (→ controller 404). */
+/** Returns null (→ 404) when missing, or deactivated and the caller is not an active subscriber. */
 export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
-  // No status filter here — a DEACTIVATED series must still open for its active
-  // subscribers (owner-aware guard below); non-owners get 404.
+  // No status filter: a deactivated series must still open for its active subscribers.
   const series = await prisma.testSeries.findFirst({
     where: { id: opts.id },
     select: {
@@ -216,7 +191,6 @@ export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
     }
   }
 
-  // Deactivated series: visible only to an active subscriber; 404 for everyone else.
   if (!series.status && !activeSubscription) return null;
 
   const catMap = await buildExamCategoryMap([series.examCategoryIds]);
@@ -272,8 +246,6 @@ export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
   };
 };
 
-// ── listSeriesPapers (needs net-new ws_test_series_exam + ws_test_series_content_category) ──
-
 export type SeriesPapersOpts = {
   id: number;
   customerId: number | null;
@@ -284,10 +256,9 @@ export type SeriesPapersOpts = {
   skip: number;
 };
 
-/** Returns null when the series is missing/inactive (→ controller 404). */
+/** Returns null (→ 404) when missing, or deactivated and the caller is not an active subscriber. */
 export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
-  // No status filter — owner-aware guard below keeps a DEACTIVATED series open for its
-  // active subscribers while 404-ing for everyone else.
+  // No status filter: a deactivated series must still open for its active subscribers.
   const series = await prisma.testSeries.findFirst({
     where: { id: opts.id },
     select: { id: true, isFree: true, status: true },
@@ -296,23 +267,19 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
 
   const isPaid = !series.isFree;
 
-  // Active paid subscription — drives both the deactivated-series guard and the paid gate.
   const subscribed = opts.customerId
     ? !!(await prisma.testSeriesSubscription.findFirst({
         where: { customerId: opts.customerId, testSeriesId: opts.id, status: true, endAt: { gt: opts.now } },
         select: { id: true },
       }))
     : false;
-  // Deactivated series: visible only to an active subscriber (a deactivated FREE series
-  // has no subscriber to grandfather, so it 404s for everyone — same as the detail page).
+  // A deactivated free series has no subscriber to grandfather, so it 404s for everyone.
   if (!series.status && !subscribed) return null;
 
-  // Access — series-level subscription gates the "start" buttons (free = open).
   const hasAccess = series.isFree ? true : subscribed;
 
-  // Papers (exam links) are the paginated collection here. `search` filters by
-  // the linked exam title — resolve matching exam ids first so the where stays
-  // identical across findMany + count.
+  // Papers (exam links) are the paginated collection. `search` matches the linked exam title,
+  // resolved to exam ids first so findMany + count share the identical where.
   const linkWhere: any = { testSeriesId: opts.id, status: true };
   if (opts.search) {
     const matchedExams = await prisma.exam.findMany({
@@ -332,7 +299,6 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
     prisma.testSeriesExam.count({ where: linkWhere }),
   ]);
 
-  // Exam DTO map keyed by exam id (parity with Mongo populate select).
   const examIds = [...new Set(links.map((l) => l.examId).filter((v): v is number => v != null))];
   const examMap = new Map<number, any>();
   if (examIds.length) {
@@ -355,7 +321,6 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
     }
   }
 
-  // Customer's most-recent attempt per exam.
   const resultByExam = new Map<number, any>();
   if (opts.customerId && examIds.length) {
     const results = await prisma.examResult.findMany({
@@ -414,8 +379,6 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
   return { isPaid, hasAccess, categories: grouped, papersTotal };
 };
 
-// ── listMySubscriptions ───────────────────────────────────────────────────────
-
 export type MySubsOpts = {
   customerId: number;
   now: Date;
@@ -429,9 +392,7 @@ export type MySubsOpts = {
 
 export const listMySubscriptionsMysql = async (opts: MySubsOpts) => {
   const where: any = { customerId: opts.customerId, status: true };
-  // Search filters by the subscribed test-series title. Resolve matching series
-  // ids first, then constrain the subscription query — keeps the where identical
-  // for both findMany + count.
+  // `search` matches the series title, resolved to ids first so findMany + count share the where.
   if (opts.search) {
     const matched = await prisma.testSeries.findMany({
       where: buildPrismaSearch(opts.search, ["title"]) ?? {},

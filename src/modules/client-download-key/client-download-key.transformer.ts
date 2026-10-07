@@ -1,12 +1,9 @@
+// Download encryption key: key to DTO mapping.
 import type { DownloadEncryptionKeyDto } from "./client-download-key.types";
 
 /**
- * Stored key → API DTO.
- *
- * Takes the key alone rather than a `Customer` row, on purpose: the row carries
- * `password`, `otp` and the rest of the account, and a transformer that accepts
- * the whole row is one careless spread away from returning it. Nothing but the
- * 64 hex characters can reach this function.
+ * Takes the key alone, not the `Customer` row, so the account's secrets
+ * (`password`, `otp`, ...) can never be spread into the response.
  */
 export const toDownloadEncryptionKeyDto = (keyHex: string): DownloadEncryptionKeyDto => ({
   key: keyHex,

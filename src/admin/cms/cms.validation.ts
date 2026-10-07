@@ -1,24 +1,22 @@
+// Admin CMS: Zod request schemas for FAQs, popups, banners, testimonials, links and app version.
 import { z } from "zod";
 
 import { UpdateType } from "../../shared/enums";
 
-// Accepts a MySQL integer id or a legacy Mongo ObjectId (migration-tolerant).
+// Accepts an integer id or a legacy 24-hex ObjectId.
 const refIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 
-// ─── FAQ ──
 export const faqCreateSchema = z.object({
   typeId: z.string().regex(refIdRegex, "Invalid typeId"),
   question: z.string().min(1).max(1000),
   answer: z.string().min(1),
 });
 
-// ─── FAQ Type ──
 export const faqTypeCreateSchema = z.object({
   title: z.string().min(1).max(255),
 });
 export const faqTypeUpdateSchema = faqTypeCreateSchema.partial();
 
-// ─── Popup ──
 export const popupCreateSchema = z.object({
   title: z.string().min(1).max(255),
   description: z.string().min(1),
@@ -30,11 +28,8 @@ export const popupCreateSchema = z.object({
 });
 export const popupUpdateSchema = popupCreateSchema.partial();
 
-// ─── Current Affairs ──
-// `image` required on create (must always be present per the frontend
-// contract). On update it's optional: when the admin doesn't change the
-// image, the request omits it and genericUpdate's $set leaves the existing
-// URL untouched — never null it out.
+// `image` is required on create (frontend contract). On update it's optional:
+// when omitted the existing URL is kept, never nulled.
 export const currentAffairCreateSchema = z.object({
   title: z.string().min(1).max(255),
   image: z.string().min(1).max(500),
@@ -43,19 +38,15 @@ export const currentAffairCreateSchema = z.object({
 });
 export const currentAffairUpdateSchema = currentAffairCreateSchema.partial();
 
-// ─── Banner ──
 const bannerRefId = z.string().regex(refIdRegex, "Invalid id");
 
-// `ws_banner_slider.key_id` is a plain int column — unlike bannerRefId this
-// rejects a legacy ObjectId outright rather than accepting an id that could
-// never be stored. Accepts a number as well as a string: these routes are
-// multipart (everything arrives as a string) but a JSON client would send an
-// int, and both must reach the same positive-integer check.
+// `ws_banner_slider.key_id` is an int column, so unlike bannerRefId this rejects
+// an ObjectId outright. Accepts a number or a string: multipart sends strings, a
+// JSON client sends an int, and both must hit the same positive-integer check.
 const bannerTargetId = z
   .union([z.string(), z.number()])
   .refine((v) => /^[1-9]\d*$/.test(String(v)), "Invalid keyId");
 
-/** Collection keys that deep-link to a row and therefore require `keyId`. */
 const BANNER_KEYS_NEEDING_TARGET = ["Packages", "Courses", "Book", "EBook"] as const;
 
 const bannerBaseSchema = z.object({
@@ -63,15 +54,13 @@ const bannerBaseSchema = z.object({
   key: z.enum(["Packages", "Courses", "Book", "EBook", "Explore"]).optional(),
   keyId: bannerTargetId.optional(),
   // No `.default(0)`: an omitted orderBy must stay undefined so createBanner can
-  // assign previous-row + 1 within that key's list (utils/listOrdering). An explicit
-  // value is still honoured as-is.
+  // assign previous-row + 1 within that key's list (utils/listOrdering).
   orderBy: z.number().int().optional(),
 });
 
 /**
  * `keyId` is mandatory whenever `key` selects a collection, and forbidden for
- * `Explore` (a standalone CTA with no target). Enforced here so a banner can't
- * be saved as a deep link that points nowhere.
+ * `Explore` (a standalone CTA), so a banner can't deep-link to nothing.
  */
 const refineBannerTarget = (
   data: { key?: string; keyId?: string | number },
@@ -112,7 +101,6 @@ export const bannerUpdateSchema = bannerBaseSchema
   .partial()
   .superRefine(refineBannerTarget);
 
-// ─── Live Banner ──
 export const liveBannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
   liveCourseId: bannerRefId,
@@ -121,7 +109,6 @@ export const liveBannerCreateSchema = z.object({
 });
 export const liveBannerUpdateSchema = liveBannerCreateSchema.partial();
 
-// ─── Testimonial ──
 export const testimonialCreateSchema = z.object({
   name: z.string().min(1).max(255),
   title: z.string().min(1).max(255),
@@ -130,33 +117,25 @@ export const testimonialCreateSchema = z.object({
 });
 export const testimonialUpdateSchema = testimonialCreateSchema.partial();
 
-// ─── Terms ──
-// NOTE: the terms write path validates with `termsCreateSchemaMysql`
-// (modules/terms/terms.validation.ts), which pins `module` to the MySQL enum. A
-// second, looser free-string schema used to live here — imported but never called.
-// It was deleted rather than fixed: two schemas for one endpoint is how the loose
-// one eventually gets wired back in by mistake.
+// Terms writes validate with `termsCreateSchemaMysql` (modules/terms/terms.validation.ts),
+// which pins `module` to the DB enum. Don't add a looser schema here.
 
-// ─── Version ──
 export const versionUpsertSchema = z.object({
   latestVersionCode: z.number().int().nonnegative(),
   lastSupportedVersionCode: z.number().int().nonnegative(),
 });
 
-// ─── App update ──
 export const appUpdateUpsertSchema = z.object({
   latestVersion: z.number().int().nonnegative(),
   updateType: z.enum([UpdateType.IMMEDIATE, UpdateType.FLEXIBLE]).default(UpdateType.FLEXIBLE),
   isUpdateAvailable: z.boolean(),
 });
 
-// ─── Social Link Type ──
 export const socialLinkTypeCreateSchema = z.object({
   title: z.string().min(1).max(255),
 });
 export const socialLinkTypeUpdateSchema = socialLinkTypeCreateSchema.partial();
 
-// ─── Social Link ──
 export const socialLinkCreateSchema = z.object({
   typeId: z.string().regex(refIdRegex, "Invalid typeId"),
   title: z.string().min(1).max(255),

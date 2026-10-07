@@ -1,15 +1,8 @@
 /**
- * Educator portal — SQL data layer for the educator course + package controllers
- * (listings, detail, per-item dashboard, subscribers). Gated behind
- * `isMysqlModule("educator-portal")`.
- *
- * Ownership: Course.courseEducatorId / Package.educator_id == educatorId.
- * Plans: PackageCourseEbookPrice by courseId / packageId. Subs:
- * ws_package_course_subscription by courseId / packageId (packageId IS the
- * package on SQL). Customer is single `fullName` + `phoneNumber`.
+ * Educator portal: course + package listings, detail, dashboard and subscribers.
+ * Subscription `package_id` is the package itself (not the plan).
  */
 import { prisma } from "../../config/prisma";
-
 
 export const parseEpId = (id: string): number | null => {
   const n = Number(id);
@@ -22,7 +15,6 @@ const planBuckets = (plans: any[]) => ({
   withoutMaterial: plans.filter((p) => !p.withMaterial),
 });
 
-// ── COURSES ──────────────────────────────────────────────────────────────────
 export const listMyCourses = async (educatorId: number) => {
   const courses = await prisma.course.findMany({
     where: { courseEducatorId: educatorId },
@@ -33,7 +25,6 @@ export const listMyCourses = async (educatorId: number) => {
     courseIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { courseId: { in: courseIds }, status: true }, orderBy: { duration: "asc" } }) : [],
     courseIds.length ? prisma.packageCourseSubscription.groupBy({ by: ["courseId"], where: { courseId: { in: courseIds } }, _count: { _all: true } }) : [],
   ]);
-  // active counts need a separate grouped query (status=true)
   const activeCounts = courseIds.length
     ? await prisma.packageCourseSubscription.groupBy({ by: ["courseId"], where: { courseId: { in: courseIds }, status: true }, _count: { _all: true } })
     : [];
@@ -60,6 +51,7 @@ export const getMyCourseDetail = async (educatorId: number, courseId: number) =>
   return { ...course, _id: String(course.id), plans };
 };
 
+// Null unless the educator owns the course (same for the package variants).
 export const getCourseDashboard = async (educatorId: number, courseId: number) => {
   const owned = await prisma.course.findFirst({ where: { id: courseId, courseEducatorId: educatorId }, select: { id: true } });
   if (!owned) return null;
@@ -84,7 +76,6 @@ export const getCourseSubscribers = async (educatorId: number, courseId: number,
   return { data, total };
 };
 
-// ── PACKAGES ─────────────────────────────────────────────────────────────────
 export const listMyPackages = async (educatorId: number) => {
   const packages = await prisma.package.findMany({ where: { educator_id: educatorId } });
   const packageIds = packages.map((p) => p.id);

@@ -1,3 +1,4 @@
+// Admin packages: package/type CRUD, category tabs, plans, subscribers and video relations.
 import { HttpError } from "../../middlewares/errorHandler";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { nextOrder } from "../../utils/listOrdering";
@@ -19,14 +20,12 @@ const idStrOrNull = (v: number | null | undefined): string | null => (v != null 
 // string[] (numeric ids) → int[] for the JSON countdown columns; drops non-numerics.
 const toIntIdArray = (arr?: string[]): number[] =>
   (arr ?? []).map((s) => Number(s)).filter((n) => Number.isInteger(n) && n > 0);
-// JSON int[] column → string[] for the DTO (mirrors Mongo's id-string arrays).
+// JSON int[] column → string[] for the DTO.
 const jsonIdsToStrings = (v: unknown): string[] =>
   Array.isArray(v) ? v.map((x) => String(x)) : [];
 
-// ── goal-label resolution ──────────────────────────────────────────────────────
-// goalLabelId is the label NAME at the API boundary (labels carry no usable id
-// in Mongo); SQL stores the JSON-label numeric id in ws_package.goal_label_id.
-// These bridge the two: name → id on write, id → name on read.
+// goalLabelId is the label NAME at the API boundary; ws_package.goal_label_id stores
+// the JSON-label numeric id. name → id on write, id → name on read.
 const labelNameById = (labels: unknown, labelId: number | null | undefined): string | null => {
   if (labelId == null) return null;
   const arr = Array.isArray(labels) ? labels : [];
@@ -40,10 +39,9 @@ const labelIdByName = (labels: unknown, name: string): number | null => {
 };
 
 /**
- * Resolve + validate a (goalId, goalLabelName) pair for writes. Mirrors the Mongo
- * `assertGoalLabelPair`: when a label name is supplied, goalId is required and the
- * name MUST exist under that goal — else the contract reject string. Returns the
- * numeric ids to persist (and the canonical name for the response DTO).
+ * Resolve + validate a (goalId, goalLabelName) pair for writes: when a label name is
+ * supplied, goalId is required and the name must exist under that goal, else the
+ * contract reject string. Returns the numeric ids to persist (and the canonical name).
  */
 const resolveGoalFields = async (
   goalIdStr: string | null | undefined,
@@ -51,7 +49,7 @@ const resolveGoalFields = async (
 ): Promise<{ goalId: number | null; goalLabelId: number | null; goalLabelName: string | null; isIndividual: boolean }> => {
   const goalId = goalIdStr ? parsePackageId(goalIdStr) : null;
   if (!goalId) {
-    // No goal targeted. A label without a goal is invalid (unchanged contract).
+    // A label without a goal is invalid.
     if (goalLabelName) throw new HttpError(400, "goalId is required when goalLabelId is provided.");
     return { goalId: null, goalLabelId: null, goalLabelName: null, isIndividual: false };
   }
@@ -78,22 +76,15 @@ const resolveLabelNameForRow = async (row: { goalId?: number | null; goalLabelId
   return labelNameById(goal?.labels, row.goalLabelId);
 };
 
-// ── transformers ─────────────────────────────────────────────────────────────
 const toTypeDto = (t: PackageType) => ({ _id: String(t.id), name: t.name, createdAt: t.created_at ?? null, updatedAt: t.updated_at ?? null });
 
 type PkgRow = Package & { packageType?: { id: number; name: string } | null };
 
 /**
- * `ws_package` row → Mongo-shaped Package doc. isPaid/packageCategoryId persist
- * on real ws_package columns and
- * are read straight from the row (packageCategoryId surfaced as a bare id string,
- * not the populated {_id,title,slug,image} object the Mongo getById returns).
- * examCountdownCategoryIds/examCountdownIds now persist on ws_package JSON
- * columns (id-string arrays out). Still SQL-absent (synthesized): subtitle="",
- * notificationTopic="". goalId is the numeric id as a string (unpopulated, mirroring
- * Mongo); goalLabelId is the label NAME string (resolved by the caller, passed in
- * as `goalLabelName`). with_material/without_material are the descriptive *Text
- * fields in Mongo.
+ * `ws_package` row → Package DTO. packageCategoryId is a bare id string (not populated).
+ * examCountdownCategoryIds/examCountdownIds come from JSON columns as id strings.
+ * subtitle/notificationTopic have no column → "". goalId is the numeric id as a string
+ * (unpopulated); goalLabelId is the label NAME, resolved by the caller (`goalLabelName`).
  */
 const toPackageDto = (
   row: PkgRow,
@@ -142,7 +133,7 @@ const toPlanDto = (p: any) => ({
   updatedAt: p.updated_at ?? null,
 });
 
-// Embedded category ref → Mongo shape: { category: {_id,title|name,image}, order, status }.
+// Embedded category ref → { category: {_id,title|name,image}, order, status }.
 const subjectRef = (r: any) => ({
   category: r.VideoCategory ? { _id: String(r.VideoCategory.id), title: r.VideoCategory.title, image: r.VideoCategory.image ?? null } : idStrOrNull(r.subjectId),
   order: r.order_by, status: r.status,
@@ -196,12 +187,11 @@ export const listExamCategories = async (packageId: number, q: { page?: string; 
   return { data: rows.map(examRowDto), pagination: pageMeta(total, page, limit) };
 };
 
-// ── package types ──────────────────────────────────────────────────────────────
 export const listPackageTypes = async () => (await repo.listTypes()).map(toTypeDto);
 
 export const createPackageType = async (d: { name: string }) => {
   const now = new Date();
-  // ws_package_type has only id/name (+ timestamps) — order/active dropped.
+  // ws_package_type has only id/name (+ timestamps).
   return toTypeDto(await repo.createType({ name: d.name, created_at: now, updated_at: now }));
 };
 
@@ -219,13 +209,13 @@ export const deletePackageType = async (id: number): Promise<"not_found" | "in_u
   return true;
 };
 
-// ── packages: list / get ────────────────────────────────────────────────────────
 export interface ListPackagesQuery { search?: string; active?: string; isPaid?: string; packageTypeId?: string; goalId?: string; page?: string; limit?: string }
 
+// Paged list; each row carries its active plans split by withMaterial.
 export const listPackages = async (q: ListPackagesQuery) => {
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(q.limit ?? "20", 10) || 20, 1), 100);
-  // isPaid/goalId filters are Mongo-only (no SQL columns) → ignored on SQL.
+  // isPaid/goalId query filters are accepted but ignored.
   const opts = {
     search: q.search,
     active: q.active === "true" ? true : q.active === "false" ? false : undefined,
@@ -261,7 +251,6 @@ export const getPackageById = async (id: number): Promise<"not_found" | any> => 
   return toPackageDto(row, await loadEmbeds(id), await resolveLabelNameForRow(row));
 };
 
-// ── packages: write ───────────────────────────────────────────────────────────
 export interface PackageWriteInput {
   name?: string; subtitle?: string; description?: string; image?: string; shareableLink?: string;
   withMaterialText?: string; withoutMaterialText?: string; order?: number; active?: boolean;
@@ -278,10 +267,8 @@ export interface PackageWriteInput {
   examCategories?: Array<{ category: string; order?: number }>;
 }
 
-// Resolve an incoming packageTypeId (string id, or null/"" to clear) to the int
-// column value. Empty/null → null (clears package_type_id, which is nullable).
-// A non-numeric or non-existent id throws a 4xx so callers never silently fall
-// back to a wrong type (or hit an FK 500).
+// packageTypeId (string id, or null/"" to clear) → int column value. A non-numeric or
+// non-existent id throws a 4xx so callers never fall back to a wrong type (or hit an FK 500).
 const resolvePackageTypeId = async (raw?: string | null): Promise<number | null> => {
   if (raw === undefined || raw === null || raw === "") return null;
   const n = parsePackageId(raw);
@@ -334,6 +321,7 @@ export const createPackage = async (d: PackageWriteInput) => {
   return toPackageDto(await repo.findById(pkg.id) as PkgRow, await loadEmbeds(pkg.id), gf.goalLabelName);
 };
 
+// Partial update; revalidates goal/label and resyncs video relations when subjects change.
 export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"not_found" | any> => {
   const existing = await repo.findBare(id);
   if (!existing) return "not_found";
@@ -356,7 +344,7 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.examCountdownIds !== undefined) data.examCountdownIds = toIntIdArray(d.examCountdownIds);
 
   // Goal/label: validate the merged (goalId, labelName) pair when either is supplied,
-  // then persist both numeric ids. Mirrors the Mongo branch's assertGoalLabelPair.
+  // then persist both numeric ids.
   if (d.goalId !== undefined || d.goalLabelId !== undefined) {
     const nextGoalIdStr = d.goalId !== undefined ? (d.goalId || null) : idStrOrNull(existing.goalId);
     let nextLabelName: string | null;
@@ -385,6 +373,7 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   return toPackageDto(row, await loadEmbeds(id), await resolveLabelNameForRow(row));
 };
 
+// Refuses while the package has subscribers; its plans are detached, not deleted.
 export const deletePackage = async (id: number): Promise<"not_found" | "has_subscribers" | true> => {
   if (!(await repo.exists(id))) return "not_found";
   if ((await repo.subscriberCount(id)) > 0) return "has_subscribers";
@@ -409,7 +398,7 @@ export const reorderPackages = async (orders: Array<{ id: string; order: number 
   return true;
 };
 
-// ── embedded reorder ─────────────────────────────────────────────────────────
+// Reorder one category tab; returns that tab's refreshed embed array.
 export const reorderEmbedded = async (
   pkgId: number,
   field: "specificSubjects" | "materialCategories" | "examCategories",
@@ -430,7 +419,6 @@ export const reorderEmbedded = async (
   return embeds[field];
 };
 
-// ── plans ──────────────────────────────────────────────────────────────────────
 export const listPackagePlans = async (
   packageId: number,
   q: { page?: string; limit?: string; status?: string }
@@ -438,20 +426,16 @@ export const listPackagePlans = async (
   if (!(await repo.exists(packageId))) return "not_found";
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(q.limit ?? "10", 10) || 10, 1), 500);
-  // Optional filter for callers that DO want one view or the other. Absent (the
-  // panel's case) = every plan, active and inactive. Anything other than the two
-  // literals is ignored rather than 422'd — this is a display toggle, not a
-  // reference, and a typo must not empty the tab.
+  // Optional status filter; absent (the panel's case) = all plans. Anything other than
+  // the two literals is ignored rather than 422'd — a typo must not empty the tab.
   const status = q.status === "true" ? true : q.status === "false" ? false : undefined;
   const [rows, total] = await Promise.all([
     repo.listPlans(packageId, (pageNum - 1) * limitNum, limitNum, status),
     repo.countPlans(packageId, status),
   ]);
-  // `orderCount` is the cross-module contract (all-time, status-blind) that drives
-  // the Delete lock. `subscriberCount` is kept beside it — it predates orderCount,
-  // the panel reads `orderCount ?? subscriberCount`, and the two are NOT synonyms:
-  // subscriberCount counts subscription rows only, orderCount also counts orders
-  // with no subscription row yet. Dropping it would be a silent contract change.
+  // `orderCount` (all-time, status-blind) drives the Delete lock. `subscriberCount` is
+  // kept beside it: the panel reads `orderCount ?? subscriberCount`, and they are not
+  // synonyms (orderCount also counts orders with no subscription row yet).
   const [counts, usage] = await Promise.all([
     rows.length ? repo.subscriptionCountsByPlan(rows.map((r) => r.id)) : Promise.resolve([]),
     countPlanUsage("price", rows.map((r) => r.id)),
@@ -467,6 +451,7 @@ export const listPackagePlans = async (
   };
 };
 
+// Move plans onto this package (clears their course/ebook owner).
 export const attachPlansToPackage = async (packageId: number, planIds: string[]): Promise<"not_found" | "no_valid" | { modified: number }> => {
   if (!(await repo.exists(packageId))) return "not_found";
   const ids = planIds.map((i) => parsePackageId(i)).filter((n): n is number => n != null);
@@ -475,11 +460,7 @@ export const attachPlansToPackage = async (packageId: number, planIds: string[])
   return { modified: r.count };
 };
 
-/**
- * Delete a plan from a package — a REAL delete now, guarded exactly like the other
- * four modules. Was an `updateMany({ status: false })` that returned 200 and looked
- * identical to a delete from the panel's side.
- */
+/** Delete a plan from a package — a real delete, guarded like the other four modules. */
 export const detachPlan = async (
   packageId: number,
   planId: number
@@ -492,7 +473,6 @@ export const detachPlan = async (
   return true;
 };
 
-// ── subscribers ───────────────────────────────────────────────────────────────
 export const listSubscribers = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
   if (!(await repo.exists(packageId))) return "not_found";
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
@@ -508,9 +488,8 @@ export const listSubscribers = async (packageId: number, q: { page?: string; lim
       _id: String(s.id),
       customerId: c ? { _id: String(c.id), firstName, lastName, phoneNumber: c.phoneNumber, emailAddress: c.emailAddress ?? null } : null,
       packageId: s.package ? { _id: String(s.package.id), name: s.package.name } : idStrOrNull(s.packageId),
-      // `amount` is the canonical paid value on ws_package_course_subscription. The
-      // later `paid_amount` column is promoter-only and stays NULL for everyone else,
-      // so sourcing from it would blank the column — see admin-customer-details.transformer.
+      // `amount` is the canonical paid value; `paid_amount` is promoter-only and NULL for
+      // everyone else (see admin-customer-details.transformer).
       paidAmount: s.amount != null ? Number(s.amount) : null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
@@ -521,7 +500,6 @@ export const listSubscribers = async (packageId: number, q: { page?: string; lim
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
-// ── video category relations ────────────────────────────────────────────────
 export const listVideoRelations = async (packageId: number): Promise<"not_found" | any[]> => {
   if (!(await repo.exists(packageId))) return "not_found";
   const rows = await repo.listVideoRelations(packageId);

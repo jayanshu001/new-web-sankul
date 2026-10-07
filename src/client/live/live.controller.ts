@@ -1,7 +1,8 @@
+// Client live sessions: join handler and 3-minute preview watch-time metering.
 import { Request, Response } from "express";
 import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../../admin/live/streamos.service";
-// Per-session provider dispatch — a legacy session keeps resolving on the legacy
-// API even once STREAMOS_PROVIDER is flipped to v1.
+// Per-session provider dispatch: a legacy session keeps resolving on the legacy API
+// even when STREAMOS_PROVIDER is v1.
 import { getDetails as streamosGetDetails, StreamosError } from "../../admin/live/streamos.provider";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -12,27 +13,16 @@ import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import * as adminLive from "../../modules/admin-live/admin-live.service";
 
-// GET /api/v1/client/live-sessions/:id  (id = Mongo _id or streamId)
-// Returns playback info for an authenticated student.
-// - SCHEDULED: returns scheduledAt; no playback yet.
-// - CREATED:   isLive + hlsUrl/hlsUrls from Streamos.
-// - ENDED/READY: recordings[] for replay. If the webhook was missed we'll
-//   transparently recover recordings from Streamos `streamDetails` here.
+// SCHEDULED → scheduledAt only; CREATED → live; ENDED/READY → recordings, recovered
+// from StreamOS here if the webhook was missed.
 //
-// ── Shared sessions and the ?liveCourseId entry point ────────────────────────
-// One session can be linked to several live courses, so "does this student have
-// access" has no single answer — it depends on where they came FROM:
-//
-//   ?liveCourseId=C  → judge C ALONE. Owning a different course that happens to
-//                      share this session must NOT unlock it, otherwise a paid
-//                      course silently leaks into an unpaid one. An unlinked C is
-//                      rejected (404), never quietly downgraded to the Live Now
-//                      rule — that would be the same leak through a typo.
-//   (omitted)        → the Live Now entry point: no course was selected, so ANY
-//                      actively-owned linked course grants full access.
-//
-// The client-sent id is context only; linkage AND entitlement are both re-derived
-// here, and again at /client/media/resolve before any URL is produced.
+// A session can be linked to several live courses, so access depends on the entry point:
+//   ?liveCourseId=C → judge C alone. Owning another course that shares this session
+//                     must not unlock it (paid course leaking into an unpaid one). An
+//                     unlinked C is 404, never downgraded to the Live Now rule.
+//   (omitted)       → Live Now: any actively-owned linked course grants full access.
+// The client id is context only; linkage and entitlement are re-derived here and again
+// at /client/media/resolve.
 export const getLiveSessionForClient = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -42,19 +32,17 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
   logger.info("getLiveSessionForClient invoked", { traceId, path: req.originalUrl, userId, id, selectedLiveCourseId });
 
   try {
-    // SQL session + SQL write-back; StreamOS + Socket.IO kept.
     const cid = req.user?.id ? Number(req.user.id) : null;
     const customerId = Number.isInteger(cid) ? cid : null;
     const s = await adminLive.findSessionByAnyId(id);
     if (!s) { logger.warn("getLiveSessionForClient not found (mysql)", { traceId, userId, id }); return failure(res, "Live session not found.", 404); }
     const linkedCourseIds = await adminLive.getLinkedCourseIds(s.id);
 
-    // Reject an entry point that isn't real before it can influence anything.
     if (selectedLiveCourseId != null && !linkedCourseIds.includes(selectedLiveCourseId)) {
       logger.warn("getLiveSessionForClient unlinked liveCourseId", { traceId, userId, sessionId: s.id, selectedLiveCourseId, linkedCourseIds });
       return failure(res, "This live course is not linked to this live session.", 404);
     }
-    // THE access scope. One id = course-specific; all ids = Live Now.
+// One id = course-specific scope; all linked ids = Live Now.
     const liveCourseIds = selectedLiveCourseId != null ? [selectedLiveCourseId] : linkedCourseIds;
 
     let isLive = false;
@@ -80,31 +68,19 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
       }
     }
 
-    // Don't start the 3-minute clock on a session that hasn't aired yet — there
-    // is nothing to watch, so opening its page must not burn the trial.
+// Don't start the 3-minute trial clock on a session that hasn't aired yet.
     const track = status !== "SCHEDULED";
     const preview = await liveSql.resolveLivePreviewStateSql(customerId, s.id, liveCourseIds, track);
     const exposePlayback = preview.accessLevel === "full" || preview.accessLevel === "preview";
-    // Upsell exactly what the student can act on: the course they came from, or
-    // every purchasable linked course when they arrived from Live Now.
     const purchaseOptions = preview.accessLevel === "full" ? [] : await liveSql.buildPurchaseOptionsSql(liveCourseIds);
 
-    // No inline media. When playback is allowed (full OR preview access), mint a
-    // customer-bound media token the client exchanges at /media/resolve for the
-    // live HLS URL(s). No access → mediaToken null. `streamId`/`liveClassId` are
-    // internal identifiers (needed for the socket room), not playable URLs.
-    //
-    // `lc` carries the entry point so resolve re-applies the SAME course-scoped
-    // decision — without it, a preview token minted for unpurchased C2 would be
-    // re-evaluated against all linked courses and hand a full stream to someone
-    // who only owns C1. Not a `scope` claim: those are checked ahead of the
-    // per-kind switch and would reject the legitimate preview caller outright.
-    //
-    // A preview token is additionally clamped to the remaining trial. That stays
-    // a valid bound now the trial is measured in WATCH time: watch seconds only
-    // accrue while wall-clock seconds do, so remaining-watch ≤ remaining-wall and
-    // the token still cannot outlive the entitlement that justified it. Resolve
-    // re-checks anyway — this is defence-in-depth, not the only guard.
+// When playback is allowed, mint a customer-bound media token the client exchanges at
+// /media/resolve for the HLS URL(s); otherwise null.
+// `lc` carries the entry point so resolve applies the same course-scoped decision
+// (otherwise a preview token for unpurchased C2 could resolve to a full stream for a
+// C1 owner). It is not a `scope` claim, which would reject the preview caller outright.
+// A preview token is also clamped to the remaining trial; watch time accrues no faster
+// than wall time, so the token cannot outlive the entitlement. Resolve re-checks anyway.
     const mediaToken =
       exposePlayback && customerId != null
         ? signMediaToken(
@@ -114,27 +90,20 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         : null;
 
     logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel, selectedLiveCourseId, accessGrantedByLiveCourseId: preview.accessGrantedByLiveCourseId });
-    // Slim playback DTO: keep streamId/isLive/mediaToken/accessLevel/previewSecondsRemaining
-    // + purchaseOptions upsell (liveCourseId/name/image). Drop unused metadata + nested plans.
     return success(res, {
       _id: String(s.id),
       title: s.title, streamId: s.streamId ?? null, isLive,
       mediaToken,
       accessLevel: preview.accessLevel,
       previewSecondsRemaining: preview.previewSecondsRemaining,
-      // Handle for the heartbeat/stop endpoints. Non-null ONLY while a trial is
-      // actually running: `full` has no trial to meter and `preview_ended` has
-      // nothing left, and in both cases a null tells the app to stop heartbeating
-      // rather than to keep polling an endpoint that will not move.
+      // Non-null only while a trial is running; null tells the app to stop heartbeating.
       previewTrackingId:
         preview.accessLevel === "preview" && customerId != null
           ? buildPreviewTrackingId(customerId, s.id)
           : null,
-      // How often to heartbeat while playing. Server-owned so the cadence can be
-      // retuned without an app release.
+      // Server-owned so the cadence can be retuned without an app release.
       previewHeartbeatSeconds: liveSql.PREVIEW_HEARTBEAT_SECONDS,
-      // Which course actually unlocked this (null on preview/preview_ended) — lets
-      // the app show "included in <course>" and debug entitlement without guessing.
+      // Course that unlocked access (null on preview/preview_ended).
       accessGrantedByLiveCourseId: preview.accessGrantedByLiveCourseId != null ? String(preview.accessGrantedByLiveCourseId) : null,
       purchaseOptions: omitList(purchaseOptions, ["plans"]),
     }, "Live session fetched.");
@@ -144,17 +113,11 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
   }
 };
 
-// ── preview watch-time tracking ───────────────────────────────────────────────
-// The 3-minute trial is 180 seconds of ACTUAL WATCH TIME, metered server-side.
-// The app reports *when* it is playing; the server decides *how much* that cost,
-// from its own clock — a client-supplied "seconds watched" is never accepted, so
-// a patched app cannot lengthen the trial.
-//
-// Both endpoints resolve the session, re-validate the ?liveCourseId entry point,
-// and re-derive entitlement exactly as the join endpoint does. Sharing that
-// preamble matters: judging a heartbeat against every linked course would report
-// `full` for a student previewing an unpurchased course while owning a different
-// one linked to the same session, and silently stop metering their trial.
+// The 3-minute trial is 180s of actual watch time, metered from the server clock; a
+// client-supplied "seconds watched" is never accepted.
+// Both preview endpoints re-validate ?liveCourseId and re-derive entitlement exactly as
+// the join endpoint does; judging against every linked course would report `full` for a
+// student previewing an unpurchased course and silently stop metering their trial.
 const resolvePreviewScope = async (
   req: Request,
   res: Response
@@ -183,9 +146,8 @@ const resolvePreviewScope = async (
     return null;
   }
 
-  // The tracking id proves the app is metering the session it was handed, not
-  // another one. A mismatch is a client bug (422), never a permission failure —
-  // access was already decided from the bearer token.
+  // The tracking id proves the app meters the session it was handed. A mismatch is a
+  // client bug (422), not a permission failure.
   if (!isValidPreviewTrackingId(String(req.body?.previewTrackingId ?? ""), customerId, s.id)) {
     logger.warn("live preview scope: tracking id mismatch", { traceId, userId: req.user?.id, sessionId: s.id });
     failure(res, "Validation failed.", 422, { previewTrackingId: "previewTrackingId does not match this live session." });
@@ -199,9 +161,7 @@ const resolvePreviewScope = async (
   };
 };
 
-// POST /api/v1/client/live-sessions/:id/preview/heartbeat[?liveCourseId=]
-// Sent every `previewHeartbeatSeconds` while the player is playing AND focused.
-// `isPlaying: false` is handled exactly like /preview/stop.
+// Sent while the player is playing and focused. `isPlaying: false` behaves like /preview/stop.
 export const livePreviewHeartbeat = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -225,10 +185,7 @@ export const livePreviewHeartbeat = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/live-sessions/:id/preview/stop[?liveCourseId=]
-// Sent on pause / navigate away / backgrounding / player close. Idempotent —
-// calling it twice, or without a trial ever having started, returns the same
-// remaining time and consumes nothing extra.
+// Idempotent: repeat calls, or calls with no trial started, consume nothing.
 export const livePreviewStop = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

@@ -1,7 +1,4 @@
-// src/admin/ebook/ebook.controller.ts
-//
-// Thin controllers: parse + coerce → validate → call service → respond.
-
+// Admin ebooks: HTTP handlers for catalog, trending, reorder and plans.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
@@ -22,6 +19,7 @@ const NAME_FIELD_BY_URL = {
   bookUrl: "bookFileName",
 } as const;
 
+// Map uploaded S3 files and multipart strings onto req.body before validation.
 const applyEbookUploads = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   if (files) {
@@ -34,9 +32,8 @@ const applyEbookUploads = (req: Request) => {
       }
     }
   }
-  // A cleared PDF slot must clear its file name too. The multipart form sends ""
-  // but the admin UI's Remove button sends JSON `null` (there is no File in the
-  // payload, so the request isn't multipart at all) — both mean "cleared".
+  // A cleared PDF slot clears its file name too. Multipart sends "" but the
+  // Remove button sends JSON null (no file, so not multipart); both mean cleared.
   for (const urlField of ["demoUrl", "bookUrl"] as const) {
     const url = req.body[urlField];
     if (url === "" || url === null) {
@@ -49,10 +46,8 @@ const applyEbookUploads = (req: Request) => {
   coerceArrayFields(req);
 };
 
-// Multipart form-data flattens `field[0]=a&field[1]=b` (and the bare
-// `field[]=a&field[]=b` form) into literal keys; reassemble them into a real
-// array before validation. The Zod schema also accepts a JSON-stringified
-// array or single string, so this only handles the bracketed-key form.
+// Multipart flattens `field[0]=a` / `field[]=a` into literal keys; reassemble
+// them into an array (the Zod schema handles the JSON-string and single forms).
 const ARRAY_BODY_FIELDS = ["examCountdownCategoryIds", "examCountdownIds"] as const;
 
 const coerceArrayFields = (req: Request) => {
@@ -69,10 +64,6 @@ const coerceArrayFields = (req: Request) => {
     body[field] = arr.filter((v) => v !== "");
   }
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Ebook CRUD
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getEbooks = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await ebookService.listEbooks(
@@ -111,15 +102,11 @@ export const toggleEbookTrending = asyncHandler(async (req: Request, res: Respon
 });
 
 export const reorderEbooks = asyncHandler(async (req: Request, res: Response) => {
-  // On SQL ids are numeric. Shape is { orders: [{ id, order }] }.
-  const { orders } = reorderEbooksSqlSchema.parse(req.body);
+  const
+ { orders } = reorderEbooksSqlSchema.parse(req.body);
   await ebookService.reorderEbooks(orders);
   return success(res, {}, "Ebooks reordered successfully");
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Ebook plans
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getEbookPlans = asyncHandler(async (req: Request, res: Response) => {
   const q = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });

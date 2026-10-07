@@ -1,3 +1,4 @@
+// Client API: master router mounting every client domain router in gate order.
 import { Router } from "express";
 import clientAuthRoutes from "./auth/auth.routes";
 import clientProfileRoutes from "./profile/customer.routes";
@@ -52,14 +53,6 @@ import { markGuestBrowse } from "../middlewares/guestBrowse";
 
 const router = Router();
 
-/**
- * ==========================================
- * MASTER CLIENT API ROUTES (/api/v1/client)
- * ==========================================
- * All traffic originating from the Mobile App
- * or Student Web Portal is channeled here.
- */
-
 // Guest browse (App Store 5.1.1(v)): flags a GET on an allowlisted catalog path that
 // carries a live guest token, so `authenticate` / `requireRole` below let it through as
 // a guest. Must stay ABOVE every router that gates. Allowlist: middlewares/guestBrowse.ts.
@@ -86,8 +79,7 @@ router.use("/materials", clientMaterialRoutes); // -> /api/v1/client/materials/*
 router.use("/packages", clientPackageRoutes); // -> /api/v1/client/packages/*
 router.use("/promocodes", clientPromocodeRoutes); // -> /api/v1/client/promocodes/*
 router.use("/ebooks", clientEbookRoutes); // -> /api/v1/client/ebooks/*
-// Legacy Mongo /orders/* surface removed 2026-07-01 — superseded by the SQL
-// /payment/* (create-order + verify) surface below.
+
 router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testimonials|terms|version|upgrade}
 router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
 router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}

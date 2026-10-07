@@ -1,3 +1,4 @@
+// Admin careers: job application routes.
 import { Router } from "express";
 import {
   getApplicationList,

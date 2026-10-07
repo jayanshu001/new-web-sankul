@@ -1,17 +1,14 @@
+// Client lecture audio notes: Zod request schemas.
 import { z } from "zod";
 
-// Accept a 24-hex Mongo ObjectId OR a numeric MySQL id: this module runs on MySQL,
-// so ids like "33141" (ws_video / ws_live_session ints) are valid.
+// Accepts a 24-hex legacy id or a numeric id (ws_video / ws_live_session ints).
 const objectId = z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id");
 
-// Body fields arrive as strings because of multipart/form-data. We coerce
-// here rather than relying on JSON parsing.
+// Multipart fields arrive as strings, so numbers are coerced here.
 const timestampSec = z.coerce.number().int().min(0).max(60 * 60 * 24);
-// Audio-note length in seconds. FE measures the recording and may report a
-// fractional value ("42.7"); `duration_sec` is an INT column, so floor here —
-// an unfloored float reached Prisma as a non-integer and blew up the whole
-// create (500 + the just-uploaded file cleaned off S3). 0 stays legal: a
-// sub-second note floors to 0 and must not cost the user the recording.
+// FE may report a fractional length ("42.7") but `duration_sec` is INT: an unfloored
+// value fails the Prisma create (500 + uploaded file deleted). 0 stays legal so a
+// sub-second note is not lost.
 const durationSec = z.coerce.number().min(0).max(60 * 60 * 24).transform(Math.floor);
 const title = z.string().trim().max(200);
 

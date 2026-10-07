@@ -1,12 +1,12 @@
-// src/utils/crashReporter.ts
+// Crash reporter: emails uncaught errors with recent requests, throttled across pods.
 import { sendEmail } from "../utils/emailService";
 import { redisClient, isRedisReady } from "../config/redis";
 
 type CrashReporterOptions = {
   appName?: string;
-  emailTo: string;                 // where to send crash emails
-  throttleMs?: number;             // avoid spam: minimum ms between mails
-  sendTimeoutMs?: number;          // give email this many ms before giving up
+  emailTo: string;
+  throttleMs?: number;             // minimum ms between mails
+  sendTimeoutMs?: number;
 };
 
 const lastRequests: Array<{
@@ -19,23 +19,19 @@ const lastRequests: Array<{
 }> = [];
 
 const MAX_REQ_SNAPSHOT = 20;
-// Per-pod guard — fine to stay in-memory; prevents the SAME pod from sending
-// two emails for two near-simultaneous crashes during its dying moments.
+// Per-pod guard against two emails for near-simultaneous crashes.
 let crashEmailInFlight = false;
-// CROSS-pod throttle uses Redis SET NX EX. Without this, a crash loop across
-// N pods would emit N emails per throttle window — alert spam during the
-// moment you most need a clean signal. Lock key includes the title so two
-// different crash types within the same window each get one email.
+// Cross-pod throttle (Redis SET NX EX) so a crash loop across N pods sends one
+// email per window; keyed by title so distinct crash types each get one.
 const CRASH_LOCK_KEY = (title: string) => `crash-email-lock:${title}`;
 
-// Strip the query string off a request URL before snapshotting it. Crash
-// emails attach the last 20 requests, and a careless `/reset?token=abc123`
-// would otherwise leak the token via email. Path is enough for triage.
+// Crash emails attach recent requests; query strings could leak tokens.
 const stripQuery = (url: string): string => {
   const i = url.indexOf("?");
   return i === -1 ? url : url.slice(0, i);
 };
 
+// Keeps the last 20 requests (query strings stripped) for the crash email.
 export function captureCrashContextMiddleware() {
   return (req: any, res: any, next: any) => {
     const fullUrl = req.originalUrl || req.url || "";
@@ -58,22 +54,21 @@ export function captureCrashContextMiddleware() {
   };
 }
 
+// One email per crash title per throttle window, then the process exits.
 export function initCrashReporter(opts: CrashReporterOptions) {
   const {
     appName = "Xcelyst",
     emailTo,
-    throttleMs = 10 * 60 * 1000, // 10 minutes
-    sendTimeoutMs = 4000,         // 4 seconds
+    throttleMs = 10 * 60 * 1000,
+    sendTimeoutMs = 4000,
   } = opts;
 
   const sendCrashEmail = async (title: string, payload: any) => {
-    if (crashEmailInFlight) return; // same-pod guard
+    if (crashEmailInFlight) return;
     crashEmailInFlight = true;
 
-    // Cross-pod throttle. SET NX EX is atomic — exactly one pod wins per
-    // throttle window per crash title. If Redis is down (likely during
-    // major outages — the very moments we want a crash email), fail open
-    // and let the email through; better one alert per pod than zero.
+    // Fails open when Redis is down (likely during the outages we most want
+    // to hear about): one alert per pod beats zero.
     if (isRedisReady()) {
       try {
         const acquired = await redisClient.set(
@@ -109,7 +104,7 @@ export function initCrashReporter(opts: CrashReporterOptions) {
       </html>
     `;
 
-    // Race with timeout so we don’t hang the dying process
+    // Don't hang the dying process.
     const timeout = new Promise((_r, rej) =>
       setTimeout(() => rej(new Error("sendEmail timeout")), sendTimeoutMs)
     );
@@ -130,7 +125,6 @@ export function initCrashReporter(opts: CrashReporterOptions) {
       promise: String(p),
     };
     void sendCrashEmail("Unhandled Promise Rejection", payload).finally(() => {
-      // Exit soon after scheduling the email; let your process manager restart it
       setImmediate(() => process.exit(1));
     });
   });
@@ -146,7 +140,6 @@ export function initCrashReporter(opts: CrashReporterOptions) {
   });
 }
 
-// Helpers
 function serializeError(e: unknown) {
   if (e instanceof Error) {
     return { name: e.name, message: e.message, stack: e.stack };

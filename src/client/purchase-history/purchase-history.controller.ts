@@ -1,3 +1,4 @@
+// Client purchase history: subscription, book and ebook order lists.
 import { Request, Response } from "express";
 import {
   BookOrderStatus,
@@ -9,13 +10,8 @@ import { parseListQuery } from "../../utils/listQuery";
 import { omit, omitList, pickList } from "../../utils/pick";
 import * as phSql from "../../modules/client-purchase-history/client-purchase-history.service";
 
-// GET /api/v1/client/purchase-history/subscriptions
-// Drives the "Subscriptions" tab. Returns paid course/package subscriptions
-// only (paymentStatus === "verified"); pending/failed payments are intentionally
-// hidden — the user only wants to see their actual purchases here.
-//
-// Each row carries the package-type badge ("Live" / "Recorded" / "Test Series")
-// resolved through PackageCourseEbookPrice → Package → PackageType.
+// Verified (paid) subscriptions only; pending/failed are intentionally hidden. Each row
+// carries the package-type badge ("Live" / "Recorded" / "Test Series").
 export const listSubscriptionsHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -28,15 +24,11 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
 
     const cid = phSql.parsePhId(String(userId));
     if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-    // ⚠ SQL has no payment_status — "verified" maps to status=true (active sub).
-    // NOTE: pagination-only — subscriptions unions 4 tables whose titles live in
-    // separate joined name tables (course/package/live/test-series), so a single
-    // searchable where-clause isn't feasible; ?search is not applied here.
+    // There is no payment_status column: "verified" maps to status=true. ?search is not
+    // applied: this unions 4 tables whose titles live in separate name tables.
     const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
-    // Slim to fields the RN PurchaseHistory screen reads (see
-    // docs/api-optimization/GET_client_purchase_history_subscriptions.md). Keeps
-    // tracking.trackingId (AWB) + endAt (expiry, used by the website's purchase
-    // history); drops tracking.courier + unused card meta.
+    // Slimmed to fields the app reads; keeps tracking.trackingId (AWB) and endAt (the
+    // website's purchase history uses it).
     const slim = (data as any[]).map((r) => ({
       ...omit(r, ["thumbnail", "kind", "startAt", "meta"]),
       tracking: r.tracking ? omit(r.tracking, ["courier"]) : r.tracking,
@@ -48,10 +40,7 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/books
-// Drives the "Books" tab. Returns BookOrders in success states only
-// (verified / shipped / delivered) — pending/failed/cancelled are hidden
-// because the screen is "what I bought", not "every order I ever started".
+// Success states only (verified / shipped / delivered): the tab is "what I bought".
 const BOOK_SUCCESS_STATUSES = [
   BookOrderStatus.VERIFIED,
   BookOrderStatus.SHIPPED,
@@ -71,9 +60,7 @@ export const listBooksHistory = async (req: Request, res: Response) => {
     const cid = phSql.parsePhId(String(userId));
     if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
     const { data, pagination } = await phSql.listBooks(cid, BOOK_SUCCESS_STATUSES as string[], skip, limitNum, pageNum, limitNum, search);
-    // Slim to fields the RN PurchaseHistory screen reads (see
-    // docs/api-optimization/GET_client_purchase_history_books.md). Keeps
-    // tracking.trackingId (AWB) + books[].name; drops the rest.
+    // Slimmed to fields the app reads; keeps tracking.trackingId (AWB) + books[].name.
     const slim = (data as any[]).map((r) => ({
       ...omit(r, ["thumbnail"]),
       books: pickList(r.books, ["name"]),
@@ -86,8 +73,7 @@ export const listBooksHistory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/purchase-history/ebooks
-// Drives the "E-Book" tab. Returns EbookOrders in COMPLETE status only.
+// COMPLETE ebook orders only.
 export const listEbooksHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -101,8 +87,6 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
     const cid = phSql.parsePhId(String(userId));
     if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
     const { data, pagination } = await phSql.listEbooks(cid, PackageCourseEbookOrderStatus.COMPLETE, skip, limitNum, pageNum, limitNum, search);
-    // Slim to fields the RN PurchaseHistory screen reads (see
-    // docs/api-optimization/GET_client_purchase_history_ebooks.md).
     return res.status(200).json({ success: true, data: omitList(data, ["thumbnail", "meta"]), pagination });
   } catch (e: any) {
     logger.error("listEbooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });

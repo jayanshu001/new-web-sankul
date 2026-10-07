@@ -1,10 +1,4 @@
-// src/admin/course/course.service.ts
-//
-// Domain logic for admin course endpoints. Controllers should:
-//   1. Parse + validate input.
-//   2. Call into this service.
-//   3. Map the return value to the HTTP response.
-
+// Admin courses: id parsing and result-code to HttpError mapping over the admin-course module.
 import { HttpError } from "../../middlewares/errorHandler";
 import { planInUseMessage } from "../../utils/planUsage";
 import { PLAN_TERMS_FROZEN_MESSAGE } from "../../modules/admin-plan/admin-plan.service";
@@ -13,17 +7,14 @@ import { CacheEntity } from "../../middlewares/flushGroups";
 import logger from "../../utils/logger";
 import * as adminCourse from "../../modules/admin-course/admin-course.service";
 
-// Re-exported so the thin controllers can branch validation (numeric vs ObjectId).
 export const parseCourseSqlId = adminCourse.parseCourseId;
 
-// On the SQL branch ids are numeric; the Mongo assertObjectId would 400 them.
 const assertCourseSqlId = (id: string, label: string): number => {
   const n = adminCourse.parseCourseId(id);
   if (!n) throw new HttpError(400, `Invalid ${label} ID`);
   return n;
 };
 
-// SQL create/update wrappers (validated numeric input from the controller).
 export const createCourseSql = (v: any) => adminCourse.createCourse(v);
 
 export const updateCourseSql = async (id: string, v: any) => {
@@ -31,10 +22,6 @@ export const updateCourseSql = async (id: string, v: any) => {
   if (res === "not_found") throw new HttpError(404, "Course not found");
   return res;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Types
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListCoursesQuery {
   search?: string;
@@ -46,10 +33,6 @@ export interface ListCoursesQuery {
   sortBy?: string;
   sortOrder?: string;
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────────────
 
 const courseDetailKey = (id: string) => cache.key(CacheDomain.Admin, CacheEntity.Course, `detail:${id}`);
 
@@ -63,17 +46,9 @@ const invalidateCourseCaches = async (courseId?: string) => {
   ]);
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Pre-requisites
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const getPreRequisites = async () => {
   return adminCourse.getPreRequisites();
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// List & detail
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const listCourses = async (query: ListCoursesQuery) => {
   return adminCourse.listCourses(query);
@@ -84,10 +59,6 @@ export const getCourseById = async (id: string) => {
   if (res === "not_found") throw new HttpError(404, "Course not found");
   return res;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Course video categories & materials (admin masters)
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListVideoCategoriesQuery {
   page?: string;
@@ -134,10 +105,6 @@ export const deleteCourseVideoCategory = async (videoCategoryId: string) => {
   return res;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Course CRUD
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const deleteCourse = async (id: string) => {
   const res = await adminCourse.deleteCourse(assertCourseSqlId(id, "Course"));
   if (res === "not_found") throw new HttpError(404, "Course not found");
@@ -155,10 +122,6 @@ export const toggleCourseStatus = async (id: string, requested?: boolean | strin
   if (res === "not_found") throw new HttpError(404, "Course not found");
   return res;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Plans scoped to a course
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const createCoursePlan = async (
   courseId: string,
@@ -245,8 +208,7 @@ export const getCoursePlanById = async (planId: string) => {
 export const updateCoursePlan = async (planId: string, validated: any) => {
   const res = await adminCourse.updateCoursePlan(assertCourseSqlId(planId, "Plan"), validated);
   if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
-  // A saved plan's commercial terms are frozen — 422 so the panel can pin the
-  // message to the offending field.
+  // 422 so the panel can pin the message to the offending field.
   if (res === "frozen_terms") throw new HttpError(422, PLAN_TERMS_FROZEN_MESSAGE);
   return res;
 };
@@ -254,15 +216,10 @@ export const updateCoursePlan = async (planId: string, validated: any) => {
 export const deleteCoursePlan = async (planId: string) => {
   const res = await adminCourse.deleteCoursePlan(assertCourseSqlId(planId, "Plan"));
   if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
-  // 409 — same status + wording the packages module already returns, so the panel
-  // shows one message everywhere.
+  // Same status + wording as the packages module so the panel shows one message.
   if (typeof res === "object") throw new HttpError(409, planInUseMessage(res.inUse));
   return;
 };
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Video category relations
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListVideoCategoryRelationsQuery {
   page?: string;
@@ -298,6 +255,6 @@ export const deleteVideoCategoryRelation = async (relationId: string) => {
   return;
 };
 
-// Helper for callers that want to log invalidation themselves.
 export const _invalidateCacheForTest = invalidateCourseCaches;
-void logger; // import retained for future structured logs from this module
+void logger;
+

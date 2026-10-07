@@ -1,3 +1,4 @@
+// Jobs organizations: admin CRUD with unique slugs and jobs-api cache flush.
 import { organizationRepository } from "./organization.repository";
 import { toOrganizationDto } from "./organization.transformer";
 import { slugify, uniqueSlug } from "../../utils/slug";
@@ -14,11 +15,9 @@ export const parseOrganizationId = (id: string): bigint | null => {
   return BigInt(id);
 };
 
-// Organizations have no standalone public list/detail in jobs-api — their
-// name/logo are only ever embedded inline in cached content/paper responses,
-// so an edit on an org already linked to published content needs a broad
-// flush (no per-org cache entity exists to target narrowly). Best-effort,
-// never turns a successful write into a failure response.
+// Org name/logo are only embedded in cached content/paper responses (no per-org
+// cache entity in jobs-api), so edits need a broad flush. Best-effort: never
+// fails a successful write.
 const safeRevalidateAll = async () => {
   try {
     await revalidateJobsApiCache("all");

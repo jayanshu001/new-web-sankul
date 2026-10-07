@@ -1,3 +1,4 @@
+// App version: DTO and input types.
 export interface VersionDto {
   _id?: string;
   latestVersionCode: number;

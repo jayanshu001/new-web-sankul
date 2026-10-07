@@ -1,3 +1,4 @@
+// Admin offline centers: HTTP handlers for banners, cities, centers, batches and enquiries.
 import { Request, Response } from "express";
 import {
   bannerCreateSchema,
@@ -24,7 +25,6 @@ import {
   createCityAdmin as sqlCreateCity, updateCityAdmin as sqlUpdateCity, deleteCityAdmin as sqlDeleteCity,
 } from "../../modules/offline-city/offline-city.service";
 
-// City SQL body schema: stateId dropped (no SQL column), order/status numeric.
 const cityCreateSqlSchema = z.object({
   name: z.string().min(1).max(100),
   image: z.string().min(1).max(500),
@@ -35,7 +35,7 @@ const cityCreateSqlSchema = z.object({
 });
 const cityUpdateSqlSchema = cityCreateSqlSchema.partial();
 
-// SQL-path body schemas: cityId/centerId are numeric ints (not 24-hex ObjectIds).
+// cityId/centerId are numeric ids.
 const centerCreateSqlSchema = z.object({
   name: z.string().min(1).max(255),
   images: z.array(z.string()).default([]),
@@ -57,8 +57,6 @@ const batchCreateSqlSchema = z.object({
   status: z.boolean().optional(),
 });
 const batchUpdateSqlSchema = batchCreateSqlSchema.partial();
-
-// ─── Banners ──────────────────────────────────────────────────────────────
 
 export const listBanners = async (_req: Request, res: Response) => {
   try {
@@ -125,8 +123,6 @@ export const reorderBanners = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-
-// ─── Cities ──────────────────────────────────────────────────────────────
 
 export const listCities = async (req: Request, res: Response) => {
   try {
@@ -216,8 +212,6 @@ export const deleteCity = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Centers ──────────────────────────────────────────────────────────────
-
 export const listCenters = async (req: Request, res: Response) => {
   try {
     // Pagination opt-in (page/limit); `search` matches center name; newest first.
@@ -233,7 +227,7 @@ export const listCenters = async (req: Request, res: Response) => {
     });
 
     const cid = cityId ? parseOfflineId(cityId) ?? undefined : undefined;
-    // status filter is a no-op on SQL (no status column — all rows active)
+    // No status column (all centers active), so the status filter is a no-op.
     const { data, total } = await sqlListCenters({
       cityId: cid,
       search: search?.trim() || undefined,
@@ -259,6 +253,7 @@ export const getCenter = async (req: Request, res: Response) => {
   }
 };
 
+// Coerce multipart fields and merge kept image URLs with newly uploaded center images.
 const buildCenterPayload = (req: Request) => {
   const body: Record<string, any> = { ...req.body };
   if (body.latitude !== undefined) body.latitude = Number(body.latitude);
@@ -320,8 +315,6 @@ export const deleteCenter = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-
-// ─── Batches ──────────────────────────────────────────────────────────────
 
 export const listBatches = async (req: Request, res: Response) => {
   try {
@@ -410,8 +403,6 @@ export const deleteBatch = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Enquiries ──────────────────────────────────────────────────────────────
-
 export const listEnquiries = async (req: Request, res: Response) => {
   try {
     const { batchId, search, fromDate, toDate, page = "1", limit = "20" } =
@@ -450,10 +441,7 @@ export const deleteEnquiry = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Batch Enquiries (offline-batch "Register" form) ─────────────────────────
-
-// `/batch-enquiries` is an admin-UI alias for `/enquiries`; both read/delete the
-// same SQL offline-enquiry table (offline-enquiry module).
+// `/batch-enquiries` is an admin-UI alias for `/enquiries` (same table).
 export const listBatchEnquiries = async (req: Request, res: Response) => {
   try {
     const { batchId, search, fromDate, toDate, page = "1", limit = "20" } =

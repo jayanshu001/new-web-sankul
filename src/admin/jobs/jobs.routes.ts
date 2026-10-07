@@ -1,3 +1,4 @@
+// Admin jobs portal: mounts content, organization, paper and suggested-product routers.
 import { Router } from "express";
 import contentRoutes from "./content.routes";
 import organizationsRoutes from "./organizations.routes";

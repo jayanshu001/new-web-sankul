@@ -1,11 +1,10 @@
+// FAQs: Zod request schemas.
 import { z } from "zod";
 import { FAQ_TYPES } from "./faq.types";
 
 /**
- * The admin UI sends the FAQ category as `typeId` (the slug "general"/"referral",
- * matching the response's `typeId._id`), but MySQL `ws_faq` stores it in the
- * `type` enum column. Copy the `typeId` alias onto `type` before validation so
- * the inner object schema (and its output types) stay unchanged.
+ * The admin UI sends the category slug as `typeId` (matching the response's
+ * `typeId._id`); the column is `type`. Alias it before validation.
  */
 const aliasTypeId = (input: unknown) => {
   if (input && typeof input === "object" && !Array.isArray(input)) {
@@ -15,7 +14,6 @@ const aliasTypeId = (input: unknown) => {
   return input;
 };
 
-/** MySQL `ws_faq` — uses `type` enum, not Mongo ObjectId `typeId`. */
 export const faqCreateSchemaMysql = z.preprocess(
   aliasTypeId,
   z.object({

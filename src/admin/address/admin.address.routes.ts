@@ -1,3 +1,4 @@
+// Admin address: state and city (district) lookup routes.
 import { Router } from "express";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import { CacheEntity } from "../../middlewares/flushGroups";
@@ -13,7 +14,6 @@ import {
 } from "../customer-master/customer-master.controller";
 
 // Cities are sourced from ws_customer_distict (districts), not ws_offline_city.
-// Same request/response contract; see admin.cities.controller for the mapping.
 import {
   listCities,
   getCity,
@@ -26,17 +26,14 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// ─── States ───────────────────────────────────────────────────────────────────
 router.get("/states", getStates);
-// These lookups are cached shared+24h on client/address (states, cities,
-// educations, characteristic). NOTE: "/cities" here is ws_customer_distict
-// (districts) — a DIFFERENT table from admin/offline's /cities
-// (ws_offline_city), which is why they carry different tags.
+// These lookups are cached shared+24h on client/address. "/cities" here is
+// ws_customer_distict, a different table from admin/offline's /cities
+// (ws_offline_city), which is why they carry different cache tags.
 router.post("/states", autoFlushGroup(CacheEntity.CustomerLookup), createState);
 router.put("/states/:id", autoFlushGroup(CacheEntity.CustomerLookup), updateState);
 router.delete("/states/:id", autoFlushGroup(CacheEntity.CustomerLookup), deleteState);
 
-// ─── Cities ───────────────────────────────────────────────────────────────────
 router.get("/cities", listCities);
 router.post("/cities", autoFlushGroup(CacheEntity.CustomerLookup), uploadTo(UPLOAD_FOLDERS.cities), uploadS3.single("image"), createCity);
 router.get("/cities/:id", getCity);

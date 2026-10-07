@@ -1,13 +1,10 @@
+// Admin quizzes: Zod request schemas.
 import { z } from "zod";
 import { ExamType } from "../../shared/enums";
 
-// ─── Category ─────────────────────────────────────────────────────────────────
-
 export const createCategorySchema = z.object({
   name: z.string().min(1).max(255),
-  // URL (set), absence (unchanged), or null / "" (clear). On update the
-  // controller turns a null/empty value into a $unset so the FE can remove the
-  // category image via JSON `image: null` or an empty multipart field.
+  // URL (set), absent (unchanged), or null / "" (clear).
   image: z.preprocess(
     (v) => (v === "" ? null : v),
     z.string().max(500).nullable().optional()
@@ -25,43 +22,29 @@ export const createCategorySchema = z.object({
 
 export const updateCategorySchema = createCategorySchema.partial();
 
-// ─── Exam ─────────────────────────────────────────────────────────────────────
-
 export const createExamSchema = z
   .object({
     title: z.string().min(1).max(255),
     durationMinutes: z.coerce.number().int().positive(),
     questionCount: z.coerce.number().int().nonnegative().optional(),
-    // Full-replace set of leaf category ids. A single selection arrives from a
-    // multipart form as ONE `categoryIds[]` key (a bare scalar, not an array), so
-    // lift it before validating — otherwise picking exactly one category while
-    // uploading a solution PDF would 400.
-    //
-    // An EMPTY array is a valid shape here (2026-08-20): daily tests are browsed by
-    // date and may have no parent category. "At least one category" is no longer a
-    // shape rule — it is type-dependent, so the service owns it (it is the only layer
-    // that knows the EFFECTIVE type on an update, where `type` may be absent from the
-    // payload). Existence + leaf-ness are likewise checked there, since they need the DB.
-    //
-    // `"" -> []` mirrors the startAt / endAt / solutionPdfUrl preprocess below: a
-    // multipart form appends NO keys for an empty array, so the field would arrive
-    // absent and read as "leave untouched", silently ignoring the admin's removal.
-    // The empty-string marker is the only way to express "clear all" over multipart.
+    // Full-replace set of leaf ids. A single multipart selection arrives as a bare
+    // scalar, so it is lifted to an array. Empty is valid (daily tests may have no
+    // category); "at least one" is type-dependent and enforced in the service, which
+    // also checks existence and leaf-ness. "" means "clear all" because multipart
+    // sends no key at all for an empty array.
     categoryIds: z.preprocess(
       (v) => (v === "" ? [] : v === undefined || Array.isArray(v) ? v : [v]),
       z.array(z.string().min(1)).optional()
     ),
-    // Legacy single-category form, still accepted so older clients keep working.
+    // Legacy single-category form, still accepted for older clients.
     categoryId: z.string().nullable().optional(),
     type: z
       .enum([ExamType.DAILY, ExamType.SUBJECT, ExamType.MOCK, ExamType.WEEKLY])
       .default(ExamType.SUBJECT),
     positiveMarks: z.coerce.number().nonnegative(),
     negativeMarks: z.coerce.number(),
-    // Accept a date (set), absence (leave unchanged), or null / "" (clear → null the
-    // column). Mirrors solutionPdfUrl: without the null/"" handling a JSON null would
-    // coerce to the 1970 epoch and a multipart "" would 422, so the cleared window
-    // never persisted. The service writes null through (admin-exam.service updateExam).
+    // Date (set), absent (unchanged), or null / "" (clear). Without this a JSON
+    // null would coerce to the 1970 epoch and a multipart "" would 422.
     startAt: z.preprocess(
       (v) => (v === "" ? null : v),
       z.coerce.date().nullable().optional()
@@ -70,14 +53,11 @@ export const createExamSchema = z
       (v) => (v === "" ? null : v),
       z.coerce.date().nullable().optional()
     ),
-    // Accept a URL (set), absence (leave unchanged), or null / "" (clear). The
-    // controller translates a null/empty value into a $unset so the FE can
-    // remove an attached solution PDF via JSON `solutionPdfUrl: null`.
+    // URL (set), absent (unchanged), or null / "" (clear).
     solutionPdfUrl: z.preprocess(
       (v) => (v === "" ? null : v),
       z.string().max(500).nullable().optional()
     ),
-    // Original filename of the uploaded solution PDF (paired with solutionPdfUrl).
     solutionPdfName: z.preprocess(
       (v) => (v === "" ? null : v),
       z.string().max(255).nullable().optional()
@@ -88,8 +68,7 @@ export const createExamSchema = z
   })
   .superRefine(requireDailyWindow);
 
-// Daily tests live in a fixed availability window, so both ends are mandatory
-// and the window must be non-empty. Shared by create (full payload) and the
+// Daily tests need a non-empty availability window. Shared by create and the
 // controller's update path (merged effective values).
 function requireDailyWindow(
   data: { type?: string; startAt?: Date | null; endAt?: Date | null },
@@ -121,9 +100,8 @@ function requireDailyWindow(
 export const updateExamSchema = createExamSchema._def.schema
   .partial()
   .superRefine((data, ctx) => {
-    // On update the window rule is enforced in the controller against the
-    // merged effective values; here we only validate ordering when both
-    // ends are present in the payload.
+    // The full window rule runs in the controller against merged values; here
+    // only ordering when both ends are present.
     if (data.startAt && data.endAt && data.endAt <= data.startAt)
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -136,13 +114,12 @@ export const reorderExamsSchema = z.object({
   orders: z.array(z.object({ id: z.string(), orderBy: z.number().int() })).min(1),
 });
 
-// ─── Question ─────────────────────────────────────────────────────────────────
-// Matches old schema: question has `answer` (text), options live in separate collection.
-// A special option named "skip" is allowed — submitting it counts as a skipped answer.
+// An option named "skip" is allowed; submitting it counts as a skipped answer.
 
 const optionSchema = z.object({
   name: z.string().min(1).max(1000),
-  // Allow URL, empty string (= clear), or absent. Final coercion happens in controller.
+  // URL, "" (clear), or absent; coerced in the controller.
+
   image: z.string().max(500).optional(),
   orderBy: z.coerce.number().int().optional(),
 });

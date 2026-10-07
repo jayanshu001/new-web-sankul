@@ -1,3 +1,4 @@
+// Educator courses: own course list, detail, dashboard and subscriber routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {

@@ -1,3 +1,4 @@
+// Client learning: live-session progress heartbeat and Resume Learning feed.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -13,24 +14,18 @@ import {
 const progressBodySchema = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24),
   durationSec: z.number().int().min(0).max(60 * 60 * 24),
-  // Container hint, accepted for back-compat with older app builds. No
-  // longer affects storage — progress is global per (customer, liveSession).
+  // Accepted for older app builds; ignored — progress is global per (customer, liveSession).
   scope: z
     .object({
       kind: z.enum(["liveCourse", "package"]),
-      // Accept either an ObjectId (Mongo build) or an int-string (SQL build).
-      // Back-compat hint only — no longer affects storage.
+      
       id: z.string().min(1),
     })
     .optional(),
 });
 
-// ---------------------------------------------------------------------------
-// POST /api/v1/client/learning/progress/live-sessions/:liveSessionId
-// Heartbeat for a recorded live session playback. Mirrors the video heartbeat:
-// upserts a (customer, liveSessionId) row, gated on an active live-course
-// subscription for at least one course the session is published under.
-// ---------------------------------------------------------------------------
+// Recorded live-session heartbeat; gated on an active live-course subscription for
+// at least one course the session is published under.
 export const reportLiveSessionProgress = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -54,19 +49,9 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
   }
 };
 
-// ---------------------------------------------------------------------------
-// GET /api/v1/client/learning/progress/my
-// Unified "Resume Learning" feed. Returns one flat list of cards covering
-// Course and Package entries the user has actually started (i.e. has at least
-// one LectureProgress row for). The list is sorted by most-recent activity
-// across both types so the FE renders them as one vertical stream — matching
-// the UI in the design.
-//
-// LIVE COURSES ARE EXCLUDED (2026-07-30, FE request): a live session is not a
-// resumable lecture, so no `type: "live"` card is ever emitted here, and
-// `resumeNext` can never be a live card. Enforced at the source in
-// client-lecture-progress.service.listMyLearningProgress.
-// ---------------------------------------------------------------------------
+// Unified "Resume Learning" feed: started Course and Package cards, most recent first.
+// Live courses are excluded at the source (listMyLearningProgress): a live session is
+// not a resumable lecture.
 export const listMyLearningProgress = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

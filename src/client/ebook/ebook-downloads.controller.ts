@@ -1,3 +1,4 @@
+// Client ebook downloads: record, list and remove a user's ebook downloads.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -9,8 +10,7 @@ function userId(req: Request): string | null {
   return (req as any).user?.id ?? null;
 }
 
-// POST /api/v1/client/ebooks/:id/download
-// Records a per-user download row and returns the PDF URL. Idempotent: a
+// Records a per-user download row and returns a media token. Idempotent: a
 // repeat tap refreshes `downloadedAt` without duplicating the row.
 export const recordEbookDownload = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -33,8 +33,8 @@ export const recordEbookDownload = async (req: Request, res: Response) => {
     if (!ebook.bookUrl) return res.status(404).json({ success: false, message: "This ebook has no downloadable PDF." });
     await dlSql.recordDownload(cid, eId);
     logger.info("recordEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
-    // Entitlement already checked above → issue a book media token the client
-    // exchanges at /media/resolve for a short-lived presigned URL. No raw URL.
+    // Entitlement is checked above. Return a media token (exchanged at /media/resolve
+    // for a short-lived presigned URL), never a raw URL.
     const mediaToken = signMediaToken({ k: "ebook", id: ebook.id, scope: { kind: "ebook", id: ebook.id }, cust: cid });
     return res.status(200).json({ success: true, message: "Download recorded.", data: { ebookId: String(ebook.id), mediaToken } });
   } catch (error: any) {
@@ -43,9 +43,7 @@ export const recordEbookDownload = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/ebooks/downloads
-// Lists this customer's downloaded ebooks, filtered to those whose subscription
-// is still active (matches in-app copy "Downloads are removed when your
+// Only entries whose subscription is still active ("Downloads are removed when your
 // subscription ends.").
 export const listEbookDownloads = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -62,8 +60,8 @@ export const listEbookDownloads = async (req: Request, res: Response) => {
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
     const data = await dlSql.listDownloads(cid);
     logger.info("listEbookDownloads success (sql)", { traceId, customerId: uid, count: data.length });
-    // Downloads hub reads only _id/ebookId/name/mediaToken (see
-    // docs/api-optimization/GET_client_ebooks_downloads.md); mediaToken preserved.
+    // Downloads hub reads only _id/ebookId/name/mediaToken
+    // (see docs/api-optimization/GET_client_ebooks_downloads.md).
     return res.status(200).json({ success: true, data: omitList(data, ["author", "image", "thumbnail", "language", "downloadedAt"]) });
   } catch (error: any) {
     logger.error("listEbookDownloads failed", { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
@@ -71,7 +69,6 @@ export const listEbookDownloads = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/client/ebooks/downloads/:ebookId
 export const removeEbookDownload = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const uid = userId(req);
@@ -97,8 +94,7 @@ export const removeEbookDownload = async (req: Request, res: Response) => {
   }
 };
 
-// Internal helper for the profile dashboard (Step 2): counts only entries
-// whose subscription is still active, matching what `listEbookDownloads` shows.
+// Profile dashboard count; matches what `listEbookDownloads` shows.
 export async function countActiveEbookDownloads(customerId: string): Promise<number> {
   const cid = dlSql.parseDlId(String(customerId));
   return cid == null ? 0 : dlSql.countActiveDownloads(cid);

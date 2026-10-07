@@ -1,3 +1,4 @@
+// Client lecture notes: note CRUD and saved-material routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {

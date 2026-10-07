@@ -1,3 +1,4 @@
+// Promoter auth: login, token rotation, logout, password and profile logic.
 import bcrypt from "bcryptjs";
 import { redisClient } from "../../config/redis";
 import {
@@ -26,6 +27,7 @@ const parsePromoterId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+// Email/password login; deactivates prior tokens and issues a fresh access/refresh pair.
 export async function promoterLogin(email: string, password: string, ip?: string, traceId?: string) {
   logger.info("promoterLogin service invoked", { traceId, email, ip });
 
@@ -50,6 +52,7 @@ export async function promoterLogin(email: string, password: string, ip?: string
   return { ok: true, message: "Login successful.", token, refreshToken, promoter: dto };
 }
 
+// Rotates tokens: the used refresh row is deactivated and a new pair issued.
 export async function promoterRefresh(refreshToken: string, traceId?: string) {
   logger.info("promoterRefresh service invoked", { traceId });
   if (!refreshToken) { logger.warn("promoterRefresh service missing token", { traceId }); return { ok: false, message: "Refresh token is required." }; }
@@ -86,21 +89,11 @@ export async function promoterRefresh(refreshToken: string, traceId?: string) {
 export async function promoterLogout(promoterId: string, traceId?: string) {
   logger.info("promoterLogout service invoked", { traceId, promoterId });
 
-  // Kill the token that is ALREADY on the device.
-  //
-  // `deactivateTokens`/`deactivateAllTokens` below only flags the DB rows, and
-  // nothing on the request path reads them: `authenticate` validates an access
-  // token by signature + this Redis cutoff + the account gate, never by a lookup
-  // in ws_*_access_token. So without this line "logout" only blocked the REFRESH
-  // call — the access token already in the app kept opening every endpoint until
-  // it expired on its own (7 days for customers, 1 day for the staff surfaces).
-  // That is exactly the bug the client reported. `/logout-all-devices` always did
-  // this; plain logout never did.
-  //
-  // Fail-open by design (see libs/tokenRevocation.ts): if Redis is unreachable it
-  // logs and returns false rather than throwing, so a Redis blip can't make
-  // logout fail. Called FIRST so a later teardown failure still leaves the token
-  // revoked.
+  // Revoke the access token already on the device: the DB token rows below are never
+  // read on the request path (authenticate checks signature + Redis cutoff + account
+  // gate), so without this the token stays valid until expiry. Fail-open on a Redis
+  // outage (libs/tokenRevocation.ts); called first so a later teardown failure still
+  // leaves the token revoked.
   await revokeAllTokensForUser("promoter", String(promoterId));
 
   const id = parsePromoterId(promoterId);

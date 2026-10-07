@@ -1,3 +1,4 @@
+// Admin dashboard: revenue, order-series and recent-activity overview handler.
 import { Request, Response } from "express";
 import * as adminDashSql from "../../modules/admin-dashboard/admin-dashboard.service";
 
@@ -19,7 +20,6 @@ function istStartOfDay(input: string): Date | null {
   if (!m) {
     const d = new Date(input);
     if (isNaN(d.getTime())) return null;
-    // Convert to IST calendar day, then take start-of-day IST
     const istMs = d.getTime() + IST_OFFSET_MS;
     const istDay = new Date(istMs);
     const y = istDay.getUTCFullYear();
@@ -75,6 +75,7 @@ function shiftDays(d: Date, days: number) {
 
 // The comparison window is the WHOLE previous period (today vs all of yesterday, this
 // month vs all of last month), so deltaPct compares the amounts the cards show.
+// Preset window plus the equal-length window just before it (for deltas).
 function resolveRange(preset: RangePreset | undefined, now = new Date()) {
   const start = new Date(now);
   const end = new Date(now);
@@ -139,6 +140,7 @@ function deltaPct(current: number, previous: number) {
   return Math.round(((current - previous) / previous) * 100);
 }
 
+// Chart bucket for the span: hour (~1 day), day (<= 31 days) or month.
 function bucketStage(start: Date, end: Date) {
   const spanHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
   if (spanHours <= 26) {
@@ -148,10 +150,9 @@ function bucketStage(start: Date, end: Date) {
       slots: Array.from({ length: 24 }, (_, i) => i),
     };
   }
-  // ⚠ DAYOFMONTH only means anything INSIDE a single month. Past ~31 days it
-  // collapses Jan 5 + Feb 5 + Mar 5 … into one slot, so `totalRange=year` charted 31
-  // buckets that mixed every month together. Anything longer than a month buckets by
-  // MONTH instead; `unit` (already in the response) tells the panel how to label.
+  // DAYOFMONTH is only meaningful within one month (past ~31 days it merges Jan 5,
+  // Feb 5, ... into one slot), so longer spans bucket by MONTH; `unit` in the
+  // response tells the panel how to label.
   const spanDays = spanHours / 24;
   if (spanDays > 31) {
     return {

@@ -1,14 +1,8 @@
+// Category ancestors: parent chains for the admin category pickers.
 /**
- * Resolve category ancestors ({id, name}, ordered root → immediate-parent) for a
- * page of category rows that form a single-parent tree via a `parent` self-FK.
- *
- * Used by the admin category pickers (exam / material / video) so each returned row
- * carries its ancestor chain — the FE renders the greyed parent rows for a search
- * match without holding the whole tree. See
- * docs/backend-requests/category-pickers-hierarchy.md.
- *
- * Cost: bounded by tree DEPTH (one batched `loadByIds` query per level), not by the
- * number of rows — typically 2–4 queries regardless of page size. Cycle-guarded.
+ * Ancestor chains for the admin category pickers (exam / material / video), so the
+ * FE can render parent rows for a search match without the whole tree. One batched
+ * query per tree level, not per row. Cycle-guarded.
  */
 
 export interface CategoryAncestor {
@@ -23,11 +17,11 @@ interface RawNode {
 }
 
 /**
- * Pre-load every ancestor of the given rows, then return a lookup that maps a row's
- * immediate `parent` id to its ancestors[] (root → immediate-parent).
+ * Pre-loads every ancestor, then returns a lookup from a row's `parent` id to its
+ * ancestors (root → immediate parent).
  *
- * @param parentIds  each page row's own `parent` id (0/null = root; deduped internally)
- * @param loadByIds  batched loader: category ids → {id, name, parent} (one query/level)
+ * @param parentIds  each row's own `parent` id (0/null = root)
+ * @param loadByIds  batched loader: ids → {id, name, parent}
  */
 export async function resolveAncestors(
   parentIds: (number | null | undefined)[],
@@ -58,7 +52,7 @@ export async function resolveAncestors(
       chain.push({ id: String(node.id), name: node.name ?? "" });
       cur = node.parent ?? 0;
     }
-    return chain.reverse(); // root → immediate-parent
+    return chain.reverse();
   };
 }
 

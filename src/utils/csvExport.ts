@@ -1,16 +1,9 @@
+// CSV export: streams row batches into one CSV string; export date formatting.
 import { format } from "fast-csv";
 
 /**
- * Stream pre-built rows through `fast-csv` into a single CSV string.
- *
- * Each row is an array of cells (already mapped from the report's column spec);
- * `headers` is written first. Rows arrive in **batches** (from a keyset iterator)
- * so the full result set is never materialized at once — the report exporters page
- * through lakhs of rows and feed one batch at a time.
- *
- * fast-csv handles RFC-4180 quoting/escaping (fields containing `,` `"` or newlines
- * are quoted, embedded `"` doubled), `\n` row delimiter, and no trailing newline —
- * byte-identical to the hand-rolled escaper this replaced.
+ * Streams row batches (from a keyset iterator) through `fast-csv` into one CSV
+ * string, headers first. RFC-4180 quoting, `\n` delimiter, no trailing newline.
  */
 export async function buildCsvFromRowBatches(
   headers: (string | number)[],
@@ -32,22 +25,12 @@ export async function buildCsvFromRowBatches(
   return Buffer.concat(chunks).toString("utf8");
 }
 
-// IST offset applied to export timestamps. Timestamps are STORED as IST already
-// (see the IST-in-DB migration), but a Date read back is a UTC instant, so we
-// shift by +5:30 and read the wall-clock parts off the shifted value with the
-// getUTC* accessors — that avoids depending on the server's local TZ.
+// A Date read back is a UTC instant, so shift +5:30 and read the parts with
+// getUTC* to avoid depending on the server's local TZ.
 const IST_OFFSET_MS = 330 * 60_000;
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
-/**
- * `YYYY-MM-DD HH:mm:ss` in IST for a report/export cell; "" for null, undefined
- * or an unparseable value (an export column must never render "Invalid Date").
- *
- * Was copy-pasted into six report services; this is that exact implementation.
- * The admin-subscription copy typed `d` as `Date | null | undefined` while the
- * rest allowed `string` too — widened here to the union that already worked,
- * since the body has always gone through `new Date(d)`.
- */
+/** `YYYY-MM-DD HH:mm:ss` in IST; "" for nullish or unparseable input (never "Invalid Date"). */
 export const fmtExportDate = (d: Date | string | null | undefined): string => {
   if (!d) return "";
   const t = new Date(d);

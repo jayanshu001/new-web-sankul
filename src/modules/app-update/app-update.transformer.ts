@@ -1,3 +1,4 @@
+// App update settings: row to DTO mapping and write payload (response shape is frozen).
 import type { AppUpdate } from "@prisma/client";
 import type { AppUpdateDto, AppUpdateUpsertInput } from "./app-update.types";
 import { APP_UPDATE_DEFAULTS } from "./app-update.types";

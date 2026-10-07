@@ -1,17 +1,9 @@
 /**
- * Client wishlist — SQL (Prisma) branch. Net-new table `ws_wishlist`
- * (2026-06-19_create_c4_tables.sql). Gated behind `isMysqlModule("client-wishlist")`.
- *
- * Per-customer saved items across 4 entity types (course/package/ebook/book).
- * `(customer_id,item_type,item_id)` is UNIQUE → add is idempotent (re-add = no-op).
- *
- * Drift vs Mongo: the populated `item` is a compact `{_id,title,thumbnail}` DTO
- * (SQL catalog rows are snake_case and differ from the Mongo lean docs the old
- * handler spread wholesale). All ids are SQL ints stringified.
+ * Client wishlist: per-customer saved items across course/package/ebook/book. `(customer_id,item_type,item_id)`
+ * is UNIQUE, so add is idempotent. The populated `item` is a compact `{_id,title,thumbnail}` DTO.
  */
 import { prisma } from "../../config/prisma";
 import { matchesAllTokens } from "../../utils/searchFilter";
-
 
 export const parseWlId = (id: string): number | null => {
   const n = Number(id);
@@ -26,7 +18,7 @@ const itemDto = (id: number, title: string | null, thumbnail: string | null) => 
   _id: String(id), title, thumbnail,
 });
 
-/** Does the referenced catalog row exist on SQL? (active/status not enforced — mirrors the Mongo `_id` existence check.) */
+/** Existence only; active/status is deliberately not enforced. */
 export const itemExists = async (type: WlType, id: number): Promise<boolean> => {
   if (type === "course") return !!(await prisma.course.findFirst({ where: { id }, select: { id: true } }));
   if (type === "package") return !!(await prisma.package.findFirst({ where: { id }, select: { id: true } }));
@@ -59,10 +51,8 @@ export const listWishlistMysql = async (
   const bMap = new Map(books.map((b) => [b.id, itemDto(b.id, b.name ?? null, b.thumbnail ?? b.image ?? null)]));
   const mapFor: Record<WlType, Map<number, ReturnType<typeof itemDto>>> = { course: cMap, package: pMap, ebook: eMap, book: bMap };
 
-  // Heterogeneous list (4 entity types) → resolve every entry to its display DTO
-  // in the wishlist's own createdAt-desc order, then filter/paginate over that
-  // combined array. total = full filtered length; the window is re-grouped so
-  // the `{courses,packages,ebooks,books}` response shape stays identical.
+  // Paginate over the combined createdAt-desc list, then re-group the window so the
+  // `{courses,packages,ebooks,books}` response shape stays identical.
   let combined = entries
     .filter((e) => isWlType(e.itemType) && mapFor[e.itemType as WlType].has(e.itemId))
     .map((e) => ({
@@ -92,7 +82,6 @@ export const listWishlistMysql = async (
   return { data, count, total };
 };
 
-/** Idempotent add. Returns "created" | "exists". */
 export const addWishlistMysql = async (customerId: number, itemType: WlType, itemId: number): Promise<"created" | "exists"> => {
   const existing = await prisma.wishlist.findFirst({ where: { customerId, itemType, itemId }, select: { id: true } });
   if (existing) return "exists";
@@ -101,13 +90,12 @@ export const addWishlistMysql = async (customerId: number, itemType: WlType, ite
     await prisma.wishlist.create({ data: { customerId, itemType, itemId, createdAt: now, updatedAt: now } });
     return "created";
   } catch (err: any) {
-    // Unique-constraint race → treat as already present (mirrors Mongo dup-key 11000).
+    // Unique-constraint race: treat as already present.
     if (err?.code === "P2002") return "exists";
     throw err;
   }
 };
 
-/** Returns true if a row was deleted. */
 export const removeWishlistMysql = async (customerId: number, itemType: WlType, itemId: number): Promise<boolean> => {
   const r = await prisma.wishlist.deleteMany({ where: { customerId, itemType, itemId } });
   return r.count > 0;

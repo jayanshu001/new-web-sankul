@@ -1,10 +1,10 @@
+// Client search: global search across catalog entity types.
 import { Request, Response } from "express";
 import * as searchSql from "../../modules/client-search/client-search.service";
 import * as searchHistory from "../../modules/client-search-history/client-search-history.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// GET /api/v1/client/search?q=&type=courses|packages|liveCourses|books|ebooks|testSeries&page=&limit=
 // Omit `type` (or pass an unknown one) to search ALL six entity types at once.
 export const globalSearch = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -17,10 +17,8 @@ export const globalSearch = async (req: Request, res: Response) => {
 
     const skip = (page - 1) * limit;
 
-    // Record this term in the customer's recent-search history (dedupe →
-    // move-to-top → trim to newest 10). Fire-and-forget: history persistence
-    // must never block or fail the actual search response. Only the first page
-    // is recorded so paginating an existing query doesn't re-stamp it.
+    // Fire-and-forget: history must never block or fail the search. Only page 1 is
+    // recorded so paginating doesn't re-stamp the term.
     const historyCustomerId = req.user?.id ? Number(req.user.id) : null;
     if (page === 1 && historyCustomerId) {
       searchHistory
@@ -28,7 +26,6 @@ export const globalSearch = async (req: Request, res: Response) => {
         .catch((err) => logger.warn("search history record failed", { traceId, error: getErrorMessage(err) }));
     }
 
-    // ─── SQL branch (int id-space) ───
     const userNum = req.user?.id ? Number(req.user.id) : null;
     const cid = Number.isInteger(userNum) ? userNum : null;
     if (!type || !searchSql.SEARCH_TYPES.includes(type as any)) {

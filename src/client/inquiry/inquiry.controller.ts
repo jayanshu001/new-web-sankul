@@ -1,3 +1,4 @@
+// Client inquiry: HTTP handlers for inquiries, contact-us and the public enquiry form.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { listActiveContactDepartments } from "../../modules/department/department.service";
@@ -13,7 +14,6 @@ const submitSchema = z.object({
   description: z.string().min(1).max(2000),
 });
 
-// POST /api/v1/client/inquiry
 export const submitInquiry = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -50,7 +50,6 @@ export const submitInquiry = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/contactus — department contacts for support screen
 export const getContactUs = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getContactUs invoked", { traceId, path: _req.originalUrl });
@@ -58,9 +57,8 @@ export const getContactUs = async (_req: Request, res: Response) => {
   try {
     const filtered = await listActiveContactDepartments();
 
-    // Slim: RN reads department _id/name/description + contacts[].mobile only.
-    // Drop order/active/isCallAvailable/isWhatsAppAvailable (unused; call+WhatsApp
-    // always shown). Applied at both levels; missing keys are skipped safely.
+    // The app reads department _id/name/description + contacts[].mobile only (call and
+    // WhatsApp are always shown).
     const DROP = ["order", "active", "isCallAvailable", "isWhatsAppAvailable"];
     const departments = filtered.map((d: any) => ({
       ...omit(d, DROP),
@@ -77,8 +75,7 @@ export const getContactUs = async (_req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/enquiry — PUBLIC lead-capture form (websankul-jobs / books sites).
-// Body already parsed + coerced by validate({ body: publicEnquirySchema }).
+// Public marketing-site lead form; no account required.
 export const submitEnquiry = asyncHandler(async (req: Request, res: Response) => {
   const enquiry = await submitPublicEnquiry(req.body as PublicEnquiryInput);
   return success(res, { enquiry }, "Thanks! Our team will contact you shortly.", 201);

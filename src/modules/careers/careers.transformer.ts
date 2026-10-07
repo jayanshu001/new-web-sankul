@@ -1,3 +1,4 @@
+// Careers: row to DTO mapping (response shape is frozen).
 import type { CareerApplication, CareerOpening } from "@prisma/client";
 import type { CareerApplicationDto, CareerOpeningDto } from "./careers.types";
 

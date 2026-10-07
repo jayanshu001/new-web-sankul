@@ -1,3 +1,4 @@
+// Jobs organizations: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { OrganizationCreateInput, OrganizationUpdateInput } from "./organization.types";

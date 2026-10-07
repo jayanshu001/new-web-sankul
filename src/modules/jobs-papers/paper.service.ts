@@ -1,3 +1,4 @@
+// Jobs previous papers: admin CRUD with jobs-api cache revalidation.
 import { paperRepository } from "./paper.repository";
 import { toPaperDto } from "./paper.transformer";
 import { slugify, uniqueSlug } from "../../utils/slug";
@@ -37,6 +38,7 @@ const paperSlugExists = async (candidate: string, excludeId?: bigint) => {
   return existing !== null && existing.id !== excludeId;
 };
 
+// Slug comes from the given slug or the title, made unique.
 export const createPaper = async (input: PaperWriteInput): Promise<PaperDto> => {
   const slug = input.slug
     ? await uniqueSlug(slugify(input.slug), (c) => paperSlugExists(c))

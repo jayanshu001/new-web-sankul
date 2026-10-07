@@ -1,3 +1,4 @@
+// Admin rank predictor: HTTP handlers for reviewing and correcting submissions.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { HttpError } from "../../middlewares/errorHandler";
@@ -48,6 +49,7 @@ export const getSubmission = asyncHandler(async (req: Request, res: Response) =>
   return success(res, { ...result, customer: customers.get(result.customer_id) ?? null });
 });
 
+// Redirect to a signed URL for the uploaded response sheet.
 export const getSubmissionFile = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.getSubmission(bigIntParam(req, "id"), null);
   if (!result.source_pdf_key) {
@@ -68,6 +70,7 @@ export const correctAnswers = asyncHandler(async (req: Request, res: Response) =
   return success(res, result, "Answers corrected.");
 });
 
+// Remove the submission and any published score so the student can re-upload.
 export const deleteSubmission = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.deleteSubmission(
     bigIntParam(req, "id"),

@@ -1,17 +1,8 @@
-// src/admin/referral/referral.service.ts
-//
-// Domain logic for admin referral endpoints. Withdrawals + reward adjustments
-// are financial mutations — the controller layer enforces `Idempotency-Key`
-// (see referral.routes.ts).
-
+// Admin referral: program, withdrawal, reward-adjustment and referrer logic.
 import { HttpError } from "../../middlewares/errorHandler";
 import * as refSql from "../../modules/referral/referral.service";
 
 const { parseId } = refSql;
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Programs (small master)
-// ──────────────────────────────────────────────────────────────────────────────
 
 export interface ListProgramsQuery {
   search?: string;
@@ -21,10 +12,7 @@ export interface ListProgramsQuery {
   limit?: string;
 }
 
-/**
- * Programs list with optional title/name search + sort. Pagination is opt-in
- * (page/limit present → `pagination` block; absent → flat array — back-compat).
- */
+/** Pagination is opt-in: page/limit present → `pagination` block; absent → flat array. */
 export const listPrograms = async (query: ListProgramsQuery = {}) => {
   const paginate = query.page !== undefined || query.limit !== undefined;
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
@@ -72,10 +60,6 @@ export const deleteProgram = async (id: string) => {
   await refSql.adminDeleteProgram(numId);
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Transactions
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface ListTransactionsQuery {
   customerId?: string;
   type?: string;
@@ -114,6 +98,7 @@ export const updateWithdrawalStatus = async (
   return r.data;
 };
 
+// Reject a pending withdrawal debit and refund its points to the customer.
 export const rejectWithdrawal = async (id: string, reason?: string) => {
   const numId = parseId(id);
   if (!numId) throw new HttpError(400, "Invalid transaction id.");
@@ -126,15 +111,11 @@ export const rejectWithdrawal = async (id: string, reason?: string) => {
   return;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Withdrawal Report (admin "Referral Report" screen)
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface WithdrawalsReportQuery {
   fromDate?: string;
   toDate?: string;
-  // Unified cross-report name for the createdAt window (reports-date-filter-created-at.md);
-  // fromDate/toDate kept as legacy aliases. Bounds `ws_refferal_transaction.created_at`.
+  // Bounds `ws_refferal_transaction.created_at`; fromDate/toDate are legacy aliases.
   createdFrom?: string;
   createdTo?: string;
   status?: string;
@@ -152,19 +133,14 @@ export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Withdrawal CSV export
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface WithdrawalsCsvQuery {
   fromDate?: string;
   toDate?: string;
-  // Unified createdAt-window name; fromDate/toDate kept as legacy aliases.
+  // fromDate/toDate are legacy aliases.
   createdFrom?: string;
   createdTo?: string;
   status?: string;
-  // Same semantics as the list endpoint: blank/absent => no predicate (full
-  // export). Without this the CSV ignores the search box and over-exports.
+  // Same as the list endpoint: blank/absent => no predicate (full export).
   search?: string;
 }
 
@@ -173,10 +149,7 @@ export const buildWithdrawalsCsv = async (query: WithdrawalsCsvQuery): Promise<s
   return refSql.adminWithdrawalsCsv({ status, fromDate: createdFrom ?? fromDate, toDate: createdTo ?? toDate, search });
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Manual reward adjustment
-// ──────────────────────────────────────────────────────────────────────────────
-
+// Manual credit/debit of a customer's reward points; a debit cannot exceed the balance.
 export const adjustCustomerRewards = async (
   customerId: string,
   input: { amount: number; type: "credit" | "debit"; description?: string }
@@ -193,10 +166,6 @@ export const adjustCustomerRewards = async (
   return r.data;
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Referrers listing — aggregated stats per customer with a referral code
-// ──────────────────────────────────────────────────────────────────────────────
-
 export interface ReferrersQuery {
   search?: string;
   sort?: string;
@@ -206,6 +175,7 @@ export interface ReferrersQuery {
   limit?: string;
 }
 
+// total/totalPages are inferred from the page size (no count query), not exact.
 export const listReferrers = async (query: ReferrersQuery) => {
   const {
     search,

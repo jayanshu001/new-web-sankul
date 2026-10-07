@@ -1,9 +1,7 @@
 /**
- * Admin Goal CRUD — now backed by `ws_customer_target_goal` (the single goal
- * master after ws_goal was dropped). The `/admin/goals` contract is preserved
- * for the existing admin UI: DTO is the old ws_goal shape
- * (`_id, title, labels:[{id,name}], image, isActive, createdAt, updatedAt`), with
- * `title ← name` and `isActive ← active`. ws_customer_target_goal has no
+ * Admin goal CRUD over `ws_customer_target_goal`. The `/admin/goals` DTO keeps the
+ * legacy ws_goal shape (`_id, title, labels:[{id,name}], image, isActive, createdAt,
+ * updatedAt`) with `title ← name` and `isActive ← active`. The table has no
  * timestamps, so createdAt/updatedAt are null and sorting falls back to id.
  */
 import { prisma } from "../../config/prisma";
@@ -26,7 +24,6 @@ export const parseGoalId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Old ws_goal DTO shape, mapped from a ws_customer_target_goal row. */
 const dto = (g: any) => ({
   _id: String(g.id),
   title: g.name,
@@ -37,7 +34,7 @@ const dto = (g: any) => ({
   updatedAt: null,
 });
 
-/** Normalize multipart/JSON labels → [{ name }]; then assign stable per-goal ids. */
+/** Normalize multipart/JSON labels → [{ name }]. */
 const parseLabels = (rawLabels: any): { name: string }[] => {
   const mapItem = (item: any): { name: string } | null => {
     if (typeof item === "string") return item.trim() ? { name: item.trim() } : null;
@@ -57,8 +54,8 @@ const parseLabels = (rawLabels: any): { name: string }[] => {
 };
 
 /**
- * Assign stable numeric ids to labels (existing labels keep their id, matched by
- * name; new labels get the next free id). Same scheme used across goal features.
+ * Existing labels keep their id (matched by name); new labels get the next free id.
+ * Same scheme used across goal features.
  */
 const withLabelIds = (labels: { name: string }[], existing?: unknown): { id: number; name: string }[] => {
   const prior = parseStoredLabels(existing);
@@ -108,9 +105,8 @@ export const getGoals = async (
 };
 
 /**
- * GET /admin/goals/:id — resolve one goal (with its `labels[]`) in the old
- * ws_goal DTO shape. Needed for server-searched Goal pickers to render the
- * selected goal's dependent "Goal Label" sub-dropdown in edit mode.
+ * Needed for server-searched Goal pickers to render the selected goal's dependent
+ * "Goal Label" sub-dropdown in edit mode.
  */
 export const getGoalById = async (id: string, traceId?: string) => {
   logger.info("getGoalById service invoked", { traceId, id });
@@ -152,6 +148,7 @@ export const updateGoal = async (
   return { ok: true, goal: dto(row) };
 };
 
+// Hard delete; also removes the goal image from storage.
 export const deleteGoal = async (id: string, traceId?: string): Promise<{ ok: false; message: string } | { ok: true; message: string }> => {
   logger.info("deleteGoal service invoked", { traceId, id });
   const nid = parseGoalId(id);

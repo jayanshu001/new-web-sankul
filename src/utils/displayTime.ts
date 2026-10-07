@@ -1,8 +1,5 @@
-// Server-side IST formatter for response payloads. Clients render this string
-// as-is so users see a proper local time instead of a raw UTC ISO. The raw
-// UTC `scheduledAt` is still returned alongside it for any client-side math.
-//
-// Example: 2026-05-27T14:30:00.000Z -> "27 May 2026, 8:00 pm"
+// Display time: IST string clients render as-is; the raw `scheduledAt` is returned
+// alongside for date math. 2026-05-27T14:30:00.000Z -> "27 May 2026, 8:00 pm"
 
 const FORMATTER = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",

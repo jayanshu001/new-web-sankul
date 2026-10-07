@@ -1,14 +1,10 @@
+// Permission catalog: admin permissions grouped by category, read from the DB.
 import { prisma } from "../../config/prisma";
 
 /**
- * SQL home for the permissions CATALOG read path (catalog.controller).
- *
- * The catalog is rendered ENTIRELY from the database — `ws_permissions` rows and
- * their `ws_permission_category` (via `category_id`). Nothing is sourced from the
- * in-code registry: only fields that actually exist in the tables are surfaced
- * (permission `id`/`name`, and the owning category's `id`/`title`/`slug`).
+ * The catalog is rendered entirely from `ws_permissions` + `ws_permission_category`;
+ * nothing comes from the in-code registry.
  */
-
 
 export interface CatalogPermissionRow {
   id: string;
@@ -23,11 +19,7 @@ export interface CatalogCategory {
   permissions: CatalogPermissionRow[];
 }
 
-/**
- * Build the guard-scoped catalog straight from the DB: every ws_permissions row
- * for the guard, grouped under its ws_permission_category. Uncategorised rows
- * (category_id NULL / dangling) fall into a trailing bucket with a null category.
- */
+/** Uncategorised rows (category_id NULL / dangling) fall into a trailing null-category bucket. */
 export const getCatalogFromDb = async (guard: string): Promise<CatalogCategory[]> => {
   const [rows, categories] = await Promise.all([
     prisma.adminPermissionRow.findMany({
@@ -43,8 +35,7 @@ export const getCatalogFromDb = async (guard: string): Promise<CatalogCategory[]
 
   const buckets = new Map<number | null, CatalogCategory>();
 
-  // Seed one bucket per known category so empty categories are preserved and the
-  // category ordering (order_by) is respected.
+  // Seed every category so empty ones are preserved in order_by order.
   for (const c of categories) {
     buckets.set(c.id, {
       id: c.id,

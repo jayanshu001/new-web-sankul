@@ -1,3 +1,4 @@
+// Admin roles: HTTP handlers for role CRUD and role permissions.
 import { Request, Response } from "express";
 import {
   createRoleSchema,
@@ -9,8 +10,6 @@ import {
 import * as rbac from "../../modules/admin-rbac/admin-rbac.service";
 import { formatZodIssues as formatZodErrors } from "../../utils/httpResponse";
 
-
-// GET /api/v1/admin/roles
 export const listRoles = async (req: Request, res: Response) => {
   try {
     const parsed = listQuerySchema.safeParse(req.query);
@@ -24,9 +23,8 @@ export const listRoles = async (req: Request, res: Response) => {
     const { guard, search, page, per_page, sort_by, sort_dir } = parsed.data;
 
     const { items, total } = await rbac.listRoles({ guard, search, page, per_page, sort_by, sort_dir });
-    // House-standard list envelope (matches books/customers/etc.): `data` is the
-    // page array and `pagination` is a SIBLING with total + totalPages, so the
-    // admin pager can advance. See roles-list-server-side.md.
+    // House-standard list envelope: `data` is the page array and `pagination` a
+    // sibling with total + totalPages so the admin pager can advance.
     return res.status(200).json({
       success: true,
       data: items,
@@ -37,7 +35,6 @@ export const listRoles = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/roles/:id
 export const getRole = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -60,7 +57,6 @@ export const getRole = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/admin/roles
 export const createRole = async (req: Request, res: Response) => {
   try {
     const parsed = createRoleSchema.safeParse(req.body);
@@ -87,7 +83,6 @@ export const createRole = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/roles/:id
 export const updateRole = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -124,7 +119,6 @@ export const updateRole = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /api/v1/admin/roles/:id
 export const deleteRole = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -151,7 +145,7 @@ export const deleteRole = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/admin/roles/:id/permissions
+// Permissions of the role's guard, split into assigned and unassigned.
 export const getRolePermissions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -174,7 +168,7 @@ export const getRolePermissions = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /api/v1/admin/roles/:id/permissions
+// Replace the role's permission set; ids must belong to the role's guard.
 export const syncRolePermissions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;

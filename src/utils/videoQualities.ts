@@ -1,18 +1,13 @@
-// Lightweight `qualities` array embedded in lecture/video LISTING rows so the
-// mobile download picker can render "720p — ~320 MB" without a per-row call to
-// the detail endpoint (which resolves + encrypts a playback token, expensive).
-// The client falls back to the detail endpoint when the user actually confirms
-// a download and needs the encrypted URL.
+// Video qualities: `qualities` hint on lecture/video listing rows so the download picker can show
+// sizes without the expensive per-row detail call; the detail endpoint stays the
+// source of truth for the playable set and encrypted URLs.
 
 export interface ListingQuality {
   qualityLabel: string;
   bitrate: number; // bits per second
 }
 
-// Standard rendition ladder we publish across all videos. The detail endpoint
-// remains the source of truth for the actual playable set; this list is a
-// best-effort hint for the download size estimator. Sorted highest-first per
-// the FE contract.
+// Sorted highest-first per the FE contract.
 const STANDARD_HEIGHTS: Array<{ qualityLabel: string; height: number }> = [
   { qualityLabel: "1080p", height: 1080 },
   { qualityLabel: "720p", height: 720 },
@@ -21,9 +16,8 @@ const STANDARD_HEIGHTS: Array<{ qualityLabel: string; height: number }> = [
   { qualityLabel: "240p", height: 240 },
 ];
 
-// Mirrors estimateBitrateForHeight() in videoResolver.ts. Duplicated here so
-// listing rows can be built without importing the resolver (which pulls in
-// ytdl-core + redis on module load).
+// Mirrors estimateBitrateForHeight() in videoResolver.ts, duplicated to avoid
+// importing the resolver (ytdl-core + redis on module load).
 function bitrateForHeight(height: number): number {
   if (height >= 1080) return 4_500_000;
   if (height >= 720) return 2_500_000;
@@ -33,20 +27,15 @@ function bitrateForHeight(height: number): number {
   return 300_000;
 }
 
-// Synthetic ladder for recorded-lecture lists where progressive renditions are
-// only known after a live ytdl/VideoCrypt resolve. Returns the standard 4-tier
-// set the FE expects.
+// Synthetic ladder for lists where real renditions are only known after a resolve.
 export function defaultListingQualities(): ListingQuality[] {
   return STANDARD_HEIGHTS
     .filter((q) => q.height <= 720) // match the FE's typical picker (720p top)
     .map((q) => ({ qualityLabel: q.qualityLabel, bitrate: bitrateForHeight(q.height) }));
 }
 
-// Build a `qualities` array from a LiveSession.recordings list (already on hand
-// in the live-course recordings endpoint). `quality` strings on those rows look
-// like "720p" / "480p" — we keep the label and attach the height-based bitrate
-// estimate. Sorted highest-first; entries we can't parse a height from are
-// dropped. Returns [] when input is empty/invalid.
+// From LiveSession.recordings ("720p"-style labels), highest-first; labels without
+// a parseable height are dropped.
 export function qualitiesFromSessionRecordings(
   recordings: Array<{ quality: string | null }> | null | undefined
 ): ListingQuality[] {

@@ -1,25 +1,13 @@
 /**
- * Offline downloads — registration + the access snapshot that governs expiry.
+ * Offline downloads: registration + the access snapshot that governs expiry.
  *
- * The app downloads paid lectures and ebooks for offline use and must expire them
- * against the subscription that grants access, with no network at playback.
- *
- * The shape of the problem: a lecture can live in a course, a package AND a live
- * course at once, but the app only knows the ONE product the user was looking at
- * when they tapped download. It cannot discover the others. So:
- *
- *   POST registers a single {content, product} pair — whatever the user saw.
- *   GET  ignores that product and re-derives coverage from scratch: every
- *        currently-active product of the customer's that CONTAINS a registered
- *        lecture, each carrying the registered ids it covers (`videoIds`).
- *
- * That asymmetry is the whole design. If GET echoed back only the POSTed product,
- * a user who downloaded from Course A while also owning Package B would lose the
- * file the moment Course A expired — even though Package B still entitles the
- * very same lecture. Expansion is what keeps the file alive.
- *
- * Ebooks are the degenerate case: the ebook IS the content, so there is nothing
- * to expand into. `{videoId: E, kind: "ebook", id: E}` in, one `ebook` row out.
+ * A lecture can live in a course, a package and a live course at once, but the app
+ * only knows the one product the user tapped download from. So POST registers a
+ * single {content, product} pair, and GET ignores that product and re-derives
+ * coverage: every currently-active product that contains a registered lecture,
+ * with the ids it covers (`videoIds`). Without that expansion, a user who
+ * downloaded from Course A while owning Package B would lose the file when A
+ * expired. Ebooks have nothing to expand: one `ebook` row in, one out.
  *
  * Contract + FE usage: docs/client/SUBSCRIPTION_ACCESS.md.
  */
@@ -36,7 +24,6 @@ import {
   type VideoScopeKind,
 } from "./offline-video-download.types";
 
-
 const daysLeftOf = computeDaysLeft;
 
 interface ActiveProduct {
@@ -46,24 +33,18 @@ interface ActiveProduct {
 }
 
 /**
- * The customer's currently-active entitlements.
+ * The customer's currently-active entitlements, built from the same `build*Cards`
+ * functions that back GET /client/my-subscriptions. Do not replace this with a
+ * separate query: a product that leaves My Subscriptions must leave the access
+ * snapshot in the same request, or a revoked download keeps playing.
  *
- * DELIBERATELY built from the SAME `build*Cards` functions that back
- * GET /client/my-subscriptions — not a parallel "is active" query. That is the
- * contract the FE asked for: a product that disappears from My Subscriptions
- * MUST disappear from the access snapshot in the very same request, because both
- * are the same computation. Do not "optimise" this into its own repository call;
- * the two would drift the first time either active-filter changed, and a revoked
- * offline download would keep playing.
- *
- * Carries the active filters those builders already own:
+ * Active filters (owned by those builders):
  *   course/package → status = true AND end_at > now
  *   liveCourse     → status = true AND payment_status = "verified"
  *                    AND (end_at IS NULL OR end_at > now)   ← lifetime allowed
  *   ebook          → status = true AND end_at > now
  * plus their dedup (furthest end_at per product wins; lifetime beats dated).
- *
- * Only the builders the caller's `kinds` actually need are run.
+ * Only the builders the caller's `kinds` need are run.
  */
 const activeProducts = async (
   customerId: number,
@@ -96,7 +77,7 @@ const activeProducts = async (
   return out;
 };
 
-/** Does the product exist at all? Separates 404 (unknown product) from 403. */
+/** Separates 404 (unknown product) from 403. */
 const productExists = async (kind: DownloadScopeKind, id: number): Promise<boolean> => {
   const row =
     kind === "course" ? await repo.courseExists(id)
@@ -107,25 +88,17 @@ const productExists = async (kind: DownloadScopeKind, id: number): Promise<boole
 };
 
 /**
- * Register one offline download. Idempotent on (customer, content, kind, id).
- *
- * Check order matters — it decides 404 vs 403, and the FE branches on that:
+ * Register one offline download. Check order decides 404 vs 403, which the FE branches on:
  *   1. content missing            → 404
  *   2. product missing            → 404
  *   3. no active subscription     → 403
  *   4. lecture not in the product → 403   (video scopes only)
  *
- * (3) uses the SAME active set the snapshot uses, so a registration can never
- * succeed for a product the very next GET would omit.
- *
- * (4) uses `reachableCategoryIds`, the same resolver that decides which videos
- * `/client/catalog/:type/:id/videos` lists under the product — so a lecture the
- * app was legitimately able to show and download always passes. It is a superset
- * of the catalog listing's own root resolution, never narrower, which is what
- * keeps this from 403-ing a real download and stranding the file.
- *
- * For `ebook` there is no (4): the ebook is the content, and the controller has
- * already enforced `videoId === id`.
+ * (3) uses the same active set as the snapshot, so a registration never succeeds
+ * for a product the next GET would omit. (4) uses `reachableCategoryIds`, the same
+ * resolver behind `/client/catalog/:type/:id/videos` (a superset, never narrower),
+ * so a lecture the app could legitimately show always passes.
+ * `ebook` has no (4); the controller already enforces `videoId === id`.
  */
 export const registerDownload = async (
   input: RegisterDownloadInput,
@@ -144,14 +117,12 @@ export const registerDownload = async (
       return { ok: false, reason: "not_entitled" };
     }
 
-    // A lecture with no category cannot be proven to belong anywhere — reject
-    // rather than register coverage the snapshot could never justify.
+    // A lecture with no category cannot be proven to belong anywhere.
     if (video.videoCategoryId == null) return { ok: false, reason: "content_not_in_product" };
     const reachable = await reachableCategoryIds(kind, scopeId);
     if (!reachable.has(video.videoCategoryId)) return { ok: false, reason: "content_not_in_product" };
   } else {
-    // ebook: contentId === scopeId (controller-enforced), so one existence check
-    // covers both "unknown content" and "unknown product".
+    // ebook: contentId === scopeId (controller-enforced), so one check covers content and product.
     if (!(await repo.ebookExists(scopeId))) return { ok: false, reason: "product_not_found" };
 
     const active = await activeProducts(customerId, now, new Set<DownloadScopeKind>(["ebook"]));
@@ -168,27 +139,22 @@ export const registerDownload = async (
       videoId: String(contentId),
       kind,
       id: String(scopeId),
-      // UTC `...Z`, matching `endAt` in the snapshot — see buildAccessSnapshot.
+      // UTC `...Z`, matching `endAt` in the snapshot.
       registeredAt: now.toISOString(),
     },
   };
 };
 
 /**
- * GET /client/subscriptions/access — every active product that still COVERS a
- * registered download, with the ids it covers.
- *
- * Deliberately NOT "the products they POSTed under". Coverage is recomputed from
- * the customer's current entitlements on every read, so:
- *   - a lecture registered under Course A also surfaces Package B while B is
- *     active, without the app ever POSTing B (the expansion requirement);
+ * GET /client/subscriptions/access: every active product that still covers a
+ * registered download, with the ids it covers. Recomputed from current
+ * entitlements on every read, not from the POSTed products:
+ *   - a lecture registered under Course A also surfaces Package B while B is active;
  *   - when A expires the file survives on B's row alone;
  *   - when the last covering product goes, the id appears in no `videoIds` and
  *     the app deletes the file;
- *   - an active product containing no registered lecture never appears at all.
- *
- * The registration row is history — it records that a download happened, never
- * that access persists. Entitlement is decided fresh here every time.
+ *   - an active product containing no registered lecture never appears.
+ * The registration row records that a download happened, never that access persists.
  */
 export const buildAccessSnapshot = async (
   customerId: number,
@@ -203,24 +169,19 @@ export const buildAccessSnapshot = async (
     want.has("ebook") ? repo.registeredEbookIds(customerId) : Promise.resolve([]),
   ]);
 
-  // Nothing downloaded → nothing to govern. Costs the two index reads above and
-  // skips the entitlement builders entirely, which is the common case for users
-  // who never download offline.
+  // Nothing downloaded: skip the entitlement builders (the common case).
   if (!videoIds.length && !ebookIds.length) return [];
 
   const active = await activeProducts(customerId, now, want);
   const items: SubscriptionAccessItem[] = [];
 
-  // ── videos: expand across every active product whose curriculum covers one ──
   if (videoIds.length) {
     const catOf = new Map(
       (await repo.videoCategories(videoIds)).map((v) => [v.id, v.videoCategoryId]),
     );
 
-    // One reachability walk per active video product. `reachableCategoryIds` is
-    // reused rather than inlined so GET's coverage test and POST's membership
-    // check can never disagree about what "in this product" means — a drift
-    // there would either strand files or keep revoked ones playable.
+    // Shared with POST's membership check so the two can never disagree about
+    // what "in this product" means (drift would strand files or keep revoked ones playable).
     const videoScopes = active.filter((p): p is ActiveProduct & { kind: VideoScopeKind } =>
       isVideoScopeKind(p.kind),
     );
@@ -245,7 +206,6 @@ export const buildAccessSnapshot = async (
     });
   }
 
-  // ── ebooks: no expansion, the ebook IS its own content ──────────────────────
   if (ebookIds.length) {
     const registered = new Set(ebookIds);
     for (const p of active) {

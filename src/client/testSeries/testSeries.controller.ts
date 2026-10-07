@@ -1,3 +1,4 @@
+// Client test series: catalog, papers, checkout preview and my subscriptions.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -19,10 +20,8 @@ import { CRM_LEAD_TYPE } from "../../shared/enums";
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-// Test series is charged at the raw plan price (minus any promo discount),
-// matching the eBook flow — NO GST, NO handling fee. The gstAmount/handlingFee
-// fields are kept in the breakdown (always 0) so the response shape is stable
-// for the FE; they can be re-enabled later by reinstating the rates below.
+// Charged at the raw plan price minus promo, like eBooks — no GST, no handling fee.
+// gstAmount/handlingFee stay in the breakdown (always 0) to keep the response shape stable.
 const GST_RATE = 0;
 const HANDLING_FEE = 0;
 
@@ -36,6 +35,7 @@ interface Breakdown {
   promocodeId?: string | null;
 }
 
+// Test-series price breakdown; also used by create-order via `_shared`.
 function computeBreakdown(basePrice: number, discountAmount = 0, promocodeId: string | null = null): Breakdown {
   const netPrice = Math.max(0, basePrice - discountAmount);
   const gstAmount = Math.round(netPrice * GST_RATE);
@@ -51,9 +51,6 @@ function computeBreakdown(basePrice: number, discountAmount = 0, promocodeId: st
   };
 }
 
-// ─── Discovery ───────────────────────────────────────────────────────────────
-
-// GET /api/v1/client/test-series
 export const listTestSeries = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -62,7 +59,6 @@ export const listTestSeries = async (req: Request, res: Response) => {
   try {
     const { search, page, limit } = parseListQuery(req.query);
 
-    // ─── SQL branch (int id-space) — gated on `client-testseries` ───
     const cidNum = customerId ? parseCtsId(String(customerId)) : null;
     const { data, total } = await listTestSeriesMysql({
       search: search ?? null,
@@ -85,7 +81,6 @@ export const listTestSeries = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/test-series/:id
 export const getTestSeriesDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id);
@@ -93,7 +88,6 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
   logger.info("getTestSeriesDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ─── SQL branch (int id-space) ───
     const tsId = parseCtsId(id);
     if (tsId == null) { logger.warn("getTestSeriesDetail invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const cidNum = customerId ? parseCtsId(String(customerId)) : null;
@@ -110,9 +104,7 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/test-series/:id/papers
-// Returns the papers grouped by content category. Each paper carries the
-// customer's attempt state (`Start` vs `Retake`).
+// Papers grouped by content category, each with the customer's attempt state (`Start` vs `Retake`).
 export const listSeriesPapers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = String(req.params.id);
@@ -120,7 +112,6 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
   logger.info("listSeriesPapers invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ─── SQL branch (int id-space) ───
     const tsId = parseCtsId(id);
     if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
@@ -135,16 +126,12 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Checkout ────────────────────────────────────────────────────────────────
-
 const previewSchema = z.object({
   planId: z.coerce.number().int().positive(),
   promocode: z.string().trim().min(1).optional(),
 });
 
-// POST /api/v1/client/test-series/checkout/preview
-// Returns the price breakdown (matches the "Order Summary" card in the mockup).
-// Does not create any rows. Promo is re-validated server-side at create-order.
+// Price breakdown only; creates no rows. Promo is re-validated at create-order.
 export const previewCheckout = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -161,7 +148,6 @@ export const previewCheckout = async (req: Request, res: Response) => {
       return failure(res, "Validation failed.", 422, { errors: e.issues });
     }
 
-    // ─── SQL branch (int id-space) — planId is numeric ───
     const plan = await findPlanForOrder(body.planId);
     if (!plan) { logger.warn("previewCheckout plan not found", { traceId, customerId, planId: body.planId }); return failure(res, "Plan not found or inactive.", 404); }
 
@@ -212,9 +198,6 @@ export const previewCheckout = async (req: Request, res: Response) => {
   }
 };
 
-// ─── My subscriptions ────────────────────────────────────────────────────────
-
-// GET /api/v1/client/test-series/my/subscriptions
 export const listMySubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -223,7 +206,6 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
-    // ─── SQL branch (int id-space) — gated on `client-testseries` ───
     const { search, page, limit, skip } = parseListQuery(req.query);
     const cidNum = parseCtsId(String(customerId));
     if (cidNum == null)
@@ -250,7 +232,6 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
   }
 };
 
-// Helpers shared with payment controller
 export const _shared = {
   computeBreakdown,
   GST_RATE,

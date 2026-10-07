@@ -1,3 +1,4 @@
+// Jobs suggested products: row to DTO mapping (response shape is frozen).
 import type { JobSuggestedProduct } from "@prisma/client";
 import type { SuggestedProductDto } from "./suggested-product.types";
 

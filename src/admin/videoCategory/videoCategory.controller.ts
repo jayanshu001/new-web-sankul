@@ -1,3 +1,4 @@
+// Admin video categories: HTTP handlers for category CRUD and linked content.
 import { Request, Response } from "express";
 import {
   createVideoCategorySchema,
@@ -10,7 +11,6 @@ import {
 import * as vcat from "../../modules/admin-master/admin-master.service";
 import { formatZodIssues as formatZodErrors } from "../../utils/httpResponse";
 
-
 const buildMeta = (page: number, per_page: number, total: number) => ({
   page,
   per_page,
@@ -18,7 +18,6 @@ const buildMeta = (page: number, per_page: number, total: number) => ({
   totalPages: Math.ceil(total / per_page),
 });
 
-// GET /
 export const listVideoCategories = async (req: Request, res: Response) => {
   try {
     const parsed = listQuerySchema.safeParse(req.query);
@@ -39,7 +38,6 @@ export const listVideoCategories = async (req: Request, res: Response) => {
   }
 };
 
-// GET /pre-requisites
 export const getVideoCategoryPreRequisites = async (_req: Request, res: Response) => {
   try {
     return res.status(200).json({ success: true, data: await vcat.fullVcPreRequisites() });
@@ -48,7 +46,6 @@ export const getVideoCategoryPreRequisites = async (_req: Request, res: Response
   }
 };
 
-// GET /:id
 export const getVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -63,7 +60,6 @@ export const getVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /:id/sub-categories — paginated, searchable child categories of this category.
 export const listVideoCategorySubCategories = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -81,11 +77,8 @@ export const listVideoCategorySubCategories = async (req: Request, res: Response
   }
 };
 
-// GET /:id/courses — paginated, searchable UNION of everything attached to this
-// video category: recorded courses, live courses and packages. Each row carries a
-// `type` discriminator; ids are per-type and can collide, so the FE keys by
-// `type:id`. Path kept as /courses (the tab's existing route) — widening it in
-// place is what keeps pagination and `total` honest.
+// Courses, live courses and packages attached to this category. Ids collide across
+// types, so each row carries a `type` discriminator and the FE keys by `type:id`.
 export const listVideoCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -103,7 +96,6 @@ export const listVideoCategoryCourses = async (req: Request, res: Response) => {
   }
 };
 
-// GET /:id/videos — paginated, searchable videos belonging to this video category.
 export const listVideoCategoryVideos = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -121,7 +113,6 @@ export const listVideoCategoryVideos = async (req: Request, res: Response) => {
   }
 };
 
-// POST / (multipart)
 export const createVideoCategory = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
@@ -157,7 +148,6 @@ export const createVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-// PUT /:id (multipart)
 export const updateVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -188,7 +178,6 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-// DELETE /:id
 export const deleteVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -204,7 +193,7 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-// POST /:id/duplicate
+// Deep-clone the category with its sub-categories and videos.
 export const duplicateVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -219,7 +208,6 @@ export const duplicateVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH /:id/status
 export const toggleVideoCategoryStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;

@@ -1,3 +1,4 @@
+// Admin referral: Zod schemas for programs, withdrawal status/reject and reward adjustments.
 import { z } from "zod";
 import { RefferalTransactionStatus } from "../../shared/enums";
 
@@ -20,10 +21,9 @@ export const updateTransactionStatusSchema = z.object({
     RefferalTransactionStatus.PENDING,
     RefferalTransactionStatus.SUCCESSFUL,
   ]),
-  // Bank reference / UTR for the manual (offline) transfer finance just made.
-  // Optional so the existing admin panel keeps working unchanged; stored on
-  // ws_refferal_transaction.reference_number, which the retired RazorpayX payout
-  // integration used to own. Blank/whitespace is treated as "not provided".
+  // Bank reference / UTR for the manual (offline) transfer; stored on
+  // ws_refferal_transaction.reference_number. Optional so the existing admin panel
+  // keeps working; blank/whitespace means "not provided".
   referenceNumber: z.string().trim().max(255).optional(),
 });
 

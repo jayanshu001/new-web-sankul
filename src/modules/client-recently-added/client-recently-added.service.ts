@@ -1,3 +1,4 @@
+// Recently added: newest planner/smart packages and live courses feed.
 import { clientRecentlyAddedRepository as repo } from "./client-recently-added.repository";
 import { computeDaysLeft } from "../../utils/planDuration";
 import {
@@ -7,14 +8,12 @@ import {
   getOwnedCourseIds,
 } from "../admin-live-course/admin-live-course.service";
 
-
 export const parseCustomerId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// The three kinds surfaced by the feed. Planner/Smart are package types (via
-// ws_package.package_type_id); live-course is ws_live_course.
+// Planner/Smart are package types (ws_package.package_type_id); live-course is ws_live_course.
 export type RecentKind = "planner" | "smart" | "live-course";
 const ALL_KINDS: RecentKind[] = ["planner", "smart", "live-course"];
 
@@ -23,14 +22,12 @@ export const parseKinds = (raw?: string | string[] | null): RecentKind[] => {
   const list = (Array.isArray(raw) ? raw : String(raw).split(","))
     .map((s) => s.trim().toLowerCase())
     .filter((s): s is RecentKind => (ALL_KINDS as string[]).includes(s));
-  // Unknown/empty → default to all kinds (never an empty feed from a bad param).
+  // Unknown/empty falls back to all kinds: never an empty feed from a bad param.
   return list.length ? [...new Set(list)] : [...ALL_KINDS];
 };
 
-// Resolve the Planner/Smart package-type ids by NAME from ws_package_type (the same
-// source as GET /admin/packages/types) — e.g. "Planner Course" → planner, "Smart
-// Course" → smart. Name-matched (case-insensitive substring) so it survives id
-// changes and needs no env/config. Multiple matching types per kind are supported.
+// Matched by name (case-insensitive substring, e.g. "Planner Course") so it survives id
+// changes and needs no config. Multiple matching types per kind are supported.
 const resolveKindTypeIds = async (): Promise<{ planner: number[]; smart: number[] }> => {
   const types = await repo.allPackageTypes();
   const planner: number[] = [];
@@ -70,11 +67,8 @@ const liveCard = (row: any, plans: any[], isPurchased: boolean, daysLeft: number
 });
 
 /**
- * Combined "Recently Added" feed across Planner packages, Smart packages, and
- * live courses — merged by created date desc, with server-side search + paging.
- *
  * Each source table has its own PK space, so we over-fetch each to (skip+take),
- * merge + sort, slice the page, THEN decorate only that page (plans + ownership).
+ * merge + sort, slice the page, then decorate only that page (plans + ownership).
  * `total` is the exact sum of per-kind counts for the active filter.
  */
 export const listRecentlyAdded = async (
@@ -86,8 +80,6 @@ export const listRecentlyAdded = async (
   const wantLive = kinds.includes("live-course");
   const wantPackages = kinds.includes("planner") || kinds.includes("smart");
 
-  // Resolve Planner/Smart type ids by name; map each type id back to its kind so
-  // fetched package rows can be tagged. Only queried when a package kind is wanted.
   const { planner, smart } = wantPackages ? await resolveKindTypeIds() : { planner: [], smart: [] };
   const typeIdToKind = new Map<number, RecentKind>();
   for (const id of planner) typeIdToKind.set(id, "planner");
@@ -98,7 +90,7 @@ export const listRecentlyAdded = async (
   if (kinds.includes("smart")) typeIds.push(...smart);
 
   const skip = (opts.page - 1) * opts.limit;
-  const over = skip + opts.limit; // enough head rows to fill this page after the merge.
+  const over = skip + opts.limit;
 
   const [pkgRows, pkgCount, liveRows, liveCount] = await Promise.all([
     repo.recentPackagesByTypes(typeIds, search, over),
@@ -107,7 +99,6 @@ export const listRecentlyAdded = async (
     wantLive ? repo.countLiveCourses(search) : Promise.resolve(0),
   ]);
 
-  // Merge raw rows tagged with kind + createdAt, newest first.
   type Raw = { kind: RecentKind; id: number; createdAt: Date | null; row: any };
   const raws: Raw[] = [];
   for (const p of pkgRows) {
@@ -120,7 +111,6 @@ export const listRecentlyAdded = async (
   const pageRaws = raws.slice(skip, skip + opts.limit);
   const total = pkgCount + liveCount;
 
-  // Decorate only the sliced page.
   const pagePkgIds = pageRaws.filter((r) => r.kind !== "live-course").map((r) => r.id);
   const pageLiveIds = pageRaws.filter((r) => r.kind === "live-course").map((r) => r.id);
   const now = new Date();
@@ -133,14 +123,14 @@ export const listRecentlyAdded = async (
     getOwnedCourseIds(customerId),
   ]);
 
-  // Group package plans by material flag (same shape as the dashboard package card).
+  // Same shape as the dashboard package card.
   const plansByPackage = new Map<number, { withMaterial: any[]; withoutMaterial: any[] }>();
   for (const p of pkgPlans) {
     if (p.packageId == null) continue;
     const b = plansByPackage.get(p.packageId) ?? plansByPackage.set(p.packageId, { withMaterial: [], withoutMaterial: [] }).get(p.packageId)!;
     (p.withMaterial ? b.withMaterial : b.withoutMaterial).push(p);
   }
-  // Package ownership → { isPurchased, daysLeft } (lifetime/null wins, else max daysLeft).
+  // Lifetime (null daysLeft) wins, else the max daysLeft.
   const pkgOwn = new Map<number, { isPurchased: boolean; daysLeft: number | null }>();
   for (const s of pkgSubs as { packageId: number | null; endAt: Date | null }[]) {
     if (s.packageId == null) continue;

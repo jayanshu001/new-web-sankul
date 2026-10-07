@@ -1,3 +1,4 @@
+// Client quizzes: HTTP handlers for exam lists, attempts, solutions and analytics.
 import { Request, Response } from "express";
 import { generateExamSolutionPdf } from "../../libs/core/generate";
 import {
@@ -31,14 +32,10 @@ import {
 } from "../../modules/client-exam/client-exam.service";
 import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
-// Legacy Mongo ObjectId shape (24-hex). Preserves the exact pre-migration
-// validation behaviour without pulling in mongoose.
+// Accepts legacy 24-hex ids as well as numeric ids.
 const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
 
-// ─── Discovery ────────────────────────────────────────────────────────────────
-
-// GET /api/v1/client/exams/categories
 export const listCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCategories invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -47,7 +44,6 @@ export const listCategories = async (req: Request, res: Response) => {
     const { parentId } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // ─── ws_exam_category ──────────────────────────────────
     const [categories, total] = await Promise.all([
       catalogExam.listClientCategories({ parentId, search, skip, take: limit }),
       catalogExam.countClientCategories({ parentId, search }),
@@ -60,7 +56,6 @@ export const listCategories = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/exams/categories/:categoryId/exams
 export const listExamsByCategory = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -68,7 +63,6 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, customerId, categoryId });
 
   try {
-    // ─── ws_exam + ws_exam_category ────────────────────────
     const catId = parseExamId(categoryId);
     if (!catId) return res.status(400).json({ success: false, message: "Invalid category id." });
     const cid = customerId ? parseExamId(customerId) : null;
@@ -82,14 +76,12 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/quizzes/daily
 // Drill-down filter (all params optional, applied progressively):
 //   no params              -> years      [{ year, testsCount }]
 //   ?year=YYYY             -> months     [{ year, month, label, testsCount }]
 //   ?year&month            -> weeks      [{ week, label, startDate, endDate, testsCount }]
 //   ?year&month&week       -> tests      (same shape as before, decorated per-customer)
-// The year/month/week bucketing itself lives in utils/dateBuckets and is applied
-// by the service (svcGetDailyExams); this handler only validates the query params.
+// Bucketing lives in utils/dateBuckets (applied by the service); this handler only validates params.
 
 export const getDailyExams = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -120,7 +112,6 @@ export const getDailyExams = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
     }
 
-    // ─── daily-exam drill-down ─────────────────────────────
     // Pagination + search apply only to the leaf "tests" level (a genuine exam
     // list); the years/months/weeks levels are bounded aggregate summaries.
     const cid = customerId ? parseExamId(customerId) : null;
@@ -136,9 +127,6 @@ export const getDailyExams = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Taking the exam ──────────────────────────────────────────────────────────
-
-// GET /api/v1/client/exams/:id — questions with options (old API shape). `answer` is not exposed.
 export const getExamQuestions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -165,9 +153,6 @@ export const getExamQuestions = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Submission ───────────────────────────────────────────────────────────────
-
-// POST /api/v1/client/save/answers  (also mounted at /exams/:id/submit)
 // Body: { examId, timing, test: [{questionId, answerId}, ...], ratting? }
 export const saveAnswers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -180,7 +165,6 @@ export const saveAnswers = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── ws_exam_result + _detail; scoring write ───────────
     const cid = parseExamId(customerId);
     const body = req.body ?? {};
     const examId = parseExamId(String(body.examId ?? ""));
@@ -189,9 +173,7 @@ export const saveAnswers = async (req: Request, res: Response) => {
     if (!cid || !examId || !test || !/^\d{1,3}:\d{2}(:\d{2})?$/.test(timing)) {
       return res.status(400).json({ success: false, message: "Invalid submission payload." });
     }
-    // `answerId` null/omitted = skipped (the app now supplies skip itself instead of
-    // selecting a "Skip" option row). An unparseable NON-empty answerId is still a
-    // bad payload; only a genuinely absent one means skip.
+    // A null/omitted answerId means skipped; an unparseable non-empty one is a bad payload.
     type ParsedAnswer = { questionId: number | null; answerId: number | null; answerAbsent: boolean };
     const parsedTest: ParsedAnswer[] = test.map((t: any) => {
       const rawAnswer = t?.answerId;
@@ -224,9 +206,7 @@ export const saveAnswers = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Post-submit views ────────────────────────────────────────────────────────
-
-// GET /api/v1/client/exams/:id/solution
+// Per-question solution for the latest submitted attempt, or ?attemptId.
 export const getSolutionByExam = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -259,7 +239,6 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/exams/:id/solution/analytics
 export const getSolutionAnalyticsByExam = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -289,7 +268,7 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
   }
 };
 
-// GET /api/v1/client/exams/:id/solution/download
+// Streams the solution PDF as a file attachment.
 export const getSolutionDownloadByExam = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -328,9 +307,6 @@ export const getSolutionDownloadByExam = async (req: Request, res: Response) => 
   }
 };
 
-// ─── My history / analytics ──────────────────────────────────────────────────
-
-// GET /api/v1/client/exams/my/attempts
 export const listMyResults = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -344,7 +320,6 @@ export const listMyResults = async (req: Request, res: Response) => {
 
     const { search, page, limit } = parseListQuery(req.query);
 
-    // ─── ws_exam_result ────────────────────────────────────
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const { items, total } = await svcListMyResults(cid, page, limit, search);
@@ -360,7 +335,6 @@ export const listMyResults = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/quizzes/my/past-daily
 // Past (finished) attempts of DAILY-type exams, for the "Exam Analytics" screen.
 // Predicate matches the `pastExams` count on /profile/dashboard exactly so badge ⇄ list agree.
 export const listMyPastDailyResults = async (req: Request, res: Response) => {
@@ -376,7 +350,6 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
 
     const { search, page, limit } = parseListQuery(req.query);
 
-    // ─── ws_exam_result ⋈ ws_exam (DAILY, submitted) ───────
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const { items: data, total } = await svcListPastDailyResults(cid, page, limit, search);
@@ -392,7 +365,6 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/exams/my/analytics
 export const getMyOverallAnalytics = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -403,7 +375,6 @@ export const getMyOverallAnalytics = async (req: Request, res: Response) => {
       logger.warn("getMyOverallAnalytics unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
-    // ─── ws_exam_result_detail_analytics ──────────────────
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const analytics = await svcGetOverallAnalytics(cid);
@@ -415,7 +386,6 @@ export const getMyOverallAnalytics = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/exams/:id/rate
 export const rateExamResult = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -434,7 +404,6 @@ export const rateExamResult = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     }
 
-    // ─── ws_exam_result (rating write) ─────────────────────
     const { ratting } = rateResultSchema.parse(req.body);
     const result = await svcRateResult(cid, eid, ratting);
     if (!result) {
@@ -453,7 +422,6 @@ export const rateExamResult = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/exams/:id/detail
 export const getExamDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -477,15 +445,12 @@ export const getExamDetail = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Attempt lifecycle (Start / SaveAnswer / Submit / Resume) ─────────────────
-
 const isAttemptExpired = (r: any, durationMinutes: number) => {
   if (!r?.startedAt) return false;
   const deadline = new Date(r.startedAt).getTime() + durationMinutes * 60_000;
   return Date.now() > deadline;
 };
 
-// POST /api/v1/client/quizzes/:id/attempts/start
 export const startAttempt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -511,7 +476,6 @@ export const startAttempt = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/quizzes/:id/attempts/:attemptId/answer
 // Body: { questionId, answerId? }   (answerId omitted/null => skip)
 export const saveSingleAnswer = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -548,7 +512,6 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/quizzes/:id/attempts/:attemptId/submit
 // Body: { timing?, ratting? }   Scores from saved details; unanswered => SKIP.
 export const submitAttempt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -583,7 +546,6 @@ export const submitAttempt = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/quizzes/:id/attempts
 // Lists all of this user's attempts for an exam (history list).
 export const listAttempts = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -617,7 +579,6 @@ export const listAttempts = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/quizzes/:id/attempts/aggregate
 // Aggregate stats across ALL of this user's submitted attempts for the exam.
 // Powers the donut + summary on the Exam Analytics screen.
 export const getAttemptsAggregate = async (req: Request, res: Response) => {
@@ -652,7 +613,6 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/quizzes/:id/attempts/active
 export const getActiveAttempt = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;

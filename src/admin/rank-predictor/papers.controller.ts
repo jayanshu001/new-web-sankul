@@ -1,3 +1,4 @@
+// Admin rank predictor: HTTP handlers for exam papers and leaderboards.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { rankPredictorService } from "../../modules/rank-predictor/rank-predictor.service";

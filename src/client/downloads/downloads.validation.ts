@@ -1,14 +1,9 @@
+// Client downloads: Zod schema for saving the encryption key.
 import { z } from "zod";
 import { DOWNLOAD_KEY_HEX_REGEX } from "../../modules/client-download-key/client-download-key.types";
 
-/**
- * Body for PUT /api/v1/client/downloads/encryption-key
- *
- * `.strict()` is load-bearing here, not stylistic: the spec says a `userId` in
- * the body must never be honoured, and rejecting unknown keys outright is a
- * stronger guarantee than remembering to ignore them. Token identity is the only
- * identity.
- */
+// `.strict()` is load-bearing: a `userId` in the body must never be honoured, and
+// rejecting unknown keys outright guarantees it. Token identity is the only identity.
 export const putEncryptionKeySchema = z
   .object({
     key: z

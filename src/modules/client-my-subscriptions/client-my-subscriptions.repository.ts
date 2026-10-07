@@ -1,38 +1,27 @@
+// Client my subscriptions: Prisma queries.
 import { prisma } from "../../config/prisma";
 
 /**
- * Prisma persistence for the client my-subscriptions MySQL branch (Wave 7).
- * Read-aggregation over already-migrated tables; no new tables. Covers the
- * `course` (course+package) and `ebook` tabs. The `test_series` tab is Mongo-only
- * (ws_test_series* has no SQL table) — it falls through to the Mongo controller.
- *
- * "Active" = status=true && endAt > now. ⚠ ws_package_course_subscription has no
- * payment_status → status conveys verified/active. SQL package_id = the package
- * (pcb_id = the plan); the Mongo handler inverts packageId/targetPackageId.
+ * "Active" = status=true && endAt > now. ws_package_course_subscription has no
+ * payment_status, so status conveys verified/active. package_id = the package; pcb_id = the plan.
  */
 export const clientMySubscriptionsRepository = {
-  // course + package: ALL active rows (latest endAt first) for dedup-before-page.
+  // All active rows (latest endAt first) so the service can dedup before paging.
   activeCourseSubs: (customerId: number, now: Date) =>
     prisma.packageCourseSubscription.findMany({
       where: { customerId, status: true, endAt: { gt: now } },
       orderBy: { endAt: "desc" },
     }),
 
-  // ebook: ALL active rows (latest endAt first).
   activeEbookSubs: (customerId: number, now: Date) =>
     prisma.eBookSubscription.findMany({
       where: { customerId, status: true, endAt: { gt: now } },
       orderBy: { endAt: "desc" },
     }),
 
-  // live courses: ALL active rows (latest endAt first). Unlike course/package/ebook,
-  // a live-course sub can be LIFETIME (endAt = null) — include those (they never
-  // expire) alongside not-yet-expired rows.
-  //
-  // The `payment_status = "verified"` filter was dropped 2026-08-25: payment moved to
-  // ws_live_course_order and a subscription row is now written ONLY for a completed
-  // order, so `status` is the ownership gate. Legacy rows that never verified were
-  // deactivated by the backfill, so they stay excluded.
+  // Unlike course/package/ebook, a live-course sub can be lifetime (endAt = null).
+  // Payment lives on ws_live_course_order and a subscription row is written only for a
+  // completed order, so `status` is the ownership gate (no payment_status filter).
   activeLiveCourseSubs: (customerId: number, now: Date) =>
     prisma.liveCourseSubscription.findMany({
       where: {
@@ -43,7 +32,6 @@ export const clientMySubscriptionsRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  // hydration
   coursesByIds: (ids: number[]) =>
     ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   packagesByIds: (ids: number[]) =>

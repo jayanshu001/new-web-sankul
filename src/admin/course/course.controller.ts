@@ -1,15 +1,4 @@
-// src/admin/course/course.controller.ts
-//
-// Thin controllers: parse + coerce request → validate → call service → respond.
-// All error paths route through the global error middleware via `asyncHandler`;
-// services throw `HttpError(code, message)` for predictable status codes.
-//
-// This file replaces the legacy inline-try/catch handlers (audit Module 2 P1)
-// and consumes:
-//   - middlewares/asyncHandler       — error forwarding
-//   - admin/course/course.service.ts — domain logic, caching, transactions
-//   - utils/httpResponse             — standard `{ success, code, data, ... }` envelope
-
+// Admin courses: HTTP handlers for courses, plans, linked content and video categories.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
@@ -32,14 +21,7 @@ import {
 } from "../master/master.validation";
 import * as courseService from "./course.service";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Multipart coercion helpers
-// Forms posted by the admin UI send everything as strings; normalize before
-// handing the payload to Zod.
-// ──────────────────────────────────────────────────────────────────────────────
-
-// Coerce the multipart body (refs are numeric ids). Returns the parsed numeric
-// category-ref arrays.
+// Multipart sends every field as a string; normalize before Zod.
 const coerceCourseBodySql = (req: Request) => {
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
@@ -47,20 +29,16 @@ const coerceCourseBodySql = (req: Request) => {
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
   if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
-  // Scalar id refs: the detail GET returns these populated as {_id,name}/{_id,title}
-  // objects, and the edit form round-trips the object (or an empty string) back on
-  // save. Flatten object → id string and drop empties so Zod's `coerce.number` sees
-  // a clean numeric string (or an absent field) instead of coercing an object to NaN
-  // — which surfaced as "Expected number, received nan" on courseEducatorId.
+  // The detail GET returns these refs populated ({_id,name}) and the edit form
+  // round-trips the object (or ""). Flatten to an id string and drop empties so
+  // coerce.number never sees an object (NaN).
   const flattenIdRef = (v: any): any => {
     if (v == null) return undefined;
-    // Real object (JSON body): { _id | id }.
     if (typeof v === "object" && !Array.isArray(v)) {
       const id = v._id ?? v.id;
       return id != null ? String(id) : undefined;
     }
-    // Multipart serializes nested values as strings — a ref object comes through
-    // as a JSON string, or as the useless "[object Object]" if String()'d.
+    // Multipart sends a ref object as a JSON string, or as "[object Object]".
     if (typeof v === "string") {
       const s = v.trim();
       if (s === "" || s === "null" || s === "undefined" || s === "[object Object]") return undefined;
@@ -73,7 +51,7 @@ const coerceCourseBodySql = (req: Request) => {
           /* not JSON — fall through */
         }
       }
-      return s; // plain id string ("1747") → coerce.number handles it
+      return s;
     }
     return v;
   };
@@ -98,7 +76,6 @@ const coerceCourseBodySql = (req: Request) => {
   const examCategories = parseRefs(req.body.examCategories);
   if (materialCategories !== undefined) req.body.materialCategories = materialCategories;
   if (examCategories !== undefined) req.body.examCategories = examCategories;
-  // C6: examCountdown attachments arrive as int[] or JSON-string int[]; coerce.
   const parseIdList = (raw: any): number[] | undefined => {
     if (raw === undefined || raw === null || raw === "") return undefined;
     let items = raw;
@@ -113,10 +90,7 @@ const coerceCourseBodySql = (req: Request) => {
   return { materialCategories, examCategories };
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Pre-requisites / list / detail
-// ──────────────────────────────────────────────────────────────────────────────
-
+// Form dropdown options: active educators, subject/video categories and materials.
 export const getPreRequisites = asyncHandler(async (_req: Request, res: Response) => {
   const data = await courseService.getPreRequisites();
   return success(res, data);
@@ -133,10 +107,6 @@ export const getCourseById = asyncHandler(async (req: Request, res: Response) =>
   const result = await courseService.getCourseById(req.params.id as string);
   return success(res, result);
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Video categories / materials masters
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getCourseVideoCategories = asyncHandler(
   async (req: Request, res: Response) => {
@@ -197,10 +167,6 @@ export const deleteCourseVideoCategory = asyncHandler(
   }
 );
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Course CRUD + popular toggle
-// ──────────────────────────────────────────────────────────────────────────────
-
 export const createCourse = asyncHandler(async (req: Request, res: Response) => {
   coerceCourseBodySql(req);
   const v = createCourseSqlSchema.parse(req.body);
@@ -210,8 +176,7 @@ export const createCourse = asyncHandler(async (req: Request, res: Response) => 
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
   coerceCourseBodySql(req);
-  // Educator is compulsory on update: partial() relaxes everything, then we
-  // force courseEducatorId back to required so it can't be cleared/omitted.
+  // Educator stays required on update so it can't be cleared.
   const v = createCourseSqlSchema
     .partial()
     .required({ courseEducatorId: true })
@@ -242,10 +207,6 @@ export const toggleCourseStatus = asyncHandler(async (req: Request, res: Respons
     `Course ${data.status ? "activated" : "deactivated"}`
   );
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Plans (course-scoped)
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const createCoursePlan = asyncHandler(async (req: Request, res: Response) => {
   const validated = createCoursePlanSchema.parse(req.body);
@@ -298,8 +259,6 @@ export const getCourseMaterialCategories = asyncHandler(async (req: Request, res
   return res.status(200).json({ success: true, data, pagination });
 });
 
-// GET /admin/courses/:id/books — physical books linked to the course, paginated,
-// optional book-name search, ordered by the per-course pivot order.
 export const getCourseBooks = asyncHandler(async (req: Request, res: Response) => {
   const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
   const { data, pagination } = await courseService.listCourseBooks(req.params.id as string, {
@@ -312,35 +271,31 @@ export const getCourseBooks = asyncHandler(async (req: Request, res: Response) =
   return res.status(200).json({ success: true, data, pagination });
 });
 
-// POST /admin/courses/:id/books — attach books to the course (idempotent).
+// Idempotent.
 export const linkCourseBooks = asyncHandler(async (req: Request, res: Response) => {
   const { bookIds } = linkCourseBooksSchema.parse(req.body);
   const data = await courseService.linkCourseBooks(req.params.id as string, bookIds);
   return res.status(201).json({ success: true, message: "Books linked to course.", data });
 });
 
-// PUT /admin/courses/:id/books/reorder — set the per-course display order.
 export const reorderCourseBooks = asyncHandler(async (req: Request, res: Response) => {
   const { order } = reorderCourseBooksSchema.parse(req.body);
   const data = await courseService.reorderCourseBooks(req.params.id as string, order);
   return res.status(200).json({ success: true, message: "Book order updated.", data });
 });
 
-// PUT /admin/courses/:id/exam-categories/reorder — set the per-course display order.
 export const reorderCourseExamCategories = asyncHandler(async (req: Request, res: Response) => {
   const { order } = reorderCourseCategoriesSchema.parse(req.body);
   const data = await courseService.reorderCourseExamCategories(req.params.id as string, order);
   return res.status(200).json({ success: true, message: "Exam category order updated.", data });
 });
 
-// PUT /admin/courses/:id/material-categories/reorder — set the per-course display order.
 export const reorderCourseMaterialCategories = asyncHandler(async (req: Request, res: Response) => {
   const { order } = reorderCourseCategoriesSchema.parse(req.body);
   const data = await courseService.reorderCourseMaterialCategories(req.params.id as string, order);
   return res.status(200).json({ success: true, message: "Material category order updated.", data });
 });
 
-// DELETE /admin/courses/:id/books/:bookId — unlink a book from the course.
 export const unlinkCourseBook = asyncHandler(async (req: Request, res: Response) => {
   const data = await courseService.unlinkCourseBook(req.params.id as string, req.params.bookId as string);
   return res.status(200).json({ success: true, message: "Book unlinked from course.", data });
@@ -361,10 +316,6 @@ export const deleteCoursePlan = asyncHandler(async (req: Request, res: Response)
   await courseService.deleteCoursePlan(req.params.planId as string);
   return success(res, {}, "Pricing plan deleted successfully");
 });
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Video category relations
-// ──────────────────────────────────────────────────────────────────────────────
 
 export const getVideoCategoryRelations = asyncHandler(
   async (req: Request, res: Response) => {

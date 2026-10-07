@@ -1,49 +1,25 @@
+// List ordering: admin vs client sort rules and the next-order helper.
 /**
- * List ordering — two rules, one for each side of the product.
+ * List ordering rules.
  *
- * ── 1. ADMIN LIST SCREENS: RECENCY IS THE CONTRACT ──────────────────────────
+ * Admin list screens: every top-level admin list sorts `created_at DESC, id DESC`
+ * when the request asks for the order column or sends no sort; `sort_dir` is
+ * ignored there because "newest on top" is the requirement and the UI sends `asc`.
+ * Other `sort_by` values sort by their own column. Manual reordering is therefore
+ * invisible on admin screens by design. True sequences keep `order ASC`: exam
+ * questions and the association tabs inside a detail page (package contents,
+ * course videos/books/materials, live-course folder contents).
  *
- * (Adopted 2026-07-29, replacing the 2026-07-27 top-slot model.) `/admin/videos`
- * had always sorted admin rows by recency and was chosen as the pattern for every
- * admin list. So every top-level admin list sorts `created_at DESC, id DESC` when
- * the request asks for the order column or sends no sort at all — `sort_dir` is
- * ignored in that case, because "newest on top" is the requirement and honouring
- * the `asc` the UI sends would invert exactly what was asked for. Any other
- * `sort_by` (name, updatedAt, …) still sorts by its own column as requested.
+ * Client/catalog: every client query sorts `order ASC`; that is the only consumer
+ * of the order column.
  *
- * Consequence, ON PURPOSE: manual reordering is INVISIBLE on admin screens. To
- * restore curated ordering on one, sort it by the order column again.
- *
- * True sequences are the exception and keep sorting by order ASC: exam questions
- * (paper order), and the association tabs inside a detail page (package contents,
- * course videos/books/materials, live-course folder contents). Those are ordered
- * contents, not browsable lists.
- *
- * ── 2. CLIENT / CATALOG: the order column still rules ────────────────────────
- *
- * Every client-facing query keeps sorting `order ASC`, so curated ordering is
- * intact everywhere the customer looks. That is the ONLY consumer the order
- * column now has, and what `nextOrder` below is for.
- *
- * ── nextOrder: previous row + 1 ──────────────────────────────────────────────
- *
- * A row created without an explicit Order takes `(order of the PREVIOUS row) + 1`
- * — "previous" meaning the most recently created row in the list it joins, found
- * with `findFirst({ orderBy: [{ created_at: desc }, { id: desc }] })` and scoped
- * the same way the list is (same parent / category / series / banner key). An
- * empty list yields 1.
- *
- * Chosen deliberately (2026-07-29) over `MAX(order) + 1`. KNOWN CONSEQUENCE: the
- * value is NOT guaranteed unique and NOT guaranteed to be last. If the previous
- * row was itself given a low or negative order — e.g. by the superseded
- * `MIN - 1` model, whose leftovers still sit in several tables — the new row can
- * collide with an existing one, and rows that tie have no defined relative order
- * in the client's `order ASC` list. An admin can always type an explicit Order,
- * or drag-reorder, to resolve a collision.
- *
- * EXCEPTIONS — MAX(order) + 1, table-wide (2026-09-25): exams + exam categories,
- * videos + video categories, materials + material categories. Those pass the
- * table's highest order instead, so a new row is always last in the app.
+ * nextOrder: a row created without an explicit Order takes the order of the most
+ * recently created row in the list it joins (`findFirst` by `created_at desc, id
+ * desc`, scoped like the list) + 1; an empty list yields 1. This is deliberately
+ * not `MAX(order) + 1`, so the value is neither unique nor guaranteed last (legacy
+ * low/negative orders can cause collisions; admins resolve by explicit Order or
+ * drag-reorder). Exceptions passing the table-wide MAX(order) instead, so new rows
+ * are always last: exams, videos, materials and their categories.
  *
  * Callers pass the previous row's order (`null` when the list is empty).
  */

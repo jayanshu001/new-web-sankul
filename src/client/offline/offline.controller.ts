@@ -1,3 +1,4 @@
+// Client offline batches: HTTP handlers for dashboard, centers, batches and enquiries.
 import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
@@ -24,17 +25,16 @@ import {
   DuplicateEnquiryError,
 } from "../../modules/offline-enquiry/offline-enquiry.service";
 
-// MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
 const enquiryMysqlSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email().max(255),
   mobile: z.string().min(6).max(20),
   qualification: z.string().min(1).max(255),
   batchId: z.coerce.number().int().positive(),
-  remarks: z.string().max(2000).optional(), // accepted but dropped (no SQL col)
+  remarks: z.string().max(2000).optional(), // accepted but not persisted (no column)
 });
 
-// GET /api/v1/client/offline — dashboard: banners + cities/centers/batches + upcoming batches
+// Public dashboard: banner, city (with nested centers) and upcoming-batch sections.
 export const getOfflineDashboard = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getOfflineDashboard invoked", { traceId, path: _req.originalUrl });
@@ -42,9 +42,7 @@ export const getOfflineDashboard = async (_req: Request, res: Response) => {
   try {
     const now = new Date();
 
-    // ── MySQL dashboard composition (offline-batch + offline-city) ──
-    // banners + cities with nested centers/batches + upcoming batches.
-    // Sections are only pushed when non-empty.
+    // Sections are only included when non-empty.
     const [banners, cities, upcomingBatches] = await Promise.all([
       listBannersMysql(),
       listActiveCitiesMysql(),
@@ -76,15 +74,12 @@ export const getOfflineDashboard = async (_req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/cities
 export const listCities = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCities invoked", { traceId, path: req.originalUrl });
 
   try {
-    // ── MySQL active-cities read (offline-city). Active only, ordered by manual
-    // `order` then name (mirrors Mongo {status:true} sort {order:1}); name search.
-    // Pagination applied over the (small) active set to keep buildPagination shape.
+    // Active cities ordered by manual `order` then name; paginated in memory over the small set.
     const { search, page, limit, skip } = parseListQuery(req.query);
     const all = await listActiveCitiesMysql(search);
     const total = all.length;
@@ -97,15 +92,12 @@ export const listCities = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/cities/:cityId/centers
 export const listCentersByCity = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const cityId = req.params.cityId as string;
   logger.info("listCentersByCity invoked", { traceId, path: req.originalUrl, cityId });
 
   try {
-    // ── MySQL: centers (each with nested active batches) under this city
-    // (offline-batch). SQL ids are ints, not 24-hex ObjectIds.
     const cid = parseOfflineId(cityId);
     if (cid == null) { logger.warn("listCentersByCity invalid id (mysql)", { traceId, cityId }); return res.status(400).json({ success: false, message: "Invalid city id." }); }
 
@@ -120,7 +112,6 @@ export const listCentersByCity = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/centers
 export const listCenters = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCenters invoked", { traceId, path: req.originalUrl });
@@ -144,7 +135,6 @@ export const listCenters = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/batches
 export const listBatches = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listBatches invoked", { traceId, path: req.originalUrl });
@@ -169,7 +159,6 @@ export const listBatches = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/centers/:id
 export const getCenterDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -188,7 +177,6 @@ export const getCenterDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/offline/batches/:id
 export const getBatchDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -207,22 +195,20 @@ export const getBatchDetail = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/offline/enquiry
+// Public enquiry; attaches the customer when a valid token is present.
 export const submitEnquiry = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id || null;
   logger.info("submitEnquiry invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
-    // ── MySQL enquiry write path (offline-enquiry) ───────────────────────────
-    // A MySQL batch id is an int. Anonymous-allowed (userId may be null → stored
-    // as the 0 sentinel).
+    // userId may be null (stored as the 0 sentinel).
     const data = enquiryMysqlSchema.parse(req.body);
     if (!(await enquiryBatchExists(data.batchId))) {
       logger.warn("submitEnquiry batch not found (mysql)", { traceId, batchId: data.batchId });
       return res.status(404).json({ success: false, message: "Batch not found." });
     }
-    const customerIdInt = userId != null ? Number(userId) : null; // C3 seam
+    const customerIdInt = userId != null ? Number(userId) : null;
     const enquiry = await submitEnquiryMysql({
       customerId: Number.isInteger(customerIdInt as number) ? (customerIdInt as number) : null,
       name: data.name,
@@ -240,11 +226,8 @@ export const submitEnquiry = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/offline/batch-enquiry
-// The offline-batch "Register" form (name/email/number/qualification +
-// optional free-text when "other" is chosen). Auth is REQUIRED — customerId is
-// always recorded against the logged-in customer.
-// MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
+// Offline-batch "Register" form. Auth is required: the enquiry is always recorded
+// against the logged-in customer.
 const batchEnquirySchema = z
   .object({
     name: z.string().min(1).max(255),
@@ -265,9 +248,6 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
   logger.info("submitBatchEnquiry invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
-    // ── MySQL batch-enquiry write path (offline-enquiry, same ws_offline_enquiry
-    // table as submitEnquiry). Batch id is an int; existence checked via the
-    // offline-enquiry repo. otherQualification retained only for "other".
     const data = batchEnquirySchema.parse(req.body);
 
     if (!(await enquiryBatchExists(data.batchId))) {
@@ -282,7 +262,6 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
       email: data.email,
       mobile: data.mobile,
       qualification: data.qualification,
-      // Only retain the free-text when "other" is selected.
       otherQualification: data.qualification === "other" ? data.otherQualification ?? null : null,
       batchId: data.batchId,
     });

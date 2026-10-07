@@ -1,19 +1,12 @@
-/**
- * Category-ref normalization for live courses. Kept in its own file (like
- * customer-profile.name) so the backfill script can import it without dragging
- * in the service's heavy deps (exceljs / redis / streamos).
- */
+// Admin live courses: material-category ref parsing for the entitlement pivot.
+// Kept in its own file so the backfill script can import it without the service's
+// heavy deps (exceljs / redis / streamos).
 
 /**
- * Normalize the `materialCategories` payload/JSON into pivot rows for
- * ws_material_category_live_course.
- *
- * The SQL create/update schema passes this field through as `z.any()[]` (it
- * mirrors the Mongo shape `[{ category, order }]`), and multipart submissions
- * may deliver it JSON-stringified. Tolerate every id-carrying shape the admin
- * dashboard has ever sent — the same leniency admin/course's `parseRefs` has —
- * so a valid attachment can't silently fail to reach the entitlement pivot.
- * Duplicates collapse (the pivot is unique per course+category).
+ * Normalize the `materialCategories` payload/JSON into ws_material_category_live_course
+ * pivot rows. Accepts every id-carrying shape the admin dashboard has sent (including
+ * JSON-stringified multipart values), like admin/course's `parseRefs`, so a valid
+ * attachment never silently misses the entitlement pivot. Duplicates collapse.
  */
 export const parseMaterialCategoryRefs = (raw: any): Array<{ categoryId: number; order: number }> => {
   let items = raw;

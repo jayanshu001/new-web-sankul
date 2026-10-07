@@ -1,3 +1,4 @@
+// Client payments: course create-order (promo, wallet, shipping snapshot, Razorpay).
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
@@ -17,12 +18,9 @@ import { findCourseById } from "../../modules/catalog-course/catalog-course.serv
 import { queueCRMLead } from "../../utils/crm";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 
-/** Non-null Razorpay client (the controller has already null-checked it). */
 type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
 
-// MySQL course write path: the plan id is an INT (the migrated id-space), not an
-// ObjectId. Accept a positive-int packageId (as number or numeric string) plus
-// the same optional promocode + delivery-address fields as the Mongo branch.
+// The plan id is a positive INT (number or numeric string).
 const createCourseOrderMysqlSchema = z.object({
   packageId: z.coerce
     .number({ invalid_type_error: "Please select a valid plan." })
@@ -41,9 +39,7 @@ const createCourseOrderMysqlSchema = z.object({
     .optional(),
 });
 
-// POST /api/v1/client/payment/create-order/course
-// Creates a PackageCourseSubscription in paymentStatus="pending" and a Razorpay
-// order. After /verify flips paymentStatus → "verified", access is granted.
+// Writes a pending order + Razorpay order; /verify grants access.
 export const createCourseOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -61,11 +57,7 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // ── MySQL course write path (commerce-order) ─────────────────────────────
-    // The client sends an INT plan id (the migrated id-space), the plan + course
-    // are read from MySQL, and the pending order row is written to
-    // ws_package_course_order. /payment/verify (course branch) completes it.
-    // C3 seam: coerce the string-typed token subject to the int customer id.
+    // The token subject is a string; the order tables key on the int customer id.
     const customerIdInt = Number(customerId);
     if (!Number.isInteger(customerIdInt)) {
       logger.warn("createCourseOrderPayment[mysql] non-int customer id", { traceId, customerId });
@@ -83,11 +75,8 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
   }
 };
 
-// MySQL course create-order. Reads plan + course from MySQL, writes the pending
-// ws_package_course_order row, creates the Razorpay order, and returns the SAME
-// response shape as the Mongo branch (subscriptionId here is the ORDER id — the
-// entitlement subscription row is created at verify time, not now). The client
-// only round-trips the razorpay order id to /verify, so this is contract-safe.
+// `subscriptionId` in the response is the ORDER id; the entitlement subscription row
+// is created at verify time. The client only round-trips the razorpay order id.
 const createCourseOrderMysqlPath = async (
   req: Request,
   res: Response,
@@ -111,12 +100,10 @@ const createCourseOrderMysqlPath = async (
     return res.status(404).json({ success: false, message: "Course not found or inactive." });
   }
 
-  // The request carries an ADDRESS-BOOK id (ws_customer_address) — that is the
-  // only list the app shows. `ws_package_course_order.shipping` is a foreign key
-  // to ws_customer_shipping, so snapshot the address into a real shipping row and
-  // persist THAT id. Resolving also proves ownership, replacing the old
-  // addressBelongsToCustomerSql gate (a not-found result covers unknown,
-  // soft-deleted and someone-else's ids alike).
+  // The request carries an address-book id (ws_customer_address), but the order's
+  // `shipping` column is an FK to ws_customer_shipping, so snapshot the address into a
+  // shipping row and persist that id. Resolving also proves ownership (not-found covers
+  // unknown, soft-deleted and other customers' ids).
   let shippingIdSql: number | null = null;
   if (customerShippingId) {
     const resolved = await resolveShippingIdForAddress(customerId, customerShippingId);
@@ -133,8 +120,7 @@ const createCourseOrderMysqlPath = async (
     shippingIdSql = resolved.shippingId;
   }
 
-  // Resolve the promo code (if any) against THIS course; charge the reduced
-  // amount. Re-validated here — the /promocodes/apply preview is never trusted.
+  // Re-validated here; the /promocodes/apply preview is never trusted.
   let chargeAmount = plan.price;
   let promocodeIdNum: number | null = null;
   let originalAmount: number | null = null;
@@ -156,20 +142,17 @@ const createCourseOrderMysqlPath = async (
     referrerIdNum = result.referrerId ?? null;
   }
 
-  // Freeze the redeemed code into the order as the legacy snapshot OBJECT, routed
-  // to exactly ONE column: a real promocode → `promocode`, a customer referral code
-  // → `refferalcode`. promoter-data reads these columns by JSON path to attribute
-  // commission, so the object (not the bare code) is what makes the order visible
-  // to the promoter dashboard. Both null when no code was applied.
+  // Freeze the redeemed code into the order as a snapshot object in exactly one column:
+  // promocode → `promocode`, referral code → `refferalcode`. promoter-data reads these
+  // by JSON path to attribute commission, so the object (not the bare code) is required.
   const codeSnapshot = await buildOrderCodeSnapshots({
     promocodeId: promocodeIdNum,
     referrerId: referrerIdNum,
     planId: packageId,
   });
 
-  // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap, then
-  // reduce the charged amount. Coins are DEBITED at verify (not here); the amount
-  // stored on the order carries the coin so verify knows how much to debit.
+  // Wallet coins: validated against balance + 50%-of-plan-price cap. They are debited
+  // at verify, so the order stores the coin amount.
   const walletUsage = await resolveWalletUsage(Number(customerId), coin, plan.price);
   if (walletUsage.error) {
     logger.warn("createCourseOrderPayment[mysql] wallet rejected", { traceId, customerId, coin, error: walletUsage.error });
@@ -194,10 +177,8 @@ const createCourseOrderMysqlPath = async (
     },
   });
 
-  // Persist the pending order with its razorpay id so /verify can find it.
-  // `price` is the CHARGED amount (→ discount_price); the plan's list price and the
-  // code discount are passed separately so the order row keeps the full breakdown:
-  //   price − code_discount − ws_coin = discount_price
+  // `price` is the charged amount (→ discount_price); list price and code discount are
+  // passed separately so the row keeps: price − code_discount − ws_coin = discount_price.
   const { orderId } = await createCourseOrderMysql({
     customerId,
     planId: packageId,

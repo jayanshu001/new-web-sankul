@@ -1,9 +1,9 @@
+// Educator courses: HTTP handlers for the educator's own courses, dashboards and subscribers.
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as epSql from "../../modules/educator-portal/educator-portal.service";
 
-// GET /api/v1/educator/courses
 export const listMyCourses = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -22,7 +22,6 @@ export const listMyCourses = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/courses/:id
 export const getMyCourseDetail = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -44,7 +43,6 @@ export const getMyCourseDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/courses/:id/dashboard
 export const getCourseDashboard = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;
@@ -66,7 +64,6 @@ export const getCourseDashboard = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/educator/courses/:id/subscribers
 export const getCourseSubscribers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const educatorId = req.user?.id;

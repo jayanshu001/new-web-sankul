@@ -1,7 +1,7 @@
+// Client app version: Zod query schema.
 import { z } from "zod";
 
 // Query for GET /api/v1/client/app-version/check
-// Coerces the numeric build code from the query string and normalizes platform.
 export const checkAppVersionQuerySchema = z
   .object({
     platform: z

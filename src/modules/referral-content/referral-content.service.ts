@@ -1,9 +1,8 @@
+// Referral content: referral terms and FAQs for the client plus admin CRUD.
 import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
-
-
 
 export const parseRcId = (id: string): number | null => {
   const n = Number(id);
@@ -61,9 +60,7 @@ const toFaqDto = (r: RefferalFaq): FaqDto => ({
   updatedAt: r.updatedAt,
 });
 
-// ─── Client read helpers ───────────────────────────────────────────────────
-// Slim, status-filtered projections matching the legacy client contract
-// (`/client/referral/terms` -> {_id,text,order}; `/faqs` -> {_id,question,answer,order}).
+// Client contract: `/client/referral/terms` → {_id,text,order}; `/faqs` → {_id,question,answer,order}.
 
 export const listActiveTermsForClient = async (): Promise<
   { _id: string; text: string; order: number }[]
@@ -92,7 +89,6 @@ export const listActiveFaqsForClient = async (): Promise<
   }));
 };
 
-// ─── List options (admin search + sort + opt-in pagination) ──────────────────
 export interface RcListOpts {
   search?: string;
   sortBy?: string; // order | createdAt | updatedAt
@@ -105,14 +101,11 @@ const rcOrderBy = (opts: RcListOpts): any[] => {
   switch (opts.sortBy) {
     case "createdAt": return [{ createdAt: dir }, { id: "desc" }];
     case "updatedAt": return [{ updatedAt: dir }, { id: "desc" }];
-    // "order" and no-sort both mean newest-first — RECENCY IS THE CONTRACT on
-    // admin lists (utils/listOrdering). `orderBy` is still written, and the
-    // client readers above still sort by it.
+    // "order" and no-sort both mean newest-first (utils/listOrdering); the client
+    // readers above still sort by `orderBy`.
     default: return [{ createdAt: "desc" }, { id: "desc" }];
   }
 };
-
-// ─── Terms ───────────────────────────────────────────────────────────────────
 
 export const listTerms = async (opts: RcListOpts = {}): Promise<{ data: TermDto[]; total: number }> => {
   const where: any = {};
@@ -137,7 +130,6 @@ export const getTerm = async (id: number): Promise<TermDto | null> => {
 
 export const createTerm = async (input: TermInput): Promise<TermDto> => {
   const now = new Date();
-  // No explicit order → previous row + 1 (see utils/listOrdering).
   const orderBy = input.order ?? nextOrder((await prisma.refferalTerm.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await prisma.refferalTerm.create({
     data: {
@@ -179,8 +171,6 @@ export const deleteTerm = async (id: number): Promise<boolean> => {
     return false;
   }
 };
-
-// ─── FAQs ────────────────────────────────────────────────────────────────────
 
 export const listFaqs = async (opts: RcListOpts = {}): Promise<{ data: FaqDto[]; total: number }> => {
   const where: any = {};

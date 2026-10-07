@@ -1,8 +1,6 @@
-// Shared "Resume Now" card builder. Produces the same shape as the
-// /learning/progress/my hero card, but scoped to the parent course / live
-// course of a specific lecture the user is currently viewing — so the
-// lecture-notes and lecture-audio-notes endpoints can return a resumeNext
-// alongside their notes list without duplicating the dashboard logic.
+// Lecture notes: resume card builder for the notes lists.
+// "Resume Now" card in the /learning/progress/my hero shape, scoped to the parent
+// course / live course of one lecture, for the lecture-notes endpoints' resumeNext.
 
 type Input =
   | { lectureType: "recorded"; userId: string; videoId: string }

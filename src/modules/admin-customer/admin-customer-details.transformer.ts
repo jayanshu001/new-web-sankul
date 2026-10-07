@@ -20,19 +20,16 @@ const ref = (
   fields: Record<string, unknown> | null | undefined
 ) => (id == null || !fields ? null : { _id: String(id), ...fields });
 
-// Plan price row → Mongo `packageId`/`planId` populated shape ({ name, duration, price }).
+// Plan price row → populated `packageId`/`planId` shape ({ name, duration, price }).
 const planRef = (
   id: number | null | undefined,
   plan: { name: string | null; duration: number; price: unknown } | undefined
 ) => (id == null || !plan ? null : { _id: String(id), name: plan.name ?? null, duration: plan.duration, price: dec(plan.price) });
 
-// ── Package/course subscription (one model, split by course vs package) ────────
 type PkgSub = {
   id: number; courseId: number | null; packageId: number | null; planId: number | null;
-  // `amount` is the canonical paid value on ws_package_course_subscription (written by
-  // the create path, summed by the Subscription Report). `paid_amount` is a later
-  // promoter-only column (2026-06-19_subscription_promoter_cols.sql) that stays NULL
-  // for non-promoter subs — so paidAmount is sourced from `amount`, not `paid_amount`.
+  // `amount` is the canonical paid value on ws_package_course_subscription. `paid_amount`
+  // is promoter-only and NULL for other subs, so paidAmount is sourced from `amount`.
   amount: unknown; status: boolean | null; startAt: Date | null; endAt: Date | null;
 };
 
@@ -74,22 +71,15 @@ export const toPackageDto = (
   };
 };
 
-// ── Live course subscription ───────────────────────────────────────────────────
 type LiveSub = {
   id: number; liveCourseId: number; planId: number | null;
   status: boolean | null;
   startAt: Date | null; endAt: Date | null;
   /**
-   * The payment row — the ONLY source of payment since 2026-08-25, when paid/original
-   * amount, wallet coin and payment_status moved off the subscription and were
-   * dropped from it.
-   *
-   * 2026-08-27: the columns took their ws_package_course_order names —
-   * `amount` (discount_price, charged), `originalPrice` (price, list) and
-   * `codeDiscount` (code_discount), which is the discount STORED rather than derived.
-   *
-   * REQUIRED, not optional: a caller that forgets `include: { order: true }` would
-   * otherwise silently emit paidAmount/discountAmount as null. Keep it a compile error.
+   * The payment row, the only source of payment data. `amount` = discount_price
+   * (charged), `originalPrice` = price (list), `codeDiscount` = the stored code discount.
+   * Required, not optional: a caller that forgets `include: { order: true }` would
+   * silently emit paidAmount/discountAmount as null. Keep it a compile error.
    */
   order: { amount: number | null; originalPrice: number | null; codeDiscount: number | null; wsCoin: number | null; promocode: unknown; refferalcode: unknown; status: string | null } | null;
 };
@@ -101,20 +91,14 @@ export const toLiveCourseDto = (
   now: Date
 ) => {
   const live = liveCourses.get(s.liveCourseId);
-  // Payment lives on the order since 2026-08-25 and nowhere else.
   const pay = s.order;
   return {
     _id: String(s.id),
     liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image }),
     planId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
     paidAmount: pay?.amount ?? null,
-    // The DTO field is unchanged: null (not 0) when NO code was applied, matching
-    // what the dropped column held for those rows.
-    //
-    // The gate used to be `originalAmount != null`, which worked only because
-    // original_amount was written ONLY on a promo. `price` is now written on every
-    // order (package semantics), so the gate is the code snapshots themselves —
-    // exactly the condition under which original_amount used to be set.
+    // null (not 0) when no code was applied. The gate is the code snapshots, since
+    // `price` is written on every order.
     discountAmount: pay && (pay.promocode != null || pay.refferalcode != null) ? liveSubDiscountAmount(pay) : null,
     paymentStatus: pay
       ? (pay.status === "complete" ? "verified" : pay.status === "cancel" ? "failed" : pay.status ?? "pending")
@@ -125,7 +109,6 @@ export const toLiveCourseDto = (
   };
 };
 
-// ── Test series subscription ───────────────────────────────────────────────────
 type TestSub = {
   id: number; testSeriesId: number; planId: number | null; amount: unknown;
   status: boolean | null; startAt: Date | null; endAt: Date | null;
@@ -143,8 +126,7 @@ export const toTestSeriesDto = (
     _id: String(s.id),
     testSeriesId: ref(s.testSeriesId, ts && { name: ts.title, image: ts.thumbnail }),
     planId: price ? { _id: String(s.planId), name: price.name ?? null, duration: price.durationDays, price: dec(price.price) } : null,
-    // WIRE CONTRACT: the DTO key stays `price`; the column became `amount` on
-    // 2026-08-31 when this table took the ws_package_course_subscription names.
+    // Wire contract: the DTO key stays `price`; the column is `amount`.
     price: dec(s.amount),
     startAt: s.startAt,
     endAt: s.endAt,
@@ -152,7 +134,6 @@ export const toTestSeriesDto = (
   };
 };
 
-// ── Ebook subscription ─────────────────────────────────────────────────────────
 type EbookSub = {
   id: number; ebookId: number | null; orderId: number | null; price: unknown;
   status: boolean | null; startAt: Date | null; endAt: Date | null;
@@ -177,10 +158,8 @@ export const toEbookDto = (
   };
 };
 
-// ── Physical book order ────────────────────────────────────────────────────────
-// Takes admin-book's enrichOrders() output, so line items resolve the same way as
-// the Book Orders report: ws_book_order_item child rows, else the legacy
-// `order_items` JSON snapshot (legacy orders have NO child rows).
+// Takes admin-book's enrichOrders() output, so line items resolve like the Book Orders
+// report: ws_book_order_item rows, else the legacy `order_items` JSON snapshot.
 type BookOrderRow = {
   id: number; receiptId: string; trackingId: bigint | null; amount: unknown;
   gatewayOrderId: string; gatewayPaymentId: string | null; paymentMethod: string; status: string; paidAt: Date | null; createdAt: Date | null;
@@ -195,7 +174,7 @@ type EnrichedBookOrder = {
 export const toPhysicalBookDto = ({ row: o, lineItems, books, shippingPrice }: EnrichedBookOrder) => ({
   _id: String(o.id),
   receiptId: o.receiptId,
-  // Courier AWB; null until fulfilled. String, same as the Book Orders report.
+  // Courier AWB; null until fulfilled.
   trackingId: o.trackingId != null ? String(o.trackingId) : null,
   items: lineItems.map((it) => {
     const book = it.bookId != null ? books.get(it.bookId) : undefined;
@@ -210,7 +189,7 @@ export const toPhysicalBookDto = ({ row: o, lineItems, books, shippingPrice }: E
   amount: dec(o.amount),
   shippingPrice,
   paymentMethod: o.paymentMethod,
-  // Razorpay identifiers, same as the Book Orders report; empty gateway id → null.
+  // Empty gateway id → null.
   razorpayOrderId: o.gatewayOrderId ? o.gatewayOrderId : null,
   razorpayPaymentId: o.gatewayPaymentId ?? null,
   status: o.status,
@@ -218,7 +197,6 @@ export const toPhysicalBookDto = ({ row: o, lineItems, books, shippingPrice }: E
   createdAt: o.createdAt,
 });
 
-// ── Address ────────────────────────────────────────────────────────────────────
 type AddressRow = {
   id: number; name: string; phone: bigint; alternate_phone: bigint | null;
   email: string; address: string; address_2: string; city: string;
@@ -233,7 +211,7 @@ export const toAddressDto = (
   const st = a.state != null ? states.get(a.state) : undefined;
   return {
     _id: String(a.id),
-    // Editable fields (admin edit modal prefill). Phones are BIGINT → strings.
+    // Phones are BIGINT → strings.
     name: a.name,
     phone: a.phone != null ? String(a.phone) : null,
     alternatePhone: a.alternate_phone != null ? String(a.alternate_phone) : null,

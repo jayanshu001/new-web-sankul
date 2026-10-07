@@ -1,3 +1,4 @@
+// Client careers: HTTP handlers for openings and job applications.
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";

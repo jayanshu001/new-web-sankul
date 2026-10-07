@@ -1,22 +1,13 @@
 /**
- * Client trending books/ebooks + free-category resolution — SQL branch for the
- * dashboard widgets and free dashboard. Gated behind `isMysqlModule("client-trending")`.
- *
- * Books: ws_book where is_trending=1 (+ language/search), paid = discounted_price>0.
- * Ebooks: ws_ebook where is_trending=1; price/free via ws_package_course_ebook_price
- * (ebookId; min plan price; free = min==0).
- * resolveFreeCategoryIds: free packages/courses → material/exam/video category ids
- * via the *_category_(course|package) pivots + PackageSpecificSubject + the
- * PackageVideoCategoryRelation→VideoCategoryRelation tree. ⚠ ws_package has no
- * isPaid col → no free packages on SQL (free-package branch yields none); Course
- * free = purchase='0'. (Documented catalog drift.)
+ * Client trending: trending books/ebooks + free dashboard. Book paid = discounted_price>0. Ebook free = min
+ * active plan price is 0 (ws_ebook has no isPaid). ws_package has no isPaid either, so there
+ * are no free packages; a free course is purchase='0'.
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 import { signMediaToken } from "../../utils/mediaToken";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-
 
 type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number; skip?: number; customerId?: number | null };
 const flags = (o: TrendingOpts) => ({
@@ -35,22 +26,20 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
   if (wantFree) where.discounted_price = 0;
   else if (wantPaid) where.discounted_price = { gt: 0 };
 
-  // findMany + count over the IDENTICAL where — total drives the pagination envelope.
+  // findMany + count must share the identical where (total drives pagination).
   const [books, total] = await Promise.all([
     prisma.book.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip, take: limitNum }),
     prisma.book.count({ where }),
   ]);
   const items = books.map((b: any) => ({
     type: "book" as const, _id: String(b.id), name: b.name, description: b.description ?? null, author: b.author ?? null,
-    // Encrypted demo token instead of the raw demo URL. Public content → always
-    // emitted when a demo PDF exists, independent of login/purchase.
+    // Encrypted demo token instead of the raw URL; public content, so emitted regardless of login/purchase.
     language: b.language, image: b.image ?? null, thumbnail: b.thumbnail ?? null,
     demoMediaToken: b.demo_url ? signMediaToken({ k: "bookDemo", id: b.id, free: true, cust: opts.customerId ?? 0 }) : null,
     isTrending: b.isTrending, isCombo: b.isCombo ?? false, isMagazine: b.isMagazine ?? false,
     listPrice: b.list_price ?? b.listPrice ?? null, discountedPrice: b.discounted_price, shippingPrice: b.shipping_price ?? null,
     pages: b.pages ?? 0, price: b.discounted_price, isFree: b.discounted_price === 0, isNew: isNewItem(b.created_at), createdAt: b.created_at,
-    // Exposed so the combined book+ebook trending feed (GET /client/books/trending)
-    // can re-apply `order_by ASC, created_at ASC` across both types in memory.
+    // Lets the combined feed (GET /client/books/trending) re-sort both types in memory.
     orderBy: b.order_by ?? 0,
   }));
   return { type: wantFree ? "free" : "paid", items, total };
@@ -70,8 +59,7 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const plansByEbook = new Map<number, any[]>();
   for (const p of plans) { if (p.ebookId == null) continue; (plansByEbook.get(p.ebookId) ?? plansByEbook.set(p.ebookId, []).get(p.ebookId)!).push(p); }
 
-  // free/paid is a post-query (in-memory) filter over the plan price, so the
-  // total for pagination is the FULL filtered length; window it via skip/take.
+  // free/paid is an in-memory filter over plan price, so total = full filtered length.
   const filtered = ebooks.map((e: any) => {
     const ePlans = plansByEbook.get(e.id) ?? [];
     const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => Number(p.price) || 0)) : 0;
@@ -82,7 +70,6 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
       type: "ebook" as const, _id: String(e.id), name: e.name, description: e.description ?? null, author: e.author ?? null,
       publisher: e.publisher ?? null, language: e.language, image: e.image ?? null, thumbnail: e.thumbnail ?? null, demoUrl: e.demoUrl ?? null,
       isTrending: e.isTrending, price: minPrice, isFree, isNew: isNewItem(e.createdAt), plans: ePlans, createdAt: e.createdAt,
-      // See the book DTO above — needed for the combined trending merge.
       orderBy: e.orderby ?? 0,
     };
   }).filter(Boolean) as any[];
@@ -91,13 +78,13 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   return { type: wantFree ? "free" : "paid", items, total };
 };
 
+// Material/exam/video category ids attached to free courses.
 export const resolveFreeCategoryIds = async () => {
   const materialCategoryIds = new Set<number>();
   const examCategoryIds = new Set<number>();
   const videoCategoryIds = new Set<number>();
 
-  // Free courses: purchase='0'. (Free packages: ws_package has no isPaid → none.)
-  // CourseFlag01 enum: `no`@map("0") = free, `yes`@map("1") = paid.
+  // CourseFlag01 enum: `no`@map("0") = free, `yes`@map("1") = paid. ws_package has no isPaid.
   const freeCourses = await prisma.course.findMany({ where: { status: true, purchase: "no" as any }, select: { id: true, videoCategoryId: true } });
   const freeCourseIds = freeCourses.map((c) => c.id);
   for (const c of freeCourses) if (c.videoCategoryId) videoCategoryIds.add(c.videoCategoryId);
@@ -120,10 +107,7 @@ export const resolveFreeCategoryIds = async () => {
 
 const FREE_LIMIT = 10;
 
-/**
- * getFreeDashboard sections on SQL. Free ebooks = min plan price 0 (ws_ebook has
- * no isPaid col); free videos = in a free video-category OR priceType=free.
- */
+/** Free ebooks = min plan price 0; free videos = in a free video category OR priceType=free. */
 export const buildFreeDashboard = async (customerId: number | null) => {
   const [trendingFreeBooks, trendingFreeEbooks, freeCats] = await Promise.all([
     fetchTrendingBooksOnly({ type: "free", limit: FREE_LIMIT, customerId }),
@@ -131,9 +115,7 @@ export const buildFreeDashboard = async (customerId: number | null) => {
     resolveFreeCategoryIds(),
   ]);
 
-  // Free ebooks: those whose min active plan price is 0 (price-derived, since
-  // ws_ebook has no isPaid). Reuse the trending-free-ebook items? No — this is
-  // the full free-ebook section, not trending-only. Resolve directly.
+  // Full free-ebook section (not trending-only), so resolved directly.
   const allEbooks = await prisma.eBook.findMany({ where: { active: true }, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }], take: 100 });
   const ebookIds = allEbooks.map((e) => e.id);
   const plans = ebookIds.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ebookIds }, status: true }, orderBy: { duration: "asc" } }) : [];
@@ -154,14 +136,12 @@ export const buildFreeDashboard = async (customerId: number | null) => {
     return { ...e, _id: String(e.id), plans: plansByEbook.get(e.id) ?? [], isPaid: false, isPurchased: !!endAt, daysLeft: endAt ? computeDaysLeft(endAt, now) : null };
   });
 
-  // Free videos: in a free video-category OR priceType=free.
   const videoWhere: any = { status: true, OR: [{ priceType: "free" as any }] };
   if (freeCats.videoCategoryIds.length) videoWhere.OR.push({ videoCategoryId: { in: freeCats.videoCategoryIds } });
   const freeVideos = (await prisma.video.findMany({ where: videoWhere, orderBy: [{ order: "asc" }, { created_at: "asc" }], take: FREE_LIMIT, select: { id: true, title: true, topic: true, priceType: true, videoCategoryId: true, VideoCategory: { select: { id: true, title: true, image: true } } } }))
     .map((v) => ({ _id: String(v.id), title: v.title, topic: v.topic, priceType: v.priceType, videoCategoryId: v.VideoCategory ? { _id: String(v.VideoCategory.id), title: v.VideoCategory.title, image: v.VideoCategory.image } : null }));
 
-  // Every section is always present; empty array as `data` when unavailable so
-  // the response shape stays stable for the client.
+  // Every section is always present (empty `data` when unavailable) so the shape stays stable.
   const dashboard: Array<{ title: string; type: string; data: unknown }> = [
     { title: "Trending Free Books", type: "trending-book", data: trendingFreeBooks.items.slice(0, FREE_LIMIT) },
     { title: "Trending Free Ebooks", type: "trending-ebook", data: trendingFreeEbooks.items.slice(0, FREE_LIMIT) },

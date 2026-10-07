@@ -1,3 +1,4 @@
+// Admin package categories: HTTP handlers for package category CRUD.
 import { Request, Response } from "express";
 import { createPackageCategorySchema, updatePackageCategorySchema } from "./master.validation";
 import * as pkgCatSql from "../../modules/package-category/package-category.service";

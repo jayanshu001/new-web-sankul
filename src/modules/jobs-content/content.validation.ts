@@ -1,3 +1,4 @@
+// Jobs content: Zod request schemas.
 import { z } from "zod";
 import { JOB_CONTENT_STATUSES, JOB_CONTENT_TYPES, JOB_SECTION_BLOCK_TYPES, JOB_SECTION_POSITIONS } from "./content.types";
 import { jobContentSeoSchema } from "../jobs-seo/seo.validation";

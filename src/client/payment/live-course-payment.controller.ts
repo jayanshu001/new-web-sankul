@@ -1,3 +1,4 @@
+// Client payments: live-course promo preview and create-order handlers.
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
@@ -20,7 +21,6 @@ import {
 } from "../../modules/live-course-order/live-course-order.service";
 import { customerAddressRepository } from "../../modules/customer-address/customer-address.repository";
 
-// SQL planId is numeric (migrated id-space).
 const createOrderSqlSchema = z.object({
   planId: z.coerce
     .number({ invalid_type_error: "Please select a valid plan." })
@@ -40,7 +40,6 @@ const createOrderSqlSchema = z.object({
     .optional(),
 });
 
-// SQL variant: planId is a numeric id (migrated id-space).
 const applyPromoSqlSchema = z.object({
   planId: z.coerce
     .number({ invalid_type_error: "Please select a valid plan." })
@@ -49,10 +48,7 @@ const applyPromoSqlSchema = z.object({
   promocode: z.string().trim().min(1, "Please enter a promo code."),
 });
 
-// POST /api/v1/client/payment/apply-promo/live-course
-// Preview-only: validates a promo code against a plan and returns the price
-// breakdown. The discount is re-validated server-side at create-order time —
-// this endpoint is purely so the UI can show the final price before checkout.
+// Preview only: the discount is re-validated at create-order time.
 export const applyLiveCoursePromo = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -61,9 +57,8 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("applyLiveCoursePromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ── MySQL live-course promo preview (live-course-order flag) ──────────────
-    // Returns the SAME shape as POST /client/promocodes/apply: the entity + ALL
-    // its pricing plans, each annotated with the per-plan offer.
+    // Same shape as POST /client/promocodes/apply: the entity + all its plans,
+    // each annotated with the per-plan offer.
     {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await findLiveCoursePlanForOrder(body.planId);
@@ -213,9 +208,7 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
   }
 };
 
-// POST /api/v1/client/payment/create-order/live-course
-// Mirrors createCourseOrderPayment but writes to LiveCourseSubscription so the
-// existing course flow stays isolated. Body: { planId, promocode? }.
+// Body: { planId, promocode? }.
 export const createLiveCourseOrderPayment = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const customerId = req.user?.id;
@@ -233,10 +226,6 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    // ── MySQL live-course write path (live-course-order) ─────────────────────
-    // Single-table design: createPending writes a pending ws_live_course_subscription
-    // row; /payment/verify (or the webhook) flips it to verified or folds it onto an
-    // existing active sub.
     {
       const customerIdInt = Number(customerId);
       if (!Number.isInteger(customerIdInt)) {
@@ -249,16 +238,14 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price/inactive", { traceId, customerId, planId: body.planId });
         return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       }
-      // Gate on the parent live course being active — a disabled live course must
-      // not be purchasable even if an active plan row still points at it.
+      // A disabled live course must not be purchasable even if an active plan still points at it.
       const courseSql = await findLiveCourse(planSql.liveCourseId);
       if (!courseSql || courseSql.status === false) {
         logger.warn("createLiveCourseOrderPayment[mysql] live course inactive/missing", { traceId, customerId, liveCourseId: planSql.liveCourseId });
         return res.status(404).json({ success: false, message: "This live course is currently unavailable. Please choose another." });
       }
 
-      // Material is a property of the selected PLAN (mirrors Course/Package).
-      // When the plan ships material, accept + validate the delivery address.
+      // Material belongs to the selected plan; when it ships material, validate the address.
       const withMaterialSql = planSql.withMaterial;
       let shippingIdSql: number | null = null;
       if (withMaterialSql && body.customerShippingId) {
@@ -287,16 +274,11 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         referrerIdNum = result.referrerId ?? null;
       }
 
-      // Freeze the redeemed code into the subscription as the snapshot OBJECT, routed
-      // to exactly ONE column: a real promocode → `promocode`, a customer referral
-      // code → `refferalcode`. Same contract as ws_package_course_order, so the
-      // live-course subscription report can render the code + promoter, and the same
-      // JSON paths resolve. Both null when no code was applied.
-      //
-      // planKind "livePlan" is REQUIRED: body.planId is a ws_live_course_plan id, and
-      // that table shares an id space with ws_package_course_ebook_price. Defaulting
-      // to "price" here would snapshot an unrelated course/package plan and its
-      // promoter percentage (see order-code-snapshot.repository.findPlanLink).
+      // Snapshot the redeemed code into exactly one column (promocode → `promocode`,
+      // referral → `refferalcode`; both null when none), same contract as
+      // ws_package_course_order. planKind "livePlan" is required: ws_live_course_plan
+      // shares an id space with ws_package_course_ebook_price, so "price" would snapshot
+      // an unrelated plan and its promoter percentage.
       const codeSnapshot = await buildOrderCodeSnapshots({
         promocodeId: promocodeIdNum,
         referrerId: referrerIdNum,
@@ -324,15 +306,8 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       const { orderId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
         amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: walletUsage.coin,
-        // Since 2026-08-27 this table has the ws_package_course_order columns, so the
-        // four values this checkout already computed but had nowhere to put are
-        // persisted — same wiring as createPackageOrderMysql:
-        //   receiptId  → unique_id      (the id already returned to the client)
-        //   rzpOrder   → razorpay_order (the full gateway response)
-        //   discountAmount → code_discount (stored now, no longer derived)
-        //   referrerIdNum  → referrer_id   (was only inside the refferalcode snapshot)
         // `originalAmount` stays null when no promo ran; the service falls back to the
-        // charged amount so `price` is ALWAYS the list price, as on package.
+        // charged amount so `price` is always the list price, as on package.
         originalAmount,
         uniqueId: receiptId,
         razorpayOrderPayload: JSON.stringify(rzpOrder),
@@ -350,10 +325,8 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       return res.status(201).json({
         success: true,
         data: omit({
-          // WIRE CONTRACT: the key stays `subscriptionId`. Since 2026-08-25 checkout
-          // creates an ORDER (no subscription exists until payment verifies), so this
-          // now carries the order id. The app only echoes it back / logs it — verify
-          // is keyed on razorpay_order_id — so the rename stayed server-side.
+          // Wire contract: the key stays `subscriptionId` but carries the order id (no
+          // subscription exists until verify, which is keyed on razorpay_order_id).
           subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
           liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
           plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },

@@ -1,10 +1,10 @@
+// Logger: Winston with daily-rotated JSON files and a colored console renderer.
 import winston from 'winston';
 import 'winston-daily-rotate-file';
 import path from 'path';
 import fs from 'fs';
 import { getContext } from './requestContext';
 
-//  Custom Logger Interface
 interface ExtendedLogger extends winston.Logger {
   logWithContext: (level: string, message: string, context?: Record<string, any>) => void;
 }
@@ -15,11 +15,8 @@ if (!fs.existsSync(logDirectory)) {
   fs.mkdirSync(logDirectory, { recursive: true });
 }
 
-// Inject per-request context (traceId, userId, route, dbMs, cacheHit) into
-// every log record. Reads AsyncLocalStorage at format time, so the only
-// cost outside a request is one undefined check. Caller-supplied fields
-// always take precedence — explicit context in a `logger.info(msg, ctx)`
-// call overrides what's in the request context.
+// Injects AsyncLocalStorage request context into every record; fields passed
+// explicitly to `logger.info(msg, ctx)` take precedence.
 const requestContextFormat = winston.format((info) => {
   const ctx = getContext();
   if (!ctx) return info;
@@ -30,7 +27,6 @@ const requestContextFormat = winston.format((info) => {
   return info;
 })();
 
-//  JSON file format for logs
 const customFormat = winston.format.combine(
   requestContextFormat,
   winston.format.timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
@@ -39,7 +35,6 @@ const customFormat = winston.format.combine(
   winston.format.json()
 );
 
-//  Daily rotating log files
 const fileTransport = new winston.transports.DailyRotateFile({
   filename: path.join(logDirectory, 'app-%DATE%.log'),
   datePattern: 'YYYY-MM-DD',
@@ -49,8 +44,6 @@ const fileTransport = new winston.transports.DailyRotateFile({
   options: { flags: 'a', mode: 0o644 }
 });
 
-//  ANSI colors for the console — no extra dependency (chalk/colors aren't
-//  installed); these are the same 16-color codes every terminal supports.
 const ANSI = {
   reset: '\x1b[0m',
   dim: '\x1b[2m',
@@ -62,15 +55,11 @@ const ANSI = {
   magenta: '\x1b[35m',
   cyan: '\x1b[36m',
   gray: '\x1b[90m',
-  // Bold text on a solid background — for badges that must jump out of a
-  // scrolling log, not just tint it (cache HIT/MISS).
   bgGreen: '\x1b[1;30;42m',
   bgYellow: '\x1b[1;30;43m',
 } as const;
 const paint = (code: string, text: string) => `${code}${text}${ANSI.reset}`;
 
-/** 2xx green, 3xx cyan, 4xx yellow, 5xx red — the whole point of this task:
- * scan a scrolling console and immediately see which requests errored. */
 const colorForStatus = (status: number): string =>
   status >= 500 ? ANSI.red : status >= 400 ? ANSI.yellow : status >= 300 ? ANSI.cyan : ANSI.green;
 
@@ -85,24 +74,15 @@ const colorForMethod = (method: string): string => {
   }
 };
 
-// Compact one-line JSON — no pretty-printing indent, so a query/params/body
-// dump doesn't blow a single request out to a dozen console lines.
 const compact = (value: unknown): string => JSON.stringify(value);
 
-/**
- * Console renderer for the two requestLogger.ts events that carry
- * method/url — everything else (service startup logs, error stacks, cron
- * output, etc.) falls through to the generic `[level]: message {meta}` form
- * below unchanged.
- */
+/** Console renderer for requestLogger.ts events (those carrying method/url). */
 const renderHttpLine = (info: Record<string, any>): string => {
   const { timestamp, message, method, url, statusCode, responseTime, dbMs, cacheHit, cacheMiss, query, params, body } = info;
   const arrow = message === 'API Request Start' ? ANSI.dim + '→' + ANSI.reset : ANSI.dim + '←' + ANSI.reset;
   const methodBadge = paint(colorForMethod(method), String(method).padEnd(6));
   const statusBadge = statusCode !== undefined ? ' ' + paint(colorForStatus(statusCode), String(statusCode)) : '';
   const timing = responseTime ? paint(ANSI.dim, responseTime) : '';
-  // Black-on-green / black-on-yellow blocks — deliberately louder than the
-  // rest of the line so a HIT/MISS is scannable at a glance, not just tinted.
   const cacheBadge =
     cacheHit ? paint(ANSI.bgGreen, ' HIT ') : cacheMiss ? paint(ANSI.bgYellow, ' MISS ') : '';
   const dbBadge = dbMs ? paint(ANSI.dim, `db=${dbMs}ms`) : '';
@@ -115,16 +95,13 @@ const renderHttpLine = (info: Record<string, any>): string => {
   return line;
 };
 
-//  Console format for local dev
 const consoleFormat = winston.format.combine(
   requestContextFormat,
   winston.format.colorize(),
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   winston.format.printf((info) => {
-    // The logger-level `customFormat` (see below) runs `winston.format.metadata()`
-    // BEFORE this transport-level format does, which nests every field except
-    // level/message/timestamp under `info.metadata` — so the real fields (method,
-    // url, statusCode...) live one level deeper than they look at first glance.
+    // The logger-level `customFormat` runs `format.metadata()` before this
+    // transport format, so method/url/statusCode etc. are nested under `info.metadata`.
     const { timestamp, level, message, metadata: nested, ...rest } = info;
     const meta = nested && typeof nested === 'object' ? { ...rest, ...nested } : rest;
     if (typeof meta.method === 'string' && typeof meta.url === 'string') {
@@ -136,10 +113,7 @@ const consoleFormat = winston.format.combine(
   })
 );
 
-//  Create logger
 const baseLogger = winston.createLogger({
-  // Production defaults to `info` to cut log volume + disk I/O at high RPS; dev
-  // stays `debug`. Override explicitly with LOG_LEVEL when needed.
   level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
   format: customFormat,
   defaultMeta: { service: 'Web-sankul' },
@@ -148,9 +122,8 @@ const baseLogger = winston.createLogger({
     new winston.transports.Console({ format: consoleFormat })
   ],
   exitOnError: false
-}) as ExtendedLogger; // cast to extended type
+}) as ExtendedLogger;
 
-// dd logWithContext method
 baseLogger.logWithContext = (level, message, context = {}) => {
   baseLogger.log(level, message, { ...context });
 };

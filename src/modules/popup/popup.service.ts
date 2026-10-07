@@ -1,3 +1,4 @@
+// Popups: admin popup CRUD and the client's active popup.
 import { popupRepository } from "./popup.repository";
 import { toPopupDto } from "./popup.transformer";
 import type { PopupCreateInput, PopupDto, PopupUpdateInput } from "./popup.types";
@@ -12,10 +13,7 @@ export const listPopups = async (): Promise<PopupDto[]> => {
   return rows.map(toPopupDto);
 };
 
-/**
- * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
- * when provided (absent → full filtered list). Always returns the total count.
- */
+/** Admin list; `skip`/`take` apply only when provided (absent → full filtered list). */
 export const listPopupsPaged = async (q: {
   search?: string;
   sortBy?: string;
@@ -70,10 +68,7 @@ export const deletePopup = async (id: string): Promise<boolean> => {
   }
 };
 
-/**
- * Client active popup: status:true AND promoExpireAt > now, newest first.
- * Returns the single most recent match or null (matches legacy `findOne`).
- */
+/** Client active popup: status:true AND promoExpireAt > now; the most recent match or null. */
 export const getActivePopup = async (): Promise<PopupDto | null> => {
   const now = new Date();
   const row = await popupRepository.findActive(now);

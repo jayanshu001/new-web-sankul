@@ -1,3 +1,4 @@
+// Client course lectures: HTTP handler issuing a lecture's media token.
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -5,6 +6,7 @@ import { lectureQuerySchema } from "./course.validation";
 import * as lecSql from "../../modules/client-lecture/client-lecture.service";
 import { signMediaToken, MediaScope } from "../../utils/mediaToken";
 
+// Lecture media token for a course/package video; paid needs an active subscription.
 export const getLectureHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -49,10 +51,9 @@ export const getLectureHandler = async (req: Request, res: Response) => {
       }
     }
 
-    // Media is never returned inline. We mint a short-lived, customer-bound
-    // media token; the client exchanges it at POST /media/resolve. Free videos
-    // get a `free` token; paid videos require an active subscription (403 for
-    // unpurchased — no raw id/url ever leaves the server).
+    // Media is never returned inline: the client exchanges a short-lived,
+    // customer-bound token at POST /media/resolve. Paid videos require an active
+    // subscription (403 otherwise).
     const buildScope = (): MediaScope => {
       if (type === "package" && packageId) return { kind: "package", id: lecSql.parseLecId(packageId)! };
       return { kind: "course", id: lecSql.parseLecId(courseId ?? "")! };

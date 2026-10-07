@@ -1,18 +1,4 @@
-/**
- * Catalog · Course service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
- *
- * Gated behind `isMysqlModule("catalog-course")` — currently **flag OFF**.
- *
- * Built dual-path but NOT enabled: like package, every client course LISTING
- * endpoint joins commerce-wave tables (PackageCourseEbookPrice plans,
- * PackageCourseSubscription ownership) and embeds Mongo-only category groups, so
- * the full `/client/courses` contract cannot be reproduced from `ws_course`
- * alone this wave. And the subject-category / course id-space is int (MySQL) vs
- * ObjectId (Mongo) — flipping any single course read while its still-Mongo
- * consumers join those ids would split the id space → broken FE. So
- * `catalog-course` flips WITH the commerce/dashboard wave (D3, mirrors package).
- * See docs/migration/CATALOG_MODULE_SCOPE.md.
- */
+// Course catalog: categories, course lists and plan-enriched course listings.
 import { computeDaysLeft } from "../../utils/planDuration";
 import { catalogCourseRepository as repo } from "./catalog-course.repository";
 import { listActivePricesByCourses } from "../commerce-price/commerce-price.service";
@@ -33,23 +19,12 @@ import type {
 } from "./catalog-course.types";
 import type { PriceDto } from "../commerce-price/commerce-price.types";
 
-
-/** Parse a string id to a positive int, else null. */
 export const parseCourseId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// ── subject categories ──────────────────────────────────────────────────────
-
-/**
- * Active subject categories each with their active-course count — matches the
- * Mongo `listCourseCategories` contract (`{...category, courseCount}`).
- *
- * Supports optional `search` (title `contains`) + pagination (`skip`/`limit`);
- * the active-course counts are computed only for the returned page. Returns
- * `{ data, total }` where `total` is the full match count (for pagination).
- */
+/** Active-course counts are computed only for the returned page; `total` is the full match count. */
 export const listCourseCategoriesWithCounts = async (
   opts: { search?: string; skip?: number; limit?: number } = {}
 ): Promise<{ data: CourseSubjectCategoryWithCountDto[]; total: number }> => {
@@ -75,8 +50,6 @@ export const listCourseCategoriesWithCounts = async (
   };
 };
 
-// ── courses ─────────────────────────────────────────────────────────────────
-
 export const findCourseById = async (id: number): Promise<CourseDto | null> => {
   const row = await repo.findCourseById(id);
   return row ? toCourseDto(row) : null;
@@ -94,8 +67,6 @@ export const listActiveCoursesByCategory = async (
   return rows.map(toCourseDto);
 };
 
-// ── composed course listing (catalog-course + commerce-price + -subscription) ─
-
 const SORT_FIELD: Record<NonNullable<ListCoursesOptions["sortBy"]>, "createdAt" | "ordered" | "name"> = {
   createdAt: "createdAt",
   ordered: "ordered",
@@ -103,15 +74,9 @@ const SORT_FIELD: Record<NonNullable<ListCoursesOptions["sortBy"]>, "createdAt" 
 };
 
 /**
- * The MySQL equivalent of the Mongo `paginateCoursesWithPlans`: paginated active
- * courses, each enriched with its active plans (split by material) and the
- * per-customer purchase state (isPurchased + daysLeft). Spans three migrated
- * modules — catalog-course (rows), commerce-price (plans), commerce-subscription
- * (ownership). Response shape mirrors the Mongo handler exactly.
- *
- * `daysLeft` rule (identical to Mongo): the longest-lived active sub for the
- * course wins; a lifetime grant (endAt null) beats any dated sub. A sub matches
- * a course directly (`courseId`) or via one of the course's plans (`planId`).
+ * `daysLeft`: the longest-lived active sub wins and a lifetime grant (endAt null)
+ * beats any dated sub. A sub matches a course directly (`courseId`) or via one of
+ * its plans (`planId`).
  */
 export const listCoursesWithPlans = async (
   opts: ListCoursesOptions = {}
@@ -122,12 +87,9 @@ export const listCoursesWithPlans = async (
   const sortField = SORT_FIELD[opts.sortBy ?? "createdAt"];
   const dir = opts.sortOrder === "asc" ? "asc" : "desc";
 
-  // Course rows + their active plans are pure catalog data — identical for every
-  // caller of the same filter/sort/page. Only the isPurchased/daysLeft overlay
-  // below is per-customer, and that's ALWAYS computed live (never cached), so a
-  // purchase is reflected on the very next request with no flush needed for this
-  // endpoint at all. Tagged CacheEntity.CatalogCourse — the same tag admin course
-  // AND plan/price writes already flush via autoFlushGroup (see flushGroups.ts).
+  // Rows and plans are customer-independent and cached under CacheEntity.CatalogCourse
+  // (flushed by admin course and plan/price writes). The isPurchased/daysLeft overlay
+  // is always computed live, so a purchase shows up on the next request.
   const { rows, total, plans } = await cache.aside({
     key: cache.key(
       CacheDomain.Client,
@@ -143,7 +105,6 @@ export const listCoursesWithPlans = async (
         take: limit,
       });
       const courseIds = rows.map((r) => r.id);
-      // Active plans for the page's courses, bucketed by course then by material.
       const plans = courseIds.length ? await listActivePricesByCourses(courseIds) : [];
       return { rows, total, plans };
     },
@@ -162,7 +123,6 @@ export const listCoursesWithPlans = async (
     (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
   }
 
-  // Per-course endAt / lifetime from the customer's active subs (course OR plan).
   const now = new Date();
   const endAtByCourse = new Map<string, Date | null>();
   const lifetimeByCourse = new Set<string>();

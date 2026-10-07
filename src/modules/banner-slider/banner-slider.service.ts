@@ -1,3 +1,4 @@
+// Banner slider: admin and client lists, CRUD and reorder logic.
 import { bannerSliderRepository } from "./banner-slider.repository";
 import { toBannerDto, resolveBannerKey } from "./banner-slider.transformer";
 import { nextOrder } from "../../utils/listOrdering";
@@ -13,6 +14,7 @@ export const parseBannerId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+// Client list in curated order with an optional key filter (unpaginated).
 export const listBanners = async (opts?: {
   key?: string;
 }): Promise<BannerSliderDto[]> => {
@@ -109,10 +111,7 @@ export const deleteBanner = async (id: string): Promise<boolean> => {
   }
 };
 
-/**
- * Reorder banners. Returns the count of rows updated.
- * Only numeric ids apply.
- */
+/** Returns the count of rows updated; non-numeric ids are skipped. */
 export const reorderBanners = async (
   orders: { id: string; orderBy: number }[]
 ): Promise<number> => {

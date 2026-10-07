@@ -1,3 +1,4 @@
+// Admin goals: goal CRUD routes (cached reads, flushing writes).
 import { Router } from "express";
 import {
   createGoalHandler,
@@ -16,31 +17,19 @@ import { autoFlushGroup } from "../../middlewares/autoFlush";
 
 const router = Router();
 
-/**
- * GOAL MANAGEMENT ROUTES (Admin)
- * Base Path: /api/v1/admin/goals
- *
- * Authorization is via catalog RBAC (enforceRbac maps these to goals.view /
- * goals.create / goals.edit / goals.delete) + the admin-router staff gate — NOT
- * a hardcoded requireRole. A role granted the goals.* catalog permission
- * authorizes the matching endpoint. (Previously gated super_admin-only, which
- * ignored catalog grants — see goals-403-despite-granted-permission.md.)
- */
+// Authorization is catalog RBAC (enforceRbac maps these to goals.view/create/edit/
+// delete) + the admin-router staff gate, NOT a hardcoded requireRole, so a role
+// granted the goals.* permission authorizes the matching endpoint.
 
 // Cache goal reads; every write flushes "goal" (+ the client caches embedding it).
-// Create a new goal (supports multipart/form-data for image)
 router.post("/", authenticate, uploadTo(UPLOAD_FOLDERS.goals), uploadS3.single("image"), autoFlushGroup(CacheEntity.Goal), createGoalHandler);
 
-// Read all goals natively built for dashboard
 router.get("/", authenticate, cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Goal }), getGoalsHandler);
 
-// Read a single goal by id (with its labels — for server-searched pickers)
 router.get("/:id", authenticate, cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Goal }), getGoalByIdHandler);
 
-// Update specific goal
 router.put("/:id", authenticate, uploadTo(UPLOAD_FOLDERS.goals), uploadS3.single("image"), autoFlushGroup(CacheEntity.Goal), updateGoalHandler);
 
-// Delete goal
 router.delete("/:id", authenticate, autoFlushGroup(CacheEntity.Goal), deleteGoalHandler);
 
 export default router;

@@ -1,3 +1,4 @@
+// Client cart: book cart and shipping address routes.
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import { cacheRoute, CacheScope } from "../../middlewares/cacheRoute";
@@ -16,8 +17,7 @@ const router = Router();
 
 router.use(authenticate);
 
-// Cart is per-user (it's *my* cart) → scope: CacheScope.User, short 30s TTL. Writes below
-// autoFlush(CacheEntity.Cart) so an add/remove/update shows immediately, not after TTL.
+// Cart reads are cached per user; every write autoFlushes CacheEntity.Cart so changes show immediately.
 router.post("/", autoFlush(CacheEntity.Cart), addToCart);
 router.get("/", cacheRoute({ ttl: CACHE_TTL.QUICK_REFRESH, entity: CacheEntity.Cart, scope: CacheScope.User }), getCart);
 router.patch("/items/:bookId", autoFlush(CacheEntity.Cart), updateCartItemQty);

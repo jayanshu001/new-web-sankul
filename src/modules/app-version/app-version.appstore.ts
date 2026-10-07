@@ -1,14 +1,10 @@
-// Apple's public iTunes Lookup API — the only OFFICIAL, key-less way to read
-// the currently-published App Store version of an app. There is no equivalent
-// official API for Google Play, so Android's "latest" comes from admin config
-// (see app-version.service.ts).
-//
-// Docs: https://performance-partners.apple.com/search-api
+// App version check: live App Store version lookup, cached in Redis.
+// Apple's iTunes Lookup API is the only official, key-less way to read the published
+// App Store version. Google Play has no equivalent, so Android's "latest" comes from
+// admin config (see app-version.service.ts).
 //   GET https://itunes.apple.com/lookup?bundleId=<id>&country=<cc>
-//   -> { resultCount, results: [{ version, trackViewUrl, releaseNotes, ... }] }
-//
-// Result is cached in Redis so a burst of app opens doesn't hammer Apple and
-// so a transient Apple outage still serves the last-known-good version.
+// Cached in Redis so app-open bursts don't hammer Apple and an Apple outage still
+// serves the last-known-good version.
 
 import { callOutbound } from "../../libs/outbound";
 import { redisClient, isRedisReady } from "../../config/redis";
@@ -17,12 +13,10 @@ import logger from "../../utils/logger";
 const ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup";
 const TIMEOUT_MS = 4000;
 const CACHE_KEY = "app-version:appstore:ios";
-const CACHE_TTL_SECONDS = 60 * 30; // 30 min — store versions change rarely.
+const CACHE_TTL_SECONDS = 60 * 30;
 
 export interface AppStoreLookup {
-  /** Marketing version name, e.g. "1.2.0". */
   version: string;
-  /** Canonical store listing URL. */
   storeUrl: string;
   /** Release notes for the latest version, if Apple returns them. */
   releaseNotes: string | null;
@@ -50,7 +44,6 @@ export const fetchAppStoreVersion = async (): Promise<AppStoreLookup | null> => 
     return null;
   }
 
-  // Serve from cache first.
   if (isRedisReady()) {
     try {
       const cached = await redisClient.get(CACHE_KEY);

@@ -1,3 +1,4 @@
+// Admin masters: educator, subject/video/package category and material master routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3, uploadTo } from "../../middlewares/upload";
@@ -18,14 +19,12 @@ import { getPackageCategories, createPackageCategory, updatePackageCategory, del
 
 const router = Router();
 
-// All master data endpoints are admin-only.
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Route-level response cache + autoFlushGroup on writes (see docs/CACHING.md).
 // Each master tags its entity; the relational drill-down GETs (/:id/courses etc.)
 // stay uncached. Writes flush the entity + the client caches embedding it.
 
-// Educator Master
 router.get("/educators", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Educator }), getEducators);
 router.get("/educators/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Educator }), getEducatorById);
 router.get("/educators/:id/details", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Educator }), getEducatorDetails);
@@ -38,27 +37,23 @@ router.post("/educators", uploadTo(UPLOAD_FOLDERS.educator), uploadS3.single("im
 router.put("/educators/:id", uploadTo(UPLOAD_FOLDERS.educator), uploadS3.single("image"), autoFlushGroup(CacheEntity.Educator), updateEducator);
 router.delete("/educators/:id", autoFlushGroup(CacheEntity.Educator), deleteEducator);
 
-// Subject Category Master
 router.get("/subject-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory }), getSubjectCategories);
 router.get("/subject-categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.CourseSubjectCategory }), getSubjectCategoryById);
 router.post("/subject-categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), createSubjectCategory);
 router.put("/subject-categories/:id", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.CourseSubjectCategory), updateSubjectCategory);
 router.delete("/subject-categories/:id", autoFlushGroup(CacheEntity.CourseSubjectCategory), deleteSubjectCategory);
 
-// Material Master
 router.get("/materials", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.Material }), getMaterials);
 router.post("/materials", uploadTo(UPLOAD_FOLDERS.pcMaterial), uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), createMaterial);
 router.put("/materials/:id", uploadTo(UPLOAD_FOLDERS.pcMaterial), uploadS3.single("image"), autoFlushGroup(CacheEntity.Material), updateMaterial);
 router.delete("/materials/:id", autoFlushGroup(CacheEntity.Material), deleteMaterial);
 
-// Video Category Master
 router.get("/video-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.VideoCategory }), getVideoCategories);
 router.get("/video-categories/:id", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.VideoCategory }), getVideoCategoryById);
 router.post("/video-categories", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), createVideoCategory);
 router.put("/video-categories/:id", uploadTo(UPLOAD_FOLDERS.qcategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.VideoCategory), updateVideoCategory);
 router.delete("/video-categories/:id", autoFlushGroup(CacheEntity.VideoCategory), deleteVideoCategory);
 
-// Package Category Master (parent = Package from /admin/packages listing)
 router.get("/package-categories", cacheRoute({ ttl: CACHE_TTL.DAY, entity: CacheEntity.PackageCategory }), getPackageCategories);
 router.post("/package-categories", uploadTo(UPLOAD_FOLDERS.packageCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), createPackageCategory);
 router.put("/package-categories/:id", uploadTo(UPLOAD_FOLDERS.packageCategory), uploadS3.single("image"), autoFlushGroup(CacheEntity.PackageCategory), updatePackageCategory);

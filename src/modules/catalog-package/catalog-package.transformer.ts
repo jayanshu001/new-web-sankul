@@ -1,11 +1,8 @@
+// Package catalog: row to DTO mapping (response shape is frozen).
 import type { Package, PackageType } from "@prisma/client";
 import type { PackageDto, PackageTypeDto } from "./catalog-package.types";
 
-/**
- * `ws_package_type` row → DTO. The SQL table lacks `order`/`active` (the Mongo
- * model had them); synthesize `order: 0` + `active: true` so the response JSON
- * stays shape-compatible with the Mongo `listPackageTypes` contract.
- */
+/** `ws_package_type` has no `order`/`active`; they are synthesized to keep the response shape. */
 export const toPackageTypeDto = (row: PackageType): PackageTypeDto => ({
   _id: String(row.id),
   name: row.name,
@@ -16,12 +13,8 @@ export const toPackageTypeDto = (row: PackageType): PackageTypeDto => ({
 });
 
 /**
- * `ws_package` row → DTO (Phase B, flag OFF). Only maps columns that physically
- * exist in `ws_package`. NOTE: `educator_id` exists in the DDL but is absent
- * from the Prisma `Package` model (and is NULL for every current row), so it is
- * surfaced as `null` here — add it to the Prisma model + regen if a consumer
- * ever needs it. The Mongo-only catalog fields and all commerce joins are
- * intentionally NOT produced here (see catalog-package.types.ts scope note).
+ * `educator_id` exists in the DDL but not in the Prisma `Package` model (and is
+ * NULL on every row), so it is emitted as `null`.
  */
 export const toPackageDto = (row: Package): PackageDto => ({
   _id: String(row.id),

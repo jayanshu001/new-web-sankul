@@ -1,26 +1,19 @@
 /**
- * "Most Popular" pricing-plan tag — shared recompute across commerce modules.
+ * "Most Popular" pricing-plan tag, fully automatic. `is_most_popular` is written
+ * only here; no endpoint accepts it.
  *
- * Fully automatic: per-product, all-time paid orders decide the winner. There is
- * no admin override — the `most_popular_pinned` column shipped 2026-06-30, was
- * never given a UI, never wrote a non-zero row, and was dropped 2026-08-05
- * (see docs/admin/MOST_POPULAR_PLAN_PIN.md). One column per plan table:
- *   - is_most_popular : EFFECTIVE flag the API reads. Written here, read-only
- *                       everywhere else — no write endpoint accepts it.
+ * Winner per product: the plan with the most all-time paid orders; tie → lowest
+ * price, then lowest id. No sales → no badge.
  *
- * Winner per product: the plan with the most all-time PAID orders; tie → lowest
- * price, then lowest id. No sales → no badge on any plan of that product.
+ * Counting is all-time, so an established plan is hard to unseat. If the badge must
+ * track current demand, window the paid-order query (e.g. last 90 days) rather than
+ * adding a manual override.
  *
- * ⚠ Counting is ALL-TIME, so an established plan is very hard to unseat and a
- * newly added plan may never win one. If the badge ever needs to track *current*
- * demand, window the paid-order query (e.g. last 90 days) — that is the correct
- * fix, not a manual override.
- *
- * Scopes (5 logical modules over 3 plan tables — course/package/ebook share one):
+ * Scopes (5 logical modules over 3 plan tables; course/package/ebook share one):
  *   course      : ws_package_course_ebook_price (courseId)  ← paid PackageCourseOrder
  *   package     : ws_package_course_ebook_price (packageId) ← paid PackageCourseOrder
  *   ebook       : ws_package_course_ebook_price (ebookId)   ← paid EBookOrder
- *   liveCourse  : ws_live_course_plan          (liveCourseId) ← verified LiveCourseSubscription
+ *   liveCourse  : ws_live_course_plan          (liveCourseId) ← complete LiveCourseOrder
  *   testSeries  : ws_test_series_price          (testSeriesId) ← complete TestSeriesOrder
  */
 import { prisma } from "../../config/prisma";
@@ -28,10 +21,9 @@ import { prisma } from "../../config/prisma";
 export type PopularityScope = "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 export const POPULARITY_SCOPES: PopularityScope[] = ["course", "package", "ebook", "liveCourse", "testSeries"];
 
-// One plan as the ranker sees it. price coerced to number (test-series is Decimal).
+// price coerced to number (test-series is Decimal).
 interface PlanRow { id: number; productId: number; price: number }
 
-// Pick the winning plan id for ONE product, or null when it has no paid orders.
 function pickWinner(plans: PlanRow[], paidByPlan: Map<number, number>): number | null {
   if (plans.length === 0) return null;
   const withCount = plans.map((p) => ({ ...p, c: paidByPlan.get(p.id) ?? 0 }));
@@ -39,10 +31,6 @@ function pickWinner(plans: PlanRow[], paidByPlan: Map<number, number>): number |
   if (max <= 0) return null; // no sales → no badge
   return withCount.filter((x) => x.c === max).sort((a, b) => a.price - b.price || a.id - b.id)[0].id;
 }
-
-// ── per-scope data access ──────────────────────────────────────────────────────
-// Returns active plans (id, productId, price, pinned) for the scope, optionally
-// for a single product, and a planId→paid-order-count map covering those plans.
 
 async function loadCpe(field: "courseId" | "packageId" | "ebookId", productId?: number) {
   const where: any = { status: true, [field]: productId != null ? productId : { not: null } };
@@ -61,7 +49,7 @@ async function paidCountsCpe(orderModel: "packageCourseOrder" | "eBookOrder", pl
   return new Map(grouped.map((g: any) => [g.planId as number, g._count._all as number]));
 }
 
-// ── recompute one scope (full sweep, or a single product) ───────────────────────
+// Recompute one scope (or one product); returns how many flags flipped.
 export async function recomputeScope(scope: PopularityScope, productId?: number): Promise<number> {
   let plans: PlanRow[] = [];
   let paid = new Map<number, number>();
@@ -80,17 +68,14 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
     plans = rows.map((p) => ({ id: p.id, productId: p.liveCourseId, price: p.price }));
     const ids = plans.map((p) => p.id);
     if (ids.length) {
-      // Counted off the ORDER table since 2026-08-25, matching every other scope
-      // above (which already count orders). Popularity is a SALES measure, so a
-      // renewal should count as a sale — under the old single-table read it folded
-      // into the existing subscription row and was never counted at all.
+      // Counted off the order table so a renewal counts as a sale.
       const grouped = await prisma.liveCourseOrder.groupBy({
         by: ["planId"], where: { planId: { in: ids }, status: "complete" }, _count: { _all: true },
       });
       paid = new Map(grouped.map((g) => [g.planId as number, g._count._all]));
     }
   } else {
-    // testSeries — price is Decimal; coerce to number for ranking.
+    // testSeries: price is Decimal.
     const rows = await prisma.testSeriesPrice.findMany({
       where: { status: true, ...(productId != null ? { testSeriesId: productId } : {}) },
       select: { id: true, price: true, testSeriesId: true },
@@ -105,7 +90,6 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
     }
   }
 
-  // Group plans by product, pick a winner per product, collect the desired flag.
   const byProduct = new Map<number, PlanRow[]>();
   for (const p of plans) {
     const a = byProduct.get(p.productId) ?? [];
@@ -123,7 +107,6 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
     scope === "liveCourse" ? prisma.liveCoursePlan
     : scope === "testSeries" ? prisma.testSeriesPrice
     : prisma.packageCourseEbookPrice;
-  // Re-read current flags for just these plans to diff.
   const ids = plans.map((p) => p.id);
   if (!ids.length) return 0;
   const current: Array<{ id: number; isMostPopular: boolean }> =
@@ -139,14 +122,9 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
   return changed;
 }
 
-/** Recompute every scope (the scheduled-job entry point). Returns per-scope change counts. */
+/** Scheduled-job entry point. Returns per-scope change counts. */
 export async function recomputeAllPopularity(): Promise<Record<PopularityScope, number>> {
   const out = {} as Record<PopularityScope, number>;
   for (const scope of POPULARITY_SCOPES) out[scope] = await recomputeScope(scope);
   return out;
 }
-
-// NOTE: `setPinned()` and its `scopeTable()` helper were removed 2026-08-05 along
-// with the `most_popular_pinned` column. The badge has no manual override — if one
-// is ever wanted again, see the git history of this file, but prefer windowing the
-// paid-order count (see the header note) over reintroducing a human lever.

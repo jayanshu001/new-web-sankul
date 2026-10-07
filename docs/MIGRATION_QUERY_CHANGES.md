@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-10-07 — Audit compliance check (read-only, no query change)
+
+- Re-checked the code against `docs/SCALABILITY_OPTIMIZATION_AUDIT.md` and
+  `docs/IMPLEMENTATION_ISSUES_AUDIT.md`. No code, query, schema, index or DDL change.
+- Logged only because the doc-protocol hook compares file timestamps and flagged the
+  `src/` edits that were already uncommitted before this check. Those edits need
+  their own entries, written by whoever made them.
+- Gaps still open (see the audit docs): uncapped `limit` on ~31 list endpoints,
+  package-detail N+1 per category, no search minimum length and no FULLTEXT index,
+  socket presence still uses `fetchSockets()`, camera ingest has no `maxPayload` or
+  backpressure.
+
+---
+
 ## 2026-10-06 — Admin dashboard: one date filter for every card
 
 > **DDL:** none. **Request:** `range` (`today|yesterday|week|month|prevMonth|year|custom`) +
@@ -150,6 +164,18 @@
   `websankul-api` (`src/libs/utils.js` `createRazorPayOrder`) always sent
   `payment_capture: Boolean(RAZORPAY_AUTO_CAPTURE)`, which is `true`. This restores that
   behaviour, and the `payment.captured` / `order.paid` webhooks fire again.
+## 2026-10-07 — Repo-wide comment cleanup (comments only)
+
+> **DDL:** none. **Data:** none. **Queries:** none. **Response:** unchanged.
+
+- Removed noise comments across `src/`: comments that restate code, step narration, section
+  banners, doc blocks on trivial functions, commented-out code, and stale Mongo / dual-backend /
+  dated-changelog narration. Kept why-comments, public API docs (trimmed), tool directives,
+  owned TODOs, and the middleware/route-ordering reasoning.
+- Second pass: every file gained a one-line feature-name header (`// <Feature>: <purpose>.`),
+  and non-obvious exported handlers/service functions a one-line purpose comment.
+- Proof of zero behaviour change: `tsc --removeComments` emit before vs after is byte-identical
+  (`diff -r` empty) for every file in `src/`; `yarn typecheck` passes.
 
 ---
 

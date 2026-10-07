@@ -1,12 +1,5 @@
-/**
- * Tracking / ActivityLog admin reads — MySQL (Prisma) branch. Wave 8.
- *
- * Gated behind `isMysqlModule("tracking")`. Net-new table `ws_activity_log`.
- * Two admin reads: paginated list + a summary (byEvent / dailyCount / total /
- * uniqueUsers). DTO mirrors the Mongo doc shape (`_id` string).
- */
+// Activity tracking: client event logging and admin activity reports.
 import { prisma } from "../../config/prisma";
-
 
 export const parseTrackingId = (id: string): number | null => {
   const n = Number(id);
@@ -42,11 +35,8 @@ const buildWhere = (f: { customerId?: number; event?: string; entityType?: strin
 };
 
 /**
- * Client write path (POST /client/tracking → ws_activity_log). Mirrors the Mongo
- * `ActivityLog.create`. `customerId`/`entityId` are SQL ints (null when absent or
- * non-numeric — a Mongo-ObjectId entityId won't parse, matching how the SQL admin
- * reads treat entityId as numeric). Fire-and-forget telemetry; never throws to the
- * caller's hot path beyond the create.
+ * POST /client/tracking. `customerId`/`entityId` are ints, null when absent or
+ * non-numeric, matching how the admin reads treat entityId.
  */
 export const createActivity = async (input: {
   customerId: number | null;
@@ -88,6 +78,7 @@ export const listActivity = async (opts: {
   return { data: rows.map(dto), total };
 };
 
+// Totals, top 20 events and per-day counts for the last 30 active days.
 export const activitySummary = async (opts: { from?: Date; to?: Date }): Promise<{
   totalEvents: number; uniqueUsers: number; byEvent: any[]; dailyCount: any[];
 }> => {
@@ -109,8 +100,7 @@ export const activitySummary = async (opts: { from?: Date; to?: Date }): Promise
     }),
   ]);
 
-  // dailyCount: group by Y/M/D. Prisma groupBy can't do date-part grouping, so
-  // raw SQL with the same date bounds (mirrors the Mongo $year/$month/$dayOfMonth).
+  // Prisma groupBy can't group by date part, so raw SQL with the same date bounds.
   const conds: string[] = [];
   const params: any[] = [];
   if (opts.from) { conds.push("created_at >= ?"); params.push(opts.from); }

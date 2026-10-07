@@ -1,18 +1,16 @@
 /**
- * Permission Catalog — single source of truth for all admin permissions.
+ * Permission catalog: single source of truth for all admin permissions.
  *
- * Adding a permission: append to a module's `permissions` array (or add a new
- * module). Bump CATALOG_VERSION. On next boot, the seeder syncs ws_permissions
- * to match this registry; removed keys are marked deprecated, never hard-deleted.
+ * Adding a permission: add it here and bump CATALOG_VERSION. On boot the seeder
+ * syncs ws_permissions to this registry; removed keys are marked deprecated,
+ * never hard-deleted.
  *
- * Key naming: `{module}.{action}` or `{module}.{subResource}.{action}`,
- * lowercase kebab-case, dot-separated. Once shipped, a key must never be renamed.
+ * Keys are `{module}.{action}` or `{module}.{subResource}.{action}`, lowercase
+ * kebab-case. Once shipped, a key must never be renamed.
  *
- * Guard scoping: every module belongs to exactly one guard (`web` | `educator` |
- * `promoter`). A Spatie permission row is guard-scoped and a role can only be
- * granted permissions of its OWN guard, so the catalog endpoint filters modules
- * by `?guard=` and the seeder seeds each module ONLY under its own guard. Most
- * admin modules are `web`; the promoter/educator portals get their own modules.
+ * Every module belongs to exactly one guard. A role can only hold permissions of
+ * its own guard, so the catalog endpoint filters by `?guard=` and the seeder
+ * seeds each module only under its own guard.
  */
 
 import type { Guard } from "./permission.validation";
@@ -31,15 +29,14 @@ export interface CatalogModule {
   key: string;
   label: string;
   group: string;
-  /** Guard this module's permissions live under. Defaults to "web" via `mod()`. */
   guard: Guard;
   description?: string;
   permissions: CatalogPermission[];
 }
 
-// The `web` catalog exposes only these 5 core actions per module (2026-07-20).
-// `list` was dropped (the admin UI gates list screens on `view`) and all
-// sub-feature/extra actions were removed — the admin frontend checks none of them.
+// The `web` catalog exposes only these 5 actions per module; there is no `list`
+// (the admin UI gates list screens on `view`). Per-module `extras` are added only
+// on an explicit product decision.
 const STANDARD_5: { action: string; suffix: string; verb: string }[] = [
   { action: "view", suffix: "view", verb: "View" },
   { action: "create", suffix: "create", verb: "Create" },
@@ -48,20 +45,16 @@ const STANDARD_5: { action: string; suffix: string; verb: string }[] = [
   { action: "toggle-status", suffix: "toggle-status", verb: "Toggle status" },
 ];
 
-/**
- * Build a module entry. Pass `standard: false` to skip the standard actions
- * (for read-only modules like Dashboard / Tracking), or a subset array (e.g.
- * `["view"]` for reports, `["view","edit"]` for settings).
- */
+/** `standard: false` skips the standard actions; a subset array picks some (e.g. `["view"]`). */
 const mod = (
   key: string,
   label: string,
   group: string,
   opts: {
     description?: string;
-    standard?: boolean | string[]; // true (default), false, or subset of action ids
+    standard?: boolean | string[];
     extras?: CatalogPermission[];
-    guard?: Guard; // defaults to "web"
+    guard?: Guard;
   } = {},
 ): CatalogModule => {
   const standard = opts.standard ?? true;
@@ -90,12 +83,7 @@ const mod = (
   };
 };
 
-/**
- * Define a module with an explicit, hand-listed permission set (keys that don't
- * follow the STANDARD_5 `{key}.{view|list|create|...}` shape). Used for the
- * promoter/educator portal permissions, whose historical keys are e.g.
- * `promoter`, `promoter.customers.read`.
- */
+/** Module with hand-listed keys that don't follow STANDARD_5 (promoter/educator portals). */
 const rawMod = (
   key: string,
   label: string,
@@ -130,50 +118,29 @@ const subscriptionActionKeys = (subResource: string, type: string, actions: stri
 const ALL_SUBSCRIPTION_ACTIONS = ["change", "move", "deactivate", "revert", "add-days"];
 
 export const PERMISSION_CATALOG: CatalogModule[] = [
-  // ── Master Data ──────────────────────────────────────────────────────────
   mod("goals", "Goals", "Master Data"),
   mod("educators", "Educators", "Master Data"),
   mod("materials", "Materials", "Master Data"),
   mod("pc-materials", "PC Materials", "Master Data"),
   mod("subject-categories", "Course Categories", "Master Data"),
   mod("package-categories", "Package Categories", "Master Data"),
-  // Removed 2026-07-20 (keep-list reconciliation, guard `web`):
-  //   • `video-categories` — legacy duplicate of the kept `videos.categories`;
-  //     its /video-categories + /master/video-categories routes now gate on
-  //     `videos.categories.*` in rbacRouteMap.
-  //   • `customer-masters.*` (states/districts/educations/target-goals) — the
-  //     admin panel gates these under `customers.*`; their /customer-masters/*
-  //     routes were re-pointed to `customers.*` in rbacRouteMap.
-  // See docs/backend-requests/permission-catalog-keep-list-web-guard-RESPONSE.md.
+  // /video-categories routes gate on `videos.categories.*` and /customer-masters/*
+  // on `customers.*` in rbacRouteMap.
 
-  // ── Address ──────────────────────────────────────────────────────────────
   mod("address.states", "States", "Address"),
   mod("address.cities", "Cities", "Address"),
 
-  // ── Courses ──────────────────────────────────────────────────────────────
   mod("courses", "Courses", "Courses"),
-  // courses.{plans,video-categories,videos,materials} removed 2026-07-20 — the
-  // admin panel gates all Courses actions on `courses.*`; nested routes collapsed
-  // into the parent key in rbacRouteMap.
 
-  // ── Live Courses ─────────────────────────────────────────────────────────
   mod("live-courses", "Live Courses", "Live Courses"),
-  // live-courses.{plans,folders,videos,subscriptions} removed 2026-07-20 —
-  // collapsed into the parent `live-courses` key in rbacRouteMap.
 
-  // ── Live Sessions ────────────────────────────────────────────────────────
   mod("live-sessions", "Live Sessions", "Live Sessions"),
   mod("live-sessions.chat", "Live Session Chat", "Live Sessions"),
-  // live-sessions.polls removed 2026-07-20 — collapsed into `live-sessions`.
   mod("live-sessions.streamos", "StreamOS Config", "Live Sessions"),
 
-  // ── Test Series ──────────────────────────────────────────────────────────
   mod("test-series", "Test Series", "Test Series"),
-  // test-series.{plans,subscriptions} removed 2026-07-20 — collapsed into `test-series`.
 
-  // ── Ebooks / Books ───────────────────────────────────────────────────────
   mod("ebooks", "Ebooks", "Ebooks / Books"),
-  // ebooks.plans removed 2026-07-20 — collapsed into `ebooks`.
   // Reports → view only; their write routes gate on the parent module in rbacRouteMap.
   mod("ebooks.subscriptions", "EBook Subscriptions", "Reports", {
     standard: ["view"],
@@ -181,13 +148,11 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("books", "Books", "Ebooks / Books"),
   mod("books.orders", "Book Orders", "Reports", { standard: ["view"] }),
 
-  // ── Packages ─────────────────────────────────────────────────────────────
   mod("packages", "Packages", "Packages"),
   mod("packages.types", "Package Types", "Packages"),
-  // packages.plans removed 2026-07-20 — collapsed into `packages` (attach/detach → edit).
+  // Plan attach/detach gates on `packages.edit`.
   mod("plans", "Standalone Plans", "Packages"),
 
-  // ── Study Materials ──────────────────────────────────────────────────────
   mod("study-materials", "Study Materials", "Study Materials"),
   mod(
     "study-materials.categories",
@@ -195,7 +160,6 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     "Study Materials",
   ),
 
-  // ── Exam Countdowns ──────────────────────────────────────────────────────
   mod("exam-countdowns", "Exam Countdowns", "Exam Countdowns"),
   mod(
     "exam-countdowns.categories",
@@ -203,20 +167,13 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     "Exam Countdowns",
   ),
 
-  // ── Quizzes ──────────────────────────────────────────────────────────────
   mod("quizzes", "Quizzes", "Quizzes"),
   mod("quizzes.categories", "Quiz Categories", "Quizzes"),
-  // quizzes.{questions,submissions,analytics} removed 2026-07-20 — collapsed into
-  // the parent `quizzes` key in rbacRouteMap.
 
-  // ── Videos ───────────────────────────────────────────────────────────────
   mod("videos", "Videos", "Videos"),
   mod("videos.categories", "Video Categories", "Videos"),
 
-  // ── Customers ────────────────────────────────────────────────────────────
-  // 2026-09-11: mirrors the legacy Laravel set (customer.read/create/edit/
-  // delete/status + one ADD key per subscription type; the legacy generic
-  // customer.addsubscription has no FE counterpart, so no generic key).
+  // One add key per subscription type (no generic one: the FE has no counterpart).
   // Reads (profile, addresses, every subscription tab) stay on `customers.view`.
   mod("customers", "Customers", "Customers", {
     extras: [
@@ -264,12 +221,9 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   // (customers.<type>-subscriptions.edit and the action keys); there is no status toggle.
   mod("subscriptions", "Subscriptions", "Subscriptions", { standard: ["view", "create", "delete"] }),
 
-  // ── Reports (sidebar "Reports") ──────────────────────────────────────────
-  // 2026-09-23: one view-only key per report screen. `ebooks.subscriptions` and
-  // `books.orders` already were; the other four are grantable apart from their
-  // parent module. Parent `<m>.view` still opens each report (OR in rbacRouteMap)
-  // so no existing role loses access. Subscription + Subscription Material
-  // Report share GET /subscriptions (filters differ), so either key opens it.
+  // One view-only key per report screen. The parent `<m>.view` also opens each
+  // report (OR in rbacRouteMap). Subscription and Subscription Material Report
+  // share GET /subscriptions, so either key opens it.
   mod("subscriptions.reports", "Subscription Report", "Reports", {
     standard: ["view"],
   }),
@@ -286,14 +240,12 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     standard: ["view"],
   }),
 
-  // ── RBAC ─────────────────────────────────────────────────────────────────
   mod("administrators", "Administrators", "RBAC"),
   mod("roles", "Roles", "RBAC"),
   mod("permissions", "Permissions", "RBAC"),
   mod("permission-categories", "Permission Categories", "RBAC"),
   mod("guards", "Guards", "RBAC", { standard: ["view"] }),
 
-  // ── Referrals ────────────────────────────────────────────────────────────
   mod("referrals.referrers", "Referral Referrers", "Referrals"),
   mod("referrals.report", "Referral Report", "Referrals", {
     standard: ["view"],
@@ -307,17 +259,13 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     standard: ["view", "edit"],
   }),
 
-  // ── Promoters / Promocodes ───────────────────────────────────────────────
   mod("promoters", "Promoters", "Promoters / Promocodes"),
-  // promoters.subscriptions removed 2026-07-20 — collapsed into `promoters`.
-  // Aggregated revenue dashboard is grantable separately from the promoter list
-  // (2026-09-11; same view-only pattern as subscriptions.reports).
+  // Revenue dashboard is grantable separately from the promoter list.
   mod("promoters.dashboard", "Promoter Dashboard", "Promoters / Promocodes", {
     standard: ["view"],
   }),
   mod("promocodes", "Promocodes", "Promoters / Promocodes"),
 
-  // ── CMS ──────────────────────────────────────────────────────────────────
   mod("cms.banners", "Banners", "CMS"),
   mod("cms.live-banners", "Live Banners", "CMS"),
   mod("cms.popups", "Popups", "CMS"),
@@ -326,8 +274,7 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("cms.faq-types", "FAQ Types", "CMS"),
   mod("cms.terms", "Terms", "CMS"),
   mod("cms.current-affairs", "Current Affairs", "CMS"),
-  // Free-delivery is a single settings screen (read + Save) that reads/writes the
-  // CMS book-terms row's free-shipping threshold — view + edit only.
+  // Single settings screen editing the book-terms row's free-shipping threshold.
   mod("cms.free-delivery", "Free Delivery", "CMS", {
     standard: ["view", "edit"],
   }),
@@ -336,20 +283,16 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("cms.social-links", "Social Links", "CMS"),
   mod("cms.social-link-types", "Social Link Types", "CMS"),
 
-  // ── Jobs ─────────────────────────────────────────────────────────────────
   mod("jobs.content", "Job Content", "Jobs"),
-  // jobs.categories removed 2026-10-02 — job listings filter by organization now.
   mod("jobs.organizations", "Job Organizations", "Jobs"),
   mod("jobs.previous-papers", "Previous Papers", "Jobs"),
   mod("jobs.suggested-products", "Jobs Suggested Products", "Jobs"),
 
-  // ── Careers ──────────────────────────────────────────────────────────────
   mod("careers.openings", "Career Openings", "Careers"),
   mod("careers.applications", "Career Applications", "Careers", {
     standard: ["view", "edit"],
   }),
 
-  // ── Rank Predictor ─────────────────────────────────────────────────────────
   mod("rank-predictor.papers", "Rank Predictor Papers", "Rank Predictor"),
   mod(
     "rank-predictor.answer-keys",
@@ -368,14 +311,12 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     },
   ),
 
-  // ── Offline ──────────────────────────────────────────────────────────────
   mod("offline.banners", "Offline Banners", "Offline"),
   mod("offline.cities", "Offline Cities", "Offline"),
   mod("offline.centers", "Offline Centres", "Offline"),
   mod("offline.batches", "Offline Batches", "Offline"),
   mod("offline.enquiries", "Offline Enquiries", "Offline"),
 
-  // ── Departments / Inquiries ──────────────────────────────────────────────
   mod("departments", "Departments", "Departments / Inquiries"),
   mod("inquiries", "Inquiries", "Departments / Inquiries"),
   mod(
@@ -384,21 +325,14 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     "Departments / Inquiries",
   ),
 
-  // ── Notifications ────────────────────────────────────────────────────────
   mod("notifications", "Notifications", "Notifications"),
 
-  // ── Tracking ─────────────────────────────────────────────────────────────
   mod("tracking", "Tracking", "Tracking", { standard: ["view"] }),
 
-  // ── Dashboard ────────────────────────────────────────────────────────────
   mod("dashboard", "Dashboard", "Dashboard", { standard: ["view"] }),
 
-  // ── Promoter Portal (guard: promoter) ────────────────────────────────────
-  // The "Success Partner" promoter role is built from these keys. They gate the
-  // /api/v1/promoter/* portal (dashboard, customers, promocodes). Enforcement is
-  // currently role-based (requireRole("promoter")); these permissions exist so
-  // promoter-guard roles render/manage them in the RBAC tree. Keys are the
-  // historical ones (guard=promoter) and must never be renamed.
+  // The /promoter/* portal is enforced by requireRole("promoter"); these keys exist
+  // so promoter-guard roles can be managed in the RBAC tree. Historical keys, never rename.
   rawMod("promoter", "Promoter Portal", "Promoter Portal", "promoter", [
     { key: "promoter", label: "Access promoter portal", action: "access" },
     {
@@ -432,9 +366,7 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     },
   ]),
 
-  // ── Educator Portal (guard: educator) ────────────────────────────────────
-  // Educator-guard roles (e.g. "WebSankul Educator") are built from this key; it
-  // gates the educator dashboard. Same latent-orphan fix as the promoter portal.
+  // Educator-guard roles are built from this key; it gates the educator dashboard.
   rawMod("educator", "Educator Portal", "Educator Portal", "educator", [
     {
       key: "educator.dashboard",
@@ -448,10 +380,6 @@ export const ALL_CATALOG_KEYS: Set<string> = new Set(
   PERMISSION_CATALOG.flatMap((m) => m.permissions.map((p) => p.key)),
 );
 
-/**
- * Catalog keys grouped by guard — the source of truth for guard-scoped catalog
- * responses and for the seeder (each key seeds ONLY under its module's guard).
- */
 export const CATALOG_KEYS_BY_GUARD: Map<Guard, Set<string>> = (() => {
   const byGuard = new Map<Guard, Set<string>>();
   for (const m of PERMISSION_CATALOG) {
@@ -465,6 +393,5 @@ export const CATALOG_KEYS_BY_GUARD: Map<Guard, Set<string>> = (() => {
   return byGuard;
 })();
 
-/** Catalog keys for a guard (used to compute the guard-scoped deprecated set). */
 export const catalogKeysForGuard = (guard: Guard): Set<string> =>
   CATALOG_KEYS_BY_GUARD.get(guard) ?? new Set<string>();

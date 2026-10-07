@@ -1,3 +1,4 @@
+// Banner slider: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import {
@@ -19,10 +20,9 @@ export type BannerListOpts = {
   skip?: number;
   take?: number;
   /**
-   * Admin-only: sort `created_at DESC, id DESC` and ignore sortBy/sortDir.
-   * RECENCY IS THE CONTRACT on admin lists (utils/listOrdering). The client page
-   * shares this query and must keep its curated `orderBy ASC`, so the flag is set
-   * by listBannersPaged and never by listBannersClientPaged.
+   * Admin-only: sort `created_at DESC, id DESC` and ignore sortBy/sortDir (recency is
+   * the admin-list contract, utils/listOrdering). The client page shares this query
+   * but keeps its curated `orderBy ASC`, so only listBannersPaged sets this flag.
    */
   recency?: boolean;
 };
@@ -75,11 +75,9 @@ export const bannerSliderRepository = {
   findById: (id: number) => prisma.bannerSlider.findUnique({ where: { id } }),
 
   /**
-   * `orderBy` of the PREVIOUS row — the most recently created banner in this list
-   * — which is the input to the +1 calculation on create (see utils/listOrdering).
-   * Scoped by `key` because each key (Packages/Courses/Book/EBook/Explore) is its
-   * own independently ordered list in the admin UI, so "the previous banner" means
-   * the previous one on the same screen.
+   * `orderBy` of the most recently created banner for this `key` — the input to the
+   * +1 calculation on create (utils/listOrdering). Scoped by key because each key is
+   * its own independently ordered list in the admin UI.
    */
   prevOrderBy: async (key?: BannerKey): Promise<number | null> =>
     (
@@ -101,7 +99,6 @@ export const bannerSliderRepository = {
 
   delete: (id: number) => prisma.bannerSlider.delete({ where: { id } }),
 
-  /** Bulk reorder: set orderBy per id. Mirrors Mongo bulkWrite. */
   reorder: (ops: { id: number; orderBy: number }[]) =>
     prisma.$transaction(
       ops.map((o) =>

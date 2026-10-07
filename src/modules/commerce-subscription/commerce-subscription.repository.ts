@@ -1,30 +1,14 @@
+// Package/course subscriptions: Prisma queries for entitlement rows.
 import { prisma } from "../../config/prisma";
 
 /**
- * Prisma persistence for the commerce · subscription READ branch
- * (`ws_package_course_subscription`, Phase 3a — READ-ONLY, flag OFF).
- *
- * This is the entitlement source of truth. The read predicates mirror the
- * dominant Mongo consumer queries exactly:
- *  - active-entitlement check: `{customerId, courseId|packageId, status:true,
- *    endAt: {$gt: now}}` (lecture/progress/lecture-note access gates)
- *  - list a customer's subscriptions (purchase-history / dashboard / my-subs)
- *  - active-owner counts (`countDocuments({packageId, status:true})`)
- *
- * SQL→Mongo name mapping (see types.ts): Mongo `packageId`=plan=SQL `pcb_id`
- * (`planId`); Mongo `targetPackageId`=package=SQL `package_id` (`packageId`).
- *
- * NO writes — subscription create/extend is Phase 3b (verify.controller).
+ * Entitlement source of truth. Naming: plan = SQL `pcb_id` (`planId`); package =
+ * SQL `package_id` (`packageId`). Active = `status = true AND end_at > now`.
  */
 export const commerceSubscriptionRepository = {
-  /** Single subscription by id. */
   findById: (id: number) =>
     prisma.packageCourseSubscription.findUnique({ where: { id } }),
 
-  /**
-   * Active, unexpired COURSE entitlement for a customer.
-   * Mirrors `findOne({customerId, courseId, status:true, endAt:{$gt:now}})`.
-   */
   findActiveCourseSub: (customerId: number, courseId: number, now: Date) =>
     prisma.packageCourseSubscription.findFirst({
       where: {
@@ -36,10 +20,6 @@ export const commerceSubscriptionRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  /**
-   * Active, unexpired PACKAGE entitlement for a customer.
-   * `package_id` (SQL) = Mongo `targetPackageId` = the actual package.
-   */
   findActivePackageSub: (customerId: number, packageId: number, now: Date) =>
     prisma.packageCourseSubscription.findFirst({
       where: {
@@ -51,14 +31,12 @@ export const commerceSubscriptionRepository = {
       orderBy: { endAt: "desc" },
     }),
 
-  /** All subscriptions for a customer, newest first (listing surfaces). */
   listByCustomer: (customerId: number) =>
     prisma.packageCourseSubscription.findMany({
       where: { customerId },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }),
 
-  /** Active subscriptions for a customer (status + unexpired), newest first. */
   listActiveByCustomer: (customerId: number, now: Date) =>
     prisma.packageCourseSubscription.findMany({
       where: { customerId, status: true, endAt: { gt: now } },
@@ -66,17 +44,8 @@ export const commerceSubscriptionRepository = {
     }),
 
   /**
-   * Active subscriptions for a customer that match ANY of the given courses OR
-   * plans, INCLUDING lifetime grants (endAt null). Mirrors the course-listing
-   * purchase-state query:
-   *   `{customerId, status:true, (endAt null OR > now),
-   *     (courseId in courseIds OR planId in planIds)}`.
-   * Returns only the fields needed to compute per-course daysLeft.
-   *
-   * NOTE: the Mongo query also filters `paymentStatus:"verified"`, but the SQL
-   * table has no `payment_status` column (that concept is collapsed into
-   * `status` — see commerce-subscription.types.ts). So `status=true` IS the
-   * verified-entitlement gate here.
+   * Includes lifetime grants (endAt null). The table has no payment-status
+   * column, so `status = true` is the verified-entitlement gate.
    */
   listActiveForCoursesOrPlans: (
     customerId: number,
@@ -101,19 +70,14 @@ export const commerceSubscriptionRepository = {
       select: { courseId: true, planId: true, endAt: true },
     }),
 
-  /** Admin date-edit: set a subscription's expiry. Mirrors the Mongo
-   *  `findByIdAndUpdate(id, {$set:{endAt}}, {new:true})`. Throws P2025 if absent. */
+  /** Throws P2025 if absent. */
   updateEndAt: (id: number, endAt: Date) =>
     prisma.packageCourseSubscription.update({ where: { id }, data: { endAt } }),
 
   /**
-   * Active, unexpired PACKAGE entitlements for ONE customer across MANY packages
-   * — the batched form of `findActivePackageSub`, for listing surfaces.
-   *
-   * Same predicate as the single-row version so `isPurchased` cannot disagree
-   * between a list and a detail screen. Ordered `endAt ASC` so a caller building
-   * a Map by packageId keeps the LAST (latest-expiring) row per package, matching
-   * the single-row query's `orderBy: { endAt: "desc" }` + `findFirst`.
+   * Batched `findActivePackageSub`; same predicate so `isPurchased` cannot
+   * disagree between list and detail. Ordered `endAt ASC` so a Map built by
+   * packageId keeps the latest-expiring row, matching the single-row query.
    */
   findActivePackageSubsForPackages: (customerId: number, packageIds: number[], now: Date) =>
     packageIds.length
@@ -129,13 +93,11 @@ export const commerceSubscriptionRepository = {
         })
       : Promise.resolve([]),
 
-  /** Count active owners of a package (`package_id`, the actual package). */
   countActiveByPackage: (packageId: number, now: Date) =>
     prisma.packageCourseSubscription.count({
       where: { packageId, status: true, endAt: { gt: now } },
     }),
 
-  /** Count active owners of a course. */
   countActiveByCourse: (courseId: number, now: Date) =>
     prisma.packageCourseSubscription.count({
       where: { courseId, status: true, endAt: { gt: now } },

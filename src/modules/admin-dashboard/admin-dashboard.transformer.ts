@@ -1,18 +1,12 @@
 /**
- * Admin dashboard — recent-list DTOs. The SQL service fetches raw Prisma rows
- * with generated relation/column names (`amount`, `package`, `customer`,
- * `orderItems` JSON …); the admin UI expects the legacy Mongo-populated shape
- * (`paidAmount`, `targetPackageId`, `customerId`, `items[].bookId` …). These
- * transformers keep the response contract identical to the old populate() output.
- *
- * Customer name: MySQL `full_name` is one column but the UI wants
- * firstName/lastName — split on read via {@link splitFullName} (shared helper).
+ * Admin dashboard recent-list DTOs. Map raw Prisma rows (`amount`, `package`,
+ * `customer`, `orderItems` JSON …) onto the frozen populated shape the admin UI parses
+ * (`paidAmount`, `targetPackageId`, `customerId`, `items[].bookId` …).
  */
 import { splitFullName } from "../customer-profile/customer-profile.name";
 
 const num = (v: any) => (v == null ? 0 : Number(v));
 
-// ── populated ref sub-objects ──────────────────────────────────────────────────
 export const toCustomerRef = (c: any) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);
@@ -22,7 +16,6 @@ export const toCustomerRef = (c: any) => {
 const toCatalogRef = (r: any) =>
   r ? { _id: String(r.id), name: r.name, image: r.image ?? null } : null;
 
-// ── recent subscription rows ───────────────────────────────────────────────────
 export const toPackageSubDto = (row: any) => ({
   _id: String(row.id),
   paidAmount: num(row.amount),
@@ -47,9 +40,8 @@ export const toEbookSubDto = (row: any) => ({
   ebookId: toCatalogRef(row.eBook),
 });
 
-// TestSeries/LiveCourse subscription models have only scalar FKs (no Prisma
-// relations), so refs are passed in as pre-loaded maps. ws_test_series uses
-// title/thumbnail → mapped to the UI's name/image.
+// TestSeries/LiveCourse subscription models have only scalar FKs (no Prisma relations),
+// so refs arrive as pre-loaded maps. ws_test_series title/thumbnail → UI name/image.
 export const toTestSeriesSubDto = (row: any, customers: Map<number, any>, series: Map<number, any>) => {
   const ts = row.testSeriesId != null ? series.get(row.testSeriesId) : null;
   return {
@@ -64,11 +56,9 @@ export const toTestSeriesSubDto = (row: any, customers: Map<number, any>, series
 };
 
 /**
- * Recent live-course purchases. Fed a `ws_live_course_order` row since 2026-08-25
- * (payment moved off the subscription), so `status` arrives as the order vocabulary
- * string "complete"/"pending"/"cancel" rather than the subscription's boolean.
- * Normalised here so the response field stays the boolean it has always been.
- * `row.amount` is discount_price — the same column the package/course rows above use.
+ * Fed a ws_live_course_order row, whose `status` is "complete"/"pending"/"cancel";
+ * normalised back to the boolean the response has always carried. `row.amount` is
+ * discount_price, the same column the package/course rows use.
  */
 export const toLiveCourseSubDto = (row: any, customers: Map<number, any>, courses: Map<number, any>) => ({
   _id: String(row.id),
@@ -79,10 +69,9 @@ export const toLiveCourseSubDto = (row: any, customers: Map<number, any>, course
   liveCourseId: toCatalogRef(row.liveCourseId != null ? courses.get(row.liveCourseId) : null),
 });
 
-// ── recent book orders (items[].bookId populated) ──────────────────────────────
-// Legacy book orders keep line items in the `order_items` JSON snapshot; migrated
-// write-path orders have child ws_book_order_item rows. Prefer child rows, fall
-// back to JSON — mirroring admin-book's getOrder contract.
+// Legacy book orders keep line items in the `order_items` JSON snapshot; newer orders
+// have ws_book_order_item rows. Prefer child rows, fall back to JSON (same as
+// admin-book's getOrder).
 type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number };
 
 export const itemsFromChildRows = (rows: any[]): OrderItemShape[] =>

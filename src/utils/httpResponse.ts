@@ -1,8 +1,8 @@
+// HTTP response envelope: success()/failure() helpers and Zod error flattening.
 import { Response } from "express";
 
 import { ZodError } from "zod";
 
-// Define the response data structure
 interface ResponseData {
   success: boolean;
   code: number;
@@ -11,7 +11,6 @@ interface ResponseData {
   messages: object;
 }
 
-// Success response helper
 export const success = (
   res: Response,
   data: object = {},
@@ -31,7 +30,6 @@ export const success = (
   return res.status(status).json(responseData);
 };
 
-// Failure response helper
 export const failure = (
   res: Response,
   message: string = "An error occurred",
@@ -56,18 +54,8 @@ export const failure = (
 };
 
 /**
- * Failure response that honors a thrown `HttpError`'s own status + message,
- * falling back to a generic message otherwise.
- *
- * Use in a controller catch that would otherwise blanket-500: a boundary
- * validator throwing 422 ("Invalid status ...") is only useful if the catch
- * doesn't flatten it into an opaque 500. Unknown errors keep the generic
- * fallback so internals are never leaked to the client.
- *
- *   } catch (err) {
- *     logger.error(...);
- *     return failureFrom(res, err, "Failed to list subscriptions.");
- *   }
+ * Failure response that honors a thrown 4xx error's own status + message; any
+ * other error gets the generic fallback so internals never leak to the client.
  */
 export const failureFrom = (
   res: Response,
@@ -81,7 +69,6 @@ export const failureFrom = (
   return failure(res, fallbackMessage, fallbackStatus);
 };
 
-// Helper to get a standard error message
 export const getErrorMessage = (error: unknown): string => {
   let message: string;
 
@@ -98,16 +85,8 @@ export const getErrorMessage = (error: unknown): string => {
 };
 
 /**
- * Flatten a ZodError into a user-friendly `{ message, errors }` pair instead of
- * leaking the raw `error.issues` blob to the client. `message` is the first
- * issue's message (schemas should carry human-readable messages — see the
- * create-order schemas); `errors` maps each field path → its first message.
- *
- * Use in a controller catch block:
- *   if (e instanceof ZodError) {
- *     const { message, errors } = formatZodError(e);
- *     return res.status(400).json({ success: false, message, errors });
- *   }
+ * Flatten a ZodError into `{ message, errors }`: `message` is the first issue's
+ * message, `errors` maps each field path to its first message.
  */
 export const formatZodError = (
   error: ZodError
@@ -124,18 +103,11 @@ export const formatZodError = (
 };
 
 /**
- * Flatten raw Zod `issues` into a `field -> message` map.
+ * Flatten raw Zod `issues` into a `field -> message` map (the `errors` shape of
+ * the admin role/permission/video controllers' 422s).
  *
- * This is the shape the admin RBAC-ish controllers (role, permission,
- * permissionCategory, video, videoCategory) return under `errors` in their
- * hand-rolled 422s. It was copy-pasted identically into all five; this is that
- * exact function, unchanged.
- *
- * NOTE it deliberately differs from `formatZodError` above in two ways, so the
- * two are NOT interchangeable:
- *   - a root-level issue keys as "" here, but "_" in formatZodError;
- *   - on two issues for one field, the LAST wins here, the FIRST there.
- * Both are reachable, so neither was normalised onto the other.
+ * Not interchangeable with `formatZodError`: a root issue keys as "" here (vs
+ * "_"), and the last issue per field wins here (vs the first).
  */
 export const formatZodIssues = (
   issues: { path: (string | number)[]; message: string }[]

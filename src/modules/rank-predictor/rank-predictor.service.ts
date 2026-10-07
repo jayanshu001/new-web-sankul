@@ -1,3 +1,4 @@
+// Rank predictor: sheet OCR, scoring, ranks, leaderboards and admin exam/key logic.
 import { OCR_SERVICE } from "../../config/ocrService";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
@@ -81,6 +82,7 @@ interface AuditEntry {
 const actorTypeFor = (customerId: number | null): ActorType =>
   customerId === null ? ACTOR_TYPE.ADMIN : ACTOR_TYPE.CUSTOMER;
 
+// Best-effort audit write; a logging failure never fails the request.
 const audit = async (entry: AuditEntry): Promise<void> => {
   try {
     await repo.writeAuditLog({
@@ -160,6 +162,7 @@ const failSubmission = async (
   });
 };
 
+// Re-score every scored sheet of an exam/series; failures are counted, not thrown.
 const rescoreSeries = async (
   examId: bigint,
   series: string | null,
@@ -222,6 +225,7 @@ export const rankPredictorService = {
 
   getExam: async (examId: bigint): Promise<RankExamDto> => decorateExam(await requireExam(examId)),
 
+  // OCR the sheet, store the PDF, then score it unless low confidence needs review.
   createSubmission: async (params: SubmissionCreateInput): Promise<RankSubmissionResultDto> => {
     const exam = await requireExam(params.examId);
     const allowedSeries = parsePaperSeries(exam.paperSeries);
@@ -334,6 +338,7 @@ export const rankPredictorService = {
     return rankPredictorService.scoreAndPublish(submission.id, params.customerId);
   },
 
+  // Score against the active key and snapshot the rank; no key clears the score.
   scoreAndPublish: async (
     submissionId: bigint,
     actorCustomerId: number | null
@@ -427,6 +432,7 @@ export const rankPredictorService = {
     };
   },
 
+  // Apply the student's corrections to low-confidence answers, then score.
   confirmCorrections: async (params: {
     submissionId: bigint;
     corrections: Record<string, number | null>;
@@ -456,6 +462,7 @@ export const rankPredictorService = {
     return rankPredictorService.scoreAndPublish(submission.id, params.actorCustomerId);
   },
 
+  // Global and caste-category rank plus the leaderboard rows around the student.
   getStanding: async (examId: bigint, customerId: number): Promise<RankStandingDto> => {
     const [score, profile] = await Promise.all([
       repo.findScoreForCustomer(examId, customerId),
@@ -678,6 +685,7 @@ export const rankPredictorService = {
     return decorateExam(exam);
   },
 
+  // Removing a paper series is refused while it has a published answer key.
   updateExam: async (
     examId: bigint,
     input: ExamUpdateInput,
@@ -724,6 +732,7 @@ export const rankPredictorService = {
     return decorateExam(updated);
   },
 
+  // Cascade-deletes submissions, scores and keys, plus their stored PDFs.
   deleteExam: async (examId: bigint, adminId: number | null): Promise<RankExamDeletionDto> => {
     const exam = await requireExam(examId);
     const pdfKeys = await repo.findExamStoredPdfKeys(examId);
@@ -758,6 +767,7 @@ export const rankPredictorService = {
     };
   },
 
+  // Publish a new versioned key for the series and re-score its sheets.
   publishAnswerKey: async (params: AnswerKeyPublishInput) => {
     const exam = await requireExam(params.examId);
     const allowedSeries = parsePaperSeries(exam.paperSeries);
@@ -813,6 +823,7 @@ export const rankPredictorService = {
 
   listAnswerKeys: (examId: bigint) => repo.listAnswerKeys(examId),
 
+  // Activating deactivates the series' other keys; either way the series is re-scored.
   setAnswerKeyActive: async (id: bigint, isActive: boolean, adminId: number | null) => {
     const key = await repo.findAnswerKeyById(id);
     if (!key) throw new HttpError(404, "Answer key not found.", { error: RANK_ERROR.NOT_FOUND });
@@ -859,6 +870,7 @@ export const rankPredictorService = {
     return { entries: rows.map(toAdminLeaderboardEntryDto), total };
   },
 
+  // Customer DTOs by id; unknown ids get a placeholder.
   resolveCustomers: async (customerIds: number[]): Promise<Map<number, RankCustomerDto>> => {
     const unique = [...new Set(customerIds)];
     const rows = await repo.findCustomersByIds(unique);

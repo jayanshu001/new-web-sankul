@@ -1,3 +1,4 @@
+// Admin PC materials: PC material master CRUD routes.
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
@@ -12,7 +13,6 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// Package Course Material — single-field ({ title }) master.
 router.get("/", listPcMaterials);
 router.post("/", createPcMaterial);
 router.get("/:id", getPcMaterialById);

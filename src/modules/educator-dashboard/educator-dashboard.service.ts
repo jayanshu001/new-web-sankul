@@ -1,15 +1,10 @@
 /**
- * Educator dashboard — SQL data layer for GET /educator/dashboard. Gated behind
- * `isMysqlModule("educator-dashboard")`. The educator's courses/packages →
- * subscription counts + top-5 + recent subs.
- *
- * Drift: on SQL ws_package_course_subscription.packageId IS the package directly
- * (Mongo used packageId = plan id). So package subs match by packageId ∈ the
- * educator's package ids — no plan-id hop needed. Course relation is `educatorId`
- * (Course.courseEducatorId) and Package.educator_id.
+ * Educator dashboard: subscription summary, top courses/packages and recent subscriptions.
+ * `ws_package_course_subscription.package_id` is the
+ * package itself (not the plan), so package subs match the educator's package ids
+ * directly.
  */
 import { prisma } from "../../config/prisma";
-
 
 export const parseEduId = (id: string): number | null => {
   const n = Number(id);
@@ -44,7 +39,6 @@ export const buildEducatorDashboard = async (educatorId: number) => {
       : [],
   ]);
 
-  // top lists: attach course/package metadata
   const courseById = new Map(courses.map((c) => [c.id, c]));
   const packageById = new Map(packages.map((p) => [p.id, p]));
   const topCourses = (topCourseRows as any[]).map((r) => ({ _id: String(r.courseId), total: r._count._all, course: courseById.get(r.courseId) ? { _id: String(r.courseId), name: courseById.get(r.courseId)!.name } : null }));

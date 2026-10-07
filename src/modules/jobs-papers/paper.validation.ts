@@ -1,3 +1,4 @@
+// Jobs previous papers: Zod request schemas.
 import { z } from "zod";
 import { JOB_PAPER_STATUSES, JOB_PAPER_TIERS } from "./paper.types";
 

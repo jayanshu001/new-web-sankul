@@ -1,3 +1,4 @@
+// App version check: decides update / force-update per platform.
 import { getAppUpdateSettings } from "../app-update/app-update.service";
 import { getVersionSettings } from "../version/version.service";
 import { fetchAppStoreVersion } from "./app-version.appstore";
@@ -63,7 +64,6 @@ export const checkAppVersion = async (
   let source: VersionSource = "config";
   let releaseNotes: string | null = null;
 
-  // Whether the CALLING build is actually behind the latest known version.
   let clientIsBehind = false;
 
   if (platform === "ios") {
@@ -73,7 +73,6 @@ export const checkAppVersion = async (
       latestVersionName = store.version;
       releaseNotes = store.releaseNotes;
       if (store.storeUrl) storeUrl = store.storeUrl;
-      // Prefer the authoritative store version-name comparison for iOS.
       clientIsBehind = currentVersionName
         ? compareVersionNames(store.version, currentVersionName) > 0
         : currentVersion > 0 && currentVersion < configLatestCode;
@@ -82,7 +81,6 @@ export const checkAppVersion = async (
       clientIsBehind = currentVersion > 0 && currentVersion < configLatestCode;
     }
   } else {
-    // Android — numeric version-code compare against admin config.
     clientIsBehind = currentVersion > 0 && currentVersion < configLatestCode;
   }
 
@@ -91,11 +89,7 @@ export const checkAppVersion = async (
   // it's true, we still only prompt clients that are genuinely behind.
   const isUpdateAvailable = appUpdate.isUpdateAvailable && clientIsBehind;
 
-  // Force-update is driven purely by updateType, and only when an update is
-  // actually available:
-  //   - isUpdateAvailable === false -> false (incl. DB flag off)
-  //   - updateType === "flexible"   -> false (soft/optional prompt)
-  //   - updateType === "immediate"  -> true  (must update before continuing)
+  // Force-update only for an available "immediate" update ("flexible" is a soft prompt).
   const isForceUpdate = isUpdateAvailable && updateType === "immediate";
 
   return {
