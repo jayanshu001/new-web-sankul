@@ -203,8 +203,22 @@ export const getDashboard = async (req: Request, res: Response) => {
         const prev = seriesMap.get(row.slot) || { orders: 0, earnings: 0 };
         seriesMap.set(row.slot, { orders: prev.orders + row.orders, earnings: prev.earnings + row.earnings });
       }
+      // Per-type split of each bucket, so the panel can show what each product type contributed.
+      const byTypeMaps = Object.entries(d.seriesByType).map(([type, rows]) => {
+        const m = new Map<number, { orders: number; earnings: number }>();
+        for (const row of rows) {
+          const prev = m.get(row.slot) || { orders: 0, earnings: 0 };
+          m.set(row.slot, { orders: prev.orders + row.orders, earnings: prev.earnings + row.earnings });
+        }
+        return [type, m] as const;
+      });
       const slots = bucket.slots ?? Array.from(seriesMap.keys()).sort((a, b) => a - b);
-      const series = slots.map((slot) => ({ bucket: String(slot).padStart(2, "0"), orders: seriesMap.get(slot)?.orders || 0, earnings: seriesMap.get(slot)?.earnings || 0 }));
+      const series = slots.map((slot) => ({
+        bucket: String(slot).padStart(2, "0"),
+        orders: seriesMap.get(slot)?.orders || 0,
+        earnings: seriesMap.get(slot)?.earnings || 0,
+        byType: Object.fromEntries(byTypeMaps.map(([type, m]) => [type, m.get(slot) || { orders: 0, earnings: 0 }])),
+      }));
       return res.status(200).json({
         success: true,
         data: {
@@ -227,6 +241,11 @@ export const getDashboard = async (req: Request, res: Response) => {
           recentTestSeriesSubscriptions: d.recentTestSeriesSubs,
           recentLiveCourseSubscriptions: d.recentLiveCourseSubs,
           summary: d.summary,
+          // Customers who used the app in the window (one row per customer per IST day);
+          // null until the ws_customer_activity_day DDL is applied.
+          activeCustomers: d.activeCustomers
+            ? { ...d.activeCustomers, deltaPct: deltaPct(d.activeCustomers.current, d.activeCustomers.previous) }
+            : null,
         },
       });
   } catch (e: any) {

@@ -12,6 +12,7 @@
  */
 import { prisma } from "../../config/prisma";
 import * as dashTransformer from "./admin-dashboard.transformer";
+import { istDay } from "../../libs/customerActivity";
 
 
 type Win = { start: Date; end: Date };
@@ -138,6 +139,38 @@ const summaryCounters = async () => {
   };
 };
 
+/**
+ * Distinct customers who used the app in each window — ws_customer_activity_day holds
+ * one row per customer per IST day (written by authenticate.ts). Both counts in one
+ * round trip, each a range scan on the (day, customer_id) primary key.
+ * null while the table doesn't exist yet, so the dashboard still loads ("—" on the tile).
+ */
+const activeCustomers = async (cur: Win, prev: Win) => {
+  try {
+    // Total counts a customer once even if they used several platforms that period;
+    // the per-platform counts can therefore add up to more than the total.
+    // The previous period is every day strictly before the current one's first IST day,
+    // so a window boundary that isn't IST midnight can't put one day in both periods.
+    const curFrom = istDay(cur.start);
+    const [row] = await prisma.$queryRaw<{ cur: bigint; prev: bigint; android: bigint; ios: bigint; web: bigint }[]>`
+      SELECT
+        COUNT(DISTINCT CASE WHEN day >= ${curFrom} THEN customer_id END) AS cur,
+        COUNT(DISTINCT CASE WHEN day < ${curFrom} THEN customer_id END) AS prev,
+        COUNT(DISTINCT CASE WHEN day >= ${curFrom} AND platform = 'android' THEN customer_id END) AS android,
+        COUNT(DISTINCT CASE WHEN day >= ${curFrom} AND platform = 'ios' THEN customer_id END) AS ios,
+        COUNT(DISTINCT CASE WHEN day >= ${curFrom} AND platform = 'web' THEN customer_id END) AS web
+      FROM ws_customer_activity_day
+      WHERE day BETWEEN ${istDay(prev.start)} AND ${istDay(cur.end)}`;
+    return {
+      current: Number(row?.cur ?? 0),
+      previous: Number(row?.prev ?? 0),
+      byPlatform: { android: Number(row?.android ?? 0), ios: Number(row?.ios ?? 0), web: Number(row?.web ?? 0) },
+    };
+  } catch {
+    return null;
+  }
+};
+
 // ── recent purchases (Activity cards' "Recent" tab), offset-paginated ─────────
 // The dashboard payload carries the first page; GET /admin/dashboard/recent serves
 // the rest as the card scrolls. Every list orders by (created_at, id) DESC so offset
@@ -229,6 +262,7 @@ export const fetchDashboardData = async (opts: {
     pkgSeries, courseSeries, ebookSeries, bookSeries, tsSeries, lcSeries,
     recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
     counters,
+    active,
   ] = await Promise.all([
     subRevenue(cur, "package"), subRevenue(cur, "course"), ebookRevenue(cur), bookRevenue(cur), testSeriesRevenue(cur), liveCourseRevenue(cur),
     subRevenue(prev, "package"), subRevenue(prev, "course"), ebookRevenue(prev), bookRevenue(prev), testSeriesRevenue(prev), liveCourseRevenue(prev),
@@ -246,6 +280,7 @@ export const fetchDashboardData = async (opts: {
     fetchRecent("package", cur, 0, limit), fetchRecent("course", cur, 0, limit), fetchRecent("book", cur, 0, limit),
     fetchRecent("ebook", cur, 0, limit), fetchRecent("testSeries", cur, 0, limit), fetchRecent("liveCourse", cur, 0, limit),
     summaryCounters(),
+    activeCustomers(cur, prev),
   ]);
 
   const series = [...pkgSeries, ...courseSeries, ...ebookSeries, ...bookSeries, ...tsSeries, ...lcSeries];
@@ -266,7 +301,10 @@ export const fetchDashboardData = async (opts: {
       earnings: series.reduce((n, r) => n + r.earnings, 0),
     },
     series,
+    // The same rows, kept per product type so the chart can stack them.
+    seriesByType: { package: pkgSeries, course: courseSeries, ebook: ebookSeries, book: bookSeries, testSeries: tsSeries, liveCourse: lcSeries },
     recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
+    activeCustomers: active,
     summary: {
       customers: { total: counters.totalCustomers, active: counters.activeCustomers },
       catalog: { courses: counters.totalCourses, packages: counters.totalPackages, ebooks: counters.totalEbooks, books: counters.totalBooks, testSeries: counters.totalTestSeries, liveCourses: counters.totalLiveCourses },

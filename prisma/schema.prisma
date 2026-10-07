@@ -2443,6 +2443,18 @@ model ActivityLog {
   @@map("ws_activity_log")
 }
 
+// One row per customer per IST day per platform they used — written by authenticate.ts
+// (libs/customerActivity.ts), read by the admin dashboard's "Active customers" tile.
+// DDL: docs/migration/schema-changes/2026-10-07_customer_activity_day.sql
+model CustomerActivityDay {
+  day        DateTime @db.Date
+  customerId Int      @map("customer_id")
+  platform   String   @db.VarChar(10) // 'android' | 'ios' | 'web'
+
+  @@id([day, customerId, platform])
+  @@map("ws_customer_activity_day")
+}
+
 model SearchHistory {
   id         Int      @id @default(autoincrement())
   customerId Int      @map("customer_id")

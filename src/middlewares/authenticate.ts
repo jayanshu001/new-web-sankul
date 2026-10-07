@@ -11,6 +11,7 @@ import logger from "../utils/logger";
 import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbAvailability";
 import jwt from "jsonwebtoken";
 import { isGuestPayload, isGuestModeOn } from "../libs/guestSession";
+import { markCustomerActive } from "../libs/customerActivity";
 
 // Per-request customer gate state, cached briefly in Redis so the live DB read
 // doesn't fire on every authenticated request. Busted on block/delete; the
@@ -260,6 +261,10 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     // downstream log line automatically carries `userId` + `userRole`
     // without callers threading them through. See utils/requestContext.ts.
     updateContext({ userId: decoded.id, userRole: role });
+
+    // "Used the app today" for the admin dashboard's active-customer counts. Fire-and-forget
+    // and Redis-throttled to one write per customer per day — see libs/customerActivity.ts.
+    if (userType === "customer") markCustomerActive(decoded.id, req);
 
     return next();
   } catch (err) {
