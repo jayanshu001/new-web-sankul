@@ -171,6 +171,20 @@ const activeCustomers = async (cur: Win, prev: Win) => {
   }
 };
 
+/**
+ * Customers who registered in each window — deleted accounts excluded, matching
+ * summary.customers.total. Both counts on one connection, each a range seek on
+ * idx_customer_search (is_account_deleted, created_at, …). Rows with a NULL
+ * created_at never match.
+ */
+const newCustomers = async (cur: Win, prev: Win) => {
+  const [current, previous] = await prisma.$transaction([
+    prisma.customer.count({ where: { isAccountDeleted: false, createdAt: { gte: cur.start, lte: cur.end } } }),
+    prisma.customer.count({ where: { isAccountDeleted: false, createdAt: { gte: prev.start, lte: prev.end } } }),
+  ]);
+  return { current, previous };
+};
+
 // ── recent purchases (Activity cards' "Recent" tab), offset-paginated ─────────
 // The dashboard payload carries the first page; GET /admin/dashboard/recent serves
 // the rest as the card scrolls. Every list orders by (created_at, id) DESC so offset
@@ -263,6 +277,7 @@ export const fetchDashboardData = async (opts: {
     recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
     counters,
     active,
+    signups,
   ] = await Promise.all([
     subRevenue(cur, "package"), subRevenue(cur, "course"), ebookRevenue(cur), bookRevenue(cur), testSeriesRevenue(cur), liveCourseRevenue(cur),
     subRevenue(prev, "package"), subRevenue(prev, "course"), ebookRevenue(prev), bookRevenue(prev), testSeriesRevenue(prev), liveCourseRevenue(prev),
@@ -281,6 +296,7 @@ export const fetchDashboardData = async (opts: {
     fetchRecent("ebook", cur, 0, limit), fetchRecent("testSeries", cur, 0, limit), fetchRecent("liveCourse", cur, 0, limit),
     summaryCounters(),
     activeCustomers(cur, prev),
+    newCustomers(cur, prev),
   ]);
 
   const series = [...pkgSeries, ...courseSeries, ...ebookSeries, ...bookSeries, ...tsSeries, ...lcSeries];
@@ -305,6 +321,7 @@ export const fetchDashboardData = async (opts: {
     seriesByType: { package: pkgSeries, course: courseSeries, ebook: ebookSeries, book: bookSeries, testSeries: tsSeries, liveCourse: lcSeries },
     recentPackageSubs, recentCourseSubs, recentBookOrders, recentEbookSubs, recentTestSeriesSubs, recentLiveCourseSubs,
     activeCustomers: active,
+    newCustomers: signups,
     summary: {
       customers: { total: counters.totalCustomers, active: counters.activeCustomers },
       catalog: { courses: counters.totalCourses, packages: counters.totalPackages, ebooks: counters.totalEbooks, books: counters.totalBooks, testSeries: counters.totalTestSeries, liveCourses: counters.totalLiveCourses },

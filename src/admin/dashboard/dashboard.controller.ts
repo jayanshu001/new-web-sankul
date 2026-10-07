@@ -246,6 +246,8 @@ export const getDashboard = async (req: Request, res: Response) => {
           activeCustomers: d.activeCustomers
             ? { ...d.activeCustomers, deltaPct: deltaPct(d.activeCustomers.current, d.activeCustomers.previous) }
             : null,
+          // Customers who registered in the window vs the previous one.
+          newCustomers: { ...d.newCustomers, deltaPct: deltaPct(d.newCustomers.current, d.newCustomers.previous) },
         },
       });
   } catch (e: any) {
