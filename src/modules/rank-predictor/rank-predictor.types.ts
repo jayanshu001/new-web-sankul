@@ -77,6 +77,7 @@ export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
 export const RANK_ERROR = {
   ALREADY_SUBMITTED: "already_submitted",
   ANSWER_KEY_REQUIRED: "answer_key_required",
+  CANCELLED_QUESTION_OUT_OF_RANGE: "cancelled_question_out_of_range",
   EXAM_CODE_TAKEN: "exam_code_taken",
   EXAM_NOT_FOUND: "exam_not_found",
   EXTRACTION_UNCONFIGURED: "extraction_unconfigured",
@@ -99,6 +100,8 @@ export const RANK_ERROR = {
   SERIES_NOT_ENABLED: "series_not_enabled",
   SERIES_REQUIRED: "series_required",
   SHIFT_REQUIRED: "shift_required",
+  SHIFT_NOT_LISTED: "shift_not_listed",
+  SHIFTS_REQUIRED: "shifts_required",
   UNKNOWN_EXTRACTION_ERROR: "unknown_error",
 } as const;
 
@@ -109,6 +112,8 @@ export const SUBMISSION_WARNING = {
   NO_ACTIVE_ANSWER_KEY: "no_active_answer_key",
   /** The paper scores against the sheet's own key, and this sheet printed none. */
   SHEET_HAS_NO_ANSWER_KEY: "sheet_has_no_answer_key",
+  /** Uploaded and queued; the result lands when the sheet has been read. */
+  QUEUED: "queued",
 } as const;
 
 export type SubmissionWarning = (typeof SUBMISSION_WARNING)[keyof typeof SUBMISSION_WARNING];
@@ -163,6 +168,7 @@ export const LEGACY_RANK_BY: readonly RankBy[] = [RANK_BY.CATEGORY];
 
 export const OTHER_SUBJECT = "Other";
 export const MAX_SYLLABUS_SUBJECTS = 30;
+export const MAX_PAPER_SHIFTS = 100;
 
 export const SKIP_OPTION = 5;
 /**
@@ -216,6 +222,17 @@ export interface SyllabusSubject {
   section?: string;
   from_question?: number;
   to_question?: number;
+}
+
+/**
+ * One slot an admin set up for the paper.
+ *  - `key` "YYYY-MM-DDTHH:MM", the same form a sheet's shift is read as.
+ *  - `cancelled_questions` question numbers the board dropped for that slot only;
+ *    scored for no one who sat it, the same as `*` in an admin key.
+ */
+export interface PaperShift {
+  key: string;
+  cancelled_questions: number[];
 }
 
 export interface ResolvedSubject {
@@ -290,9 +307,11 @@ export interface RankExamDto {
   marks_wrong: number | null;
   syllabus: SyllabusSubject[];
   rank_by: RankBy[];
+  /** Slots the admin set up, with any per-slot cancellations. Required on a marks_only paper. */
+  paper_shifts: PaperShift[];
   is_active: boolean;
   created_at: Date | null;
-  /** Slots people actually sat, read off their sheets. Only on the single-paper read. */
+  /** Slots on offer: the admin's, plus any read off scored sheets. Only on the single-paper read. */
   shifts?: RankShiftDto[];
   /** Subjects that have scores, in paper order. Only on the single-paper read. */
   subjects?: string[];
@@ -368,6 +387,8 @@ export interface RankSubmissionDto {
   extraction_kind: ExtractionKind | null;
   entry_mode: EntryMode;
   roll_number: string | null;
+  /** Name printed on the sheet, when it prints one. */
+  candidate_name: string | null;
   series: string | null;
   low_confidence_questions: number[];
   failure_code: string | null;
@@ -384,6 +405,19 @@ export interface RankSubmissionResultDto {
   low_confidence_questions?: number[];
   warning?: SubmissionWarning;
 }
+
+export interface RankSheetStatusDto {
+  submission_id: string | null;
+  status: SubmissionStatus | null;
+  /** Why the sheet failed, when it did — a RANK_ERROR / OCR code the student copy covers. */
+  failure_code: string | null;
+  scored: boolean;
+}
+
+/** What reading one queued sheet came to: its result, or the error the upload should answer with. */
+export type RankSheetJobOutcome =
+  | { ok: true; result: RankSubmissionResultDto }
+  | { ok: false; status: number; message: string; details: Record<string, unknown> };
 
 export interface RankNeighbourDto {
   rank: number;
@@ -543,6 +577,7 @@ export interface ExamCreateInput {
   marksWrong?: number | null;
   syllabus?: SyllabusSubject[];
   rankBy?: RankBy[];
+  paperShifts?: PaperShift[];
   isActive?: boolean;
 }
 

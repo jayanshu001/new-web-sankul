@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { OCR_SERVICE } from "../../config/ocrService";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
@@ -5,8 +6,20 @@ import {
   extractResponseSheet,
   type OcrExtractionResult,
 } from "../../utils/ocrExtractionClient";
-import { deleteRankPdf, putRankPdf, rankSheetKey } from "../../utils/rankSheetStorage";
+import logger from "../../utils/logger";
+import {
+  copyRankPdf,
+  deleteRankPdf,
+  deleteRankPdfKeys,
+  getRankPdf,
+  listRankPdfKeys,
+  organisedExamPrefix,
+  organisedRankSheetKey,
+  putRankPdf,
+  rankSheetKey,
+} from "../../utils/rankSheetStorage";
 import { rankPredictorRepository as repo } from "./rank-predictor.repository";
+import { enqueueRankSheet, rankSheetBacklog, waitForRankSheet } from "./rank-sheet.queue";
 import {
   lowConfidencePct,
   normalizePaperSeries,
@@ -26,6 +39,8 @@ import {
   rankByOf,
   sectionByQuestionOf,
   sheetKeyMapOf,
+  paperShiftsOf,
+  withShiftCancellations,
   syllabusOf,
   toAdminLeaderboardEntryDto,
   toLeaderboardEntryDto,
@@ -57,9 +72,13 @@ import {
   type AuditEntity,
   type BoardScope,
   type CandidateProfileInput,
+  type KeySource,
   type MarkingScheme,
+  type PaperShift,
   type RankBy,
   type RankPositionDto,
+  type RankSheetJobOutcome,
+  type RankSheetStatusDto,
   type RankSubjectStandingDto,
   type SheetCandidate,
   type SubmissionWarning,
@@ -186,6 +205,62 @@ const failSubmission = async (
 const shiftKeyOf = (candidate: SheetCandidate | null | undefined): string | null =>
   candidate?.test_date && candidate.test_start ? `${candidate.test_date}T${candidate.test_start}` : null;
 
+type FolderProfile = { casteCategory: string | null; gender: string | null } | null;
+
+interface FiledSheet {
+  id: bigint;
+  shiftKey: string | null;
+  rollNumber: string | null;
+  exam: { code: string };
+}
+
+/** A read sheet's place in the organised exam / shift / category / gender folders. */
+const organisedKeyOf = (sheet: FiledSheet, profile: FolderProfile): string =>
+  organisedRankSheetKey({
+    examCode: sheet.exam.code,
+    shiftKey: sheet.shiftKey,
+    casteCategory: casteCategoryOf(profile),
+    gender: genderOf(profile),
+    rollNumber: sheet.rollNumber,
+    submissionId: String(sheet.id),
+  });
+
+/**
+ * Files a copy of the sheet in the organised folders. The copy is for browsing
+ * only, so a failure here never fails the student's upload;
+ * scripts/sync-rank-sheet-folders.ts files anything missed.
+ */
+const fileSheetCopy = async (sourceKey: string, targetKey: string, staleKey?: string): Promise<void> => {
+  try {
+    await copyRankPdf(sourceKey, targetKey);
+    if (staleKey && staleKey !== targetKey) await deleteRankPdf(staleKey);
+  } catch (error) {
+    logger.warn("Rank sheet organised copy failed", {
+      sourceKey,
+      targetKey,
+      error: (error as Error).message,
+    });
+  }
+};
+
+/** A changed category or gender moves the student's sheets to the matching folders. */
+const refileCustomerSheets = async (
+  customerId: number,
+  before: FolderProfile,
+  after: FolderProfile
+): Promise<void> => {
+  if (casteCategoryOf(before) === casteCategoryOf(after) && genderOf(before) === genderOf(after)) return;
+
+  const sheets = await repo.listReadSheets(customerId);
+  for (const sheet of sheets) {
+    await fileSheetCopy(
+      sheet.sourcePdfKey as string,
+      organisedKeyOf(sheet, after),
+      organisedKeyOf(sheet, before)
+    );
+  }
+};
+
 const positionOf = (board: {
   higher: number;
   candidates: number;
@@ -199,12 +274,37 @@ const positionOf = (board: {
 
 /**
  * SSC-style normalization: each shift's marks are mapped linearly so that its
- * top-0.1% mean and its mean + SD land on the whole field's. Null when the paper
+ * top-share mean (NORMALIZATION_TOP_SHARE, 1%, at least five) and its mean + SD
+ * land on the whole field's. Null when the paper
  * does not normalize, has fewer than two shifts, or no shift is big enough.
  */
+/**
+ * The shift statistics are a window over every score of the paper, and they move
+ * by a hair per sheet. Every upload and every result view needs them, so they are
+ * held for a short while per paper (and shared by concurrent callers) instead of
+ * being recomputed thousands of times in an exam-day rush.
+ */
+const NORMALIZATION_TTL_MS = 60_000;
+const normalizationCache = new Map<string, { at: number; value: Promise<ShiftNormalization | null> }>();
+
+const forgetNormalization = (): void => normalizationCache.clear();
+
 const normalizationFor = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
   if (!rankByOf(exam).includes(RANK_BY.NORMALIZED)) return null;
 
+  const key = String(exam.id);
+  const cached = normalizationCache.get(key);
+  if (cached && Date.now() - cached.at < NORMALIZATION_TTL_MS) return cached.value;
+
+  const value = computeNormalization(exam).catch((error) => {
+    normalizationCache.delete(key);
+    throw error;
+  });
+  normalizationCache.set(key, { at: Date.now(), value });
+  return value;
+};
+
+const computeNormalization = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
   const rows = await repo.shiftStats(exam.id);
   const field = rows.find((row) => row.shift_key === null);
   const shifts = rows.filter((row) => row.shift_key !== null);
@@ -251,6 +351,36 @@ const boardPage = async (exam: ExamRow, skip: number, take: number, scope: Board
     scope.shiftKey || scope.subject ? null : await normalizationFor(exam)
   );
 
+/** Only the cancellations move a score; adding or renaming an empty slot does not. */
+const cancellationsOf = (shifts: PaperShift[]): Record<string, number[]> =>
+  Object.fromEntries(
+    shifts
+      .filter((shift) => shift.cancelled_questions.length)
+      .map((shift) => [shift.key, shift.cancelled_questions])
+  );
+
+/**
+ * A marks_only paper has no sheet to read a slot off, so students pick from the
+ * admin's list — which therefore has to exist. A cancelled question has to be on the paper.
+ */
+const assertShiftsFor = (keySource: KeySource, shifts: PaperShift[], totalQuestions: number): void => {
+  if (keySource === KEY_SOURCE.MARKS_ONLY && !shifts.length) {
+    throw new HttpError(422, "Add at least one shift: a marks-only paper ranks students by the shift they pick.", {
+      error: RANK_ERROR.SHIFTS_REQUIRED,
+    });
+  }
+
+  const outside = shifts.flatMap((shift) =>
+    shift.cancelled_questions.filter((question) => question > totalQuestions)
+  );
+  if (outside.length) {
+    throw new HttpError(422, `Cancelled questions must be between 1 and ${totalQuestions}.`, {
+      error: RANK_ERROR.CANCELLED_QUESTION_OUT_OF_RANGE,
+      questions: outside,
+    });
+  }
+};
+
 interface ResolvedKey {
   keys: AnswerKeyMap;
   scheme: MarkingScheme;
@@ -268,19 +398,24 @@ const resolveKey = async (
   submission: {
     series: string | null;
     questionMeta: unknown;
+    shiftKey: string | null;
   }
 ): Promise<ResolvedKey | { missing: SubmissionWarning }> => {
   if (keySourceOf(exam) === KEY_SOURCE.SHEET) {
     const keys = sheetKeyMapOf(submission as never);
     return keys
-      ? { keys, scheme: examMarkingSchemeOf(exam), answerKeyId: null }
+      ? {
+          keys: withShiftCancellations(keys, exam, submission.shiftKey),
+          scheme: examMarkingSchemeOf(exam),
+          answerKeyId: null,
+        }
       : { missing: SUBMISSION_WARNING.SHEET_HAS_NO_ANSWER_KEY };
   }
 
   const answerKey = await repo.findActiveAnswerKey(exam.id, submission.series);
   return answerKey
     ? {
-        keys: answerKeyMapOf(answerKey),
+        keys: withShiftCancellations(answerKeyMapOf(answerKey), exam, submission.shiftKey),
         scheme: markingSchemeOf(answerKey),
         answerKeyId: answerKey.id,
       }
@@ -331,27 +466,46 @@ const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void 
   }
 };
 
+/** Sheets re-marked at once; each is a handful of queries, so a few in flight keep the pool busy, not full. */
+const RESCORE_CONCURRENCY = Number(process.env.RANK_RESCORE_CONCURRENCY) || 8;
+
+/**
+ * Re-marks the given sheets, a few at a time. A sheet that fails is counted and
+ * logged, never fatal: the rest of the paper still moves.
+ */
+const rescoreMany = async (submissionIds: bigint[]): Promise<RescoreOutcome> => {
+  let rescored = 0;
+  let skipped = 0;
+  let next = 0;
+
+  const lane = async (): Promise<void> => {
+    while (next < submissionIds.length) {
+      const submissionId = submissionIds[next++];
+      try {
+        await rankPredictorService.scoreAndPublish(submissionId, null, { bulk: true });
+        rescored += 1;
+      } catch (error) {
+        skipped += 1;
+        logger.warn("Rank rescore failed for a sheet", {
+          submissionId: String(submissionId),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(RESCORE_CONCURRENCY, submissionIds.length) }, lane));
+  forgetNormalization();
+  return { rescored, skipped };
+};
+
 const rescoreSeries = async (
   examId: bigint,
   series: string | null,
   adminId: number | null
 ): Promise<RescoreOutcome> => {
   const submissions = await repo.listScoredSubmissions(examId, series);
-  let rescored = 0;
-  let skipped = 0;
-
-  for (const submission of submissions) {
-    try {
-      await rankPredictorService.scoreAndPublish(submission.id, null);
-      rescored += 1;
-    } catch (error) {
-      skipped += 1;
-      console.error(
-        `[rank-predictor] rescore failed for submission ${submission.id}:`,
-        error instanceof Error ? error.message : error
-      );
-    }
-  }
+  const { rescored, skipped } = await rescoreMany(submissions.map((submission) => submission.id));
 
   if (submissions.length) {
     await audit({
@@ -374,21 +528,7 @@ const rescoreSeries = async (
  */
 const rescoreExam = async (examId: bigint, adminId: number | null): Promise<RescoreOutcome> => {
   const submissions = await repo.listProcessedSubmissionIds(examId);
-  let rescored = 0;
-  let skipped = 0;
-
-  for (const submission of submissions) {
-    try {
-      await rankPredictorService.scoreAndPublish(submission.id, null);
-      rescored += 1;
-    } catch (error) {
-      skipped += 1;
-      console.error(
-        `[rank-predictor] exam rescore failed for submission ${submission.id}:`,
-        error instanceof Error ? error.message : error
-      );
-    }
-  }
+  const { rescored, skipped } = await rescoreMany(submissions.map((submission) => submission.id));
 
   if (submissions.length) {
     await audit({
@@ -402,6 +542,164 @@ const rescoreExam = async (examId: bigint, adminId: number | null): Promise<Resc
   }
 
   return { rescored, skipped };
+};
+
+const settled = (status: number, message: string, details: Record<string, unknown>): RankSheetJobOutcome => ({
+  ok: false,
+  status,
+  message,
+  details,
+});
+
+/**
+ * Reads, checks and scores one stored sheet. Every reason a sheet is unusable is
+ * settled here as a failed outcome, once; only a passing failure (storage or the
+ * OCR service unreachable, overloaded or timed out, a database blip) is thrown,
+ * so the queue retries it. Safe to run twice for the same sheet: a sheet already
+ * read is only scored again.
+ */
+const readQueuedSheet = async (
+  submissionId: bigint,
+  fileBuffer?: Buffer
+): Promise<RankSheetJobOutcome> => {
+  const submission = await repo.findSubmissionWithExam(submissionId);
+  if (!submission) return settled(404, "Submission not found.", { error: RANK_ERROR.NOT_FOUND });
+
+  if (submission.status === SUBMISSION_STATUS.PROCESSED) {
+    return { ok: true, result: await rankPredictorService.scoreAndPublish(submission.id, submission.customerId) };
+  }
+  if (submission.status === SUBMISSION_STATUS.NEEDS_REVIEW) {
+    return {
+      ok: true,
+      result: {
+        submission_id: String(submission.id),
+        status: SUBMISSION_STATUS.NEEDS_REVIEW,
+        low_confidence_questions: (submission.lowConfidenceQuestions ?? []) as number[],
+        score: null,
+        warning: SUBMISSION_WARNING.NEEDS_REVIEW,
+      },
+    };
+  }
+  if (submission.status !== SUBMISSION_STATUS.PROCESSING || !submission.sourcePdfKey) {
+    return settled(422, "We could not read that sheet.", {
+      error: submission.failureCode ?? RANK_ERROR.UNKNOWN_EXTRACTION_ERROR,
+    });
+  }
+
+  const exam = submission.exam;
+  const customerId = submission.customerId;
+  const sourcePdfKey = submission.sourcePdfKey;
+
+  /** A sheet that will never read: fail it and drop the stored copy. */
+  const reject = async (
+    code: string,
+    action: AuditAction,
+    metadata: Record<string, unknown>,
+    outcome: RankSheetJobOutcome
+  ): Promise<RankSheetJobOutcome> => {
+    await failSubmission(submission.id, customerId, code, action, metadata);
+    await deleteRankPdf(sourcePdfKey);
+    await repo.updateSubmission(submission.id, { sourcePdfKey: null, updatedAt: new Date() });
+    return outcome;
+  };
+
+  let extraction: OcrExtractionResult;
+  try {
+    extraction = await extractResponseSheet(fileBuffer ?? (await getRankPdf(sourcePdfKey)), `${submission.id}.pdf`);
+  } catch (error) {
+    // Anything but a typed refusal from the reader is passing — let the queue retry.
+    if (!(error instanceof OcrExtractionError)) throw error;
+    return reject(
+      error.code,
+      AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
+      { code: error.code },
+      settled(422, "We could not read that sheet.", { error: error.code })
+    );
+  }
+
+  if (extraction.total_questions !== exam.totalQuestions) {
+    const details = {
+      error: RANK_ERROR.QUESTION_COUNT_MISMATCH,
+      expected: exam.totalQuestions,
+      detected: extraction.total_questions,
+    };
+    return reject(
+      RANK_ERROR.QUESTION_COUNT_MISMATCH,
+      AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
+      { expected: exam.totalQuestions, detected: extraction.total_questions },
+      settled(422, "That sheet does not match this exam.", details)
+    );
+  }
+
+  // The same sheet from a second account would put one candidate on the board
+  // twice, and a participant id is unique per candidate, so it is the tell.
+  if (extraction.kind === "text_layer" && extraction.roll_number) {
+    const owner = await repo.findSheetOwnedByOther(exam.id, extraction.roll_number, customerId);
+    if (owner) {
+      return reject(
+        RANK_ERROR.SHEET_ALREADY_SUBMITTED,
+        AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
+        { code: RANK_ERROR.SHEET_ALREADY_SUBMITTED, roll_number: extraction.roll_number },
+        settled(409, "That sheet has already been submitted by another student.", {
+          error: RANK_ERROR.SHEET_ALREADY_SUBMITTED,
+        })
+      );
+    }
+  }
+
+  const lowConfidence = extraction.low_confidence_questions ?? [];
+  const needsReview =
+    lowConfidencePct(lowConfidence.length, exam.totalQuestions) >
+    OCR_SERVICE.LOW_CONFIDENCE_THRESHOLD_PCT;
+
+  await repo.updateSubmission(submission.id, {
+    extractionKind: extraction.kind,
+    rollNumber: extraction.roll_number,
+    rawAnswers: extraction.answers as never,
+    shiftKey: shiftKeyOf(extraction.candidate),
+    candidate: (extraction.candidate ?? undefined) as never,
+    candidateName: extraction.candidate?.name?.trim().slice(0, 255) || null,
+    questionMeta: (extraction.questions?.length ? extraction.questions : undefined) as never,
+    lowConfidenceQuestions: lowConfidence as never,
+    status: needsReview ? SUBMISSION_STATUS.NEEDS_REVIEW : SUBMISSION_STATUS.PROCESSED,
+    updatedAt: new Date(),
+  });
+
+  await fileSheetCopy(
+    sourcePdfKey,
+    organisedKeyOf(
+      { id: submission.id, shiftKey: shiftKeyOf(extraction.candidate), rollNumber: extraction.roll_number, exam },
+      await repo.findProfile(customerId)
+    )
+  );
+
+  await audit({
+    action: AUDIT_ACTION.SUBMISSION_EXTRACTED,
+    entityType: AUDIT_ENTITY.SUBMISSION,
+    entityId: String(submission.id),
+    actorType: ACTOR_TYPE.CUSTOMER,
+    actorId: customerId,
+    metadata: {
+      kind: extraction.kind,
+      low_confidence: lowConfidence.length,
+      needs_review: needsReview,
+    },
+  });
+
+  if (needsReview) {
+    return {
+      ok: true,
+      result: {
+        submission_id: String(submission.id),
+        status: SUBMISSION_STATUS.NEEDS_REVIEW,
+        low_confidence_questions: lowConfidence,
+        score: null,
+        warning: SUBMISSION_WARNING.NEEDS_REVIEW,
+      },
+    };
+  }
+
+  return { ok: true, result: await rankPredictorService.scoreAndPublish(submission.id, customerId) };
 };
 
 export const rankPredictorService = {
@@ -430,15 +728,32 @@ export const rankPredictorService = {
 
   getExam: async (examId: bigint): Promise<RankExamDto> => {
     const exam = await requireExam(examId);
-    const [dto, shifts, subjects] = await Promise.all([
+    const [dto, sat, subjects] = await Promise.all([
       decorateExam(exam),
       repo.listShifts(examId),
       repo.listSubjects(examId),
     ]);
 
+    // The admin's slots are on offer before anyone has sat them, so a student
+    // typing marks can pick theirs; a marks_only paper offers only those.
+    const configured = paperShiftsOf(exam).map((shift) => shift.key);
+    const satCount = new Map(sat.map((shift) => [shift.key, shift.candidates]));
+    const keys =
+      keySourceOf(exam) === KEY_SOURCE.MARKS_ONLY && configured.length
+        ? configured
+        : [...new Set([...configured, ...satCount.keys()])].sort();
+    const shifts = keys.map((key) => ({ key, candidates: satCount.get(key) ?? 0 }));
+
     return { ...dto, shifts, subjects };
   },
 
+  /**
+   * Takes the sheet and queues it. The reading happens in the worker process at
+   * a fixed concurrency (rank-sheet.queue.ts), so a thousand uploads at once
+   * queue up instead of overrunning the OCR service. The request waits a short
+   * while for its own sheet: under normal load the student still gets their
+   * result in this response; in a rush they are told it is queued.
+   */
   createSubmission: async (params: SubmissionCreateInput): Promise<RankSubmissionResultDto> => {
     const exam = await requireExam(params.examId);
     if (keySourceOf(exam) === KEY_SOURCE.MARKS_ONLY) {
@@ -479,118 +794,82 @@ export const rankPredictorService = {
       throw error;
     }
 
-    let extraction: OcrExtractionResult;
-    try {
-      extraction = await extractResponseSheet(params.fileBuffer, params.fileName);
-    } catch (error) {
-      const code =
-        error instanceof OcrExtractionError ? error.code : RANK_ERROR.EXTRACTION_UNREACHABLE;
-
-      await failSubmission(
-        submission.id,
-        params.customerId,
-        code,
-        AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
-        { code }
-      );
-
-      throw new HttpError(422, "We could not read that sheet.", { error: code });
-    }
-
-    if (extraction.total_questions !== exam.totalQuestions) {
-      await failSubmission(
-        submission.id,
-        params.customerId,
-        RANK_ERROR.QUESTION_COUNT_MISMATCH,
-        AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
-        { expected: exam.totalQuestions, detected: extraction.total_questions }
-      );
-
-      throw new HttpError(422, "That sheet does not match this exam.", {
-        error: RANK_ERROR.QUESTION_COUNT_MISMATCH,
-        expected: exam.totalQuestions,
-        detected: extraction.total_questions,
-      });
-    }
-
-    // The same sheet from a second account would put one candidate on the board
-    // twice, and a participant id is unique per candidate, so it is the tell.
-    if (extraction.kind === "text_layer" && extraction.roll_number) {
-      const owner = await repo.findSheetOwnedByOther(
-        params.examId,
-        extraction.roll_number,
-        params.customerId
-      );
-      if (owner) {
-        await failSubmission(
-          submission.id,
-          params.customerId,
-          RANK_ERROR.SHEET_ALREADY_SUBMITTED,
-          AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
-          { code: RANK_ERROR.SHEET_ALREADY_SUBMITTED, roll_number: extraction.roll_number }
-        );
-
-        throw new HttpError(409, "That sheet has already been submitted by another student.", {
-          error: RANK_ERROR.SHEET_ALREADY_SUBMITTED,
-        });
-      }
-    }
-
+    // Stored before it is read: the worker reads it from storage, not from this
+    // request's memory, so a crash or a deploy loses nothing.
     const sourcePdfKey = rankSheetKey(params.customerId, String(submission.id));
     await putRankPdf(sourcePdfKey, params.fileBuffer);
+    await repo.updateSubmission(submission.id, { sourcePdfKey, updatedAt: new Date() });
 
-    const lowConfidence = extraction.low_confidence_questions ?? [];
-    const needsReview =
-      lowConfidencePct(lowConfidence.length, exam.totalQuestions) >
-      OCR_SERVICE.LOW_CONFIDENCE_THRESHOLD_PCT;
-
-    await repo.updateSubmission(submission.id, {
-      sourcePdfKey,
-      extractionKind: extraction.kind,
-      rollNumber: extraction.roll_number,
-      rawAnswers: extraction.answers as never,
-      shiftKey: shiftKeyOf(extraction.candidate),
-      candidate: (extraction.candidate ?? undefined) as never,
-      questionMeta: (extraction.questions?.length ? extraction.questions : undefined) as never,
-      lowConfidenceQuestions: lowConfidence as never,
-      status: needsReview ? SUBMISSION_STATUS.NEEDS_REVIEW : SUBMISSION_STATUS.PROCESSED,
-      updatedAt: new Date(),
-    });
-
-    await audit({
-      action: AUDIT_ACTION.SUBMISSION_EXTRACTED,
-      entityType: AUDIT_ENTITY.SUBMISSION,
-      entityId: String(submission.id),
-      actorType: ACTOR_TYPE.CUSTOMER,
-      actorId: params.customerId,
-      metadata: {
-        kind: extraction.kind,
-        low_confidence: lowConfidence.length,
-        needs_review: needsReview,
-      },
-    });
-
-    if (needsReview) {
-      return {
-        submission_id: String(submission.id),
-        status: SUBMISSION_STATUS.NEEDS_REVIEW,
-        low_confidence_questions: lowConfidence,
-        score: null,
-        warning: SUBMISSION_WARNING.NEEDS_REVIEW,
-      };
+    let outcome: RankSheetJobOutcome | null;
+    try {
+      const job = await enqueueRankSheet(submission.id);
+      // Waiting holds this request, and the sheet in its memory, open. In a rush
+      // the sheet would not be reached within the wait anyway, so answer "queued"
+      // at once and let the request go.
+      const backlog = await rankSheetBacklog();
+      outcome =
+        backlog <= OCR_SERVICE.UPLOAD_WAIT_MAX_BACKLOG
+          ? await waitForRankSheet(job, OCR_SERVICE.UPLOAD_WAIT_MS)
+          : null;
+    } catch (error) {
+      // Queue unavailable (Redis down): read it here rather than lose the upload.
+      logger.warn("Rank sheet queue unavailable, reading inline", {
+        submissionId: String(submission.id),
+        error: (error as Error).message,
+      });
+      outcome = await readQueuedSheet(submission.id, params.fileBuffer);
     }
 
-    return rankPredictorService.scoreAndPublish(submission.id, params.customerId);
+    if (!outcome) {
+      return {
+        submission_id: String(submission.id),
+        status: SUBMISSION_STATUS.PROCESSING,
+        score: null,
+        warning: SUBMISSION_WARNING.QUEUED,
+      };
+    }
+    if (!outcome.ok) throw new HttpError(outcome.status, outcome.message, outcome.details);
+    return outcome.result;
   },
+
+  /** The worker's half of an upload — see readQueuedSheet. */
+  processQueuedSheet: (submissionId: bigint): Promise<RankSheetJobOutcome> =>
+    readQueuedSheet(submissionId),
+
+  /** Retries are spent on a passing failure: free the student to upload again. */
+  giveUpQueuedSheet: async (submissionId: bigint, error: Error): Promise<void> => {
+    const submission = await repo.findSubmissionById(submissionId);
+    if (!submission || submission.status !== SUBMISSION_STATUS.PROCESSING) return;
+    await failSubmission(
+      submissionId,
+      submission.customerId,
+      RANK_ERROR.EXTRACTION_UNREACHABLE,
+      AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
+      { code: RANK_ERROR.EXTRACTION_UNREACHABLE, reason: error.message }
+    );
+  },
+
+  /** Sheets a crash or a deploy left half-way, for the worker to queue again on boot. */
+  pendingQueuedSheets: (): Promise<bigint[]> => repo.listPendingSheetSubmissionIds(),
 
   createMarksSubmission: async (params: MarksSubmissionInput): Promise<RankSubmissionResultDto> => {
     const exam = await requireExam(params.examId);
     const allowedSeries = parsePaperSeries(exam.paperSeries);
     assertSeriesAllowed(allowedSeries, params.series);
 
-    if (rankByOf(exam).includes(RANK_BY.SHIFT) && !params.shiftKey) {
+    // A marks_only paper is ranked by the slot its admin set up, so the slot is
+    // required and must be one of them; elsewhere it is needed only for a shift rank.
+    const isMarksOnly = keySourceOf(exam) === KEY_SOURCE.MARKS_ONLY;
+    if ((isMarksOnly || rankByOf(exam).includes(RANK_BY.SHIFT)) && !params.shiftKey) {
       throw new HttpError(422, "Please pick the shift you sat.", {
         error: RANK_ERROR.SHIFT_REQUIRED,
+      });
+    }
+    const configuredShifts = paperShiftsOf(exam).map((shift) => shift.key);
+    if (isMarksOnly && configuredShifts.length && !configuredShifts.includes(params.shiftKey as string)) {
+      throw new HttpError(422, "Please pick one of the shifts listed for this paper.", {
+        error: RANK_ERROR.SHIFT_NOT_LISTED,
+        shifts: configuredShifts,
       });
     }
 
@@ -675,9 +954,15 @@ export const rankPredictorService = {
     };
   },
 
+  /**
+   * `bulk` is a re-mark of many sheets at once: the score and subject rows are
+   * written, but the per-sheet rank count, snapshot and audit row are skipped —
+   * ranks are always read live, and the run writes one audit row of its own.
+   */
   scoreAndPublish: async (
     submissionId: bigint,
-    actorCustomerId: number | null
+    actorCustomerId: number | null,
+    options: { bulk?: boolean } = {}
   ): Promise<RankSubmissionResultDto> => {
     const submission = await requireSubmission(submissionId);
 
@@ -759,6 +1044,14 @@ export const rankPredictorService = {
     );
 
     await repo.replaceSubjectScores(score.id, exam.id, result.subjects);
+
+    if (options.bulk) {
+      return {
+        submission_id: String(submission.id),
+        status: SUBMISSION_STATUS.PROCESSED,
+        score: toRankScoreDto(score),
+      };
+    }
 
     const { higher, candidates } = await overallStanding(exam, result.rawScore, submission.shiftKey);
     const rank = higher + 1;
@@ -986,6 +1279,20 @@ export const rankPredictorService = {
     );
   },
 
+  /**
+   * Polled every few seconds while a queued sheet is read, so it is one indexed
+   * row and nothing else — the page re-reads its full standing only once this moves.
+   */
+  getMySheetStatus: async (examId: bigint, customerId: number): Promise<RankSheetStatusDto> => {
+    const latest = await repo.findLatestSubmissionStatus(examId, customerId);
+    return {
+      submission_id: latest ? String(latest.id) : null,
+      status: (latest?.status as SubmissionStatus | undefined) ?? null,
+      failure_code: latest?.failureCode ?? null,
+      scored: Boolean(latest?.score),
+    };
+  },
+
   getSubmission: async (submissionId: bigint, customerId: number | null) => {
     const submission = await requireSubmission(submissionId);
 
@@ -1046,6 +1353,7 @@ export const rankPredictorService = {
     customerId: number,
     input: CandidateProfileInput
   ): Promise<RankCandidateProfileDto> => {
+    const before = await repo.findProfile(customerId);
     const profile = await repo.upsertCandidateProfile(customerId, {
       casteCategory: input.casteCategory,
       gender: input.gender,
@@ -1065,12 +1373,17 @@ export const rankPredictorService = {
       },
     });
 
+    await refileCustomerSheets(customerId, before, profile);
+
     return toRankCandidateProfileDto(profile);
   },
 
   forgetCandidateProfile: async (customerId: number): Promise<void> => {
+    const before = await repo.findProfile(customerId);
     const { count } = await repo.deleteProfile(customerId);
     if (!count) return;
+
+    await refileCustomerSheets(customerId, before, null);
 
     await audit({
       action: AUDIT_ACTION.CANDIDATE_PROFILE_FORGOTTEN,
@@ -1090,6 +1403,8 @@ export const rankPredictorService = {
       });
     }
 
+    assertShiftsFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.paperShifts ?? [], input.totalQuestions);
+
     const exam = await repo.createExam({
       code: input.code,
       name: input.name,
@@ -1103,6 +1418,7 @@ export const rankPredictorService = {
       syllabus: (input.syllabus ?? []) as never,
       // An unset choice stays null so the paper keeps its legacy (category-only) behaviour.
       ...(input.rankBy === undefined ? {} : { rankBy: input.rankBy as never }),
+      paperShifts: (input.paperShifts ?? []) as never,
       isActive: input.isActive ?? true,
       createdBy: input.adminId,
       createdAt: new Date(),
@@ -1127,6 +1443,11 @@ export const rankPredictorService = {
     adminId: number | null
   ): Promise<RankExamDto> => {
     const exam = await requireExam(examId);
+    assertShiftsFor(
+      input.keySource ?? keySourceOf(exam),
+      input.paperShifts ?? paperShiftsOf(exam),
+      input.totalQuestions ?? exam.totalQuestions
+    );
 
     if (input.paperSeries) {
       const next = normalizePaperSeries(input.paperSeries);
@@ -1156,6 +1477,7 @@ export const rankPredictorService = {
       ...(input.marksWrong === undefined ? {} : { marksWrong: input.marksWrong }),
       ...(input.syllabus === undefined ? {} : { syllabus: input.syllabus as never }),
       ...(input.rankBy === undefined ? {} : { rankBy: input.rankBy as never }),
+      ...(input.paperShifts === undefined ? {} : { paperShifts: input.paperShifts as never }),
       ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
       updatedAt: new Date(),
     });
@@ -1171,11 +1493,18 @@ export const rankPredictorService = {
 
     // Anything that changes what a sheet is worth has to move the scores already
     // banked, in this request, for the same reason a key publish does.
+    // The admin form resends every field on each save, so compare against what was
+    // stored: an unchanged setup must not re-mark every sheet.
+    const sameMarks = (next: number | null | undefined, stored: unknown): boolean =>
+      next === undefined || (next === null ? stored === null : stored !== null && Number(stored) === next);
     const changesMarking =
-      input.keySource !== undefined ||
-      input.marksCorrect !== undefined ||
-      input.marksWrong !== undefined ||
-      input.syllabus !== undefined;
+      (input.keySource !== undefined && input.keySource !== exam.keySource) ||
+      !sameMarks(input.marksCorrect, exam.marksCorrect) ||
+      !sameMarks(input.marksWrong, exam.marksWrong) ||
+      (input.syllabus !== undefined &&
+        !isDeepStrictEqual(JSON.parse(JSON.stringify(input.syllabus)), exam.syllabus ?? [])) ||
+      (input.paperShifts !== undefined &&
+        !isDeepStrictEqual(cancellationsOf(input.paperShifts), cancellationsOf(paperShiftsOf(exam))));
     if (changesMarking) await rescoreExam(examId, adminId);
 
     return decorateExam(updated);
@@ -1187,6 +1516,12 @@ export const rankPredictorService = {
     const deleted = await repo.deleteExamCascade(examId);
 
     await Promise.all(pdfKeys.map(deleteRankPdf));
+    await deleteRankPdfKeys(await listRankPdfKeys(organisedExamPrefix(exam.code))).catch((error) =>
+      logger.warn("Rank sheet organised folder cleanup failed", {
+        examId: String(examId),
+        error: (error as Error).message,
+      })
+    );
 
     await audit({
       action: AUDIT_ACTION.EXAM_DELETED,
@@ -1340,7 +1675,10 @@ export const rankPredictorService = {
 
     await repo.deleteSubmission(submission.id);
 
-    if (submission.sourcePdfKey) await deleteRankPdf(submission.sourcePdfKey);
+    if (submission.sourcePdfKey) {
+      await deleteRankPdf(submission.sourcePdfKey);
+      await deleteRankPdf(organisedKeyOf(submission, await repo.findProfile(submission.customerId)));
+    }
 
     await audit({
       action: AUDIT_ACTION.SUBMISSION_DELETED,

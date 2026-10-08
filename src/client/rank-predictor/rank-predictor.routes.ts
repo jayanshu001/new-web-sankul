@@ -23,6 +23,7 @@ import {
   getLeaderboardPrivacy,
   getMyAnswerReview,
   getMyRank,
+  getMySheetStatus,
   getMyRanks,
   getSubmission,
   getSubmissionFile,
@@ -82,6 +83,7 @@ router.post(
 );
 
 router.get("/papers/:examId/rank/me", validate({ params: examIdParamSchema }), getMyRank);
+router.get("/papers/:examId/status/me", validate({ params: examIdParamSchema }), getMySheetStatus);
 router.get(
   "/papers/:examId/review/me",
   validate({ params: examIdParamSchema }),

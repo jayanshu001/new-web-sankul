@@ -6,6 +6,7 @@ import {
   GENDERS,
   KEY_SOURCES,
   MAX_PAPER_SERIES,
+  MAX_PAPER_SHIFTS,
   MAX_SYLLABUS_SUBJECTS,
   RANK_BY_VALUES,
   MAX_TOTAL_QUESTIONS,
@@ -88,6 +89,24 @@ const syllabusSchema = z
     { message: "Each subject needs its own name." }
   );
 
+/** Cancellations are stored sorted and de-duplicated, so the same list compares equal. */
+const paperShiftSchema = z.object({
+  key: shiftKeySchema,
+  cancelled_questions: z
+    .array(z.coerce.number().int().positive().max(MAX_TOTAL_QUESTIONS))
+    .max(MAX_TOTAL_QUESTIONS)
+    .default([])
+    .transform((questions) => [...new Set(questions)].sort((a, b) => a - b)),
+});
+
+const paperShiftsSchema = z
+  .array(paperShiftSchema)
+  .max(MAX_PAPER_SHIFTS)
+  .refine((shifts) => new Set(shifts.map((shift) => shift.key)).size === shifts.length, {
+    message: "Each shift can be listed only once.",
+  })
+  .transform((shifts) => [...shifts].sort((a, b) => a.key.localeCompare(b.key)));
+
 const rankBySchema = z
   .array(z.enum(RANK_BY_VALUES))
   .transform((values) => [...new Set(values)]);
@@ -105,6 +124,7 @@ export const examCreateSchema = z.object({
   marksWrong: z.coerce.number().min(0).max(100).nullish(),
   syllabus: syllabusSchema.optional(),
   rankBy: rankBySchema.optional(),
+  paperShifts: paperShiftsSchema.optional(),
   isActive: z.coerce.boolean().optional(),
 });
 

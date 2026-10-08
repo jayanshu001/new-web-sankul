@@ -182,6 +182,10 @@ export const getMyRank = asyncHandler(async (req: Request, res: Response) =>
   success(res, await rankPredictorService.getStanding(examIdOf(req), customerIdOf(req)))
 );
 
+export const getMySheetStatus = asyncHandler(async (req: Request, res: Response) =>
+  success(res, await rankPredictorService.getMySheetStatus(examIdOf(req), customerIdOf(req)))
+);
+
 export const getMyAnswerReview = asyncHandler(async (req: Request, res: Response) => {
   const review = await rankPredictorService.getMyAnswerReview(examIdOf(req), customerIdOf(req));
 

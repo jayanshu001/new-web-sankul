@@ -30,6 +30,8 @@ import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
 import { isReviewModeOn } from "./libs/reviewMode";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
+import { rankPredictorService } from "./modules/rank-predictor/rank-predictor.service";
+import { initRankSheetScheduler, shutdownRankSheetScheduler } from "./modules/rank-predictor/rank-sheet.queue";
 import { initExportScheduler } from "./admin/exports/export.scheduler";
 import { initJobsScheduler, shutdownJobsScheduler } from "./admin/jobs/jobs.scheduler";
 import {
@@ -112,6 +114,14 @@ const buildPreClose =
           err: (err as Error).message,
         });
       }
+      try {
+        // Lets the sheets being read finish; the rest stay queued for the next boot.
+        await shutdownRankSheetScheduler();
+      } catch (err) {
+        logger.warn("[shutdown] shutdownRankSheetScheduler failed", {
+          err: (err as Error).message,
+        });
+      }
     }
     if (sockets?.io) {
       try {
@@ -144,6 +154,14 @@ const startWorkers = async (): Promise<void> => {
   const t1 = Date.now();
   await initPdfUploadScheduler();
   bootMs("PDF upload scheduler", t1);
+
+  const t1b = Date.now();
+  await initRankSheetScheduler({
+    process: rankPredictorService.processQueuedSheet,
+    giveUp: rankPredictorService.giveUpQueuedSheet,
+    pending: rankPredictorService.pendingQueuedSheets,
+  });
+  bootMs("rank sheet scheduler", t1b);
 
   const t2 = Date.now();
   initPlanPopularityScheduler();

@@ -192,6 +192,67 @@ export const rankPredictorRepository = {
   findSubmissionWithScore: (id: bigint) =>
     prisma.ocrSubmission.findUnique({ where: { id }, include: { score: true, exam: true } }),
 
+  /**
+   * Sheets that were read and are still stored, with what files them in the
+   * organised folders. Narrowed to one customer when their profile changes;
+   * unnarrowed for the folder sync script.
+   */
+  listReadSheets: (customerId?: number) =>
+    prisma.ocrSubmission.findMany({
+      where: {
+        ...(customerId === undefined ? {} : { customerId }),
+        status: { in: [SUBMISSION_STATUS.PROCESSED, SUBMISSION_STATUS.NEEDS_REVIEW] },
+        sourcePdfKey: { not: null },
+      },
+      select: {
+        id: true,
+        customerId: true,
+        sourcePdfKey: true,
+        shiftKey: true,
+        rollNumber: true,
+        exam: { select: { code: true } },
+      },
+      orderBy: { id: "asc" },
+    }),
+
+  findProfilesFor: (customerIds: number[]) =>
+    customerIds.length === 0
+      ? Promise.resolve([])
+      : prisma.ocrProfile.findMany({
+          where: { customerId: { in: customerIds } },
+          select: { customerId: true, casteCategory: true, gender: true },
+        }),
+
+  findSubmissionWithExam: (id: bigint) =>
+    prisma.ocrSubmission.findUnique({ where: { id }, include: { exam: true } }),
+
+  /**
+   * Sheets stored but not yet read — what a crash or a deploy leaves behind.
+   * Bounded to the last day: anything older was already settled as failed.
+   */
+  listPendingSheetSubmissionIds: async (): Promise<bigint[]> => {
+    const rows = await prisma.ocrSubmission.findMany({
+      where: {
+        status: SUBMISSION_STATUS.PROCESSING,
+        entryMode: ENTRY_MODE.SHEET,
+        sourcePdfKey: { not: null },
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+      take: 10_000,
+    });
+    return rows.map((row) => row.id);
+  },
+
+  /** The student's latest sheet on a paper, as little as a status poll needs. */
+  findLatestSubmissionStatus: (examId: bigint, customerId: number) =>
+    prisma.ocrSubmission.findFirst({
+      where: { examId, customerId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true, failureCode: true, score: { select: { id: true } } },
+    }),
+
   findActiveSubmission: (examId: bigint, customerId: number) =>
     prisma.ocrSubmission.findFirst({
       where: { examId, customerId, status: { not: SUBMISSION_STATUS.FAILED } },
@@ -266,18 +327,19 @@ export const rankPredictorRepository = {
     normalization?: ShiftNormalization | null
   ): Promise<{ higher: number; candidates: number; average: number | null }> => {
     const mark = boardScore(normalization);
-    const [candidates, higher, average] = await Promise.all([
-      countScores(examId, scope),
-      prisma.$queryRaw<CountRow[]>`
-        SELECT COUNT(*) c ${scopedScores(examId, scope)} AND ${mark} > ${score + SCORE_EPSILON}
-      `,
-      prisma.$queryRaw<CountRow[]>`SELECT AVG(${mark}) c ${scopedScores(examId, scope)}`,
-    ]);
-    const mean = average[0]?.c;
+    // One pass over the board for all three numbers: a result page asks for up to
+    // seven boards, and three queries each would hold three pool connections.
+    const [row] = await prisma.$queryRaw<{ candidates: unknown; higher: unknown; average: unknown }[]>`
+      SELECT COUNT(*) AS candidates,
+             COALESCE(SUM(${mark} > ${score + SCORE_EPSILON}), 0) AS higher,
+             AVG(${mark}) AS average
+        ${scopedScores(examId, scope)}
+    `;
+    const mean = row?.average;
 
     return {
-      candidates: countOf(candidates),
-      higher: countOf(higher),
+      candidates: row ? asNumber(row.candidates) : 0,
+      higher: row ? asNumber(row.higher) : 0,
       average: mean == null ? null : Math.round(asNumber(mean) * 100) / 100,
     };
   },
@@ -423,25 +485,34 @@ export const rankPredictorRepository = {
     if (scope.subject) return rankPredictorRepository.subjectLeaderboardPage(examId, scope.subject, skip, take);
 
     const mark = boardScore(normalization);
+    const byProfile = Boolean(scope.casteCategory || scope.gender);
+    // Rank and page on the scores alone, then join names for just the page: the
+    // board is read on every refresh, and joining customers, submissions and
+    // profiles for every candidate before keeping twenty was most of its cost.
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-      SELECT s.customer_id,
-             s.raw_score,
-             ${normalization?.size ? mark : Prisma.sql`NULL`} AS normalized_score,
-             s.correct + s.wrong + s.unanswered   AS total_questions,
-             RANK() OVER (ORDER BY ${mark} DESC) AS rank_position,
+      SELECT r.customer_id, r.raw_score, r.normalized_score, r.total_questions, r.rank_position,
              sub.created_at                AS submitted_at,
              c.full_name,
              COALESCE(p.show_real_name, 0) AS show_real_name
-        FROM ws_ocr_scores s
-        JOIN ws_ocr_submissions sub ON sub.id = s.submission_id
-        LEFT JOIN ws_customer c     ON c.id = s.customer_id
-        LEFT JOIN ws_ocr_profiles p ON p.customer_id = s.customer_id
-       WHERE s.exam_id = ${examId}
-       ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
-       ${scope.casteCategory ? Prisma.sql`AND p.caste_category = ${scope.casteCategory}` : Prisma.empty}
-       ${scope.gender ? Prisma.sql`AND p.gender = ${scope.gender}` : Prisma.empty}
-       ORDER BY ${mark} DESC, s.id ASC
-       LIMIT ${take} OFFSET ${skip}
+        FROM (
+          SELECT s.id, s.customer_id, s.submission_id, s.raw_score,
+                 ${normalization?.size ? mark : Prisma.sql`NULL`} AS normalized_score,
+                 s.correct + s.wrong + s.unanswered   AS total_questions,
+                 RANK() OVER (ORDER BY ${mark} DESC) AS rank_position,
+                 ${mark} AS board_mark
+            FROM ws_ocr_scores s
+            ${byProfile ? Prisma.sql`JOIN ws_ocr_profiles fp ON fp.customer_id = s.customer_id` : Prisma.empty}
+           WHERE s.exam_id = ${examId}
+           ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
+           ${scope.casteCategory ? Prisma.sql`AND fp.caste_category = ${scope.casteCategory}` : Prisma.empty}
+           ${scope.gender ? Prisma.sql`AND fp.gender = ${scope.gender}` : Prisma.empty}
+           ORDER BY board_mark DESC, s.id ASC
+           LIMIT ${take} OFFSET ${skip}
+        ) r
+        JOIN ws_ocr_submissions sub ON sub.id = r.submission_id
+        LEFT JOIN ws_customer c     ON c.id = r.customer_id
+        LEFT JOIN ws_ocr_profiles p ON p.customer_id = r.customer_id
+       ORDER BY r.board_mark DESC, r.id ASC
     `;
 
     return rows.map(toLeaderboardRow);

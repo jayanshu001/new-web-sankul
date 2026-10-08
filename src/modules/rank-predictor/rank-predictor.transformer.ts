@@ -2,11 +2,13 @@ import type { OcrAnswerKey, OcrExam, OcrScore, OcrSubmission } from "@prisma/cli
 import { buildAnswerReview, cancelledCountOf, normalizePaperSeries } from "./rank-predictor.scoring";
 import { questionFactorsOf, resolveSubjects } from "./rank-predictor.subjects";
 import {
+  CANCELLED_QUESTION,
   CUSTOMER_HANDLE_PREFIX,
   KEY_SOURCE,
   LEGACY_RANK_BY,
   RANK_BY_VALUES,
   type KeySource,
+  type PaperShift,
   type RankBy,
   type SheetQuestion,
   type SyllabusSubject,
@@ -125,6 +127,30 @@ export const rankByOf = (row: Pick<OcrExam, "rankBy">): RankBy[] =>
     ? RANK_BY_VALUES.filter((value) => (row.rankBy as unknown[]).includes(value))
     : [...LEGACY_RANK_BY];
 
+export const paperShiftsOf = (row: Pick<OcrExam, "paperShifts">): PaperShift[] =>
+  Array.isArray(row.paperShifts) ? (row.paperShifts as unknown as PaperShift[]) : [];
+
+/**
+ * A key with the cancellations of the slot the sheet was sat in laid over it, so a
+ * question the board dropped for that shift is scored for no one in it. A sheet with
+ * no shift, or a shift with nothing cancelled, keeps its key as it is.
+ */
+export const withShiftCancellations = (
+  keys: AnswerKeyMap,
+  exam: Pick<OcrExam, "paperShifts">,
+  shiftKey: string | null | undefined
+): AnswerKeyMap => {
+  const cancelled = shiftKey
+    ? paperShiftsOf(exam).find((shift) => shift.key === shiftKey)?.cancelled_questions ?? []
+    : [];
+  if (!cancelled.length) return keys;
+
+  return {
+    ...keys,
+    ...Object.fromEntries(cancelled.map((question) => [String(question), CANCELLED_QUESTION])),
+  };
+};
+
 /** The exam-level marking used when a paper scores against the sheet's own key. */
 export const examMarkingSchemeOf = (row: Pick<OcrExam, "marksCorrect" | "marksWrong">) => ({
   marksCorrect: row.marksCorrect === null ? 1 : Number(row.marksCorrect),
@@ -168,6 +194,7 @@ export const toRankExamDto = (
   marks_wrong: row.marksWrong === null ? null : Number(row.marksWrong),
   syllabus: syllabusOf(row),
   rank_by: rankByOf(row),
+  paper_shifts: paperShiftsOf(row),
   is_active: row.isActive,
   created_at: row.createdAt,
 });
@@ -215,6 +242,7 @@ export const toRankSubmissionDto = (row: OcrSubmission): RankSubmissionDto => ({
   extraction_kind: row.extractionKind as ExtractionKind | null,
   entry_mode: row.entryMode as EntryMode,
   roll_number: row.rollNumber,
+  candidate_name: row.candidateName,
   series: row.series,
   low_confidence_questions: Array.isArray(row.lowConfidenceQuestions)
     ? (row.lowConfidenceQuestions as number[])
@@ -277,7 +305,11 @@ export const toRankAnswerReviewDto = (
   const scheme = answerKey
     ? markingSchemeOf(answerKey)
     : examMarkingSchemeOf(submission.exam ?? { marksCorrect: null, marksWrong: null });
-  const keys = answerKey ? answerKeyMapOf(answerKey) : (sheetKeyMapOf(submission) ?? {});
+  const keys = withShiftCancellations(
+    answerKey ? answerKeyMapOf(answerKey) : (sheetKeyMapOf(submission) ?? {}),
+    submission.exam ?? { paperShifts: null },
+    submission.shiftKey
+  );
 
   // Marks are shown the way they were scored: a subject rescaled to its own
   // maximum scales each of its questions, so the lines still add up to the score.
