@@ -420,13 +420,45 @@ export const deleteFromS3FileUrl = async (fileUrl: string) => {
 };
 
 const RANK_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const PDF_MAGIC = "%PDF-";
+/** Readers accept the header anywhere in the first 1 KB, so a valid sheet may have bytes before it. */
+const PDF_HEADER_WINDOW = 1024;
 
-export const uploadRankPdfToMemory = multer({
+/** Read by the error handler as a 4xx, so a bad file is the student's error, not a 500 alert. */
+const uploadError = (statusCode: number, message: string, error: string) =>
+  Object.assign(new Error(message), { statusCode, errorObject: { error } });
+
+const NOT_A_PDF = () => uploadError(415, "Only PDF response sheets are accepted.", "file_not_pdf");
+
+const rankPdfMulter = multer({
   ...MULTER_UTF8,
   storage: multer.memoryStorage(),
-  limits: { fileSize: RANK_PDF_MAX_BYTES },
+  // One file; text fields keep multer's 1 MB size default (a pasted answer key can be long).
+  limits: { fileSize: RANK_PDF_MAX_BYTES, files: 1, fields: 50 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype === "application/pdf") return cb(null, true);
-    cb(new Error("Only PDF response sheets are accepted."));
+    cb(NOT_A_PDF());
   },
 });
+
+/**
+ * The optional `file` field of a rank-predictor upload, kept in memory. The declared
+ * type is the client's word, so the bytes must also start with the PDF header.
+ */
+export const uploadRankPdfToMemory = {
+  single: (field: string): import("express").RequestHandler => (req, res, next) =>
+    rankPdfMulter.single(field)(req, res, (err?: unknown) => {
+      if (err instanceof multer.MulterError) {
+        return next(
+          err.code === "LIMIT_FILE_SIZE"
+            ? uploadError(413, "That PDF is larger than 25 MB.", "file_too_large")
+            : uploadError(400, "Send one PDF in the `file` field.", "invalid_upload")
+        );
+      }
+      if (err) return next(err);
+      if (req.file && !req.file.buffer.subarray(0, PDF_HEADER_WINDOW).toString("latin1").includes(PDF_MAGIC)) {
+        return next(NOT_A_PDF());
+      }
+      next();
+    }),
+};

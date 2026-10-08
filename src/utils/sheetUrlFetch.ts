@@ -1,5 +1,8 @@
+import { lookup as dnsLookup } from "node:dns";
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { request } from "node:https";
+import type { IncomingMessage } from "node:http";
+import { isIP, type LookupFunction } from "node:net";
 import { RANK_ERROR } from "../modules/rank-predictor/rank-predictor.types";
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -36,7 +39,10 @@ const isPrivateAddress = (address: string): boolean => {
       lower.startsWith("fc") ||
       lower.startsWith("fd") ||
       lower.startsWith("fe80") ||
-      lower.startsWith("ff")
+      lower.startsWith("ff") ||
+      // NAT64 and 6to4 embed an IPv4 address that may be an internal one.
+      lower.startsWith("64:ff9b:") ||
+      lower.startsWith("2002:")
     );
   }
 
@@ -49,7 +55,9 @@ const isPrivateAddress = (address: string): boolean => {
     (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
+    (a === 192 && b === 0) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19))
   );
 };
 
@@ -79,59 +87,114 @@ const assertPublicHttps = async (rawUrl: string): Promise<URL> => {
   return url;
 };
 
-const readCapped = async (response: Response): Promise<Buffer> => {
-  const declared = Number(response.headers.get("content-length") ?? 0);
-  if (declared > MAX_BYTES) throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "too large");
-  if (!response.body) throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
+/**
+ * DNS lookup for the socket itself, refusing internal addresses. The check in
+ * assertPublicHttps runs on an earlier lookup; this one covers a host that
+ * re-resolves to an internal address between the two (DNS rebinding).
+ */
+const publicOnlyLookup: LookupFunction = (hostname, options, callback) =>
+  dnsLookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) return callback(error, "", 4);
+    const list = addresses as unknown as { address: string; family: number }[];
+    if (!list.length || list.some(({ address }) => isPrivateAddress(address))) {
+      return callback(new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID), "", 4);
+    }
+    return options.all ? (callback as any)(null, list) : callback(null, list[0].address, list[0].family);
+  });
 
-  const chunks: Uint8Array[] = [];
+const get = (url: URL): Promise<IncomingMessage> =>
+  new Promise((resolve, reject) => {
+    const req = request(url, {
+      lookup: publicOnlyLookup,
+      timeout: TIMEOUT_MS,
+      // Some hosts refuse a request with no user agent; `fetch` used to send one.
+      headers: { accept: "application/pdf", "user-agent": "WebSankul-RankPredictor/1.0" },
+    });
+    req.on("response", resolve);
+    req.on("timeout", () => req.destroy(new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE)));
+    req.on("error", reject);
+    req.end();
+  });
+
+const readCapped = async (response: IncomingMessage): Promise<Buffer> => {
+  const declared = Number(response.headers["content-length"] ?? 0);
+  if (declared > MAX_BYTES) {
+    response.destroy();
+    throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "too large");
+  }
+
+  const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-    total += chunk.byteLength;
-    if (total > MAX_BYTES) throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "too large");
-    chunks.push(chunk);
+  const deadline = setTimeout(() => response.destroy(new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE)), TIMEOUT_MS);
+  try {
+    for await (const chunk of response as AsyncIterable<Buffer>) {
+      total += chunk.byteLength;
+      if (total > MAX_BYTES) {
+        response.destroy();
+        throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "too large");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    clearTimeout(deadline);
   }
   return Buffer.concat(chunks);
+};
+
+const fileNameOf = (url: URL): string => {
+  let name = "sheet.pdf";
+  try {
+    name = decodeURIComponent(url.pathname.split("/").pop() || name);
+  } catch {
+    // A malformed %-escape is not worth failing the upload over.
+  }
+  // Only ever a label for the reader; keep it to plain characters.
+  name = name.replace(/[^\w.\- ]+/g, "_").slice(0, 120);
+  return name.toLowerCase().endsWith(".pdf") ? name : "sheet.pdf";
 };
 
 /**
  * Download a response-sheet PDF a student pasted a link to. The link is
  * student-controlled, so it is https only, never resolves to an internal
  * address, follows each redirect through the same check, and is size- and
- * time-capped. (A host that re-resolves between this check and the fetch is not
- * covered; the body is only ever handed to the PDF reader, never echoed back.)
+ * time-capped. The socket's own DNS lookup is checked too, so a host that
+ * re-resolves to an internal address after the first check is still refused.
+ * The body is only ever handed to the PDF reader, never echoed back.
  */
 export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; fileName: string }> => {
   let url = await assertPublicHttps(rawUrl);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    let response: Response;
+    let response: IncomingMessage;
     try {
-      response = await fetch(url, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-        headers: { accept: "application/pdf" },
-      });
-    } catch {
+      response = await get(url);
+    } catch (error) {
+      if (error instanceof SheetUrlError) throw error;
       throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
     }
 
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
+    const status = response.statusCode ?? 0;
+    if (status >= 300 && status < 400) {
+      response.resume();
+      const location = response.headers.location;
       if (!location) throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
       url = await assertPublicHttps(new URL(location, url).toString());
       continue;
     }
 
-    if (!response.ok) throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
+    if (status < 200 || status >= 300) {
+      response.resume();
+      throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
+    }
 
-    const buffer = await readCapped(response);
-    if (buffer.subarray(0, PDF_MAGIC.length).toString("latin1") !== PDF_MAGIC) {
+    const buffer = await readCapped(response).catch((error: unknown) => {
+      throw error instanceof SheetUrlError ? error : new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
+    });
+    if (!buffer.subarray(0, 1024).toString("latin1").includes(PDF_MAGIC)) {
       throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
     }
 
-    const name = decodeURIComponent(url.pathname.split("/").pop() || "sheet.pdf");
-    return { buffer, fileName: name.toLowerCase().endsWith(".pdf") ? name : "sheet.pdf" };
+    return { buffer, fileName: fileNameOf(url) };
   }
 
   throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE, "too many redirects");
