@@ -1,11 +1,20 @@
 import type { OcrAnswerKey, OcrExam, OcrScore, OcrSubmission } from "@prisma/client";
 import { buildAnswerReview, cancelledCountOf, normalizePaperSeries } from "./rank-predictor.scoring";
+import { questionFactorsOf, resolveSubjects } from "./rank-predictor.subjects";
 import {
   CUSTOMER_HANDLE_PREFIX,
+  KEY_SOURCE,
+  LEGACY_RANK_BY,
+  RANK_BY_VALUES,
+  type KeySource,
+  type RankBy,
+  type SheetQuestion,
+  type SyllabusSubject,
   MASKED_NAME_FALLBACK,
   type AnswerKeyMap,
   type AnswerMap,
   type CasteCategory,
+  type EntryMode,
   type ExtractionKind,
   type Gender,
   type LeaderboardRow,
@@ -81,6 +90,9 @@ export const casteCategoryOf = (
   row: { casteCategory: string | null } | null | undefined
 ): CasteCategory | null => lowerOrNull(row?.casteCategory) as CasteCategory | null;
 
+export const genderOf = (row: { gender: string | null } | null | undefined): Gender | null =>
+  lowerOrNull(row?.gender) as Gender | null;
+
 export const toRankCandidateProfileDto = (
   row: CandidateProfileRow | null
 ): RankCandidateProfileDto => {
@@ -96,6 +108,46 @@ export const toRankCandidateProfileDto = (
   };
 };
 
+export const keySourceOf = (row: Pick<OcrExam, "keySource">): KeySource =>
+  row.keySource === KEY_SOURCE.SHEET || row.keySource === KEY_SOURCE.MARKS_ONLY
+    ? row.keySource
+    : KEY_SOURCE.ADMIN_KEY;
+
+export const syllabusOf = (row: Pick<OcrExam, "syllabus">): SyllabusSubject[] =>
+  Array.isArray(row.syllabus) ? (row.syllabus as unknown as SyllabusSubject[]) : [];
+
+/**
+ * The breakdowns a paper shows. A paper with no stored choice is a legacy one and
+ * keeps the category rank it always had; once an admin chooses, the choice is all of it.
+ */
+export const rankByOf = (row: Pick<OcrExam, "rankBy">): RankBy[] =>
+  Array.isArray(row.rankBy)
+    ? RANK_BY_VALUES.filter((value) => (row.rankBy as unknown[]).includes(value))
+    : [...LEGACY_RANK_BY];
+
+/** The exam-level marking used when a paper scores against the sheet's own key. */
+export const examMarkingSchemeOf = (row: Pick<OcrExam, "marksCorrect" | "marksWrong">) => ({
+  marksCorrect: row.marksCorrect === null ? 1 : Number(row.marksCorrect),
+  marksWrong: row.marksWrong === null ? 0 : Number(row.marksWrong),
+});
+
+export const questionMetaOf = (row: Pick<OcrSubmission, "questionMeta">): SheetQuestion[] =>
+  Array.isArray(row.questionMeta) ? (row.questionMeta as unknown as SheetQuestion[]) : [];
+
+/** The correct answers the student's own sheet printed, or null when it printed none. */
+export const sheetKeyMapOf = (row: Pick<OcrSubmission, "questionMeta">): AnswerKeyMap | null => {
+  const entries = questionMetaOf(row)
+    .filter((question) => question.correct_option !== null && question.correct_option !== undefined)
+    .map((question) => [String(question.question), question.correct_option as number] as const);
+
+  return entries.length ? Object.fromEntries(entries) : null;
+};
+
+export const sectionByQuestionOf = (
+  row: Pick<OcrSubmission, "questionMeta">
+): Record<string, string | null> =>
+  Object.fromEntries(questionMetaOf(row).map((question) => [String(question.question), question.section]));
+
 export const toRankExamDto = (
   row: OcrExam,
   submissionCount: number,
@@ -110,7 +162,12 @@ export const toRankExamDto = (
   exam_date: row.examDate,
   paper_series: parsePaperSeries(row.paperSeries),
   submission_count: submissionCount,
-  has_answer_key: hasAnswerKey,
+  has_answer_key: hasAnswerKey || keySourceOf(row) !== KEY_SOURCE.ADMIN_KEY,
+  key_source: keySourceOf(row),
+  marks_correct: row.marksCorrect === null ? null : Number(row.marksCorrect),
+  marks_wrong: row.marksWrong === null ? null : Number(row.marksWrong),
+  syllabus: syllabusOf(row),
+  rank_by: rankByOf(row),
   is_active: row.isActive,
   created_at: row.createdAt,
 });
@@ -156,6 +213,7 @@ export const toRankSubmissionDto = (row: OcrSubmission): RankSubmissionDto => ({
   exam_id: String(row.examId),
   status: row.status as SubmissionStatus,
   extraction_kind: row.extractionKind as ExtractionKind | null,
+  entry_mode: row.entryMode as EntryMode,
   roll_number: row.rollNumber,
   series: row.series,
   low_confidence_questions: Array.isArray(row.lowConfidenceQuestions)
@@ -189,6 +247,7 @@ export const toLeaderboardEntryDto = (
   rank: row.rank_position,
   name: displayNameFor(row.full_name, row.show_real_name),
   raw_score: row.raw_score,
+  normalized_score: row.normalized_score,
   total_questions: row.total_questions,
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
   submitted_at: row.submitted_at,
@@ -200,34 +259,55 @@ export const toAdminLeaderboardEntryDto = (row: LeaderboardRow): RankAdminLeader
   name: trimmedOrNull(row.full_name) ?? handleFor(row.customer_id),
   shows_real_name: row.show_real_name,
   raw_score: row.raw_score,
+  normalized_score: row.normalized_score,
   total_questions: row.total_questions,
   submitted_at: row.submitted_at,
 });
 
+/**
+ * The key is the one the score was marked on: the admin key version it points at,
+ * or — when the paper scores against the sheet's own key — the answers that sheet
+ * printed, under the paper's marking.
+ */
 export const toRankAnswerReviewDto = (
-  submission: OcrSubmission,
+  submission: OcrSubmission & { exam?: OcrExam },
   score: OcrScore,
-  answerKey: OcrAnswerKey
+  answerKey: OcrAnswerKey | null
 ): RankAnswerReviewDto => {
-  const scheme = markingSchemeOf(answerKey);
+  const scheme = answerKey
+    ? markingSchemeOf(answerKey)
+    : examMarkingSchemeOf(submission.exam ?? { marksCorrect: null, marksWrong: null });
+  const keys = answerKey ? answerKeyMapOf(answerKey) : (sheetKeyMapOf(submission) ?? {});
+
+  // Marks are shown the way they were scored: a subject rescaled to its own
+  // maximum scales each of its questions, so the lines still add up to the score.
+  const factors = questionFactorsOf(
+    keys,
+    scheme,
+    resolveSubjects(
+      submission.exam ? syllabusOf(submission.exam) : [],
+      Object.keys(keys),
+      sectionByQuestionOf(submission)
+    )
+  );
+  const isUniform = [...factors.values()].every((factor) => factor === 1);
 
   return {
     submission_id: String(submission.id),
     exam_id: String(submission.examId),
     series: submission.series,
-    answer_key_version: answerKey.version,
+    answer_key_version: answerKey?.version ?? null,
     marks_correct: scheme.marksCorrect,
     marks_wrong: scheme.marksWrong,
+    uniform_marking: isUniform,
     score: toRankScoreDto(score),
-    items: buildAnswerReview(answerMapOf(submission), answerKeyMapOf(answerKey), scheme).map(
-      (item) => ({
-        question_no: item.questionNo,
-        chosen: item.chosen,
-        correct_options: item.correctOptions,
-        correct_option: item.correctOptions[0] ?? null,
-        verdict: item.verdict,
-        marks: item.marks,
-      })
-    ),
+    items: buildAnswerReview(answerMapOf(submission), keys, scheme).map((item) => ({
+      question_no: item.questionNo,
+      chosen: item.chosen,
+      correct_options: item.correctOptions,
+      correct_option: item.correctOptions[0] ?? null,
+      verdict: item.verdict,
+      marks: item.marks * (factors.get(String(item.questionNo)) ?? 1),
+    })),
   };
 };

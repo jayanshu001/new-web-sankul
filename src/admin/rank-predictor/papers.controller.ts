@@ -4,6 +4,7 @@ import { rankPredictorService } from "../../modules/rank-predictor/rank-predicto
 import {
   examCreateSchema,
   examUpdateSchema,
+  leaderboardScopeQuerySchema,
 } from "../../modules/rank-predictor/rank-predictor.validation";
 import { buildPagination, parseListQuery } from "../../utils/listQuery";
 import { success } from "../../utils/httpResponse";
@@ -59,10 +60,12 @@ export const deletePaper = asyncHandler(async (req: Request, res: Response) => {
 
 export const getPaperLeaderboard = asyncHandler(async (req: Request, res: Response) => {
   const { page, limit } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
+  const { shift, category, gender, subject } = leaderboardScopeQuerySchema.parse(req.query);
   const { entries, total } = await rankPredictorService.getAdminLeaderboard({
     examId: bigIntParam(req, "examId"),
     page,
     pageSize: limit,
+    scope: { shiftKey: shift, casteCategory: category, gender, subject },
   });
 
   return res.json({

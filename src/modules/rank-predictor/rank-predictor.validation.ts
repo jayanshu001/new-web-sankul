@@ -4,16 +4,22 @@ import {
   CANCELLED_QUESTION,
   CASTE_CATEGORIES,
   GENDERS,
+  KEY_SOURCES,
   MAX_PAPER_SERIES,
+  MAX_SYLLABUS_SUBJECTS,
+  RANK_BY_VALUES,
   MAX_TOTAL_QUESTIONS,
   SUBMISSION_STATUSES,
   type SubmissionStatus,
 } from "./rank-predictor.types";
 
 const SERIES_LETTER = /^[A-Z]$/;
+const SHIFT_KEY = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const QUESTION_NUMBER = /^\d+$/;
 
 const positiveIntId = z.coerce.number().int().positive();
+
+const shiftKeySchema = z.string().trim().regex(SHIFT_KEY, "shift must look like 2026-09-17T13:00");
 
 const paperSeriesSchema = z
   .array(z.string())
@@ -56,6 +62,36 @@ export const answerKeyMapSchema = z
     message: "Every question is cancelled, so there is nothing to score.",
   });
 
+const syllabusSubjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    marks: z.coerce.number().positive().max(10000).optional(),
+    section: z.string().trim().min(1).max(100).optional(),
+    from_question: z.coerce.number().int().positive().optional(),
+    to_question: z.coerce.number().int().positive().optional(),
+  })
+  .refine(
+    (subject) =>
+      subject.from_question === undefined ||
+      subject.to_question === undefined ||
+      subject.from_question <= subject.to_question,
+    { message: "A subject's first question cannot come after its last." }
+  );
+
+/** Subject names are the board keys, so two that differ only by case would collide. */
+const syllabusSchema = z
+  .array(syllabusSubjectSchema)
+  .max(MAX_SYLLABUS_SUBJECTS)
+  .refine(
+    (subjects) =>
+      new Set(subjects.map((subject) => subject.name.toLowerCase())).size === subjects.length,
+    { message: "Each subject needs its own name." }
+  );
+
+const rankBySchema = z
+  .array(z.enum(RANK_BY_VALUES))
+  .transform((values) => [...new Set(values)]);
+
 export const examCreateSchema = z.object({
   code: z.string().trim().min(1).max(100),
   name: z.string().trim().min(1).max(255),
@@ -63,6 +99,12 @@ export const examCreateSchema = z.object({
   category: z.string().trim().max(255).nullish(),
   examDate: z.coerce.date().nullish(),
   paperSeries: paperSeriesSchema.optional(),
+  // All optional: a paper that sets none of these behaves as it always has.
+  keySource: z.enum(KEY_SOURCES).optional(),
+  marksCorrect: z.coerce.number().min(0).max(100).nullish(),
+  marksWrong: z.coerce.number().min(0).max(100).nullish(),
+  syllabus: syllabusSchema.optional(),
+  rankBy: rankBySchema.optional(),
   isActive: z.coerce.boolean().optional(),
 });
 
@@ -93,13 +135,34 @@ export const answerKeyUploadSchema = z.object({
   marksWrong: z.coerce.number().min(0).max(100).default(0),
 });
 
-export const submissionCreateSchema = z.object({ series: seriesSchema.nullish() });
+export const submissionCreateSchema = z.object({
+  series: seriesSchema.nullish(),
+  sheet_url: z.string().trim().min(1).max(2000).optional(),
+});
+
+/** A student who has no sheet to hand types their total; ranks are overall (+ category) only. */
+export const marksSubmissionSchema = z.object({
+  series: seriesSchema.nullish(),
+  marks: z.coerce.number().finite().min(-10000).max(10000),
+  /** The slot sat; the service requires it when the paper ranks by shift. */
+  shift: shiftKeySchema.nullish(),
+});
 
 export const correctionsSchema = z.object({
   corrections: z.record(z.string().regex(QUESTION_NUMBER), z.number().int().positive().nullable()),
+  /** For a sheet that printed no shift; ignored when the sheet names one. */
+  shift: shiftKeySchema.nullish(),
 });
 
-export const leaderboardQuerySchema = z.object({
+/** Narrow a board. A student's request needs the matching breakdown switched on for the paper. */
+export const leaderboardScopeQuerySchema = z.object({
+  shift: shiftKeySchema.optional(),
+  category: z.enum(CASTE_CATEGORIES).optional(),
+  gender: z.enum(GENDERS).optional(),
+  subject: z.string().trim().min(1).max(100).optional(),
+});
+
+export const leaderboardQuerySchema = leaderboardScopeQuerySchema.extend({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 });

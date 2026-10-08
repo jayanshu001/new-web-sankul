@@ -5,10 +5,13 @@ import { rankPredictorService } from "../../modules/rank-predictor/rank-predicto
 import {
   RANK_ERROR,
   type CandidateProfileInput,
+  type CasteCategory,
+  type Gender,
   type RankExamDto,
 } from "../../modules/rank-predictor/rank-predictor.types";
 import { getSignedRankPdfUrl } from "../../utils/rankSheetStorage";
 import { success } from "../../utils/httpResponse";
+import { SheetUrlError, fetchSheetPdf } from "../../utils/sheetUrlFetch";
 
 interface ExamListQuery {
   search?: string;
@@ -19,6 +22,10 @@ interface ExamListQuery {
 interface LeaderboardQuery {
   page: number;
   pageSize: number;
+  shift?: string;
+  category?: CasteCategory;
+  gender?: Gender;
+  subject?: string;
 }
 
 const customerIdOf = (req: Request): number => Number(req.user!.id);
@@ -60,11 +67,12 @@ export const getExam = asyncHandler(async (req: Request, res: Response) =>
 export const getLeaderboard = asyncHandler(async (req: Request, res: Response) => {
   await requireActiveExam(req);
 
-  const { page, pageSize } = req.query as unknown as LeaderboardQuery;
+  const { page, pageSize, shift, category, gender, subject } = req.query as unknown as LeaderboardQuery;
   const { entries, total } = await rankPredictorService.getLeaderboard({
     examId: examIdOf(req),
     page,
     pageSize,
+    scope: { shiftKey: shift, casteCategory: category, gender, subject },
     viewerCustomerId: optionalCustomerIdOf(req),
   });
 
@@ -72,24 +80,66 @@ export const getLeaderboard = asyncHandler(async (req: Request, res: Response) =
 });
 
 export const createSubmission = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) {
-    throw new HttpError(400, "Please choose your response sheet PDF.", {
+  const { series, sheet_url: sheetUrl } = req.body as {
+    series?: string | null;
+    sheet_url?: string;
+  };
+
+  if (!req.file && !sheetUrl) {
+    throw new HttpError(400, "Please choose your response sheet PDF or paste its link.", {
       error: RANK_ERROR.FILE_REQUIRED,
     });
   }
 
   await requireActiveExam(req);
 
-  const { series } = req.body as { series?: string | null };
+  let sheet: { buffer: Buffer; fileName: string };
+  if (req.file) {
+    sheet = { buffer: req.file.buffer, fileName: req.file.originalname };
+  } else {
+    try {
+      sheet = await fetchSheetPdf(sheetUrl as string);
+    } catch (error) {
+      if (!(error instanceof SheetUrlError)) throw error;
+      const unreachable = error.code === RANK_ERROR.SHEET_URL_UNREACHABLE;
+      throw new HttpError(
+        unreachable ? 422 : 400,
+        unreachable
+          ? "We could not download a PDF from that link."
+          : "That link is not a public https link to a PDF.",
+        { error: error.code }
+      );
+    }
+  }
+
   const result = await rankPredictorService.createSubmission({
     examId: examIdOf(req),
     customerId: customerIdOf(req),
     series: series ?? null,
-    fileBuffer: req.file.buffer,
-    fileName: req.file.originalname,
+    fileBuffer: sheet.buffer,
+    fileName: sheet.fileName,
   });
 
   return success(res, result, "Sheet uploaded.", 201);
+});
+
+export const createMarksSubmission = asyncHandler(async (req: Request, res: Response) => {
+  await requireActiveExam(req);
+
+  const { series, marks, shift } = req.body as {
+    series?: string | null;
+    marks: number;
+    shift?: string | null;
+  };
+  const result = await rankPredictorService.createMarksSubmission({
+    examId: examIdOf(req),
+    customerId: customerIdOf(req),
+    series: series ?? null,
+    marks,
+    shiftKey: shift ?? null,
+  });
+
+  return success(res, result, "Marks saved.", 201);
 });
 
 export const getSubmission = asyncHandler(async (req: Request, res: Response) =>
@@ -114,10 +164,14 @@ export const confirmSubmission = asyncHandler(async (req: Request, res: Response
 
   await rankPredictorService.getSubmission(submissionId, customerId);
 
-  const { corrections } = req.body as { corrections: Record<string, number | null> };
+  const { corrections, shift } = req.body as {
+    corrections: Record<string, number | null>;
+    shift?: string | null;
+  };
   const result = await rankPredictorService.confirmCorrections({
     submissionId,
     corrections,
+    shiftKey: shift ?? null,
     actorCustomerId: customerId,
   });
 

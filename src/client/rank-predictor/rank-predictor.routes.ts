@@ -9,11 +9,13 @@ import {
   examListQuerySchema,
   leaderboardPrivacySchema,
   leaderboardQuerySchema,
+  marksSubmissionSchema,
   submissionCreateSchema,
   submissionIdParamSchema,
 } from "../../modules/rank-predictor/rank-predictor.validation";
 import {
   confirmSubmission,
+  createMarksSubmission,
   createSubmission,
   getCandidateProfile,
   getExam,
@@ -53,6 +55,12 @@ router.post(
   uploadRankPdfToMemory.single("file"),
   validate({ body: submissionCreateSchema }),
   createSubmission
+);
+
+router.post(
+  "/papers/:examId/submissions/marks",
+  validate({ params: examIdParamSchema, body: marksSubmissionSchema }),
+  createMarksSubmission
 );
 
 router.get(

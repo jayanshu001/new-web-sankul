@@ -4,6 +4,8 @@ import {
   RANK_ERROR,
   type AnswerKeyMap,
   type ExtractionKind,
+  type SheetCandidate,
+  type SheetQuestion,
 } from "../modules/rank-predictor/rank-predictor.types";
 
 export interface OcrExtractionResult {
@@ -13,6 +15,10 @@ export interface OcrExtractionResult {
   answers: Record<string, number | null>;
   low_confidence_questions: number[];
   embedded_key_for_reference_only: AnswerKeyMap | null;
+  /** Header table of a Digialm sheet; absent/null for OMR and for sheets with no header. */
+  candidate?: SheetCandidate | null;
+  /** Per-question detail, including the sheet's own correct option; empty for OMR. */
+  questions?: SheetQuestion[];
 }
 
 export class OcrExtractionError extends Error {

@@ -15,6 +15,33 @@
 
 ---
 
+## 2026-10-08 — Rank predictor: shift normalisation, shift picker, gender leaderboard
+
+> **DDL:** none (`rank_by` is JSON; new value `"normalized"`). **Query:** new
+> `shiftStats` (one CTE with `ROW_NUMBER/COUNT OVER` per shift and overall → mean+SD and
+> top-0.1% mean). `rankForExam` / `leaderboardPage` take an optional per-shift linear map
+> and compare/order/average on `CASE s.shift_key WHEN … THEN raw*scale+offset ELSE raw END`
+> (ties within 1e-6). `leaderboardPage` gains `AND p.gender = ?`. **Writes:** marks entries
+> store the picked `shift_key`; confirm may fill a missing `shift_key`. **Response
+> (additive):** standing `raw_score`, `normalized_score`; leaderboard/nearby/admin rows
+> `normalized_score`. New error `422 shift_required`. Docs: `docs/rank-predictor.md`,
+> `docs/client/RANK_STANDING.md`.
+
+## 2026-10-08 — Rank predictor: gender boards, averages, syllabus-order subjects
+
+> **DDL:** none. **Query:** `rankForExam` (`rank-predictor.repository.ts`) also returns
+> `AVG(raw_score)` for the board; `BoardScope` gains `gender` (joins `ws_ocr_profiles`,
+> `AND p.gender = ?`, same inner-join rule as category). `getStanding` adds three gender
+> boards (overall / shift / category). **Response:** `GET …/standing` only gains keys —
+> `average_marks`, `category_percentile`, `category_average_marks`, `gender`,
+> `overall_gender`, `shift_gender`, `category_gender`; every `RankPositionDto` gains
+> `average_marks`. **Subjects:** a syllabus with no question ranges on a sheet with no
+> printed sections is cut in syllabus order, each subject getting a share of the questions
+> proportional to its `marks` (equal if marks are not all set) — `splitInSyllabusOrder`.
+> Docs: `docs/client/RANK_STANDING.md`.
+
+---
+
 ## 2026-10-06 — Admin dashboard: one date filter for every card
 
 > **DDL:** none. **Request:** `range` (`today|yesterday|week|month|prevMonth|year|custom`) +

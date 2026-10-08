@@ -281,6 +281,124 @@ and it is still §8 work. This is the collection step.
 
 ---
 
+### 3.9 Scoring from the sheet's own key, syllabus subjects, and shift/category/subject ranks
+
+Added 2026-10-08. **Every field below is optional.** A paper that sets none of them
+behaves exactly as before: admin-published key, 1 mark a question, no subjects,
+overall rank plus the category rank it always had.
+
+Set them under **Papers → Add / Edit Paper → Scoring & ranking**.
+
+| Field | What it does |
+|---|---|
+| **Answer key** | `Answer key published by an admin` (default), or `Key printed on the student's own sheet`. Digialm / TCS-iON response sheets colour-code the correct option, and the extractor reads it. With `sheet` there is nothing to publish — the *Answer Keys* tab says so — and every sheet is marked against its own key. |
+| **Marks per correct / Negative marking** | Only for `sheet` papers (an admin key carries its own scheme). Empty = 1 and 0. Enter the penalty positive. |
+| **Syllabus (subjects)** | A row per subject: name, optional **marks**, optional **sheet section**, optional **first–last question**. |
+| **Show students a rank by** | Any of *Shift*, *Category*, *Subject*. Choosing nothing on a paper that never chose = the legacy category rank. |
+
+**Why `sheet` exists, beyond convenience.** Digialm shuffles option order per
+candidate (the option IDs on a sheet are not in positional order), and
+`chosen option` is a *position*. A single positional admin key would mark such a paper
+wrong; each sheet's own key is positional for that sheet, so it is always right.
+
+**Subjects.** A subject reads its question range if it has one, otherwise the sheet
+section of its name (`section` overrides the name). A question belongs to the first
+subject that claims it; anything left over is reported under **Other**, so the parts
+always add to the total. With no syllabus at all, subjects are the sections printed on
+the sheet (English / Gujarati / General Awareness / …), and none if the sheet prints
+none. `marks` scales a subject to its maximum — each of its questions is worth
+`marks / questions that count`, with the negative marking scaled by the same factor —
+so "Subject 1 = 40, Subject 2 = 50" totals 90. Pure logic:
+`rank-predictor.subjects.ts → scoreWithSubjects()`, built on the same
+`buildAnswerReview()` as the total.
+
+**Shift** is read off the sheet (`test_date` + slot start, e.g. `2026-09-17T13:00`),
+never typed by the student. **Category** is the caste category from the first-visit
+gate (§3.8). Shift, category, shift+category and each subject are separate boards:
+
+| Board | Where it is counted |
+|---|---|
+| Shift | `ws_ocr_scores.shift_key` (indexed) |
+| Category / shift + category | join to `ws_ocr_profiles.caste_category`, as before |
+| Subject | `ws_ocr_subject_scores` (`exam_id, subject, score` indexed) |
+
+`GET /client/rank-predictor/papers/:id/rank/me` adds `shift`, `shift_category` and
+`subjects` (each `null` unless that board is switched on). `GET …/leaderboard` takes
+`shift`, `category` and `subject`; asking for one the paper has not switched on is
+`400 rank_breakdown_disabled`, and a subject board cannot be combined with shift or
+category. `GET …/papers/:id` carries `shifts` (slots that actually have scored sheets)
+and `subjects` so a client can only offer filters that have candidates. The admin
+leaderboard takes the same filters and is not gated — staff see every board.
+
+**Changing the setup re-marks the paper.** Saving a paper with a changed key source,
+marks or syllabus re-scores every processed sheet in the same request
+(`exam_rescored` audit row), exactly as publishing a key does (§4.2). Switching a
+board on or off needs no re-score — the boards are always kept current; `rank_by` only
+chooses which are shown.
+
+**Duplicate sheets.** A `text_layer` sheet whose participant ID is already on the paper
+under another account is refused: `409 sheet_already_submitted`, and the attempt is not
+burned. The participant ID is also stored as `roll_number`.
+
+**Review.** `review/me` on a `sheet` paper is rebuilt from the sheet's own key and
+returns `answer_key_version: null`.
+
+**Deploy.** Apply `docs/migration/schema-changes/2026-10-08_ocr_sheet_key_syllabus_shift.sql`
+by name (§7 — not `yarn db:migrate`). It is additive: new nullable columns, one
+`MODIFY` making `ws_ocr_scores.answer_key_id` nullable (small, new table), and
+`ws_ocr_subject_scores`. Needs the OCR service build that returns `candidate` and
+`questions` from `/extract`; against an older one the new fields are simply absent and
+papers fall back to admin keys.
+
+**Normalised marks across shifts (`rank_by` += `"normalized"`).** No DDL; computed per
+request. SSC formula: for shift *i*, `normalised = (Mgt − Mgq) / (Mti − Miq) × (raw − Miq) + Mgq`,
+where `Mti`/`Mgt` = mean of the top 0.1% (min one candidate) of the shift / of everyone with
+a shift, and `Miq`/`Mgq` = mean + population SD of the same. Boards that span shifts
+(overall, category, gender, their combinations, `nearby`, the unfiltered leaderboards and
+the rank snapshot) order on normalised marks and their `average_marks` is the normalised
+mean; boards inside one shift and subject boards stay raw. A shift under 10 candidates, a
+paper with fewer than two shifts, or a degenerate spread falls back to raw marks. Entries
+gain `normalized_score` (null when not normalising); standing gains `raw_score` and
+`normalized_score`. Leaderboards also take `gender`.
+
+---
+
+#### Other ways a student can submit
+
+`POST /papers/:examId/submissions` takes either a `file` (PDF upload) **or** a `sheet_url`.
+The link is fetched by the backend (`src/utils/sheetUrlFetch.ts`): https only, no
+credentials in the URL, every address it resolves to (and every redirect hop, max 3) must be
+public, 25 MB and 20 s caps, and the body must start `%PDF-`. Errors: `400 sheet_url_invalid`,
+`422 sheet_url_unreachable`. After the download it is the same pipeline as an upload.
+
+`POST /papers/:examId/submissions/marks` takes `{ marks, series?, shift? }` for a student with no
+sheet. It is stored with `entry_mode = 'marks'`, scored at once, and ranked overall, by
+category and — via the picked `shift` — by shift (no subject data exists). On a paper that
+ranks by shift, `shift` is required (`422 shift_required`, "Please pick the shift you sat.").
+`POST …/submissions/:id/confirm` also takes an optional `shift` for a sheet that printed none;
+a shift read off the sheet always wins. `marks` must lie within ±the paper's max
+(`422 marks_out_of_range`; max = the syllabus marks when every subject has them, otherwise
+questions × marks-per-correct). Such an entry is never re-marked (key publish, syllabus edit
+and admin rescore all skip it; `scoreAndPublish` refuses it with `409 not_scorable`) and has no
+answer review (`404 review_unavailable`). The marks are self-reported and unverified.
+
+### 3.10 Exam types and normalizing many shifts
+
+**A paper's type is its `key_source`, set under Edit Paper → Scoring & ranking.** Everything else is optional.
+
+| Type | `key_source` | Students can | Admin publishes |
+|---|---|---|---|
+| OMR / admin-key paper | `admin_key` (default) | upload a PDF, paste a link, or type marks | an answer key |
+| Response sheet with the key printed on it | `sheet` | the same | nothing |
+| No sheet, no key | `marks_only` | type their total only; an upload is refused with `sheet_not_accepted` | nothing |
+
+A `marks_only` paper caps a typed total at the syllabus marks, else questions × "Marks per question" (default 1).
+The student site reads the type, so a marks-only paper shows only the *Enter marks* form.
+
+**Shifts are never configured.** Each is read off the sheets (`YYYY-MM-DDTHH:MM`), so papers with different dates, or 40-50 shifts, need no setup. A student who types marks on a shift-ranked paper picks a shift already seen, or enters its date and time.
+
+**Normalization** (`rank_by` includes `normalized`) maps each shift linearly onto the whole field so that its top mean and its mean + SD match the field's. With many small shifts the top reference is the best 1% of the shift but never fewer than 5 people, and a shift under 30 candidates keeps its raw marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
+
 ## 4. Where the student's answers meet the key
 
 One pure function, no database and no IO, so it can be read on its own — which
