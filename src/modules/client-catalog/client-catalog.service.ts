@@ -346,6 +346,9 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
     );
   }
 
+  // PERF debt (docs/CODE_QUALITY_AUDIT.md PERF3): per-category CTE + counts.
+  // Videos above are batched to 3 queries (see "Batched: 3 queries total…");
+  // materials should use the same descendantsByRoot + groupBy pattern.
   const list = await Promise.all(ordered.map(async (cat) => {
     const subtreeIds = await descendantIds("ws_material_category", "parent", cat.id);
     const [itemCount, children, ancestors] = await Promise.all([
@@ -390,6 +393,8 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
 
   // `count` is context-dependent (directory → child-folder count, leaf → subtree
   // exam count); `totals.items` tracks the true exam count via `_itemCount`.
+  // PERF debt (docs/CODE_QUALITY_AUDIT.md PERF3): same N+1 as materials —
+  // batch via descendantsByRoot + groupBy like the videos path above.
   const list = await Promise.all(ordered.map(async (cat) => {
     const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
     const [itemCount, childCount] = await Promise.all([

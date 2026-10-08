@@ -1,4 +1,23 @@
-// Live courses: admin management plus client listings, recordings, preview and live chat logic.
+/**
+ * Live courses — large facade over several concerns (prefer splitting later; see
+ * docs/CODE_QUALITY_AUDIT.md CQ1.2 / G2-style headers).
+ *
+ * Owns:
+ *  - Admin CRUD for live courses, plans, grants / subscriptions, schedule folders
+ *  - Client listings, my-live, session feed, preview access
+ *  - Recordings / VOD meta helpers used by admin + client
+ *  - Chat / poll / ban helpers that sit on the live-course domain
+ *  - Subscription reports / CSV export rows
+ *
+ * Does not own:
+ *  - HTTP routes / StreamOS webhook ack (admin/live controllers + streamos.*)
+ *  - Camera ingest / ffmpeg (socket/camera-ingest)
+ *  - Generic Razorpay order create (client/payment/*)
+ *
+ * Performance notes: client list paths should stay paged; avoid unbounded
+ * `take` without a named constant + comment. Prefer batch entitlement maps
+ * over per-row subscription lookups (see getActivePackageSubMap / G6).
+ */
 import ExcelJS from "exceljs";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import { PassThrough } from "node:stream";

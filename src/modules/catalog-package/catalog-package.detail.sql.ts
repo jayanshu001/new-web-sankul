@@ -246,6 +246,9 @@ export const listPackagesCached = async (
     },
   });
 
+  // PERF debt (docs/CODE_QUALITY_AUDIT.md CQ0.3 / PERF2): per-row subscription
+  // lookup. Prefer getActivePackageSubMap(customerId, rows.map(r => r.id), now)
+  // — see commerce-subscription.service.ts JSDoc (batch listing contract).
   const now = new Date();
   const data = await Promise.all(
     shared.map(async (item, i) => {
@@ -263,6 +266,7 @@ export const listPackagesCached = async (
 };
 
 // Uncached variant of listPackagesCached's per-customer merge.
+// Same PERF debt as listPackagesCached: use getActivePackageSubMap for listings.
 export const enrichPackagesSql = async (rows: Package[], customerId: number | null, baseUrl?: string) => {
   const now = new Date();
   const shared = await enrichPackagesShared(rows);
