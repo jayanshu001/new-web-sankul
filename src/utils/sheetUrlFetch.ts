@@ -183,10 +183,13 @@ export const printDigialmSheet = async (html: string): Promise<Buffer> => {
  * address, follows each redirect through the same check, and is size- and
  * time-capped. The socket's own DNS lookup is checked too, so a host that
  * re-resolves to an internal address after the first check is still refused.
- * The body is only ever handed to the PDF reader, never echoed back. A Digialm
- * HTML response sheet is printed to PDF offline first, then goes the same way.
+ * The body is only ever handed to the reader, never echoed back. A Digialm HTML
+ * response sheet comes back as the page itself, which is what the reader reads,
+ * plus a PDF printed from it offline, which is what the student and admins view.
  */
-export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; fileName: string }> => {
+export const fetchSheetPdf = async (
+  rawUrl: string
+): Promise<{ buffer: Buffer; fileName: string; html?: Buffer }> => {
   let url = await assertPublicHttps(rawUrl);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
@@ -222,7 +225,11 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
       if (!isHtml || !isDigialmHost(url.hostname.toLowerCase())) {
         throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
       }
-      return { buffer: await printDigialmSheet(buffer.toString("utf8")), fileName: fileNameOf(url) };
+      return {
+        buffer: await printDigialmSheet(buffer.toString("utf8")),
+        fileName: fileNameOf(url),
+        html: buffer,
+      };
     }
 
     return { buffer, fileName: fileNameOf(url) };

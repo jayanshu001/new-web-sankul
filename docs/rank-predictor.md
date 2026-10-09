@@ -382,11 +382,18 @@ after the first check (DNS rebinding) is still refused. Errors: `400 sheet_url_i
 **Digialm HTML links.** Digialm (TCS iON) serves the response sheet as an HTML page
 (`https://cdn3.digialm.com/…/AssessmentQPHTMLMode1/…/<id>.html`). When the body is not a PDF,
 the response is `text/html` **and** the final host is `digialm.com` / `*.digialm.com`, the page
-is printed to PDF with `renderPdfFromHtml(html, { offline: true })` — page scripts off and every
-request except inline `data:` aborted, so the page can never make the server fetch anything —
-and that PDF goes through the same pipeline (stored, OCR-read, scored). The reader gets the
-same Digialm layout a student's own "Save as PDF" gives: sections, question/option IDs,
-status, chosen option, the correct option and the header (test date + start time → shift).
+is kept as served and read by the OCR service as `text/html` (`app/html_sheet.py`): sections,
+question/option IDs, status, chosen option, the correct option (classed `rightAns`, not
+inferred from colour) and the header (test date + start time → shift) are all read from the
+markup. The page is stored beside the sheet's PDF as `<submissionId>.html`
+(`rankSheetHtmlKey`), and the worker reads it whenever it exists (`findRankHtml`); a sheet that
+came in as a PDF has none and is read as before. The page is also printed to PDF with
+`renderPdfFromHtml(html, { offline: true })` — page scripts off and every request except
+inline `data:` aborted, so the page can never make the server fetch anything — and that PDF
+is the `source_pdf_key` students and admins view and the organised folders copy. Deleting a
+sheet (rejection, admin delete, exam delete) removes both (`deleteRankSheet`). The same
+applies to a Digialm `.html` uploaded as `file`. **Deploy the OCR service first:** an older
+reader answers `415 unsupported_media_type` to the page.
 HTML from any other host is still `400 sheet_url_invalid`. A print failure is
 `422 sheet_url_unreachable`.
 

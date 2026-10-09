@@ -113,14 +113,15 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
   const exam = await requireActiveExam(req);
   requireSubmissionMode(exam, req.file ? SUBMISSION_MODE.PDF : SUBMISSION_MODE.URL);
 
-  let sheet: { buffer: Buffer; fileName: string };
+  let sheet: { buffer: Buffer; fileName: string; html?: Buffer };
   if (req.file?.mimetype === "text/html") {
     // Digialm refuses our server's IP, so the app downloads the sheet on the
-    // phone and sends the page itself; it is printed here as a link would be.
+    // phone and sends the page itself; it is kept and printed as a link's would be.
     try {
       sheet = {
         buffer: await printDigialmSheet(req.file.buffer.toString("utf8")),
         fileName: req.file.originalname.replace(/\.html?$/i, "") + ".pdf",
+        html: req.file.buffer,
       };
     } catch (error) {
       if (!(error instanceof SheetUrlError)) throw error;
@@ -155,6 +156,7 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
     series: series ?? null,
     fileBuffer: sheet.buffer,
     fileName: sheet.fileName,
+    sheetHtml: sheet.html,
   });
 
   return success(res, result, "Sheet uploaded.", 201);

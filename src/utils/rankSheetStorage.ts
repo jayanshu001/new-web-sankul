@@ -9,9 +9,11 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { UPLOAD_FOLDERS } from "../config/uploadFolders";
 import { DO_BUCKET, s3Config } from "../middlewares/upload";
+import logger from "./logger";
 
 const DEFAULT_URL_TTL_SECONDS = 15 * 60;
 const PDF_CONTENT_TYPE = "application/pdf";
+const HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 const PRIVATE_ACL = "private";
 const ORGANISED_ROOT = UPLOAD_FOLDERS.rankSheets;
 const UNKNOWN_FOLDER = "unknown";
@@ -24,6 +26,12 @@ const client = s3Config as any;
 
 export const rankSheetKey = (customerId: number, submissionId: string): string =>
   `customer/rank-sheets/${customerId}/${submissionId}.pdf`;
+
+/**
+ * The Digialm page a sheet was printed from, filed beside its PDF. Only a link or
+ * an HTML upload has one; it is what the reader reads, the PDF is what people view.
+ */
+export const rankSheetHtmlKey = (pdfKey: string): string => pdfKey.replace(/\.pdf$/i, "") + ".html";
 
 export const answerKeyPdfKey = (examId: string, version: number, series: string | null): string =>
   `admin/rank-predictor/answer-keys/${examId}/v${version}${series ? `-${series}` : ""}.pdf`;
@@ -68,13 +76,17 @@ export const organisedRankSheetKey = (parts: OrganisedSheetParts): string => {
   );
 };
 
-export const putRankPdf = async (key: string, body: Buffer): Promise<string> => {
+export const putRankPdf = async (
+  key: string,
+  body: Buffer,
+  contentType: string = PDF_CONTENT_TYPE
+): Promise<string> => {
   await client.send(
     new PutObjectCommand({
       Bucket: DO_BUCKET,
       Key: key,
       Body: body,
-      ContentType: PDF_CONTENT_TYPE,
+      ContentType: contentType,
       ContentLength: body.length,
       ACL: PRIVATE_ACL,
     })
@@ -87,6 +99,31 @@ export const putRankPdf = async (key: string, body: Buffer): Promise<string> => 
 export const getRankPdf = async (key: string): Promise<Buffer> => {
   const response = await client.send(new GetObjectCommand({ Bucket: DO_BUCKET, Key: key }));
   return Buffer.from(await response.Body.transformToByteArray());
+};
+
+export const putRankHtml = (pdfKey: string, body: Buffer): Promise<string> =>
+  putRankPdf(rankSheetHtmlKey(pdfKey), body, HTML_CONTENT_TYPE);
+
+/**
+ * The page a sheet was printed from, or null when it came in as a PDF. Asked for
+ * every sheet, so it never fails one: on anything but a plain "not found" it logs
+ * and answers null, and the sheet is read from its PDF — the same sheet printed,
+ * which reads to the same answers.
+ */
+export const findRankHtml = async (pdfKey: string): Promise<Buffer | null> => {
+  try {
+    return await getRankPdf(rankSheetHtmlKey(pdfKey));
+  } catch (error: any) {
+    const status = error?.$metadata?.httpStatusCode;
+    if (status !== 404 && error?.name !== "NotFound" && error?.name !== "NoSuchKey") {
+      logger.warn("Rank sheet page lookup failed, reading the PDF", {
+        pdfKey,
+        status,
+        error: error?.name ?? String(error),
+      });
+    }
+    return null;
+  }
 };
 
 export const getSignedRankPdfUrl = (
@@ -140,4 +177,9 @@ export const deleteRankPdf = async (key: string): Promise<void> => {
   } catch {
     return;
   }
+};
+
+/** A stored sheet together with the page it was printed from, if it had one. */
+export const deleteRankSheet = async (pdfKey: string): Promise<void> => {
+  await Promise.all([deleteRankPdf(pdfKey), deleteRankPdf(rankSheetHtmlKey(pdfKey))]);
 };

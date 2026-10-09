@@ -627,6 +627,8 @@ export interface SubmissionCreateInput {
   series: string | null;
   fileBuffer: Buffer;
   fileName: string;
+  /** The Digialm page the PDF was printed from; when present it is what gets read. */
+  sheetHtml?: Buffer;
 }
 
 export interface ExamListParams {

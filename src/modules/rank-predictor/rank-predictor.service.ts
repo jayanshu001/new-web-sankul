@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { OCR_SERVICE } from "../../config/ocrService";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
+  HTML_CONTENT_TYPE,
   OcrExtractionError,
   extractResponseSheet,
   type OcrExtractionResult,
@@ -11,10 +12,13 @@ import {
   copyRankPdf,
   deleteRankPdf,
   deleteRankPdfKeys,
+  deleteRankSheet,
+  findRankHtml,
   getRankPdf,
   listRankPdfKeys,
   organisedExamPrefix,
   organisedRankSheetKey,
+  putRankHtml,
   putRankPdf,
   rankSheetKey,
 } from "../../utils/rankSheetStorage";
@@ -573,7 +577,7 @@ const settled = (status: number, message: string, details: Record<string, unknow
  */
 const readQueuedSheet = async (
   submissionId: bigint,
-  fileBuffer?: Buffer
+  inline?: { pdf: Buffer; html?: Buffer }
 ): Promise<RankSheetJobOutcome> => {
   const submission = await repo.findSubmissionWithExam(submissionId);
   if (!submission) return settled(404, "Submission not found.", { error: RANK_ERROR.NOT_FOUND });
@@ -611,14 +615,19 @@ const readQueuedSheet = async (
     outcome: RankSheetJobOutcome
   ): Promise<RankSheetJobOutcome> => {
     await failSubmission(submission.id, customerId, code, action, metadata);
-    await deleteRankPdf(sourcePdfKey);
+    await deleteRankSheet(sourcePdfKey);
     await repo.updateSubmission(submission.id, { sourcePdfKey: null, updatedAt: new Date() });
     return outcome;
   };
 
   let extraction: OcrExtractionResult;
   try {
-    extraction = await extractResponseSheet(fileBuffer ?? (await getRankPdf(sourcePdfKey)), `${submission.id}.pdf`);
+    // A Digialm page is read as served: the answers, sections and the sheet's own
+    // correct option are all in its markup. Its printed PDF is only for viewing.
+    const html = inline ? (inline.html ?? null) : await findRankHtml(sourcePdfKey);
+    extraction = html
+      ? await extractResponseSheet(html, `${submission.id}.html`, HTML_CONTENT_TYPE)
+      : await extractResponseSheet(inline?.pdf ?? (await getRankPdf(sourcePdfKey)), `${submission.id}.pdf`);
   } catch (error) {
     // Anything but a typed refusal from the reader is passing — let the queue retry.
     if (!(error instanceof OcrExtractionError)) throw error;
@@ -811,6 +820,7 @@ export const rankPredictorService = {
     // request's memory, so a crash or a deploy loses nothing.
     const sourcePdfKey = rankSheetKey(params.customerId, String(submission.id));
     await putRankPdf(sourcePdfKey, params.fileBuffer);
+    if (params.sheetHtml) await putRankHtml(sourcePdfKey, params.sheetHtml);
     await repo.updateSubmission(submission.id, { sourcePdfKey, updatedAt: new Date() });
 
     let outcome: RankSheetJobOutcome | null;
@@ -830,7 +840,7 @@ export const rankPredictorService = {
         submissionId: String(submission.id),
         error: (error as Error).message,
       });
-      outcome = await readQueuedSheet(submission.id, params.fileBuffer);
+      outcome = await readQueuedSheet(submission.id, { pdf: params.fileBuffer, html: params.sheetHtml });
     }
 
     if (!outcome) {
@@ -1551,7 +1561,7 @@ export const rankPredictorService = {
     const pdfKeys = await repo.findExamStoredPdfKeys(examId);
     const deleted = await repo.deleteExamCascade(examId);
 
-    await Promise.all(pdfKeys.map(deleteRankPdf));
+    await Promise.all(pdfKeys.map(deleteRankSheet));
     await deleteRankPdfKeys(await listRankPdfKeys(organisedExamPrefix(exam.code))).catch((error) =>
       logger.warn("Rank sheet organised folder cleanup failed", {
         examId: String(examId),
@@ -1712,7 +1722,7 @@ export const rankPredictorService = {
     await repo.deleteSubmission(submission.id);
 
     if (submission.sourcePdfKey) {
-      await deleteRankPdf(submission.sourcePdfKey);
+      await deleteRankSheet(submission.sourcePdfKey);
       await deleteRankPdf(organisedKeyOf(submission, await repo.findProfile(submission.customerId)));
     }
 
