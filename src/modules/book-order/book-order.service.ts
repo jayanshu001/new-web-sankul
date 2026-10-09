@@ -20,6 +20,8 @@ import {
   toBookOrderDto,
   toMyOrderListDto,
   toMyOrderDetailDto,
+  resolveOrderLines,
+  orderLineBookIds,
 } from "./book-order.transformer";
 import type {
   BookOrderDto,
@@ -310,7 +312,7 @@ export const listMyOrdersMysql = async (
     arr.push(it);
     byKey.set(it.order_id, arr);
   }
-  const data = orders.map((o) => toMyOrderListDto(o, byKey.get(o.receiptId) ?? []));
+  const data = orders.map((o) => toMyOrderListDto(o, resolveOrderLines(o.orderItems, byKey.get(o.receiptId) ?? [])));
   return { data, total };
 };
 
@@ -325,8 +327,10 @@ export const getMyOrderByIdMysql = async (
 ): Promise<MyOrderDto | null> => {
   const order = await repo.findMyOrderById(orderId, customerId);
   if (!order) return null;
-  const items = await repo.findOrderItemsWithBook(order.receiptId);
-  return toMyOrderDetailDto(order, items);
+  const lines = resolveOrderLines(order.orderItems, await repo.findOrderItems(order.receiptId));
+  const bookIds = orderLineBookIds(lines);
+  const books = bookIds.length ? await repo.findBookRefs(bookIds) : [];
+  return toMyOrderDetailDto(order, lines, new Map(books.map((b) => [b.id, b])));
 };
 
 /** Live-tracking lookup: order status + AWB (BigInt→number). Null if not owned. */

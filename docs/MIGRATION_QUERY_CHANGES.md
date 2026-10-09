@@ -15,6 +15,34 @@
 
 ---
 
+## 2026-10-09 — Book orders: one line-item resolver (JSON first, qty-0 lines dropped); drop `shipped`/`delivered`
+
+> **DDL / backfill:** none. **Read-source change:** every book-order line-item reader now
+> resolves through ONE helper, `book-order.transformer.resolveOrderLines`:
+> - `ws_book_order.order_items` JSON is the source of truth whenever every bought line has a
+>   book id; `ws_book_order_item` rows are only the fallback. Three JSON shapes are read:
+>   `{bookId,…}` (SQL checkout), `{item,…}` (legacy), `{item_id,…}` (oldest legacy, 2021 —
+>   carries NO `list_price`/`shipping_price`; its child rows hold 0 for both too, so those
+>   values were never recorded).
+> - **qty <= 0 lines are dropped** from both sources: legacy carts kept a book removed before
+>   checkout as a qty-0 line (JSON + child row alike). Not bought — prod check: the order total
+>   equals Σ (price + shipping) × qty over the qty > 0 lines.
+> - Readers: admin orders report + CSV/XLSX export + `getOrder`, dashboard recent book orders +
+>   book ranking (no longer unions table + JSON), client `GET /client/books/orders` +
+>   `/orders/:id` (detail populates books via new `findBookRefs`, no `active` filter), client
+>   purchase-history books + its receipt (its own parser removed), and the book receipt PDF.
+>
+> **Prod verification (read-only, 2026-10-09):** 249,681 verified orders — all resolve from the
+> JSON (0 fallback, 0 empty), 735 qty-0 lines dropped, 246,557 (98.7%) sum exactly to
+> `order_price`; the 3,124 that do not are `{item_id}`-shape orders whose shipping was never
+> stored. The `qty = 0` child rows (317 with an order + 6 orphans) are correct data — no backfill.
+>
+> **Status filter:** `shipped`/`delivered` were Mongo-era values nothing writes (prod: only
+> `pending` 238,045 / `verified` 249,681). Removed from `BookOrderStatus`, the admin status
+> schema, and the `status IN (…)` filters in `findPurchasedBookIds`, client dashboard, client
+> search, purchase-history books and the receipt gate — now `status = 'verified'`.
+> **Response shape:** unchanged. Client doc: `docs/client/BOOK_ORDER_LINE_ITEMS.md`.
+
 ## 2026-10-08 — Rank predictor: shift normalisation, shift picker, gender leaderboard
 
 > **DDL:** none (`rank_by` is JSON; new value `"normalized"`). **Query:** new

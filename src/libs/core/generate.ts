@@ -6,6 +6,7 @@ import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
 import { normalizeTiming } from "../../modules/client-exam/client-exam.service";
 import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
+import { resolveOrderLines, orderLineBookIds } from "../../modules/book-order/book-order.transformer";
 
 // Receipt/PDF DB reads. Each generator selects its SQL loader.
 //   course-receipt → PackageCourseSubscription (+ order hop) — see buildCourseReceiptHtml
@@ -238,6 +239,7 @@ async function loadBookReceiptFromMysql(
       amount: true,
       paidAt: true,
       createdAt: true,
+      orderItems: true,
       user: { select: { fullName: true, phoneNumber: true, emailAddress: true } },
     },
   });
@@ -245,27 +247,26 @@ async function loadBookReceiptFromMysql(
   // Offline / free book orders (cash, bank, QR, Backend, free) never carry a
   // gatewayPaymentId — they are settled manually. Gate on the order status
   // instead, matching the paid states the purchase-history listing exposes.
-  if (!["verified", "shipped", "delivered"].includes(order.status)) {
+  if (order.status !== "verified") {
     throw new Error("Order has not been paid yet.");
   }
   if (!order.user) throw new Error("Customer not found.");
 
-  const orderItems = await prisma.bookOrderItem.findMany({
-    where: { order_id: order.receiptId },
-    select: {
-      qty: true,
-      price: true,
-      shipping_price: true,
-      Book: { select: { name: true } },
-    },
-  });
+  // order_items JSON preferred, child rows as fallback (book-order resolveOrderLines).
+  const childRows = await prisma.bookOrderItem.findMany({ where: { order_id: order.receiptId } });
+  const lines = resolveOrderLines(order.orderItems, childRows);
+  const bookIds = orderLineBookIds(lines);
+  const bookNames = new Map(
+    (bookIds.length ? await prisma.book.findMany({ where: { id: { in: bookIds } }, select: { id: true, name: true } }) : [])
+      .map((b) => [b.id, b.name])
+  );
 
-  const items: ReceiptItem[] = orderItems.map((it) => {
-    const name = it.Book?.name || "Book";
+  const items: ReceiptItem[] = lines.map((it) => {
+    const name = it.name || (it.bookId != null ? bookNames.get(it.bookId) : null) || "Book";
     return {
       name: `${name}${it.qty > 1 ? ` × ${it.qty}` : ""}`,
       validity: "-",
-      amount: (it.price * it.qty + (it.shipping_price || 0)).toFixed(2),
+      amount: (it.price * it.qty + (it.shippingPrice || 0)).toFixed(2),
     };
   });
 

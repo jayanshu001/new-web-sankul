@@ -170,7 +170,7 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
   const ids = rows.map((r) => r.id);
 
   if (type === "books") {
-    const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: { in: ["verified", "shipped", "delivered"] } }, select: { id: true } });
+    const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: "verified" }, select: { id: true } });
     const orderIds = orders.map((o) => String(o.id)); // ws_book_order_item.order_id is a string
     const owned = new Set<number>();
     if (orderIds.length) {

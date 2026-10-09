@@ -2,6 +2,7 @@ import { clientPurchaseHistoryRepository as repo } from "./client-purchase-histo
 import { formatPaymentMethod, formatPaymentType } from "../../utils/paymentMethod";
 import { COURIER } from "../../config/courier";
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
+import { resolveOrderLines, orderLineBookIds } from "../book-order/book-order.transformer";
 
 
 export const parsePhId = (id: string): number | null => {
@@ -515,20 +516,9 @@ export const getSubscriptionTrackingLiveMysql = async (
 };
 
 // ── books tab ────────────────────────────────────────────────────────────────
-const parseOrderItems = (json: string | null): any[] => {
-  if (!json) return [];
-  try { const a = JSON.parse(json); return Array.isArray(a) ? a : []; } catch { return []; }
-};
-
-// Resolve a line item's book id regardless of order_items shape. SQL-created
-// orders write `{ bookId, qty, price, ... }` (from CreateOrderItemInput); legacy
-// Mongo-migrated rows used `{ item, name, qty, price }`. Accept both → the numeric
-// book id, or null when it can't be resolved.
-const itemBookId = (it: any): number | null => {
-  const raw = it?.bookId ?? it?.item;
-  const n = raw != null ? Number(raw) : NaN;
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+// Lines come from the order_items JSON only (as before), via book-order's
+// resolveOrderLines with no child rows: every JSON shape (bookId / item / item_id),
+// removed-from-cart qty-0 lines dropped.
 
 export const listBooks = async (customerId: number, statuses: string[], skip: number, take: number, page: number, limit: number, search?: string) => {
   const [orders, total] = await Promise.all([
@@ -537,26 +527,22 @@ export const listBooks = async (customerId: number, statuses: string[], skip: nu
   ]);
   // The order_items JSON carries the priced lines (bookId + qty + price) but NO
   // book name/thumbnail, so resolve EVERY referenced book (not just the first) to
-  // render each line's real title + thumbnail. Legacy rows use {item,name}; SQL
-  // rows use {bookId} — itemBookId handles both.
-  const itemsByOrder = new Map<number, any[]>();
-  orders.forEach((o) => itemsByOrder.set(o.id, parseOrderItems(o.orderItems)));
-  const allBookIds = [...new Set([...itemsByOrder.values()].flat().map(itemBookId).filter((x): x is number => x != null))];
-  const bookById = new Map((await repo.booksByIds(allBookIds)).map((b) => [b.id, b]));
+  // render each line's real title + thumbnail.
+  const itemsByOrder = new Map(orders.map((o) => [o.id, resolveOrderLines(o.orderItems, [])] as const));
+  const bookById = new Map((await repo.booksByIds(orderLineBookIds([...itemsByOrder.values()].flat()))).map((b) => [b.id, b]));
 
   const data = orders.map((o) => {
     const rawItems = itemsByOrder.get(o.id) ?? [];
     // Full per-book detail for the order — the app renders this list instead of a
     // bare "Book" placeholder. Name backfilled from ws_book when the JSON omits it.
     const books = rawItems.map((it) => {
-      const bookId = itemBookId(it);
-      const book = bookId != null ? bookById.get(bookId) : null;
+      const book = it.bookId != null ? bookById.get(it.bookId) : null;
       return {
-        bookId: bookId != null ? String(bookId) : null,
+        bookId: it.bookId != null ? String(it.bookId) : null,
         name: it.name || book?.name || "Book",
         thumbnail: book?.thumbnail || book?.image || null,
-        qty: it.qty != null ? Number(it.qty) : 1,
-        price: it.price != null ? Number(it.price) : null,
+        qty: it.qty,
+        price: it.price,
       };
     });
     const first = books[0];
@@ -647,14 +633,11 @@ export const getBookReceiptMysql = async (orderId: number, customerId: number) =
   const o = await repo.bookOrderForReceipt(orderId, customerId);
   if (!o) return null;
 
-  const rawItems = parseOrderItems(o.orderItems);
-  // backfill missing names via a Book lookup. SQL rows carry the id as `bookId`
-  // (no name); legacy rows as `item` — itemBookId resolves either.
-  const missingIds = [...new Set(rawItems.filter((it) => !it.name).map(itemBookId).filter((x): x is number => x != null))];
-  const nameById = new Map((await repo.booksByIds(missingIds)).map((b) => [b.id, b.name]));
+  const rawItems = resolveOrderLines(o.orderItems, []);
+  // backfill missing names via a Book lookup (SQL-checkout lines carry no name).
+  const nameById = new Map((await repo.booksByIds(orderLineBookIds(rawItems.filter((it) => !it.name)))).map((b) => [b.id, b.name]));
   const items = rawItems.map((it) => {
-    const bookId = itemBookId(it);
-    const name = it.name ?? (bookId != null ? nameById.get(bookId) : null) ?? null;
+    const name = it.name ?? (it.bookId != null ? nameById.get(it.bookId) : null) ?? null;
     return { name, qty: it.qty, unitPrice: it.price, lineTotal: it.price * it.qty };
   });
 

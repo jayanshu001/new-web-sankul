@@ -74,8 +74,6 @@ export const updateOrderStatusSchema = z.object({
   status: z.enum([
     BookOrderStatus.PENDING,
     BookOrderStatus.VERIFIED,
-    BookOrderStatus.SHIPPED,
-    BookOrderStatus.DELIVERED,
     BookOrderStatus.CANCELLED,
     BookOrderStatus.FAILED,
   ]),
