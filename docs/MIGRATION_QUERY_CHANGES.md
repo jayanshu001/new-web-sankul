@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-10-09 — Rank predictor: per-paper submission options (`ws_ocr_exams.submission_modes`)
+
+> **DDL:** `docs/migration/schema-changes/2026-10-09_ocr_submission_modes.sql` — one nullable
+> JSON column, `ALGORITHM=INSTANT`. **Apply it BEFORE deploying** this build: Prisma selects the
+> column on every `OcrExam` read, so without it every rank-predictor paper read fails.
+> **Backfill:** none — NULL means all three modes (`pdf`, `url`, `marks`), today's behaviour.
+>
+> Admin `POST/PUT /admin/rank-predictor/papers` take `submissionModes` (non-empty subset;
+> a `marks_only` paper must keep `marks` → `422 submission_modes_invalid`). Every paper DTO gains
+> `submission_modes`. Client `POST …/submissions` (file → `pdf`, `sheet_url` → `url`) and
+> `POST …/submissions/marks` (`marks`) answer `422 submission_mode_disabled` for a switched-off way,
+> checked before any link is fetched.
+
 ## 2026-10-09 — Book orders: one line-item resolver (JSON first, qty-0 lines dropped); drop `shipped`/`delivered`
 
 > **DDL / backfill:** none. **Read-source change:** every book-order line-item reader now

@@ -64,6 +64,7 @@ traced to the key that produced it.
 | Category | Groups papers on the student listing. |
 | Paper Date | Optional. |
 | Series | Leave empty if everyone sat the same paper. Pick A/B/C/D and each student must choose theirs when uploading, and **every letter needs its own key**. |
+| Submission options | **PDF upload**, **Sheet link**, **Enter marks** — untick any to hide it from students. At least one must stay on, and a `marks_only` paper must keep *Enter marks*. A paper that never set this takes all three. Students who already submitted are untouched. |
 | Active | Off takes the paper off the student site completely: it leaves the listing, and its exam page, leaderboard and upload all answer `404`. Nothing is lost — switch it back on and everything returns. |
 
 To remove a paper for good, use **Delete** in the papers table. It asks first,
@@ -411,6 +412,8 @@ answer review (`404 review_unavailable`). The marks are self-reported and unveri
 | OMR / admin-key paper | `admin_key` (default) | upload a PDF, paste a link, or type marks | an answer key |
 | Response sheet with the key printed on it | `sheet` | the same | nothing |
 | No sheet, no key | `marks_only` | type their total only; an upload is refused with `sheet_not_accepted` | nothing |
+
+On any type, *Submission options* (`submission_modes`) can switch off any of `pdf` / `url` / `marks`; a switched-off way answers `422 submission_mode_disabled`.
 
 A `marks_only` paper caps a typed total at the syllabus marks, else questions × "Marks per question" (default 1).
 The student site reads the type, so a marks-only paper shows only the *Enter marks* form.
