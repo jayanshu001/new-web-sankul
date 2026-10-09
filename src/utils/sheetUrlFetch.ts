@@ -5,6 +5,7 @@ import type { IncomingMessage } from "node:http";
 import { isIP, type LookupFunction } from "node:net";
 import { RANK_ERROR } from "../modules/rank-predictor/rank-predictor.types";
 import { renderPdfFromHtml } from "../libs/core/generate";
+import logger from "./logger";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const TIMEOUT_MS = 20_000;
@@ -114,8 +115,13 @@ const get = (url: URL): Promise<IncomingMessage> =>
     const req = request(url, {
       lookup: publicOnlyLookup,
       timeout: TIMEOUT_MS,
-      // Some hosts refuse a request with no user agent; `fetch` used to send one.
-      headers: { accept: "application/pdf, text/html;q=0.9", "user-agent": "WebSankul-RankPredictor/1.0" },
+      // Digialm sits behind Akamai, which refuses non-browser user agents from
+      // datacenter IPs (works from a laptop, 403s from the server).
+      headers: {
+        accept: "application/pdf, text/html;q=0.9",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      },
     });
     req.on("response", resolve);
     req.on("timeout", () => req.destroy(new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE)));
@@ -178,6 +184,7 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
       response = await get(url);
     } catch (error) {
       if (error instanceof SheetUrlError) throw error;
+      logger.warn("[sheet-url] request failed", { host: url.hostname, error: (error as Error)?.message });
       throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
     }
 
@@ -192,6 +199,7 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
 
     if (status < 200 || status >= 300) {
       response.resume();
+      logger.warn("[sheet-url] bad status", { host: url.hostname, status });
       throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
     }
 
@@ -203,7 +211,8 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
       if (!isHtml || !isDigialmHost(url.hostname.toLowerCase())) {
         throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
       }
-      const pdf = await renderPdfFromHtml(buffer.toString("utf8"), { offline: true }).catch(() => {
+      const pdf = await renderPdfFromHtml(buffer.toString("utf8"), { offline: true }).catch((error: unknown) => {
+        logger.warn("[sheet-url] could not print sheet", { host: url.hostname, error: (error as Error)?.message });
         throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE, "could not print the sheet");
       });
       return { buffer: pdf, fileName: fileNameOf(url) };
