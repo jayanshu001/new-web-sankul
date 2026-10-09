@@ -278,6 +278,12 @@ export interface SheetQuestion {
   correct_option: number | null;
   correct_option_id: string | null;
   status: string | null;
+  /**
+   * Every option the sheet ticks correct. Several on a question the board found
+   * ambiguous ("full marks if any of 2,4"), where correct_option is null.
+   * Missing on sheets read before the OCR service sent it.
+   */
+  correct_options?: number[];
 }
 
 export interface SheetCandidate {

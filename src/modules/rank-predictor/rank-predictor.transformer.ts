@@ -168,11 +168,24 @@ export const examMarkingSchemeOf = (row: Pick<OcrExam, "marksCorrect" | "marksWr
 export const questionMetaOf = (row: Pick<OcrSubmission, "questionMeta">): SheetQuestion[] =>
   Array.isArray(row.questionMeta) ? (row.questionMeta as unknown as SheetQuestion[]) : [];
 
-/** The correct answers the student's own sheet printed, or null when it printed none. */
+/** The options one sheet question ticks correct; empty when it ticks none. */
+const ticksOf = (question: SheetQuestion): number[] => {
+  if (question.correct_options?.length) return question.correct_options;
+  return question.correct_option === null || question.correct_option === undefined
+    ? []
+    : [question.correct_option];
+};
+
+/**
+ * The correct answers the student's own sheet printed, or null when it printed
+ * none. A question ticked twice takes either option ("A & B"), so choosing a
+ * ticked option scores, any other is wrong, and leaving it is a skip.
+ */
 export const sheetKeyMapOf = (row: Pick<OcrSubmission, "questionMeta">): AnswerKeyMap | null => {
   const entries = questionMetaOf(row)
-    .filter((question) => question.correct_option !== null && question.correct_option !== undefined)
-    .map((question) => [String(question.question), question.correct_option as number] as const);
+    .map((question) => [String(question.question), ticksOf(question)] as const)
+    .filter(([, ticks]) => ticks.length > 0)
+    .map(([question, ticks]) => [question, ticks.length === 1 ? ticks[0] : ticks] as const);
 
   return entries.length ? Object.fromEntries(entries) : null;
 };
