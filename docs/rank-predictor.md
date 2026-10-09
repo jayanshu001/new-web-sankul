@@ -390,7 +390,9 @@ markup. The page is stored beside the sheet's PDF as `<submissionId>.html`
 came in as a PDF has none and is read as before. The page is also printed to PDF with
 `renderPdfFromHtml(html, { offline: true })` — page scripts off and every request except
 inline `data:` aborted, so the page can never make the server fetch anything — and that PDF
-is the `source_pdf_key` students and admins view and the organised folders copy. Deleting a
+is the `source_pdf_key` students and admins view and the organised folders copy (admin
+`GET /admin/rank-predictor/submissions/:id` also returns it as `source_pdf_url`, signed for
+`RANK_SHEET_URL_TTL_SECONDS`, which the review modal embeds). Deleting a
 sheet (rejection, admin delete, exam delete) removes both (`deleteRankSheet`). The same
 applies to a Digialm `.html` uploaded as `file`. **Deploy the OCR service first:** an older
 reader answers `415 unsupported_media_type` to the page.
