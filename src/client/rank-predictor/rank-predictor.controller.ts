@@ -105,8 +105,8 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
       throw new HttpError(
         unreachable ? 422 : 400,
         unreachable
-          ? "We could not download a PDF from that link."
-          : "That link is not a public https link to a PDF.",
+          ? "We could not download your response sheet from that link."
+          : "That link is not a public https link to a PDF or a Digialm response sheet.",
         { error: error.code }
       );
     }

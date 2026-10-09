@@ -373,6 +373,17 @@ repeated on the socket's own DNS lookup, so a host that re-resolves to an intern
 after the first check (DNS rebinding) is still refused. Errors: `400 sheet_url_invalid`,
 `422 sheet_url_unreachable`. After the download it is the same pipeline as an upload.
 
+**Digialm HTML links.** Digialm (TCS iON) serves the response sheet as an HTML page
+(`https://cdn3.digialm.com/…/AssessmentQPHTMLMode1/…/<id>.html`). When the body is not a PDF,
+the response is `text/html` **and** the final host is `digialm.com` / `*.digialm.com`, the page
+is printed to PDF with `renderPdfFromHtml(html, { offline: true })` — page scripts off and every
+request except inline `data:` aborted, so the page can never make the server fetch anything —
+and that PDF goes through the same pipeline (stored, OCR-read, scored). The reader gets the
+same Digialm layout a student's own "Save as PDF" gives: sections, question/option IDs,
+status, chosen option, the correct option and the header (test date + start time → shift).
+HTML from any other host is still `400 sheet_url_invalid`. A print failure is
+`422 sheet_url_unreachable`.
+
 An uploaded `file` (student sheet and admin answer-key PDF, `uploadRankPdfToMemory` in
 `src/middlewares/upload.ts`) must be `application/pdf` **and** carry `%PDF-` in its first 1 KB —
 the declared type alone is the client's word. One file, ≤ 50 text fields. Errors (previously

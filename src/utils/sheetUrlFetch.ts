@@ -4,12 +4,19 @@ import { request } from "node:https";
 import type { IncomingMessage } from "node:http";
 import { isIP, type LookupFunction } from "node:net";
 import { RANK_ERROR } from "../modules/rank-predictor/rank-predictor.types";
+import { renderPdfFromHtml } from "../libs/core/generate";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 3;
 const PDF_MAGIC = "%PDF-";
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
+/**
+ * Digialm (TCS iON) serves the response sheet as an HTML page, not a PDF. Only its
+ * hosts are printed to PDF — the reader already knows that layout — so an arbitrary
+ * page is never handed to the browser.
+ */
+const isDigialmHost = (host: string): boolean => host === "digialm.com" || host.endsWith(".digialm.com");
 
 export class SheetUrlError extends Error {
   constructor(
@@ -108,7 +115,7 @@ const get = (url: URL): Promise<IncomingMessage> =>
       lookup: publicOnlyLookup,
       timeout: TIMEOUT_MS,
       // Some hosts refuse a request with no user agent; `fetch` used to send one.
-      headers: { accept: "application/pdf", "user-agent": "WebSankul-RankPredictor/1.0" },
+      headers: { accept: "application/pdf, text/html;q=0.9", "user-agent": "WebSankul-RankPredictor/1.0" },
     });
     req.on("response", resolve);
     req.on("timeout", () => req.destroy(new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE)));
@@ -149,7 +156,7 @@ const fileNameOf = (url: URL): string => {
     // A malformed %-escape is not worth failing the upload over.
   }
   // Only ever a label for the reader; keep it to plain characters.
-  name = name.replace(/[^\w.\- ]+/g, "_").slice(0, 120);
+  name = name.replace(/[^\w.\- ]+/g, "_").slice(0, 120).replace(/\.html?$/i, ".pdf");
   return name.toLowerCase().endsWith(".pdf") ? name : "sheet.pdf";
 };
 
@@ -159,7 +166,8 @@ const fileNameOf = (url: URL): string => {
  * address, follows each redirect through the same check, and is size- and
  * time-capped. The socket's own DNS lookup is checked too, so a host that
  * re-resolves to an internal address after the first check is still refused.
- * The body is only ever handed to the PDF reader, never echoed back.
+ * The body is only ever handed to the PDF reader, never echoed back. A Digialm
+ * HTML response sheet is printed to PDF offline first, then goes the same way.
  */
 export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; fileName: string }> => {
   let url = await assertPublicHttps(rawUrl);
@@ -191,7 +199,14 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
       throw error instanceof SheetUrlError ? error : new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE);
     });
     if (!buffer.subarray(0, 1024).toString("latin1").includes(PDF_MAGIC)) {
-      throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
+      const isHtml = String(response.headers["content-type"] ?? "").toLowerCase().startsWith("text/html");
+      if (!isHtml || !isDigialmHost(url.hostname.toLowerCase())) {
+        throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
+      }
+      const pdf = await renderPdfFromHtml(buffer.toString("utf8"), { offline: true }).catch(() => {
+        throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE, "could not print the sheet");
+      });
+      return { buffer: pdf, fileName: fileNameOf(url) };
     }
 
     return { buffer, fileName: fileNameOf(url) };

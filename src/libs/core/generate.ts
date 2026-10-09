@@ -153,12 +153,24 @@ function releasePageSlot(): void {
   if (next) next();
 }
 
-export async function renderPdfFromHtml(html: string): Promise<Buffer> {
+/**
+ * `offline` is for HTML we did not write (a student's response-sheet link): page
+ * scripts are off and every request except inline `data:` is aborted, so the page
+ * can never make the server fetch anything.
+ */
+export async function renderPdfFromHtml(html: string, { offline = false }: { offline?: boolean } = {}): Promise<Buffer> {
   await acquirePageSlot();
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
     try {
+      if (offline) {
+        await page.setJavaScriptEnabled(false);
+        await page.setRequestInterception(true);
+        page.on("request", (request) =>
+          request.url().startsWith("data:") ? request.continue() : request.abort()
+        );
+      }
       await page.setContent(html, { waitUntil: "load" });
       // Block until every @font-face used on the page has actually loaded.
       // `display=block` in the template hides text until the font is ready, and
