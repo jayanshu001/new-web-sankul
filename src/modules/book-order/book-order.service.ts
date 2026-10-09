@@ -16,11 +16,9 @@ import type {
   CreateOrderItemInput,
   MyOrderDto,
 } from "./book-order.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseBookOrderId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseBookOrderId = parsePositiveInt;
 
 /**
  * Read from ws_book_setting (settingKey='default'), the value the admin edits via

@@ -8,6 +8,7 @@ import {
   listScheduledForRehydrate as sqlListScheduledForRehydrate,
   existsSql as sqlNotificationExists,
   markFailed as sqlMarkFailed,
+  isRetryableDispatchFailure,
 } from "../../modules/admin-notification/admin-notification.service";
 
 const QUEUE_NAME = "notification-scheduler";
@@ -222,9 +223,14 @@ export async function initNotificationScheduler(): Promise<void> {
         // Already claimed/cancelled.
         return { skipped: true };
       }
-      if (result.status === "failed") {
-        // Throw to trigger a retry; the dispatcher already rolled the row back to "scheduled".
+      if (isRetryableDispatchFailure(result)) {
+        // The dispatcher rolled the row back to "scheduled"; throwing triggers the retry.
         throw new Error(result.failureReason || "Dispatch failed.");
+      }
+      if (result.status === "failed") {
+        // Permanent (no devices / FCM not configured): the row is already "failed" with the
+        // reason, and a retry would fail the same way, so the job ends here.
+        return { skipped: false, failed: true, failureReason: result.failureReason };
       }
       return {
         skipped: false,

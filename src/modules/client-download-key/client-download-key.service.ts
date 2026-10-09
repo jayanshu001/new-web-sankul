@@ -2,6 +2,7 @@
 import { downloadKeyRepository } from "./client-download-key.repository";
 import { toDownloadEncryptionKeyDto } from "./client-download-key.transformer";
 import type { DownloadEncryptionKeyDto } from "./client-download-key.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
 /**
  * This key is the only thing that can read a user's downloaded `.wsenc` files;
@@ -9,11 +10,7 @@ import type { DownloadEncryptionKeyDto } from "./client-download-key.types";
  * library. `customerId` always comes from the Bearer token, never the caller.
  */
 
-export const parseCustomerId = (id: string | undefined): number | null => {
-  if (!id) return null;
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCustomerId = parsePositiveInt;
 
 export type GetDownloadKeyResult =
   | { ok: true; dto: DownloadEncryptionKeyDto }

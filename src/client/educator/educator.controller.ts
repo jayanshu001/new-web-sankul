@@ -35,7 +35,7 @@ export const getEducatorWithCoursesHandler = async (
     const base = resolveBase(req);
     const data = await getEducatorWithCourses(eid, cid, (kind, id) => buildShareUrl(kind, id, base));
     if (!data) return failure(res, "Educator not found", 404);
-    logger.info("getEducatorWithCoursesHandler success (sql)", { traceId, userId, educatorId, totalCourses: (data as any).totalCourses });
+    logger.info("getEducatorWithCoursesHandler success", { traceId, userId, educatorId, totalCourses: (data as any).totalCourses });
     // Drop fields the app never reads (it uses only the top-level shareableLink).
     const d = data as any;
     const slim = {

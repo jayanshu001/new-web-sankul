@@ -1,9 +1,10 @@
-// Receipts and solution PDFs: loads order/exam data, renders EJS, prints via Puppeteer.
+// Receipts and solution PDFs: loads order/exam data, renders EJS, prints via Puppeteer
+// (pdfBrowser.ts; routed through pdfRender.queue.ts).
 import path from "path";
 import ejs from "ejs";
-import puppeteer, { type Browser } from "puppeteer";
+import { renderPdfFromHtml } from "./pdfRender.queue";
 
-import { ExamResultType } from "../../shared/enums";
+import { ExamResultType, PAID_BOOK_ORDER_STATUSES } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
 import { normalizeTiming } from "../../modules/client-exam/client-exam.service";
 import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
@@ -69,111 +70,6 @@ function formatDate(d?: Date): string {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-// One shared headless Chromium; each render opens and closes its own page.
-const BROWSER_LAUNCH_OPTIONS = {
-  headless: true as const,
-  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-};
-
-let browserPromise: Promise<Browser> | null = null;
-
-// Lazy singleton; cleared on disconnect so the next render relaunches.
-async function getBrowser(): Promise<Browser> {
-  if (!browserPromise) {
-    browserPromise = puppeteer.launch(BROWSER_LAUNCH_OPTIONS).then((browser) => {
-      browser.on("disconnected", () => {
-        browserPromise = null;
-      });
-      return browser;
-    });
-    browserPromise.catch(() => {
-      browserPromise = null;
-    });
-  }
-  return browserPromise;
-}
-
-// Optional shutdown hook; safe to leave uncalled.
-export async function closePdfBrowser(): Promise<void> {
-  const pending = browserPromise;
-  browserPromise = null;
-  if (!pending) return;
-  try {
-    const browser = await pending;
-    await browser.close();
-  } catch {
-    // never came up — nothing to close
-  }
-}
-
-// Bounds concurrent pages on the shared browser; slots are released in a finally.
-const MAX_CONCURRENT_PAGES = 3;
-let activePages = 0;
-const waiters: Array<() => void> = [];
-
-function acquirePageSlot(): Promise<void> {
-  if (activePages < MAX_CONCURRENT_PAGES) {
-    activePages++;
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => {
-    waiters.push(() => {
-      activePages++;
-      resolve();
-    });
-  });
-}
-
-function releasePageSlot(): void {
-  activePages--;
-  const next = waiters.shift();
-  if (next) next();
-}
-
-/**
- * `offline` is for HTML we did not write (a student's response-sheet link): page
- * scripts are off and every request except inline `data:` is aborted, so the page
- * can never make the server fetch anything.
- */
-export async function renderPdfFromHtml(html: string, { offline = false }: { offline?: boolean } = {}): Promise<Buffer> {
-  await acquirePageSlot();
-  try {
-    const browser = await getBrowser();
-    const page = await browser.newPage();
-    try {
-      if (offline) {
-        await page.setJavaScriptEnabled(false);
-        await page.setRequestInterception(true);
-        page.on("request", (request) =>
-          request.url().startsWith("data:") ? request.continue() : request.abort()
-        );
-      }
-      await page.setContent(html, { waitUntil: "load" });
-      // Wait for web fonts so the PDF never rasterises with a fallback font lacking
-      // Gujarati/Hindi glyphs; capped at 5s so a slow font CDN can't hang the render.
-      // The callback runs inside Chromium and must NOT be `async`: tsc (target es2016)
-      // downlevels it to `__awaiter`, which is undefined in the browser context.
-      await page.evaluate(() =>
-        Promise.race([
-          (document as any).fonts.ready,
-          new Promise((resolve) => setTimeout(resolve, 5000)),
-        ])
-      );
-      const pdf = await page.pdf({
-        format: "A4",
-        printBackground: true,
-        margin: { top: "20px", right: "20px", bottom: "20px", left: "20px" },
-      });
-      return Buffer.from(pdf);
-    } finally {
-      // Close only the page, never the shared browser.
-      await page.close();
-    }
-  } finally {
-    releasePageSlot();
-  }
-}
-
 const DEFAULT_NOTES = [
   { list: "This is a system-generated receipt and does not require a signature." },
   { list: "For any queries, contact " + COMPANY_EMAIL + "." },
@@ -223,10 +119,9 @@ async function loadBookReceiptFromMysql(
     },
   });
   if (!order) throw new Error("Order not found.");
-  // Offline / free book orders (cash, bank, QR, Backend, free) never carry a
-  // gatewayPaymentId — they are settled manually. Gate on the order status
-  // instead, matching the paid states the purchase-history listing exposes.
-  if (order.status !== "verified") {
+  // Offline/free orders have no gatewayPaymentId, so gate on the paid statuses
+  // the purchase-history listing exposes.
+  if (!(PAID_BOOK_ORDER_STATUSES as string[]).includes(order.status)) {
     throw new Error("Order has not been paid yet.");
   }
   if (!order.user) throw new Error("Customer not found.");
@@ -986,3 +881,7 @@ export async function generateExamSolutionPdf(
   const fileName = `${safeTitle}_attempt${loaded.attemptNumber}.pdf`;
   return { pdf, fileName };
 }
+
+// Kept here so existing importers do not change.
+export { renderPdfFromHtml } from "./pdfRender.queue";
+export { closePdfBrowser } from "./pdfBrowser";

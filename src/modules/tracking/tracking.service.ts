@@ -1,10 +1,9 @@
 // Activity tracking: client event logging and admin activity reports.
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseTrackingId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseTrackingId = parsePositiveInt;
 
 const dto = (r: any) => ({
   _id: String(r.id),
@@ -21,7 +20,7 @@ const dto = (r: any) => ({
 });
 
 const buildWhere = (f: { customerId?: number; event?: string; entityType?: string; entityId?: number; from?: Date; to?: Date }) => {
-  const where: any = {};
+  const where: Prisma.ActivityLogWhereInput = {};
   if (f.customerId != null) where.customerId = f.customerId;
   if (f.event) where.event = f.event;
   if (f.entityType) where.entityType = f.entityType;

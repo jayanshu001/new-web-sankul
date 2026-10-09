@@ -11,6 +11,7 @@ import {
   type BannerSliderDto,
   type BannerUpdateInput,
 } from "./banner-slider.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
 /** Resolve a banner key from either the API casing or the raw DB value. */
 export const resolveBannerKey = (raw?: string | null): BannerKey | undefined => {
@@ -20,11 +21,7 @@ export const resolveBannerKey = (raw?: string | null): BannerKey | undefined => 
 };
 
 /** `key_id` is a positive int column; anything else stores as NULL. */
-const parseKeyId = (raw?: string | number | null): number | null => {
-  if (raw === undefined || raw === null || raw === "") return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseKeyId = parsePositiveInt;
 
 /**
  * A target id only belongs on a key that references a collection — `Explore`

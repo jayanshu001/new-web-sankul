@@ -68,7 +68,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     const cid = customerId ? parseExamId(customerId) : null;
     const { search, page, limit, skip } = parseListQuery(req.query);
     const { total, ...data } = await svcListExamsByCategory(catId, cid, { skip, take: limit, search });
-    logger.info("listExamsByCategory success (sql)", { traceId, customerId, categoryId, examCount: data.exams.length });
+    logger.info("listExamsByCategory success", { traceId, customerId, categoryId, examCount: data.exams.length });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listExamsByCategory failed", { traceId, customerId, categoryId, error: getErrorMessage(error), stack: error.stack });
@@ -117,7 +117,7 @@ export const getDailyExams = async (req: Request, res: Response) => {
     const cid = customerId ? parseExamId(customerId) : null;
     const { search, page, limit, skip } = parseListQuery(req.query);
     const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid, skip, take: limit, search });
-    logger.info("getDailyExams success (sql)", { traceId, customerId, level: r.level });
+    logger.info("getDailyExams success", { traceId, customerId, level: r.level });
     const body: Record<string, any> = { success: true, data: { level: r.level, items: r.data } };
     if (r.level === "tests") body.pagination = buildPagination((r as any).total ?? r.data.length, page, limit);
     return res.status(200).json(body);
@@ -137,7 +137,7 @@ export const getExamQuestions = async (req: Request, res: Response) => {
     if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
     const data = await svcGetExamQuestions(numId);
     if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
-    logger.info("getExamQuestions success (sql)", { traceId, examId: id, questionCount: data.questions.length });
+    logger.info("getExamQuestions success", { traceId, examId: id, questionCount: data.questions.length });
     // TestScreen renders MCQ text only: drop the exam wrapper, per-question
     // image/orderBy and answer image/isSelect (see docs/api-optimization).
     const slim = {
@@ -194,7 +194,7 @@ export const saveAnswers = async (req: Request, res: Response) => {
     if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
     // Exam lists embed per-user isCompleted/lastResult under a 24h cache — drop this user's keys.
     await flushUserRouteCache(cid);
-    logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });
+    logger.info("saveAnswers success", { traceId, customerId, examId, rank: result.rank });
     return res.status(200).json({ success: true, data: { examResult: result.examResult, rank: result.rank } });
   } catch (error: any) {
     if (error.issues) {
@@ -231,7 +231,7 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
       ...omit(q, ["image"]),
       ...(Array.isArray(q.answers) ? { answers: q.answers.map((a: any) => omit(a, ["image"])) } : {}),
     }));
-    logger.info("getSolutionByExam success (sql)", { traceId, customerId, examId, questionCount: data.length });
+    logger.info("getSolutionByExam success", { traceId, customerId, examId, questionCount: data.length });
     return res.status(200).json({ success: true, data: slim });
   } catch (error: any) {
     logger.error("getSolutionByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
@@ -323,7 +323,7 @@ export const listMyResults = async (req: Request, res: Response) => {
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const { items, total } = await svcListMyResults(cid, page, limit, search);
-    logger.info("listMyResults success (sql)", { traceId, customerId, total });
+    logger.info("listMyResults success", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data: omitList(items, ["ratting"]), // unused typo'd field
@@ -353,7 +353,7 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const { items: data, total } = await svcListPastDailyResults(cid, page, limit, search);
-    logger.info("listMyPastDailyResults success (sql)", { traceId, customerId, total });
+    logger.info("listMyPastDailyResults success", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data,
@@ -378,7 +378,7 @@ export const getMyOverallAnalytics = async (req: Request, res: Response) => {
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const analytics = await svcGetOverallAnalytics(cid);
-    logger.info("getMyOverallAnalytics success (sql)", { traceId, customerId });
+    logger.info("getMyOverallAnalytics success", { traceId, customerId });
     return res.status(200).json({ success: true, data: analytics });
   } catch (error: any) {
     logger.error("getMyOverallAnalytics failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -432,7 +432,7 @@ export const getExamDetail = async (req: Request, res: Response) => {
     if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
     const data = await svcGetExamDetail(numId);
     if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
-    logger.info("getExamDetail success (sql)", { traceId, examId: id });
+    logger.info("getExamDetail success", { traceId, examId: id });
     // Instruction DTO only — TestInstruction reads title/duration/counts/marks
     // (see docs/api-optimization/GET_client_quizzes_id_detail.md).
     return res.status(200).json({
@@ -468,7 +468,7 @@ export const startAttempt = async (req: Request, res: Response) => {
     if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
     const r = await svcStartAttempt(cid, eid);
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("startAttempt success (sql)", { traceId, customerId, examId });
+    logger.info("startAttempt success", { traceId, customerId, examId });
     return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("startAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
@@ -500,7 +500,7 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
     if (rawAns != null && rawAns !== "" && !ansId) return res.status(400).json({ success: false, message: "Invalid answer id." });
     const r = await svcSaveSingleAnswer(cid, eid, aid, { questionId: qid, answerId: ansId });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("saveSingleAnswer success (sql)", { traceId, customerId, examId, attemptId, questionId: qid });
+    logger.info("saveSingleAnswer success", { traceId, customerId, examId, attemptId, questionId: qid });
     return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     if (error.issues) {
@@ -534,7 +534,7 @@ export const submitAttempt = async (req: Request, res: Response) => {
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
     // Exam lists embed per-user isCompleted/lastResult under a 24h cache — drop this user's keys.
     await flushUserRouteCache(cid);
-    logger.info("submitAttempt success (sql)", { traceId, customerId, examId, attemptId });
+    logger.info("submitAttempt success", { traceId, customerId, examId, attemptId });
     return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     if (error.issues) {
@@ -565,7 +565,7 @@ export const listAttempts = async (req: Request, res: Response) => {
     const { page, limit, skip } = parseListQuery(req.query);
     const r = await svcListAttempts(cid, eid, { skip, take: limit });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("listAttempts success (sql)", { traceId, customerId, examId });
+    logger.info("listAttempts success", { traceId, customerId, examId });
     // ExamAnalytics reads exam.title + attempt core scores/inProgress/dates only
     // (see docs/api-optimization/GET_client_quizzes_id_attempts.md).
     const slim = {
@@ -598,7 +598,7 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
     if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
     const r = await svcGetAttemptsAggregate(cid, eid);
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("getAttemptsAggregate success (sql)", { traceId, customerId, examId });
+    logger.info("getAttemptsAggregate success", { traceId, customerId, examId });
     // ExamAnalytics reads exam.title, rank and the used summary fields only
     // (see docs/api-optimization/GET_client_quizzes_id_attempts_aggregate.md).
     const slim = {
@@ -630,7 +630,7 @@ export const getActiveAttempt = async (req: Request, res: Response) => {
     if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
     const r = await svcGetActiveAttempt(cid, eid);
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("getActiveAttempt success (sql)", { traceId, customerId, examId });
+    logger.info("getActiveAttempt success", { traceId, customerId, examId });
     return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("getActiveAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });

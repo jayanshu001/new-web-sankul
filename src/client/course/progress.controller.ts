@@ -49,10 +49,10 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       positionSec, durationSec,
     });
     if (!result.ok) {
-      logger.warn("reportLectureProgress (sql) rejected", { traceId, userId, videoId: vid, scope, status: result.status });
+      logger.warn("reportLectureProgress rejected", { traceId, userId, videoId: vid, scope, status: result.status });
       return res.status(result.status).json({ success: false, message: result.message });
     }
-    logger.info("reportLectureProgress (sql) success", { traceId, userId, videoId: vid, scope, positionSec, durationSec });
+    logger.info("reportLectureProgress success", { traceId, userId, videoId: vid, scope, positionSec, durationSec });
     // The mobile player ignores the body.
     return res.status(200).json({ success: true, data: null });
   } catch (e: any) {
@@ -90,7 +90,7 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
     }
     const { courses, resumeNext, total } = await sqlListMyCoursesForResume(sid, { search, skip, limit });
     const pagination = buildPagination(total, page, limit);
-    logger.info("listMyCoursesForResume (sql) success", { traceId, userId, count: courses.length, total });
+    logger.info("listMyCoursesForResume success", { traceId, userId, count: courses.length, total });
     return res.status(200).json({ success: true, data: { courses, resumeNext, pagination } });
   } catch (e: any) {
     logger.error("listMyCoursesForResume failed", { traceId, userId, error: getErrorMessage(e), stack: e.stack });

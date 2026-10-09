@@ -1,6 +1,7 @@
 // Ebook downloads: record, list, count and remove a customer's offline ebooks.
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
+import { parsePositiveInt } from "../../utils/parseId";
 
 /**
  * An "active download" is a download row whose subscription is active
@@ -8,10 +9,7 @@ import { signMediaToken } from "../../utils/mediaToken";
  * access to a deactivated ebook (deactivation only hides it from browse/purchase).
  */
 
-export const parseDlId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseDlId = parsePositiveInt;
 
 const activeSubEbookIds = async (customerId: number, now: Date, filter?: number[]): Promise<Set<string>> => {
   const rows = await prisma.eBookSubscription.findMany({

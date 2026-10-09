@@ -2,6 +2,7 @@
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
 import type { CreateOrderItemInput } from "./book-order.types";
+import { PAID_BOOK_ORDER_STATUSES } from "../../shared/enums";
 
 export const bookOrderRepository = {
   findActiveCart: (customerId: number) =>
@@ -77,6 +78,7 @@ export const bookOrderRepository = {
   findPurchasedBookIds: async (customerId: number): Promise<number[]> => {
     const orders = await prisma.bookOrder.findMany({
       where: { userId: customerId, status: "verified" },
+      // where: { userId: customerId, status: { in: PAID_BOOK_ORDER_STATUSES } },
       select: { receiptId: true },
     });
     if (!orders.length) return [];

@@ -4,14 +4,12 @@ import { toProfileDto } from "./customer-profile.transformer";
 import { splitFullName, joinFullName } from "./customer-profile.name";
 import type { ProfileUpdateInput } from "./customer-profile.types";
 import { parseGoalSelection, parseLabels, type GoalSelection } from "../../utils/goalSelection";
+import { parsePositiveInt } from "../../utils/parseId";
 type Ok<T> = { ok: true; message: string; data: T };
 type Err = { ok: false; message: string };
 type Envelope<T> = Ok<T> | Err;
 
-export const parseProfileId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseProfileId = parsePositiveInt;
 
 /**
  * Lenient by design: unknown goals and labelIds that don't exist on the goal are

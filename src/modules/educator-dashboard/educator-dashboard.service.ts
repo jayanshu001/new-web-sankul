@@ -5,11 +5,9 @@
  * directly.
  */
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseEduId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEduId = parsePositiveInt;
 
 export const buildEducatorDashboard = async (educatorId: number) => {
   const now = new Date();

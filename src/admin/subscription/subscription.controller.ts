@@ -23,6 +23,7 @@ import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { isSuperAdmin, requirePermission } from "../../middlewares/requirePermission";
 import type { DateShift } from "../../utils/subscriptionRemarkHistory";
 import { success, failure, actionFailure, type ActionError } from "../../utils/httpResponse";
+import { reportQueryFrom } from "../../modules/report-query/report-query";
 
 // Honors a thrown HttpError's own 4xx (e.g. assertReportStatus's 422) instead of
 // flattening every failure to 500. Envelope stays the hand-rolled { success, message }.
@@ -36,26 +37,6 @@ const paginated = (req: Request) => {
   const limitNum = Math.max(parseInt((req.query.limit as string) || "20", 10) || 20, 1);
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum };
 };
-
-// Shared filter mapping for the report list and its CSV/Excel exports. The date
-// range bounds `createdAt` at IST day boundaries via `createdFrom`/`createdTo`
-// (`dateFrom`/`dateTo` and `fromDate`/`toDate` are legacy aliases);
-// startFrom/startTo and endFrom/endTo still filter startAt/endAt.
-export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
-  customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
-  // 422s an unrecognised status instead of silently returning an unfiltered list.
-  status: assertReportStatus(q.status), paymentMethod: q.paymentMethod,
-  // tri-state: absent = no filter, "true" = with material, "false" = without.
-  hasMaterial: q.hasMaterial === "true" ? true : q.hasMaterial === "false" ? false : undefined,
-  // tri-state Ws Coin filter (order.ws_coin): "true" = redeemed (>0), "false" = not.
-  hasWsCoin: q.hasWsCoin === "true" ? true : q.hasWsCoin === "false" ? false : undefined,
-  // promoter / promocode filters + orderMethod (payment gateway, ≠ paymentMethod).
-  promoterId: q.promoterId, promocodeId: q.promocodeId, orderMethod: q.orderMethod,
-  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate, dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
-  startFrom: q.startFrom, startTo: q.startTo, endFrom: q.endFrom, endTo: q.endTo,
-  activationType: q.activationType,
-  search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
-});
 
 export const listCourseSubscriptions = async (req: Request, res: Response) => {
   try {

@@ -168,7 +168,7 @@ export const deleteAudioNote = async (req: Request, res: Response) => {
     await lnSql.deleteAudioNote(nid);
     if (existing.audioUrl) {
       try { await deleteFromS3FileUrl(existing.audioUrl); }
-      catch (s3err) { logger.warn("deleteAudioNote (sql) S3 delete failed", { traceId, userId, audioKey: existing.audioKey, error: getErrorMessage(s3err) }); }
+      catch (s3err) { logger.warn("deleteAudioNote S3 delete failed", { traceId, userId, audioKey: existing.audioKey, error: getErrorMessage(s3err) }); }
     }
     return success(res, {}, "Audio note deleted.", 200);
   } catch (err) {

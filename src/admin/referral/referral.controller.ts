@@ -12,7 +12,7 @@ import {
   rejectWithdrawalSchema,
   adjustRewardPointsSchema,
 } from "./referral.validation";
-import * as referralService from "./referral.service";
+import * as referralService from "../../modules/referral/referral-admin.service";
 
 export const getPrograms = asyncHandler(async (req: Request, res: Response) => {
   const { data, pagination } = await referralService.listPrograms(

@@ -2,13 +2,12 @@
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { extractNotificationRouting } from "../../utils/notificationTarget";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 /** The unread badge uses the same visibility filter as the feed, so broadcasts are counted. */
 
-export const parseNotifId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseNotifId = parsePositiveInt;
 
 /**
  * `signupAt` bounds the broadcast feed and `readBefore` is the read watermark. A missing
@@ -109,7 +108,7 @@ export const listNotifications = async (
   const base = { AND: [visWhere(customerId, ctx.signupAt), notDismissed] };
   // `search` narrows the list + total only; the unread badge stays over the full visible set.
   const searchFilter = buildPrismaSearch(search, ["title", "body"]);
-  const where: any = searchFilter
+  const where: Prisma.NotificationWhereInput = searchFilter
     ? { AND: [...base.AND, ...searchFilter.AND] }
     : base;
   const [rows, total, unread] = await Promise.all([

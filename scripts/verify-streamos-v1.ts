@@ -26,9 +26,9 @@ import {
   primaryRecordingsOf,
   pickRecordingSql,
 } from "../src/modules/admin-live/admin-live.service";
-import { providerOf, pushCredentialsExpired } from "../src/admin/live/streamos.provider";
+import { providerOf, pushCredentialsExpired } from "../src/libs/streamos/streamos.provider";
 import { assetIdFromBody, isForeignEnvironment } from "../src/admin/live/streamos.v1.webhook";
-import { __test__ as v1parse } from "../src/admin/live/streamos.v1.service";
+import { __test__ as v1parse } from "../src/libs/streamos/streamos.v1.service";
 
 let pass = 0;
 const failures: string[] = [];

@@ -8,6 +8,7 @@ import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where
 import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 import cache, { CacheDomain } from "../../libs/cache";
 import { CacheEntity } from "../../middlewares/flushGroups";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 
@@ -143,7 +144,7 @@ export const buildCourseDetailsSql = async (
   // CacheEntity.CatalogCourse is flushed by admin course and plan/price writes.
   const shared = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogCourse, `detail:${courseId}`),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: () => buildCourseDetailsShared(courseId),
   });
   if (!shared) return null;

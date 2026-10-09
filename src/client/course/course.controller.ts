@@ -97,7 +97,7 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
   try {
     const catId = parseCourseId(categoryId);
     if (catId == null) {
-      logger.warn("listCoursesByCategoryHandler invalid id (mysql)", { traceId, categoryId });
+      logger.warn("listCoursesByCategoryHandler invalid id", { traceId, categoryId });
       return failure(res, "Invalid categoryId.", 400);
     }
     const result = await listCoursesWithPlans(
@@ -142,7 +142,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
     if (userId) {
       queueCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }, { traceId, userId, courseId });
     }
-    logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
+    logger.info("getCourseByIdHandler success", { traceId, userId, courseId });
     // Tab content is loaded via GET /client/catalog/:type/:id/{videos|materials|tests}.
     const slimResponse = omit(sqlResponse as any, ["videos", "materials", "tests", "availablePromoCode"]);
     return success(res, slimResponse, "Course details fetched successfully.", 200);

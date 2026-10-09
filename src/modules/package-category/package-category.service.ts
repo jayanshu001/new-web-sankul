@@ -6,11 +6,10 @@ import { nextOrder } from "../../utils/listOrdering";
 import { getActivePackageSubMap } from "../commerce-subscription/commerce-subscription.service";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parsePkgCatId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePkgCatId = parsePositiveInt;
 
 export const toPkgCatDto = (r: any) => ({
   _id: String(r.id),
@@ -172,7 +171,7 @@ export const listPackagesAndLiveByCategory = async (
 
 // skip/take omitted → full list.
 export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
-  const where: any = {};
+  const where: Prisma.PackageCategoryWhereInput = {};
   const titleSearch = buildPrismaPrefixSearch(q?.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
   // Recency is the contract on admin lists (utils/listOrdering): the "order" sort and
@@ -202,7 +201,7 @@ export const create = async (input: { title: string; slug: string; image?: strin
 export const update = async (id: number, input: { title?: string; slug?: string; image?: string; order?: number; status?: boolean }) => {
   const exists = await prisma.packageCategory.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return null;
-  const data: any = {};
+  const data: Prisma.PackageCategoryUncheckedUpdateInput = {};
   if (input.title !== undefined) data.title = input.title;
   if (input.slug !== undefined) data.slug = input.slug;
   if (input.image !== undefined) data.image = input.image;
@@ -251,7 +250,7 @@ const liveCourseCountFor = async (catIds: number[]): Promise<Map<number, number>
 export const listClientPackageCategories = async (opts: {
   liveOnly: boolean; search: string | null; skip: number; limitNum: number; pageNum: number;
 }) => {
-  const where: any = { status: true };
+  const where: Prisma.PackageCategoryWhereInput = { status: true };
   const titleSearch = buildPrismaSearch(opts.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
 

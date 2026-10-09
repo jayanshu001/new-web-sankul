@@ -5,12 +5,11 @@
  * category ids are accepted.
  */
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 
-export const parseAcvId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseAcvId = parsePositiveInt;
 
 const videoSelect = {
   id: true,
@@ -54,7 +53,7 @@ const toDoc = (v: any) => ({
 });
 
 export const listVideos = async (opts: { videoCategoryId?: number; status?: boolean; skip: number; take: number }) => {
-  const where: any = {};
+  const where: Prisma.VideoWhereInput = {};
   if (opts.videoCategoryId !== undefined) where.videoCategoryId = opts.videoCategoryId;
   if (opts.status !== undefined) where.status = opts.status;
   const [rows, total] = await Promise.all([
@@ -120,7 +119,7 @@ export const createVideo = async (d: VideoCreateInput) => {
 export const updateVideo = async (id: number, patch: Partial<VideoCreateInput>): Promise<"not_found" | any> => {
   const existing = await prisma.video.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return "not_found";
-  const data: any = { updated_at: new Date() };
+  const data: Prisma.VideoUncheckedUpdateInput = { updated_at: new Date() };
   if (patch.videoCategoryId !== undefined) data.videoCategoryId = patch.videoCategoryId;
   if (patch.title !== undefined) data.title = patch.title;
   if (patch.topic !== undefined) data.topic = patch.topic;

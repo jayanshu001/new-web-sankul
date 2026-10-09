@@ -6,11 +6,9 @@ import type {
   TestimonialDto,
   TestimonialUpdateInput,
 } from "./testimonial.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseTestimonialId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseTestimonialId = parsePositiveInt;
 
 export const listTestimonials = async (): Promise<TestimonialDto[]> => {
   const rows = await testimonialRepository.findMany();

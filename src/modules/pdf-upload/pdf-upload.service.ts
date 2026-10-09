@@ -6,11 +6,9 @@
  * as null (nullable column) rather than failing the upload.
  */
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parsePdfId = (id: string | number | null | undefined): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePdfId = parsePositiveInt;
 
 /**
  * Pipeline-facing row shape: `_id`/`ebookId` stringified, `index` ← `idx`. `fileSize`

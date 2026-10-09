@@ -64,7 +64,7 @@ export const listFreeTests = async (req: Request, res: Response) => {
       page: pageNum, limit: limitNum, skip,
     });
     const { pagination, ...data } = result as any;
-    logger.info("listFreeTests success (sql)", { traceId, level: (result as any).level });
+    logger.info("listFreeTests success", { traceId, level: (result as any).level });
     const payload: any = { success: true, data };
     if (pagination) payload.pagination = pagination;
     return res.status(200).json(payload);
@@ -94,7 +94,7 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
       customerId: Number.isInteger(cid) ? cid : null,
       search: search || null, page: pageNum, limit: limitNum, skip,
     });
-    logger.info("listFreeMaterials success (sql)", { traceId, total, returned: data.length });
+    logger.info("listFreeMaterials success", { traceId, total, returned: data.length });
     return res.status(200).json({
       success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
@@ -122,7 +122,7 @@ export const listFreeVideos = async (req: Request, res: Response) => {
 
     const customerId = req.user?.id ? Number(req.user.id) : null;
     const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip, customerId: Number.isInteger(customerId) ? customerId : null });
-    logger.info("listFreeVideos success (sql)", { traceId, total, returned: data.length });
+    logger.info("listFreeVideos success", { traceId, total, returned: data.length });
     return res.status(200).json({
       success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
@@ -150,7 +150,7 @@ export const listFreeEbooks = async (req: Request, res: Response) => {
       search: search || null, language: language || null,
       page: pageNum, limit: limitNum, skip, shareBase: resolveBase(req),
     });
-    logger.info("listFreeEbooks success (sql)", { traceId, userId: customerId, total, returned: data.length });
+    logger.info("listFreeEbooks success", { traceId, userId: customerId, total, returned: data.length });
     return res.status(200).json({
       success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
@@ -182,7 +182,7 @@ export const listFreeCourses = async (req: Request, res: Response) => {
       search: search || null, wantPaid,
       page: pageNum, limit: limitNum, skip, shareBase: baseUrl,
     });
-    logger.info("listFreeCourses success (sql)", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
+    logger.info("listFreeCourses success", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
     // Card DTO only — RN reads kind/_id/id/name/title/image/isPurchased.
     return res.status(200).json({
       success: true,

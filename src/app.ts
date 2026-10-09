@@ -278,7 +278,7 @@ app.use("/api/v1/promoter", globalLimiter, promoterRoutes);
 
 // HMAC-verified (no Bearer) and unthrottled, since the provider retries. Drain-only:
 // withdrawals are paid manually now, so this only settles payouts already in flight.
-// Safe to delete (with razorpay-payout.controller.ts, client/payment/razorpayx.ts and
+// Safe to delete (with razorpay-payout.controller.ts and
 // RAZORPAY_PAYOUT_WEBHOOK_SECRET) once prod has zero rows from:
 //   SELECT id FROM ws_refferal_transaction WHERE status='pending' AND reference_number IS NOT NULL;
 app.post("/api/v1/webhooks/razorpay-payout", razorpayPayoutWebhook);

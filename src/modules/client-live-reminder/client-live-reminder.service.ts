@@ -8,11 +8,9 @@ import {
 } from "../../admin/notification/scheduler";
 import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseReminderId = (id: string | number | null | undefined): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseReminderId = parsePositiveInt;
 
 /** The shape the controller's `publicReminder` shaper consumes; keeps the response frozen. */
 function toReminderShape(
@@ -108,7 +106,7 @@ async function deprovisionNotification(notificationId?: number | null): Promise<
   try {
     await cancelNotificationJob(String(notificationId));
   } catch (err) {
-    logger.warn("Live reminder (sql): failed to cancel notification job", {
+    logger.warn("Live reminder: failed to cancel notification job", {
       notificationId,
       error: (err as Error).message,
     });

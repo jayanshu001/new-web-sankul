@@ -3,11 +3,9 @@
  * payment_status has no column, so status=true.
  */
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseLecId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseLecId = parsePositiveInt;
 
 /** Any price. Caller maps null → 404 and status:false → 403. */
 export const findVideo = (id: number) =>

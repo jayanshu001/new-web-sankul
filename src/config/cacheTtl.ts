@@ -13,6 +13,9 @@ export const CACHE_TTL = {
   QUICK_REFRESH: 30,
   /** Unread badge, polled frequently by the app. */
   UNREAD_COUNT: 15,
+  /** Shared (customer-independent) catalog payloads behind `cache.aside`: list pages and
+   *  detail loaders. Purchase state is merged live after the read, so short is safe. */
+  CATALOG_SHARED: 60,
 } as const;
 
 export type CacheTtlKey = keyof typeof CACHE_TTL;

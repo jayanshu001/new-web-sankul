@@ -2,11 +2,9 @@
 import { catalogPackageRepository as repo } from "./catalog-package.repository";
 import { toPackageDto, toPackageTypeDto } from "./catalog-package.transformer";
 import type { PackageDto, PackageTypeDto } from "./catalog-package.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parsePackageId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePackageId = parsePositiveInt;
 
 /** `ws_package_type` has no `order`/`active`, so every row is returned, ordered by name. */
 export const listPackageTypes = async (

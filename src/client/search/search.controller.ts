@@ -4,6 +4,7 @@ import * as searchSql from "../../modules/client-search/client-search.service";
 import * as searchHistory from "../../modules/client-search-history/client-search-history.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery } from "../../utils/listQuery";
 
 // Omit `type` (or pass an unknown one) to search ALL six entity types at once.
 export const globalSearch = async (req: Request, res: Response) => {
@@ -12,8 +13,7 @@ export const globalSearch = async (req: Request, res: Response) => {
 
   try {
     const { q, type } = req.query as Record<string, string>;
-    const page = Math.max(parseInt(req.query.page as string, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 10, 1), 50);
+    const { page, limit } = parseListQuery({ page: req.query.page as string, limit: req.query.limit as string }, { defaultLimit: 10, maxLimit: 50 });
 
     const skip = (page - 1) * limit;
 

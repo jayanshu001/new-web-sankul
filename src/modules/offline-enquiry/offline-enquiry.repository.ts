@@ -1,6 +1,7 @@
 // Offline enquiries: Prisma queries.
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import type { Prisma } from "@prisma/client";
 
 export const offlineEnquiryRepository = {
   batchExists: async (batchId: number): Promise<boolean> =>
@@ -49,7 +50,7 @@ export const offlineEnquiryRepository = {
   list: (opts: {
     batchId?: number; search?: string; from?: Date; to?: Date; skip: number; take: number;
   }) => {
-    const where: any = {};
+    const where: Prisma.OfflineEnquiryWhereInput = {};
     if (opts.batchId != null) where.batchId = opts.batchId;
     const search = buildPrismaPrefixSearch(opts.search, ["name", "email"]);
     if (search) where.AND = search.AND;

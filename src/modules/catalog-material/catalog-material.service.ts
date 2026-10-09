@@ -5,11 +5,9 @@ import type {
   MaterialCategoryChildrenResult,
   MaterialCategoryDto,
 } from "./catalog-material.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseMaterialCategoryId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseMaterialCategoryId = parsePositiveInt;
 
 export const findCategoryById = async (id: number): Promise<MaterialCategoryDto | null> => {
   const row = await repo.findCategoryById(id);
@@ -33,15 +31,15 @@ export const getCategoryChildren = async (
 
   const childIds = children.map((c) => c.id);
   const [counts, parentsWithKids] = await Promise.all([
-    Promise.all(childIds.map((cid) => repo.countActiveMaterials(cid))),
+    repo.countActiveMaterialsByCategories(childIds),
     repo.parentsWithChildren(childIds),
   ]);
   const hasKids = new Set(parentsWithKids.map((r) => r.parent));
 
-  const list = children.map((c, i) => ({
+  const list = children.map((c) => ({
     category: {
       ...toMaterialCategoryDto(c),
-      count: counts[i],
+      count: counts.get(c.id) ?? 0,
       havingChildDirectory: hasKids.has(c.id),
     },
   }));

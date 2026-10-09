@@ -1,9 +1,9 @@
 // Client live sessions: join handler and 3-minute preview watch-time metering.
 import { Request, Response } from "express";
-import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../../admin/live/streamos.service";
+import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../../libs/streamos/streamos.service";
 // Per-session provider dispatch: a legacy session keeps resolving on the legacy API
 // even when STREAMOS_PROVIDER is v1.
-import { getDetails as streamosGetDetails, StreamosError } from "../../admin/live/streamos.provider";
+import { getDetails as streamosGetDetails, StreamosError } from "../../libs/streamos/streamos.provider";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { signMediaToken } from "../../utils/mediaToken";
@@ -35,7 +35,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
     const cid = req.user?.id ? Number(req.user.id) : null;
     const customerId = Number.isInteger(cid) ? cid : null;
     const s = await adminLive.findSessionByAnyId(id);
-    if (!s) { logger.warn("getLiveSessionForClient not found (mysql)", { traceId, userId, id }); return failure(res, "Live session not found.", 404); }
+    if (!s) { logger.warn("getLiveSessionForClient not found", { traceId, userId, id }); return failure(res, "Live session not found.", 404); }
     const linkedCourseIds = await adminLive.getLinkedCourseIds(s.id);
 
     if (selectedLiveCourseId != null && !linkedCourseIds.includes(selectedLiveCourseId)) {
@@ -63,8 +63,8 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         }
         if (Object.keys(patch).length) await adminLive.updateSession(s.id, patch);
       } catch (err) {
-        if (err instanceof StreamosError) logger.warn("getLiveSessionForClient streamos check failed (mysql)", { traceId, sessionId: s.id, message: err.message, upstreamStatus: err.upstreamStatus });
-        else logger.warn("getLiveSessionForClient streamos check error (mysql)", { traceId, sessionId: s.id, error: getErrorMessage(err) });
+        if (err instanceof StreamosError) logger.warn("getLiveSessionForClient streamos check failed", { traceId, sessionId: s.id, message: err.message, upstreamStatus: err.upstreamStatus });
+        else logger.warn("getLiveSessionForClient streamos check error", { traceId, sessionId: s.id, error: getErrorMessage(err) });
       }
     }
 
@@ -89,7 +89,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
           )
         : null;
 
-    logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel, selectedLiveCourseId, accessGrantedByLiveCourseId: preview.accessGrantedByLiveCourseId });
+    logger.info("getLiveSessionForClient success", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel, selectedLiveCourseId, accessGrantedByLiveCourseId: preview.accessGrantedByLiveCourseId });
     return success(res, {
       _id: String(s.id),
       title: s.title, streamId: s.streamId ?? null, isLive,

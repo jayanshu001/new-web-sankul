@@ -20,7 +20,7 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await listPromoterPromocodes(pid);
-    logger.info("listMyPromocodes success (sql)", { traceId, promoterId, count: data.length });
+    logger.info("listMyPromocodes success", { traceId, promoterId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listMyPromocodes failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
@@ -41,8 +41,8 @@ export const getMyPromocode = async (req: Request, res: Response) => {
     const cid = Number(id);
     if (!pid || !Number.isInteger(cid) || cid <= 0) return res.status(400).json({ success: false, message: "Invalid id." });
     const promocode = await getPromoterPromocode(pid, cid);
-    if (!promocode) { logger.warn("getMyPromocode not found (sql)", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
-    logger.info("getMyPromocode success (sql)", { traceId, promoterId, promocodeId: id });
+    if (!promocode) { logger.warn("getMyPromocode not found", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
+    logger.info("getMyPromocode success", { traceId, promoterId, promocodeId: id });
     return res.status(200).json({ success: true, data: { promocode } });
   } catch (e: any) {
     logger.error("getMyPromocode failed", { traceId, promoterId, promocodeId: id, error: getErrorMessage(e), stack: e.stack });

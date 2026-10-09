@@ -7,18 +7,10 @@ import { hasActivePackageSubscription } from "../commerce-subscription/commerce-
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
+import { selfFkDescendantsByRoot } from "../catalog-category-tree/category-tree.service";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCatId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
-
-const descendantIds = async (table: string, parentCol: string, rootId: number): Promise<number[]> => {
-  const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
-    `WITH RECURSIVE tree (id) AS (SELECT ${rootId} UNION SELECT c.id FROM ${table} c JOIN tree t ON c.${parentCol} = t.id) SELECT id FROM tree`
-  );
-  return rows.map((r) => Number(r.id));
-};
+export const parseCatId = parsePositiveInt;
 
 // An inactive package is hidden, but an active subscriber keeps access.
 export const loadParent = async (type: "course" | "package" | "live-course", id: number, customerId: number | null = null): Promise<{ name: string } | null> => {
@@ -346,14 +338,27 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
     );
   }
 
+  // Batched like catalogVideos: one CTE for every subtree, one groupBy for material
+  // counts, one query for children, instead of three queries per category. Summing
+  // per-category tallies is exact because a material belongs to one category.
+  const orderedIds = ordered.map((c) => c.id);
+  const subtreeByCat = await selfFkDescendantsByRoot("ws_material_category", "parent", orderedIds);
+  const unionSubtree = [...new Set([...subtreeByCat.values()].flat())];
+  const [countRows, childRows] = await Promise.all([
+    unionSubtree.length
+      ? prisma.material.groupBy({ by: ["materialCategoryId"], where: { materialCategoryId: { in: unionSubtree }, status: true }, _count: { _all: true } })
+      : Promise.resolve([] as any[]),
+    orderedIds.length
+      ? prisma.materialCategory.findMany({ where: { parent: { in: orderedIds }, status: true }, select: { id: true, parent: true } })
+      : Promise.resolve([] as { id: number; parent: number }[]),
+  ]);
+  const perCat = new Map<number, number>();
+  for (const r of countRows as any[]) if (r.materialCategoryId != null) perCat.set(r.materialCategoryId, r._count._all);
+
   const list = await Promise.all(ordered.map(async (cat) => {
-    const subtreeIds = await descendantIds("ws_material_category", "parent", cat.id);
-    const [itemCount, children, ancestors] = await Promise.all([
-      prisma.material.count({ where: { materialCategoryId: { in: subtreeIds }, status: true } }),
-      prisma.materialCategory.findMany({ where: { parent: cat.id, status: true }, select: { id: true } }),
-      materialCategoryAncestors(cat.parent),
-    ]);
-    const childCategoryIds = children.map((c) => String(c.id));
+    const itemCount = (subtreeByCat.get(cat.id) ?? [cat.id]).reduce((n, id) => n + (perCat.get(id) ?? 0), 0);
+    const childCategoryIds = childRows.filter((c) => c.parent === cat.id).map((c) => String(c.id));
+    const ancestors = await materialCategoryAncestors(cat.parent);
 
     if (!inlineMaterials) {
   // Directory node → child-folder count; leaf → subtree material count.
@@ -390,15 +395,25 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
 
   // `count` is context-dependent (directory → child-folder count, leaf → subtree
   // exam count); `totals.items` tracks the true exam count via `_itemCount`.
+  // Subtrees and child counts are batched. The exam count stays per category: an exam
+  // can sit in several categories (pivot), so per-category tallies cannot be summed.
+  const orderedIds = ordered.map((c) => c.id);
+  const [subtreeByCat, childRows] = await Promise.all([
+    selfFkDescendantsByRoot("ws_exam_category", "parent_id", orderedIds),
+    orderedIds.length
+      ? prisma.examCategory.groupBy({ by: ["parent"], where: { parent: { in: orderedIds }, status: true }, _count: { _all: true } })
+      : Promise.resolve([] as any[]),
+  ]);
+  const childCountByCat = new Map<number, number>((childRows as any[]).map((r) => [r.parent, r._count._all]));
+  const now = new Date();
+
   const list = await Promise.all(ordered.map(async (cat) => {
-    const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
-    const [itemCount, childCount] = await Promise.all([
-      // Only active, started, subject-type quizzes count (no drafts, daily tests or scheduled-later quizzes).
-      prisma.exam.count({
-        where: { AND: [examInCategoriesWhere(ids), { status: true, type: "subject" }, subjectStartedWhere(new Date())] },
-      }),
-      prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
-    ]);
+    const ids = subtreeByCat.get(cat.id) ?? [cat.id];
+    const childCount = childCountByCat.get(cat.id) ?? 0;
+    // Only active, started, subject-type quizzes count (no drafts, daily tests or scheduled-later quizzes).
+    const itemCount = await prisma.exam.count({
+      where: { AND: [examInCategoriesWhere(ids), { status: true, type: "subject" }, subjectStartedWhere(now)] },
+    });
     const havingChildDirectory = childCount > 0;
     const count = havingChildDirectory ? childCount : itemCount;
     return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory, count }, _itemCount: itemCount };

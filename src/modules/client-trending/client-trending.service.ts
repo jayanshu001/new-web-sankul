@@ -53,28 +53,37 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const search = buildPrismaSearch(opts.search, ["name", "author"]);
   if (search) where.AND = search.AND;
 
-  const ebooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }] });
+  // Free = min active plan price is 0, with no plans counting as 0. Expressed in SQL so
+  // skip/take/count page in the DB instead of loading every trending ebook.
+  const freeWhere = {
+    OR: [
+      { plans: { none: { status: true } } },
+      { AND: [{ plans: { some: { status: true, price: 0 } } }, { plans: { none: { status: true, price: { lt: 0 } } } }] },
+    ],
+  };
+  where.AND = [...(where.AND ?? []), wantFree ? freeWhere : { NOT: freeWhere }];
+
+  // findMany + count must share the identical where (total drives pagination).
+  const [ebooks, total] = await Promise.all([
+    prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }], skip, take: limitNum }),
+    prisma.eBook.count({ where }),
+  ]);
   const ids = ebooks.map((e) => e.id);
   const plans = ids.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ids }, status: true }, orderBy: { duration: "asc" } }) : [];
   const plansByEbook = new Map<number, any[]>();
   for (const p of plans) { if (p.ebookId == null) continue; (plansByEbook.get(p.ebookId) ?? plansByEbook.set(p.ebookId, []).get(p.ebookId)!).push(p); }
 
-  // free/paid is an in-memory filter over plan price, so total = full filtered length.
-  const filtered = ebooks.map((e: any) => {
+  const items = ebooks.map((e: any) => {
     const ePlans = plansByEbook.get(e.id) ?? [];
     const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => Number(p.price) || 0)) : 0;
     const isFree = minPrice === 0;
-    if (wantFree && !isFree) return null;
-    if (wantPaid && isFree) return null;
     return {
       type: "ebook" as const, _id: String(e.id), name: e.name, description: e.description ?? null, author: e.author ?? null,
       publisher: e.publisher ?? null, language: e.language, image: e.image ?? null, thumbnail: e.thumbnail ?? null, demoUrl: e.demoUrl ?? null,
       isTrending: e.isTrending, price: minPrice, isFree, isNew: isNewItem(e.createdAt), plans: ePlans, createdAt: e.createdAt,
       orderBy: e.orderby ?? 0,
     };
-  }).filter(Boolean) as any[];
-  const total = filtered.length;
-  const items = filtered.slice(skip, skip + limitNum);
+  });
   return { type: wantFree ? "free" : "paid", items, total };
 };
 

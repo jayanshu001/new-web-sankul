@@ -24,6 +24,8 @@ import {
   getVideoCategoryChildren,
   parseVideoCategoryId,
 } from "../../modules/catalog-video/catalog-video.service";
+import { parseListQuery } from "../../utils/listQuery";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
 // Media is never returned inline: each playable row carries a short-lived,
 // customer-bound `mediaToken` the client exchanges at POST /client/media/resolve.
@@ -49,8 +51,7 @@ function mediaTokenForVideo(v: { id: number; priceType: string }, entitled: bool
 
 function parsePaging(req: Request) {
   const { page = "1", limit = "20", search = "" } = req.query as Record<string, string>;
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, search: search.trim() };
 }
 
@@ -76,7 +77,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     // video writes (autoFlushGroup) invalidate it too.
     const [{ rows, total }, scopes] = await cache.aside({
       key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
-      ttlSeconds: 60,
+      ttlSeconds: CACHE_TTL.CATALOG_SHARED,
       load: () =>
         Promise.all([
           cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
@@ -113,7 +114,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       };
     });
 
-    logger.info("listVideosByCategory success (sql)", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
+    logger.info("listVideosByCategory success", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
     return res.status(200).json({
       success: true,
       data: { category: cvSql.categoryDto(category), scope, list },
@@ -183,7 +184,7 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
     if (scope === "multiple") return res.status(400).json({ success: false, message: "Pass only one of courseId, packageId, liveCourseId." });
     const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type, scope });
     if (!r) return res.status(404).json({ success: false, message: "Material category not found." });
-    logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
+    logger.info("listMaterialsByCategory success", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
       data: { category: r.category, list: omitList(r.list, ["file", "directLink", "fileSize", "language", "isPreview", "downloadCount", "thumbnail", "order", "status", "createdAt"]) },
@@ -207,7 +208,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     const userNum = clientExamSql.parseExamId(String(req.user?.id ?? ""));
     const r = await clientExamSql.listExamsByCategoryPaged(catId, userNum, { skip, take: limitNum, search });
     if (!r) return res.status(404).json({ success: false, message: "Exam category not found." });
-    logger.info("listExamsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
+    logger.info("listExamsByCategory success", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
       data: { category: omit(r.category, ["_id", "orderBy"]), list: r.list },
@@ -231,13 +232,13 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
   try {
     const catId = parseVideoCategoryId(id);
     if (catId == null) {
-      logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+      logger.warn("listVideoCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const result = await getVideoCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
-      logger.warn("listVideoCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+      logger.warn("listVideoCategoryChildren parent not found", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Video category not found." });
     }
     const { total, ...data } = result;
@@ -261,13 +262,13 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
   try {
     const catId = parseMaterialCategoryId(id);
     if (catId == null) {
-      logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+      logger.warn("listMaterialCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const result = await getMaterialCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
-      logger.warn("listMaterialCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+      logger.warn("listMaterialCategoryChildren parent not found", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Material category not found." });
     }
     const { total, ...data } = result;
@@ -291,13 +292,13 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
   try {
     const catId = parseExamCategoryId(id);
     if (catId == null) {
-      logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+      logger.warn("listExamCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const result = await getExamCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
-      logger.warn("listExamCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+      logger.warn("listExamCategoryChildren parent not found", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Exam category not found." });
     }
     const { total, ...data } = result;
@@ -433,7 +434,7 @@ export const listPackageCategories = async (req: Request, res: Response) => {
     const result = await pkgCatSql.listClientPackageCategories({
       liveOnly, search: search || null, skip, limitNum, pageNum,
     });
-    logger.info("listPackageCategories success (sql)", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
+    logger.info("listPackageCategories success", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
     const { data, ...restResult } = result;
     return res.status(200).json({ success: true, data: omitList(data, ["packageId"]), ...restResult });
   } catch (error: any) {
@@ -456,7 +457,7 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
     const data = await pkgCatSql.listPackagesAndLiveByCategory(catId, customerId, {
       tab, search: search || null, skip, take: limitNum, baseUrl: resolveBase(req),
     });
-    logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, tab, recordedCount: data.recorded.length, liveCount: data.live.length, total: data.total });
+    logger.info("listPackagesByCategory success", { traceId, categoryId: id, tab, recordedCount: data.recorded.length, liveCount: data.live.length, total: data.total });
     return res.status(200).json({
       success: true,
       data: { tab: data.tab, recorded: omitList(data.recorded, ["packageTypeId", "goalId", "educatorId"]), live: data.live, counts: data.counts },

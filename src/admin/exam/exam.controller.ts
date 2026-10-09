@@ -16,11 +16,11 @@ import {
   reorderQuestionsSchema,
   bulkCreateQuestionsSchema,
 } from "./exam.validation";
+import { parseListQuery } from "../../utils/listQuery";
 
 // Uses the spec's { page, per_page } naming, unlike the older page/limit handlers.
 const parseListPaging = (q: Record<string, string>) => {
-  const page = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const per_page = Math.min(Math.max(parseInt(q.per_page ?? "20", 10) || 20, 1), 200);
+  const { page, limit: per_page } = parseListQuery({ page: q.page, limit: q.per_page }, { defaultLimit: 20, maxLimit: 200 });
   return { page, per_page, skip: (page - 1) * per_page };
 };
 
@@ -216,8 +216,7 @@ export const getExams = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
 
     const { items, total } = await adminExam.listExams({ search, categoryId, type, status, isPaid, page: pageNum, limit: limitNum });
     return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
@@ -403,8 +402,7 @@ export const reorderExams = async (req: Request, res: Response) => {
 export const getQuestions = async (req: Request, res: Response) => {
   try {
     const { examId, search, status, page = "1", limit = "50" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 50, maxLimit: 200 });
 
     const { items, total } = await adminExam.listQuestions({ examId, search, status, page: pageNum, limit: limitNum });
     return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
@@ -548,8 +546,7 @@ export const getExamSubmissions = async (req: Request, res: Response) => {
   try {
     const examId = req.params.examId as string;
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
 
     const numId = adminExam.parseExamId(examId);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });

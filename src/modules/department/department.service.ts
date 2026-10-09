@@ -6,11 +6,9 @@ import type {
   DepartmentDto,
   DepartmentUpdateInput,
 } from "./department.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseDepartmentId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseDepartmentId = parsePositiveInt;
 
 export interface ListDepartmentsOptions {
   page?: number;

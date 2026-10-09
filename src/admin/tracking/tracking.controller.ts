@@ -4,6 +4,7 @@ import {
   parseTrackingId,
   listActivity as sqlListActivity, activitySummary as sqlActivitySummary,
 } from "../../modules/tracking/tracking.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 export const listActivity = async (req: Request, res: Response) => {
   try {
@@ -18,8 +19,7 @@ export const listActivity = async (req: Request, res: Response) => {
       limit = "50",
     } = req.query as Record<string, string>;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 50, maxLimit: 200 });
 
     const { data, total } = await sqlListActivity({
       customerId: customerId ? parseTrackingId(customerId) ?? undefined : undefined,

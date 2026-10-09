@@ -8,12 +8,11 @@ import { adminPackageRepository as repo } from "./admin-package.repository";
 import { resyncPackageRelations } from "./package-relation-sync";
 import { parseLabels } from "../../utils/goalSelection";
 import type { Package, PackageType } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
+import { parseListQuery } from "../../utils/listQuery";
 
 
-export const parsePackageId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePackageId = parsePositiveInt;
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
@@ -160,8 +159,7 @@ const examRowDto = (r: any) => ({ ...examRef(r), categoryName: r.ExamCategory?.n
 
 // Shared page/limit parse, mirroring listSubscribers (default 20, cap 100).
 const pageArgs = (q: { page?: string; limit?: string }) => {
-  const page = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limit = Math.min(Math.max(parseInt(q.limit ?? "20", 10) || 20, 1), 100);
+  const { page, limit } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 20, maxLimit: 100 });
   return { page, limit, skip: (page - 1) * limit };
 };
 const pageMeta = (total: number, page: number, limit: number) => ({ total, page, limit, totalPages: Math.ceil(total / limit) });
@@ -213,8 +211,7 @@ export interface ListPackagesQuery { search?: string; active?: string; isPaid?: 
 
 // Paged list; each row carries its active plans split by withMaterial.
 export const listPackages = async (q: ListPackagesQuery) => {
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "20", 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 20, maxLimit: 100 });
   // isPaid/goalId query filters are accepted but ignored.
   const opts = {
     search: q.search,
@@ -424,8 +421,7 @@ export const listPackagePlans = async (
   q: { page?: string; limit?: string; status?: string }
 ): Promise<"not_found" | { data: any[]; pagination: any }> => {
   if (!(await repo.exists(packageId))) return "not_found";
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "10", 10) || 10, 1), 500);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 10, maxLimit: 500 });
   // Optional status filter; absent (the panel's case) = all plans. Anything other than
   // the two literals is ignored rather than 422'd — a typo must not empty the tab.
   const status = q.status === "true" ? true : q.status === "false" ? false : undefined;
@@ -475,8 +471,7 @@ export const detachPlan = async (
 
 export const listSubscribers = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
   if (!(await repo.exists(packageId))) return "not_found";
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "20", 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 20, maxLimit: 100 });
   const [rows, total] = await Promise.all([
     repo.listSubscribers(packageId, (pageNum - 1) * limitNum, limitNum),
     repo.countSubscribers(packageId),

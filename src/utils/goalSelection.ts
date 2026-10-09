@@ -1,3 +1,4 @@
+import { parsePositiveInt } from "./parseId";
 // Goal selection: parse and reconcile a customer's stored goal + label choices.
 /**
  * Customer goal selection, stored on `ws_customer.goal` (JSON) as
@@ -16,10 +17,7 @@ export type GoalSelectionInput =
   | string
   | number;
 
-const toPosInt = (v: unknown): number | null => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const toPosInt = parsePositiveInt;
 
 export const parseLabels = (raw: unknown): { id: number; name: string }[] => {
   if (!Array.isArray(raw)) return [];

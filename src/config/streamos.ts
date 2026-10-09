@@ -1,8 +1,8 @@
 // StreamOS config: provider switch and v1 API settings.
 // StreamOS has two incompatible APIs (legacy streamapi.streamos.co vs v1
 // api.streamos.in; see docs/migration/STREAMOS_V1_CHANGE_MATRIX.md), selected by
-// STREAMOS_PROVIDER: "legacy" → admin/live/streamos.service.ts, "v1" →
-// admin/live/streamos.v1.service.ts. Default stays "legacy" because existing
+// STREAMOS_PROVIDER: "legacy" → libs/streamos/streamos.service.ts, "v1" →
+// libs/streamos/streamos.v1.service.ts. Default stays "legacy" because existing
 // ws_live_session rows hold legacy stream ids and CDN URLs.
 
 export type StreamosProvider = "legacy" | "v1";

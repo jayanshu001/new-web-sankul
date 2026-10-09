@@ -103,7 +103,7 @@ export const markAllAsRead = async (req: Request, res: Response) => {
     const cid = notifSql.parseNotifId(String(userId));
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
     const modified = await notifSql.markAllRead(cid);
-    logger.info("markAllAsRead success (sql)", { traceId, customerId: userId, modified });
+    logger.info("markAllAsRead success", { traceId, customerId: userId, modified });
     return res.status(200).json({ success: true, message: "All marked as read." });
   } catch (e: any) {
     logger.error("markAllAsRead failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });

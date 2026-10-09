@@ -18,11 +18,9 @@ import {
   updateCityDistrict,
   deleteCityDistrict,
 } from "../../modules/customer-lookups/customer-lookups.service";
+import { parsePositiveInt } from "../../utils/parseId";
 
-const parseId = (v: string): number | null => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseId = parsePositiveInt;
 
 // image/order may still be sent by the existing form — z.object strips unknown
 // keys, so they are silently ignored rather than rejected.

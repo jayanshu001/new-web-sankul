@@ -267,7 +267,7 @@ export async function getOrderDetailsForUser(orderId: string, userId: string, tr
   const idNum = Number(orderId);
   const custNum = Number(userId);
   if (!Number.isInteger(idNum) || idNum <= 0 || !Number.isInteger(custNum)) {
-    logger.warn("getOrderDetailsForUser service invalid id (sql)", { traceId, orderId, userId });
+    logger.warn("getOrderDetailsForUser service invalid id", { traceId, orderId, userId });
     return null;
   }
 

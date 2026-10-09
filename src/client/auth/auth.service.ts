@@ -61,7 +61,7 @@ async function sendOtpSms(phone: string, otp: string): Promise<boolean> {
   const base = process.env.TWO_FACTOR_BASE_URL;
   const apiKey = process.env.TWO_FACTOR_API_KEY;
   if (!base || !apiKey) {
-    console.warn("[SMS] 2Factor base url / api key not set — skipping send, OTP:", otp);
+    logger.warn("[SMS] 2Factor base url / api key not set — skipping send", { phone });
     return true; // dev fallback
   }
   // The 2Factor template name can contain spaces; unencoded, axios throws and
@@ -81,7 +81,8 @@ async function sendOtpSms(phone: string, otp: string): Promise<boolean> {
     const status: string = (resp.data as any)?.Status ?? "";
     return status === "Success";
   } catch (err) {
-    console.error("[SMS] failed:", err);
+    // Message only: the axios error carries the request URL, which embeds the API key and OTP.
+    logger.error("[SMS] failed", { phone, error: (err as Error)?.message });
     return false;
   }
 }
@@ -110,7 +111,6 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   }
 
   const otp = otpFor();
-  console.log(`\x1b[1m\x1b[38;5;50m[OTP]\x1b[0m \x1b[38;5;208mGenerated\x1b[0m → \x1b[1m\x1b[38;5;226m${otp}\x1b[0m`);
   const sent = DUMMY_OTP_ENABLED || isStatic || (await sendOtpSms(phone, otp));
   if (!sent) {
     return { ok: false, message: "Unable to send OTP. Please try again later." };
@@ -209,7 +209,7 @@ export async function validateOtp(
   customer?: Record<string, unknown>;
   isNewUser?: boolean;
 }> {
-  logger.info("validateOtp service invoked", { traceId, rawPhone, otp });
+  logger.info("validateOtp service invoked", { traceId, rawPhone });
   const phone = formatPhone(rawPhone);
 
   const row = await customerAuthRepository.findLoginableByPhone(phone);

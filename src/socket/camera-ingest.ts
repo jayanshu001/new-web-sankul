@@ -12,7 +12,7 @@ import { redisClient } from "../config/redis";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import logger from "../utils/logger";
 import * as adminLiveSql from "../modules/admin-live/admin-live.service";
-import { pushCredentialsExpired } from "../admin/live/streamos.provider";
+import { pushCredentialsExpired } from "../libs/streamos/streamos.provider";
 
 const INGEST_PATH = "/ws/camera-ingest";
 const ADMIN_ROLES = new Set(["admin", "super_admin", "editor"]);

@@ -1,10 +1,8 @@
 // Home dashboard: assembles the client home screen sections.
 import { parseGoalSelection } from "../../utils/goalSelection";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCdId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCdId = parsePositiveInt;
 
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -13,6 +11,7 @@ import { listRecentlyAdded } from "../client-recently-added/client-recently-adde
 // Reused so the dashboard badge matches GET /client/notifications/count (excludes
 // read and dismissed notifications).
 import { unreadCount as notificationUnreadCount } from "../client-notification/client-notification.service";
+import { PAID_BOOK_ORDER_STATUSES } from "../../shared/enums";
 
 const COURSE_CATEGORY_LIMIT = 20;
 // Safety ceiling only; the table holds a handful of rows.
@@ -130,6 +129,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
   if (customerId) {
     if (bookIds.length) {
       const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: "verified" }, select: { id: true } });
+      // const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: { in: PAID_BOOK_ORDER_STATUSES } }, select: { id: true } });
       if (orders.length) { const items = await prisma.bookOrderItem.findMany({ where: { order_id: { in: orders.map((o) => String(o.id)) }, bookId: { in: bookIds } }, select: { bookId: true } }); for (const it of items) if (it.bookId != null) ownedBookSet.add(it.bookId); }
     }
     if (ebookIds.length) {

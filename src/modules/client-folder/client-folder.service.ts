@@ -2,13 +2,12 @@
 import { prisma } from "../../config/prisma";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 /** refId is a content id: video → ws_video, material → ws_material. */
 
-export const parseFolderId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseFolderId = parsePositiveInt;
 
 const DEFAULT_NAME: Record<string, string> = { video: "My Videos", material: "My Materials" };
 
@@ -149,7 +148,7 @@ export const removeItem = async (customerId: number, type: string, folderId: num
 // Paged folders with their items inlined; items whose content is gone are dropped.
 export const allItems = async (customerId: number, type: string, search?: string, skip = 0, take = 20) => {
   await ensureDefaultFolders(customerId);
-  const where: any = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
+  const where: Prisma.FolderWhereInput = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
   const [folders, total] = await Promise.all([
     prisma.folder.findMany({ where, orderBy: [{ isDefaultFolder: "desc" }, { createdAt: "desc" }], skip, take }),
     prisma.folder.count({ where }),

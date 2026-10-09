@@ -63,25 +63,25 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     // and are idempotent, same as /verify.
     const ebookFulfilled = await fulfillEbookWebhookMysql(razorpayOrderId, razorpayPaymentId);
     if (ebookFulfilled) {
-      logger.info("paymentWebhook ebook activated (mysql)", { traceId, razorpayOrderId, orderId: ebookFulfilled._id });
+      logger.info("paymentWebhook ebook activated", { traceId, razorpayOrderId, orderId: ebookFulfilled._id });
       return res.status(200).json({ success: true, message: "Ebook subscription activated." });
     }
 
     const bookFulfilled = await fulfillBookWebhookMysql(razorpayOrderId, razorpayPaymentId);
     if (bookFulfilled) {
-      logger.info("paymentWebhook book verified (mysql)", { traceId, razorpayOrderId, orderId: bookFulfilled._id });
+      logger.info("paymentWebhook book verified", { traceId, razorpayOrderId, orderId: bookFulfilled._id });
       return res.status(200).json({ success: true, message: "Book order verified." });
     }
 
     const tsFulfilled = await tsOrderSql.fulfillWebhookMysql(razorpayOrderId, razorpayPaymentId);
     if (tsFulfilled) {
-      logger.info("paymentWebhook test-series activated (mysql)", { traceId, razorpayOrderId, subscriptionId: tsFulfilled._id });
+      logger.info("paymentWebhook test-series activated", { traceId, razorpayOrderId, subscriptionId: tsFulfilled._id });
       return res.status(200).json({ success: true, message: "Test series subscription activated." });
     }
 
     const liveFulfilled = await fulfillLiveCourseWebhookMysql(razorpayOrderId, razorpayPaymentId);
     if (liveFulfilled) {
-      logger.info("paymentWebhook live course activated (mysql)", { traceId, razorpayOrderId, subscriptionId: liveFulfilled._id });
+      logger.info("paymentWebhook live course activated", { traceId, razorpayOrderId, subscriptionId: liveFulfilled._id });
       return res.status(200).json({ success: true, message: "Live course subscription activated." });
     }
 

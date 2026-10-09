@@ -29,23 +29,11 @@ export interface FaqCreateInput {
   isExpand?: boolean;
 }
 
-export interface FaqCreateMongoInput {
-  typeId: string;
-  question: string;
-  answer: string;
-}
-
 export interface FaqUpdateInput {
   type?: FaqCategory;
   question?: string;
   answer?: string;
   isExpand?: boolean;
-}
-
-export interface FaqUpdateMongoInput {
-  typeId?: string;
-  question?: string;
-  answer?: string;
 }
 
 export const FAQ_TYPE_LABELS: Record<FaqCategory, string> = {

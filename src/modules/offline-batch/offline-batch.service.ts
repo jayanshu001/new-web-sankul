@@ -12,11 +12,9 @@ import type {
   OfflineCenterWithBatchesDto,
   OfflineCenterWithCityDto,
 } from "./offline-batch.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseOfflineId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseOfflineId = parsePositiveInt;
 
 export const listCenters = async (opts?: {
   cityId?: number;

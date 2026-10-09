@@ -5,11 +5,9 @@ import type { ClientTermsDto, TermsCreateInput, TermsDto, TermsModule, TermsUpda
 import { TERMS_MODULES } from "./terms.types";
 import { departmentRepository } from "../department/department.repository";
 import { toDepartmentDto } from "../department/department.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseTermsId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseTermsId = parsePositiveInt;
 
 export const listTerms = async (): Promise<TermsDto[]> => {
   const rows = await termsRepository.findMany();

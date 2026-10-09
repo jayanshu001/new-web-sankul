@@ -13,6 +13,7 @@ import {
   toPromoterAuthDto,
   verifyPromoterPassword,
 } from "../../modules/promoter-auth/promoter-auth.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
 // JWT secrets routed through the keyring (config/jwtKeys.ts).
 const JWT_ACCESS_TTL_DAYS = 1;
@@ -22,20 +23,17 @@ const SALT_ROUNDS = 10;
 const addDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
 /** Parse a JWT/route promoter id ("2") to a positive int; null if invalid. */
-const parsePromoterId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parsePromoterId = parsePositiveInt;
 
 // Email/password login; deactivates prior tokens and issues a fresh access/refresh pair.
 export async function promoterLogin(email: string, password: string, ip?: string, traceId?: string) {
   logger.info("promoterLogin service invoked", { traceId, email, ip });
 
   const row = await repo.findActiveByEmail(email);
-  if (!row) { logger.warn("promoterLogin invalid credentials (sql)", { traceId, email }); return { ok: false, message: "Invalid email or password." }; }
-  if (!row.password) { logger.warn("promoterLogin no password set (sql)", { traceId, promoterId: row.id }); return { ok: false, message: "Account has no password set." }; }
+  if (!row) { logger.warn("promoterLogin invalid credentials", { traceId, email }); return { ok: false, message: "Invalid email or password." }; }
+  if (!row.password) { logger.warn("promoterLogin no password set", { traceId, promoterId: row.id }); return { ok: false, message: "Account has no password set." }; }
   const match = await verifyPromoterPassword(password, row.password);
-  if (!match) { logger.warn("promoterLogin invalid credentials (sql)", { traceId, email }); return { ok: false, message: "Invalid email or password." }; }
+  if (!match) { logger.warn("promoterLogin invalid credentials", { traceId, email }); return { ok: false, message: "Invalid email or password." }; }
 
   await repo.deactivateAllTokens(row.id);
   await repo.touchLogin(row.id);
@@ -48,7 +46,7 @@ export async function promoterLogin(email: string, password: string, ip?: string
   await repo.createToken({ promoterId: row.id, token, refreshToken, expiresAt: addDays(JWT_REFRESH_TTL_DAYS) });
   await redisClient.set(`promoter_session:${dto.id}`, token, "EX", JWT_ACCESS_TTL_DAYS * 24 * 60 * 60);
 
-  logger.info("promoterLogin success (sql)", { traceId, promoterId: dto.id });
+  logger.info("promoterLogin success", { traceId, promoterId: dto.id });
   return { ok: true, message: "Login successful.", token, refreshToken, promoter: dto };
 }
 
@@ -63,10 +61,10 @@ export async function promoterRefresh(refreshToken: string, traceId?: string) {
     if (!id) return { ok: false, message: "Invalid or revoked refresh token." };
 
     const db = await repo.findActiveTokenByRefresh(refreshToken, id);
-    if (!db) { logger.warn("promoterRefresh revoked (sql)", { traceId, promoterId: id }); return { ok: false, message: "Invalid or revoked refresh token." }; }
+    if (!db) { logger.warn("promoterRefresh revoked", { traceId, promoterId: id }); return { ok: false, message: "Invalid or revoked refresh token." }; }
 
     const row = await repo.findActiveById(id);
-    if (!row) { logger.warn("promoterRefresh promoter not found (sql)", { traceId, promoterId: id }); return { ok: false, message: "Promoter not found or disabled." }; }
+    if (!row) { logger.warn("promoterRefresh promoter not found", { traceId, promoterId: id }); return { ok: false, message: "Promoter not found or disabled." }; }
 
     await repo.deactivateToken(db.id);
 
@@ -78,10 +76,10 @@ export async function promoterRefresh(refreshToken: string, traceId?: string) {
     await repo.createToken({ promoterId: row.id, token: newToken, refreshToken: newRefreshToken, expiresAt: addDays(JWT_REFRESH_TTL_DAYS) });
     await redisClient.set(`promoter_session:${dto.id}`, newToken, "EX", JWT_ACCESS_TTL_DAYS * 24 * 60 * 60);
 
-    logger.info("promoterRefresh success (sql)", { traceId, promoterId: dto.id });
+    logger.info("promoterRefresh success", { traceId, promoterId: dto.id });
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, promoter: dto };
   } catch (err) {
-    logger.error("promoterRefresh error (sql)", { traceId, error: (err as Error).message });
+    logger.error("promoterRefresh error", { traceId, error: (err as Error).message });
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }
@@ -99,7 +97,7 @@ export async function promoterLogout(promoterId: string, traceId?: string) {
   const id = parsePromoterId(promoterId);
   if (id) await repo.deactivateAllTokens(id);
   await redisClient.del(`promoter_session:${promoterId}`);
-  logger.info("promoterLogout success (sql)", { traceId, promoterId });
+  logger.info("promoterLogout success", { traceId, promoterId });
   return { ok: true, message: "Successfully logged out." };
 }
 
@@ -114,12 +112,12 @@ export async function promoterChangePassword(
   const id = parsePromoterId(promoterId);
   if (!id) return { ok: false, message: "Promoter not found." };
   const row = await repo.findById(id);
-  if (!row) { logger.warn("promoterChangePassword promoter not found (sql)", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
-  if (!row.password) { logger.warn("promoterChangePassword no password set (sql)", { traceId, promoterId }); return { ok: false, message: "No current password set." }; }
+  if (!row) { logger.warn("promoterChangePassword promoter not found", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
+  if (!row.password) { logger.warn("promoterChangePassword no password set", { traceId, promoterId }); return { ok: false, message: "No current password set." }; }
   const match = await verifyPromoterPassword(currentPassword, row.password);
-  if (!match) { logger.warn("promoterChangePassword wrong current password (sql)", { traceId, promoterId }); return { ok: false, message: "Current password is incorrect." }; }
+  if (!match) { logger.warn("promoterChangePassword wrong current password", { traceId, promoterId }); return { ok: false, message: "Current password is incorrect." }; }
   await repo.updatePassword(id, await bcrypt.hash(newPassword, SALT_ROUNDS));
-  logger.info("promoterChangePassword success (sql)", { traceId, promoterId });
+  logger.info("promoterChangePassword success", { traceId, promoterId });
   return { ok: true, message: "Password updated successfully." };
 }
 
@@ -133,9 +131,9 @@ export async function promoterUpdateProfile(
   const id = parsePromoterId(promoterId);
   if (!id) return { ok: false, message: "Promoter not found." };
   const existing = await repo.findById(id);
-  if (!existing) { logger.warn("promoterUpdateProfile promoter not found (sql)", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
+  if (!existing) { logger.warn("promoterUpdateProfile promoter not found", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
   const updated = await repo.updateProfile(id, data);
-  logger.info("promoterUpdateProfile success (sql)", { traceId, promoterId });
+  logger.info("promoterUpdateProfile success", { traceId, promoterId });
   return { ok: true, message: "Profile updated.", promoter: toPromoterAuthDto(updated) };
 }
 
@@ -145,7 +143,7 @@ export async function promoterGetProfile(promoterId: string, traceId?: string) {
   const id = parsePromoterId(promoterId);
   if (!id) return { ok: false, message: "Promoter not found." };
   const row = await repo.findById(id);
-  if (!row) { logger.warn("promoterGetProfile promoter not found (sql)", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
-  logger.info("promoterGetProfile success (sql)", { traceId, promoterId });
+  if (!row) { logger.warn("promoterGetProfile promoter not found", { traceId, promoterId }); return { ok: false, message: "Promoter not found." }; }
+  logger.info("promoterGetProfile success", { traceId, promoterId });
   return { ok: true, message: "ok", promoter: toPromoterAuthDto(row) };
 }

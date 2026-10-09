@@ -3,14 +3,12 @@ import { referralRepository as repo } from "./referral.repository";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { Prisma, RefferalProgram, RefferalTransaction } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
 
 export const REFERRAL_MODULE = "referral";
 export const isReferralMysql = (): boolean => true;
 
-export const parseCustomerId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCustomerId = parsePositiveInt;
 
 const splitName = (full: string | null | undefined) => {
   const parts = (full ?? "").trim().split(/\s+/).filter(Boolean);
@@ -287,10 +285,7 @@ export const applyPayoutWebhook = async (
   return "ok";
 };
 
-export const parseId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseId = parsePositiveInt;
 
 const splitNameParts = (full: string | null | undefined) => splitName(full);
 

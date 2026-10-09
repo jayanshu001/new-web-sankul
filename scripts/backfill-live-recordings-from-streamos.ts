@@ -23,8 +23,8 @@
 import dotenv from "dotenv";
 import { prisma } from "../src/config/prisma";
 import * as adminLiveSql from "../src/modules/admin-live/admin-live.service";
-import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../src/admin/live/streamos.service";
-import { getDetails as getStreamDetails, providerOf, StreamosError } from "../src/admin/live/streamos.provider";
+import { enrichMp4Sizes as streamosEnrichMp4Sizes } from "../src/libs/streamos/streamos.service";
+import { getDetails as getStreamDetails, providerOf, StreamosError } from "../src/libs/streamos/streamos.provider";
 
 dotenv.config();
 

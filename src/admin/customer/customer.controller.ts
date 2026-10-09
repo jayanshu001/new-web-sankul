@@ -14,12 +14,12 @@ import {
   listCustomerBookOrders,
   listCustomerAddresses,
 } from "../../modules/admin-customer/admin-customer-details.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 // Shared page/limit parsing for the customer-detail per-tab lists.
 const parsePaging = (req: Request) => {
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, take: limitNum };
 };
 const pageMeta = (total: number, pageNum: number, limitNum: number) => ({
@@ -45,8 +45,7 @@ export const getCustomers = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
 
     const { items, total } = await customerSql.listCustomers({
       search,

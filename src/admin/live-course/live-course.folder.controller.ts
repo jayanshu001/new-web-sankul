@@ -45,14 +45,14 @@ export const listFolders = async (req: Request, res: Response) => {
   try {
     const id = liveCourseSql.parseLiveId(liveCourseId);
     if (id == null || !(await liveCourseSql.lcCourseExists(id))) {
-      logger.warn("listFolders course not found (sql)", { traceId, liveCourseId });
+      logger.warn("listFolders course not found", { traceId, liveCourseId });
       return failure(res, "Live course not found.", 404);
     }
     const { folders, relations } = await liveCourseSql.lcListFolders(id, search || undefined);
-    logger.info("listFolders success (sql)", { traceId, liveCourseId, folderCount: folders.length, relationCount: relations.length });
+    logger.info("listFolders success", { traceId, liveCourseId, folderCount: folders.length, relationCount: relations.length });
     return success(res, { folders, relations }, "Folders fetched.");
   } catch (err) {
-    logger.error("listFolders failed (sql)", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("listFolders failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list folders.", 500);
   }
 };
@@ -66,7 +66,7 @@ export const createFolder = async (req: Request, res: Response) => {
   try {
     const id = liveCourseSql.parseLiveId(liveCourseId);
     if (id == null || !(await liveCourseSql.lcCourseExists(id))) {
-      logger.warn("createFolder course not found (sql)", { traceId, liveCourseId });
+      logger.warn("createFolder course not found", { traceId, liveCourseId });
       return failure(res, "Live course not found.", 404);
     }
     let validated: z.infer<typeof createFolderSchema>;
@@ -74,7 +74,7 @@ export const createFolder = async (req: Request, res: Response) => {
       validated = createFolderSchema.parse(req.body);
     } catch (err) {
       if (err instanceof z.ZodError) {
-        logger.warn("createFolder validation failed (sql)", { traceId, liveCourseId, issues: err.issues });
+        logger.warn("createFolder validation failed", { traceId, liveCourseId, issues: err.issues });
         return zodIssueResponse(res, err);
       }
       throw err;
@@ -88,13 +88,13 @@ export const createFolder = async (req: Request, res: Response) => {
       status: validated.status,
     });
     if (result === "bad_parent") {
-      logger.warn("createFolder invalid parent (sql)", { traceId, liveCourseId, parentFolderId: validated.parentFolderId });
+      logger.warn("createFolder invalid parent", { traceId, liveCourseId, parentFolderId: validated.parentFolderId });
       return failure(res, "parentFolderId does not belong to this live course.", 422);
     }
-    logger.info("createFolder success (sql)", { traceId, liveCourseId, folderId: result.folder._id });
+    logger.info("createFolder success", { traceId, liveCourseId, folderId: result.folder._id });
     return success(res, { folder: result.folder }, "Folder created.", 201);
   } catch (err) {
-    logger.error("createFolder failed (sql)", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("createFolder failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to create folder.", 500);
   }
 };
@@ -109,7 +109,7 @@ export const updateFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("updateFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("updateFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     let validated: z.infer<typeof updateFolderSchema>;
@@ -117,7 +117,7 @@ export const updateFolder = async (req: Request, res: Response) => {
       validated = updateFolderSchema.parse(req.body);
     } catch (err) {
       if (err instanceof z.ZodError) {
-        logger.warn("updateFolder validation failed (sql)", { traceId, liveCourseId, folderId, issues: err.issues });
+        logger.warn("updateFolder validation failed", { traceId, liveCourseId, folderId, issues: err.issues });
         return zodIssueResponse(res, err);
       }
       throw err;
@@ -129,10 +129,10 @@ export const updateFolder = async (req: Request, res: Response) => {
       educatorId: validated.educatorId ? liveCourseSql.parseLiveId(validated.educatorId) ?? undefined : undefined,
       status: validated.status,
     });
-    logger.info("updateFolder success (sql)", { traceId, liveCourseId, folderId });
+    logger.info("updateFolder success", { traceId, liveCourseId, folderId });
     return success(res, { folder }, "Folder updated.");
   } catch (err) {
-    logger.error("updateFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("updateFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update folder.", 500);
   }
 };
@@ -148,22 +148,22 @@ export const deleteFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null) {
-      logger.warn("deleteFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("deleteFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     const result = await liveCourseSql.lcDeleteFolder(cid, fid);
     if (result === "not_found") {
-      logger.warn("deleteFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("deleteFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     if (result === "is_root") {
-      logger.warn("deleteFolder refused root (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("deleteFolder refused root", { traceId, liveCourseId, folderId });
       return failure(res, "Cannot delete the root folder of a live course.", 409);
     }
-    logger.info("deleteFolder success (sql)", { traceId, liveCourseId, folderId, videos: result.deletedVideos, relations: result.deletedRelations });
+    logger.info("deleteFolder success", { traceId, liveCourseId, folderId, videos: result.deletedVideos, relations: result.deletedRelations });
     return success(res, { id: folderId, deletedVideos: result.deletedVideos, deletedRelations: result.deletedRelations }, "Folder deleted.");
   } catch (err) {
-    logger.error("deleteFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("deleteFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete folder.", 500);
   }
 };

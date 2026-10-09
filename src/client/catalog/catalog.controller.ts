@@ -7,6 +7,7 @@ import * as catSql from "../../modules/client-catalog/client-catalog.service";
 import { omit } from "../../utils/pick";
 import cache, { CacheDomain } from "../../libs/cache";
 import { CacheEntity } from "../../middlewares/flushGroups";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
 // Drops unused `progress.completedAt` / `lastWatchedAt` from video list items (flat
 // course items carry `progress`; grouped items nest videos under `list`).
@@ -76,7 +77,7 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
         ? await catSql.catalogVideos({ type, id: idNum, customerId: userNum, search: search || null, categoryIds: catIds })
         : await cache.aside({
             key: cache.key(CacheDomain.Client, CacheEntity.Categories, `video-tabs:${type}:${idNum}:${cache.hashFilter({ search, catIds })}`),
-            ttlSeconds: 60,
+            ttlSeconds: CACHE_TTL.CATALOG_SHARED,
             load: () => catSql.catalogVideos({ type, id: idNum, customerId: null, search: search || null, categoryIds: catIds }),
           });
     const msg = type === "course" ? "Videos fetched." : "Video categories fetched.";

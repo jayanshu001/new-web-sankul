@@ -19,11 +19,9 @@ import type {
   EducationInput,
   TargetGoalInput,
 } from "./customer-lookups.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseLookupId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseLookupId = parsePositiveInt;
 
 export const listStates = async (opts?: {
   activeOnly?: boolean;

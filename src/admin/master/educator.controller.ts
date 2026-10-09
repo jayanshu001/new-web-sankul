@@ -12,13 +12,12 @@ import {
   listEducatorVideoCategories,
   listEducatorLiveSessions,
 } from "../../modules/educator-auth/educator-details.service";
+import { parsePositiveInt } from "../../utils/parseId";
+import { parseListQuery } from "../../utils/listQuery";
 
 const EDUCATOR_SORT_FIELDS = new Set(["createdAt", "updatedAt", "name", "email"]);
 
-const parseEducatorIntId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseEducatorIntId = parsePositiveInt;
 
 const parseEducatorStatus = (status?: string): boolean | undefined => {
   if (status === "true" || status === "active") return true;
@@ -163,8 +162,7 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
 
 const parseEducatorPaging = (req: Request) => {
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
   return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, take: limitNum };
 };
 const educatorPageMeta = (total: number, pageNum: number, limitNum: number) => ({

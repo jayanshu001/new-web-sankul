@@ -6,12 +6,10 @@ import { resolveAncestors } from "../../utils/categoryAncestors";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resyncAllPackageRelations } from "../admin-package/package-relation-sync";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseMasterId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseMasterId = parsePositiveInt;
 const toInt = (v: unknown, def = 0): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : def;

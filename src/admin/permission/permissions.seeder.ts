@@ -94,7 +94,7 @@ async function syncPermissionCatalogSql(): Promise<void> {
   logger.info(
     `[permissions] catalog sync complete (sql) — guards: [${SEED_GUARDS.join(", ")}], inserted: ${inserted}, catalog keys total: ${ALL_CATALOG_KEYS.size}, deprecated (guard:name) pairs: ${deprecated.length}`
   );
-  if (deprecated.length > 0) logger.warn(`[permissions] deprecated (non-catalog for their guard) names still in DB (sql): ${deprecated.join(", ")}`);
+  if (deprecated.length > 0) logger.warn(`[permissions] deprecated (non-catalog for their guard) names still in DB: ${deprecated.join(", ")}`);
 }
 
 const slugify = (s: string) =>

@@ -23,12 +23,11 @@ import { splitFullName } from "../customer-profile/customer-profile.name";
 import { fmtExportDate } from "../../utils/csvExport";
 import { appendAdminRemark, planAddDays } from "../../utils/subscriptionRemarkHistory";
 import { adminSubscriptionRepository } from "../admin-subscription/admin-subscription.repository";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 
-export const parseAtsId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseAtsId = parsePositiveInt;
 
 const num = (v: any): number => (v == null ? 0 : Number(v.toString?.() ?? v) || 0);
 
@@ -205,14 +204,33 @@ export type ListSeriesOpts = {
   limit: number;
 };
 
-// Paged list with each series' default plan; the exam-category filter runs in memory.
+// Paged list with each series' default plan.
 export const listTestSeries = async (opts: ListSeriesOpts) => {
   const where: any = {};
   const search = buildPrismaSearch(opts.search, ["title"]);
   if (search) Object.assign(where, search);
   if (opts.status !== null) where.status = opts.status;
 
-  const [rows, total] = await Promise.all([
+  // The exam-category filter (legacy single column OR the JSON array, whose ids may be
+  // strings) resolves matching ids in memory BEFORE paging, so `total` and page size
+  // agree with the filter. Filtering after skip/take returned short or empty pages.
+  // ponytail: scans id + category columns of every candidate; fine while ws_test_series
+  // stays in the hundreds, move to a JSON_TABLE join if it grows.
+  if (opts.catIds.length) {
+    const want = new Set(opts.catIds);
+    const candidates = await prisma.testSeries.findMany({ where, select: { id: true, examCategoryId: true, examCategoryIds: true } });
+    where.id = {
+      in: candidates
+        .filter((r) => {
+          if (r.examCategoryId != null && want.has(r.examCategoryId)) return true;
+          const arr = r.examCategoryIds;
+          return Array.isArray(arr) && arr.some((v) => want.has(Number(v)));
+        })
+        .map((r) => r.id),
+    };
+  }
+
+  const [filtered, total] = await Promise.all([
     prisma.testSeries.findMany({
       where,
       // Recently-added on top (utils/listOrdering); id breaks ties for null/duplicate
@@ -223,18 +241,6 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
     }),
     prisma.testSeries.count({ where }),
   ]);
-
-  // Filter on examCategory membership (legacy single column OR the JSON array) in
-  // memory: the array lives in a JSON column, which can't be queried portably.
-  let filtered = rows;
-  if (opts.catIds.length) {
-    const want = new Set(opts.catIds);
-    filtered = rows.filter((r) => {
-      if (r.examCategoryId != null && want.has(r.examCategoryId)) return true;
-      const arr = r.examCategoryIds;
-      return Array.isArray(arr) && arr.some((v) => want.has(Number(v)));
-    });
-  }
 
   const seriesIds = filtered.map((r) => r.id);
   const defaultByid = new Map<number, any>();
@@ -258,8 +264,7 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
     };
   });
 
-  // total reflects the catId filter when present.
-  return { data, total: opts.catIds.length ? filtered.length : total };
+  return { data, total };
 };
 
 /** Returns null when the series is missing (→ controller 404). */
@@ -1294,7 +1299,7 @@ const orderDto = (o: any) => ({
 });
 
 export const listOrders = async (opts: ListOrdersOpts) => {
-  const where: any = {};
+  const where: Prisma.TestSeriesOrderWhereInput = {};
   if (opts.testSeriesId != null) where.testSeriesId = opts.testSeriesId;
   if (opts.customerId != null) where.customerId = opts.customerId;
   if (opts.status) where.status = opts.status;

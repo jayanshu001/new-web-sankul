@@ -5,11 +5,10 @@
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch, buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseCmsId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCmsId = parsePositiveInt;
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
@@ -137,7 +136,7 @@ export const updateSocialLink = async (id: number, input: {
 }) => {
   const exists = await prisma.socialLink.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return null;
-  const data: any = {};
+  const data: Prisma.SocialLinkUncheckedUpdateInput = {};
   if (input.typeId !== undefined) data.typeId = input.typeId;
   if (input.title !== undefined) data.title = input.title;
   if (input.icon !== undefined) data.icon = input.icon;

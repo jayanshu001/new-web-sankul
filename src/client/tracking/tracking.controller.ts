@@ -37,7 +37,7 @@ export const trackEvent = async (req: Request, res: Response) => {
       ip: (req.headers["x-forwarded-for"] as string) || req.ip || null,
       userAgent: (req.headers["user-agent"] as string) || null,
     });
-    logger.info("trackEvent success (sql)", { traceId, customerId, event: data.event });
+    logger.info("trackEvent success", { traceId, customerId, event: data.event });
     return res.status(201).json({ success: true });
   } catch (e: any) {
     if (e.issues) { logger.warn("trackEvent validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }

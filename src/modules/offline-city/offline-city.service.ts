@@ -4,11 +4,9 @@ import { toCityDto } from "./offline-city.transformer";
 import { CityDto } from "./offline-city.types";
 import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCityId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCityId = parsePositiveInt;
 
 /** Optional `stateId` scopes to one state (cities with no state are excluded). */
 export const listActiveCities = async (search?: string, stateId?: number): Promise<CityDto[]> => {

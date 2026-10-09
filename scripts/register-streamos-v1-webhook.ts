@@ -32,7 +32,7 @@ import {
   registerWebhook,
   StreamosError,
   type StreamosV1Event,
-} from "../src/admin/live/streamos.v1.service";
+} from "../src/libs/streamos/streamos.v1.service";
 
 // The path is fixed by src/client/webhook/webhook.routes.ts — the same public
 // endpoint the legacy callback uses. v1 deliveries are told apart by their headers.

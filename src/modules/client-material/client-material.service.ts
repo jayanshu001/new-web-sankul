@@ -7,8 +7,11 @@
  * which stays the admin shape).
  */
 import { prisma } from "../../config/prisma";
+import { selfFkDescendantsByRoot } from "../catalog-category-tree/category-tree.service";
 import { signMediaToken } from "../../utils/mediaToken";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 /**
  * `null` when not accessible (unpurchased paid item, or no customer). The raw `file` /
@@ -27,10 +30,7 @@ export const materialMediaToken = (
     : signMediaToken({ k: "material", id: materialId, free: true, cust: customerId });
 };
 
-export const parseMatId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseMatId = parsePositiveInt;
 
 /** One positive-int query param: null = absent, "invalid" = present but unusable. */
 const parseScopeId = (raw: unknown): number | null | "invalid" => {
@@ -205,25 +205,6 @@ const toLite = (m: any): MatLite => ({ _id: m.id, materialCategoryId: m.material
 const toScope = (scope?: MaterialEntitlementScope): MaterialEntitlementScope =>
   scope && Number.isInteger(scope.id) && scope.id > 0 ? scope : null;
 
-const subtreeCategoryIds = async (rootId: number): Promise<number[]> => {
-  const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
-    `WITH RECURSIVE tree (id) AS (SELECT ${rootId} UNION SELECT c.id FROM ws_material_category c JOIN tree t ON c.parent = t.id) SELECT id FROM tree`
-  );
-  return rows.map((r) => Number(r.id));
-};
-
-export const leafCount = async (categoryId: number): Promise<number> => {
-  const ids = await subtreeCategoryIds(categoryId);
-  return prisma.material.count({ where: { materialCategoryId: { in: ids }, status: true } });
-};
-
-export const hasNewlyAdded = async (categoryId: number, days = 10): Promise<boolean> => {
-  const cutoff = new Date(Date.now() - days * 86_400_000);
-  const ids = await subtreeCategoryIds(categoryId);
-  const n = await prisma.material.count({ where: { materialCategoryId: { in: ids }, status: true, created_at: { gt: cutoff } } });
-  return n > 0;
-};
-
 export const findCategory = (id: number) =>
   prisma.materialCategory.findFirst({ where: { id, status: true }, select: { id: true, name: true, image: true, parent: true } });
 
@@ -237,14 +218,32 @@ export const getCategoryContents = async (
   if (!current) return null;
 
   const children = await prisma.materialCategory.findMany({ where: { parent: categoryId, status: true }, select: { id: true, name: true, image: true, order_by: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] });
-  const subjects = await Promise.all(children.map(async (c) => {
-    const [grandChildren, count, isNewlyAdded] = await Promise.all([
-      prisma.materialCategory.count({ where: { parent: c.id, status: true } }),
-      leafCount(c.id),
-      hasNewlyAdded(c.id),
-    ]);
-    return { _id: String(c.id), title: c.name, image: c.image, order: c.order_by, havingChildDirectory: grandChildren > 0, count, isNewlyAdded };
-  }));
+  // Batched: one subtree CTE + three groupBys for all children (was 5 queries per child).
+  // A folder counts every active material in its subtree and is "newly added" when any
+  // was created in the last 10 days; summing per category is exact because a material
+  // belongs to one category.
+  const childIds = children.map((c) => c.id);
+  const subtreeByChild = await selfFkDescendantsByRoot("ws_material_category", "parent", childIds);
+  const union = [...new Set([...subtreeByChild.values()].flat())];
+  const cutoff = new Date(Date.now() - 10 * 86_400_000);
+  const [grandRows, countRows, newRows] = childIds.length
+    ? await Promise.all([
+        prisma.materialCategory.groupBy({ by: ["parent"], where: { parent: { in: childIds }, status: true }, _count: { _all: true } }),
+        prisma.material.groupBy({ by: ["materialCategoryId"], where: { materialCategoryId: { in: union }, status: true }, _count: { _all: true } }),
+        prisma.material.groupBy({ by: ["materialCategoryId"], where: { materialCategoryId: { in: union }, status: true, created_at: { gt: cutoff } }, _count: { _all: true } }),
+      ])
+    : [[], [], []];
+  const tally = (rows: { materialCategoryId: number | null; _count: { _all: number } }[]) =>
+    new Map(rows.map((r) => [r.materialCategoryId as number, r._count._all]));
+  const perCat = tally(countRows);
+  const newPerCat = tally(newRows);
+  const grandByParent = new Map(grandRows.map((r) => [r.parent, r._count._all]));
+  const subjects = children.map((c) => {
+    const subtree = subtreeByChild.get(c.id) ?? [c.id];
+    const count = subtree.reduce((n, id) => n + (perCat.get(id) ?? 0), 0);
+    const isNewlyAdded = subtree.some((id) => (newPerCat.get(id) ?? 0) > 0);
+    return { _id: String(c.id), title: c.name, image: c.image, order: c.order_by, havingChildDirectory: (grandByParent.get(c.id) ?? 0) > 0, count, isNewlyAdded };
+  });
 
   // Only leaf materials are paginated; `subjects` + breadcrumbs are node metadata.
   const matsWhere: any = { materialCategoryId: categoryId, status: true };
@@ -278,7 +277,7 @@ export const listMaterialsByCategoryPaged = async (
   const category = await findCategory(categoryId);
   if (!category) return null;
 
-  const where: any = { materialCategoryId: categoryId, status: true };
+  const where: Prisma.MaterialWhereInput = { materialCategoryId: categoryId, status: true };
   const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) where.AND = search.AND;
   if (opts.type === "free") where.isPaid = false;
@@ -321,7 +320,7 @@ export const getRecentMaterials = async (
   opts: { skip: number; take: number; search?: string | null }
 ) => {
   const cutoff = new Date(Date.now() - days * 86_400_000);
-  const where: any = { status: true, created_at: { gt: cutoff } };
+  const where: Prisma.MaterialWhereInput = { status: true, created_at: { gt: cutoff } };
   const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) where.AND = search.AND;
   const [matsRaw, total] = await Promise.all([

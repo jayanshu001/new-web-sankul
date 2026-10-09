@@ -1,6 +1,7 @@
 // Admin referral: program, withdrawal, reward-adjustment and referrer logic.
 import { HttpError } from "../../middlewares/errorHandler";
-import * as refSql from "../../modules/referral/referral.service";
+import * as refSql from "./referral.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 const { parseId } = refSql;
 
@@ -73,8 +74,7 @@ export interface ListTransactionsQuery {
 export const listTransactions = async (query: ListTransactionsQuery) => {
   const { customerId, type, status, fromDate, toDate, page = "1", limit = "20" } = query;
 
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
   const { data, total } = await refSql.adminListTransactions({ customerId, type, status, fromDate, toDate, page: pageNum, limit: limitNum });
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
@@ -127,8 +127,7 @@ export interface WithdrawalsReportQuery {
 export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
   const { fromDate, toDate, createdFrom, createdTo, status, search, page = "1", limit = "10" } = query;
 
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 10, maxLimit: 200 });
   const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate: createdFrom ?? fromDate, toDate: createdTo ?? toDate, search, page: pageNum, limit: limitNum });
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
@@ -186,8 +185,7 @@ export const listReferrers = async (query: ReferrersQuery) => {
     limit = "20",
   } = query;
 
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
 
   const { data } = await refSql.adminListReferrers({ search, sort, hasWithdrawn, minEarned, page: pageNum, limit: limitNum });
   return { data, pagination: { total: data.length, page: pageNum, limit: limitNum, totalPages: data.length < limitNum ? pageNum : pageNum + 1 } };

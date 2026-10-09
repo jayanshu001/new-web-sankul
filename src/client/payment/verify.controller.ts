@@ -50,6 +50,62 @@ const verifySignature = (
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 };
 
+type CrmParams = { userId: number } & Record<string, unknown>;
+type Fulfilled = { message: string; log: Record<string, unknown>; crm?: CrmParams };
+type VerifyStep = (razorpayOrderId: string, paymentId: string, customerId: number) => Promise<Fulfilled | null>;
+
+// One step per order table: claim the order if this table owns the razorpay id, else
+// return null so the next table is tried. Verifying a settled order is idempotent.
+const step = <O extends { id: unknown }, R>(
+  kind: string,
+  find: (razorpayOrderId: string, customerId: number) => Promise<O | null>,
+  settled: (o: O) => boolean,
+  verify: (o: O, paymentId: string) => Promise<R>,
+  describe: (o: O, r: R, razorpay_order_id: string, razorpay_payment_id: string) => Fulfilled
+): VerifyStep => async (razorpay_order_id, razorpay_payment_id, customerId) => {
+  const order = await find(razorpay_order_id, customerId);
+  if (!order) return null;
+  if (settled(order)) {
+    logger.info(`verifyPayment: ${kind} order already verified (idempotent)`, { orderId: order.id, razorpay_order_id });
+  }
+  return describe(order, await verify(order, razorpay_payment_id), razorpay_order_id, razorpay_payment_id);
+};
+
+// Tried sequentially in this order; the first table that owns the id wins.
+// findPackageOrderForVerify only matches package orders (plan has packageId, no courseId).
+// The pending ws_live_course_order owns the razorpay id; verifying it creates the subscription.
+const VERIFY_STEPS: VerifyStep[] = [
+  step("course", findCourseOrderForVerify, (o) => o.paymentStatus !== "pending", verifyCourseOrderMysql, (o, sub, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: course subscription activated",
+    log: { orderId: o.id, subscriptionId: sub._id, customerId: sub.customerId, razorpay_order_id, razorpay_payment_id, endAt: sub.endAt?.toISOString?.() },
+    crm: { userId: sub.customerId, courseId: sub.courseId ?? undefined, planId: sub.packageId ?? undefined, amount: sub.paidAmount ?? undefined },
+  })),
+  step("package", findPackageOrderForVerify, (o) => o.paymentStatus !== "pending", verifyPackageOrderMysql, (o, sub, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: package subscription activated",
+    log: { orderId: o.id, subscriptionId: sub._id, customerId: sub.customerId, razorpay_order_id, razorpay_payment_id, endAt: sub.endAt?.toISOString?.() },
+    crm: { userId: sub.customerId, packageId: sub.targetPackageId ?? undefined, planId: sub.packageId ?? undefined, amount: sub.paidAmount ?? undefined },
+  })),
+  step("ebook", findEbookOrderForVerify, (o) => o.status !== "pending", verifyEbookOrderMysql, (o, order, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: ebook order activated",
+    log: { orderId: o.id, customerId: order.customerId, ebookId: order.ebookId, razorpay_order_id, razorpay_payment_id },
+  })),
+  step("book", findBookOrderForVerify, (o) => o.status !== "pending", verifyBookOrderMysql, (o, order, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: book order verified",
+    log: { orderId: o.id, customerId: order.customerId, trackingId: order.tracking.trackingId, razorpay_order_id, razorpay_payment_id },
+  })),
+  step("live-course", findLiveCourseOrderForVerify, (o) => !!o.status && o.status !== "pending", verifyLiveCourseOrderMysql, (_o, sub, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: live-course subscription activated",
+    log: { subscriptionId: sub._id, customerId: sub.customerId, razorpay_order_id, razorpay_payment_id, endAt: sub.endAt?.toISOString?.() },
+    crm: { userId: sub.customerId, liveCourseId: sub.liveCourseId, planId: sub.planId ?? undefined, amount: sub.paidAmount ?? undefined },
+  })),
+  // Verify folds-or-fresh into ws_test_series_subscription.
+  step("test-series", tsOrderSql.findOrderForVerify, (o) => o.status !== "pending", tsOrderSql.verifyOrderMysql, (o, sub, razorpay_order_id, razorpay_payment_id) => ({
+    message: "verifyPayment: test-series subscription activated",
+    log: { orderId: o.id, subscriptionId: sub._id, customerId: sub.customerId, razorpay_order_id, razorpay_payment_id, endAt: sub.endAt?.toISOString?.() },
+    crm: { userId: sub.customerId, testSeriesId: sub.testSeriesId, planId: sub.planId ?? undefined, amount: sub.price ?? undefined },
+  })),
+];
+
 // HMAC-verifies the signature, then fulfils whichever local order owns this
 // razorpay_order_id. Idempotent: re-verifying an already-paid order returns 200.
 export const verifyPayment = async (req: Request, res: Response) => {
@@ -72,153 +128,18 @@ export const verifyPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Each block below claims the order if its table owns this razorpay id, else falls through.
-    {
-      
-      const customerIdInt = Number(userId);
-      const mysqlCourseOrder = Number.isInteger(customerIdInt)
-        ? await findCourseOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlCourseOrder) {
-        if (mysqlCourseOrder.paymentStatus !== "pending") {
-          logger.info("verifyPayment: course order already verified (idempotent, mysql)", {
-            orderId: mysqlCourseOrder.id,
-            razorpay_order_id,
-          });
+    const customerIdInt = Number(userId);
+    if (Number.isInteger(customerIdInt)) {
+      // Sequential, never parallel: table order is part of the ownership semantics.
+      for (const run of VERIFY_STEPS) {
+        const done = await run(razorpay_order_id, razorpay_payment_id, customerIdInt);
+        if (!done) continue;
+        logger.info(done.message, done.log);
+        if (done.crm) {
+          queueCRMLead({ params: done.crm, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS }, { traceId, customerId: done.crm.userId });
         }
-        const subscription = await verifyCourseOrderMysql(
-          mysqlCourseOrder,
-          razorpay_payment_id
-        );
-        logger.info("verifyPayment: course subscription activated (mysql)", {
-          orderId: mysqlCourseOrder.id,
-          subscriptionId: subscription._id,
-          customerId: subscription.customerId,
-          razorpay_order_id,
-          razorpay_payment_id,
-          endAt: subscription.endAt?.toISOString?.(),
-        });
-        queueCRMLead(
-          { params: { userId: subscription.customerId, courseId: subscription.courseId ?? undefined, planId: subscription.packageId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
-          { traceId, customerId: subscription.customerId }
-        );
         // Entitlement changed → clear THIS buyer's cached catalog reads so the
         // next fetch shows isPurchased=true immediately (long TTL stays correct).
-        await flushUserRouteCache(customerIdInt);
-        return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
-      }
-    }
-
-    // findPackageOrderForVerify only matches package orders (plan has packageId, no courseId).
-    {
-      const customerIdInt = Number(userId);
-      const mysqlPackageOrder = Number.isInteger(customerIdInt)
-        ? await findPackageOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlPackageOrder) {
-        if (mysqlPackageOrder.paymentStatus !== "pending") {
-          logger.info("verifyPayment: package order already verified (idempotent, mysql)", { orderId: mysqlPackageOrder.id, razorpay_order_id });
-        }
-        const subscription = await verifyPackageOrderMysql(mysqlPackageOrder, razorpay_payment_id);
-        logger.info("verifyPayment: package subscription activated (mysql)", { orderId: mysqlPackageOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
-        queueCRMLead(
-          { params: { userId: subscription.customerId, packageId: subscription.targetPackageId ?? undefined, planId: subscription.packageId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
-          { traceId, customerId: subscription.customerId }
-        );
-        await flushUserRouteCache(customerIdInt);
-        return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
-      }
-    }
-
-    
-    {
-      const customerIdInt = Number(userId);
-      const mysqlEbookOrder = Number.isInteger(customerIdInt)
-        ? await findEbookOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlEbookOrder) {
-        if (mysqlEbookOrder.status !== "pending") {
-          logger.info("verifyPayment: ebook order already verified (idempotent, mysql)", {
-            orderId: mysqlEbookOrder.id,
-            razorpay_order_id,
-          });
-        }
-        const order = await verifyEbookOrderMysql(mysqlEbookOrder, razorpay_payment_id);
-        logger.info("verifyPayment: ebook order activated (mysql)", {
-          orderId: mysqlEbookOrder.id,
-          customerId: order.customerId,
-          ebookId: order.ebookId,
-          razorpay_order_id,
-          razorpay_payment_id,
-        });
-        await flushUserRouteCache(customerIdInt);
-        return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
-      }
-    }
-
-    
-    {
-      const customerIdInt = Number(userId);
-      const mysqlBookOrder = Number.isInteger(customerIdInt)
-        ? await findBookOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlBookOrder) {
-        if (mysqlBookOrder.status !== "pending") {
-          logger.info("verifyPayment: book order already verified (idempotent, mysql)", {
-            orderId: mysqlBookOrder.id,
-            razorpay_order_id,
-          });
-        }
-        const order = await verifyBookOrderMysql(mysqlBookOrder, razorpay_payment_id);
-        logger.info("verifyPayment: book order verified (mysql)", {
-          orderId: mysqlBookOrder.id,
-          customerId: order.customerId,
-          trackingId: order.tracking.trackingId,
-          razorpay_order_id,
-          razorpay_payment_id,
-        });
-        await flushUserRouteCache(customerIdInt);
-        return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
-      }
-    }
-
-    // The pending ws_live_course_order owns the razorpay id; verifying it creates the subscription.
-    {
-      const customerIdInt = Number(userId);
-      const mysqlLiveOrder = Number.isInteger(customerIdInt)
-        ? await findLiveCourseOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlLiveOrder) {
-        if (mysqlLiveOrder.status && mysqlLiveOrder.status !== "pending") {
-          logger.info("verifyPayment: live-course order already complete (idempotent, mysql)", { orderId: mysqlLiveOrder.id, razorpay_order_id });
-        }
-        const subscription = await verifyLiveCourseOrderMysql(mysqlLiveOrder, razorpay_payment_id);
-        logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
-        queueCRMLead(
-          { params: { userId: subscription.customerId, liveCourseId: subscription.liveCourseId, planId: subscription.planId ?? undefined, amount: subscription.paidAmount ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
-          { traceId, customerId: subscription.customerId }
-        );
-        await flushUserRouteCache(customerIdInt);
-        return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
-      }
-    }
-
-    // Verify folds-or-fresh into ws_test_series_subscription.
-    {
-      const customerIdInt = Number(userId);
-      const mysqlTsOrder = Number.isInteger(customerIdInt)
-        ? await tsOrderSql.findOrderForVerify(razorpay_order_id, customerIdInt)
-        : null;
-      if (mysqlTsOrder) {
-        if (mysqlTsOrder.status !== "pending") {
-          logger.info("verifyPayment: test-series order already verified (idempotent, mysql)", { orderId: mysqlTsOrder.id, razorpay_order_id });
-        }
-        const subscription = await tsOrderSql.verifyOrderMysql(mysqlTsOrder, razorpay_payment_id);
-        logger.info("verifyPayment: test-series subscription activated (mysql)", { orderId: mysqlTsOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
-        queueCRMLead(
-          { params: { userId: subscription.customerId, testSeriesId: subscription.testSeriesId, planId: subscription.planId ?? undefined, amount: subscription.price ?? undefined }, leadType: CRM_LEAD_TYPE.PAYMENT_SUCCESS },
-          { traceId, customerId: subscription.customerId }
-        );
         await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true }); // ack-only; FE checks HTTP success
       }

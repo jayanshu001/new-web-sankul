@@ -23,6 +23,7 @@ import {
   planDeactivationRevert,
   type DateShift,
 } from "../../utils/subscriptionRemarkHistory";
+import { parsePositiveInt } from "../../utils/parseId";
 
 // Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
 // from `paymentMethod` (= payment_type online|backend, the activation channel). FE
@@ -33,10 +34,7 @@ const GATEWAY_BY_INPUT: Record<string, string> = {
 };
 
 
-export const parseSubId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseSubId = parsePositiveInt;
 
 const idStr = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 

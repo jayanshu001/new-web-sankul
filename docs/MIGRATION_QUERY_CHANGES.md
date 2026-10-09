@@ -94,6 +94,239 @@
 > printed sections is cut in syllabus order, each subject getting a share of the questions
 > proportional to its `marks` (equal if marks are not all set) — `splitInSyllabusOrder`.
 > Docs: `docs/client/RANK_STANDING.md`.
+## 2026-10-09 — Scheduled notification retry fix (no response change)
+
+- `dispatchScheduledById`: when FCM was reached but every device failed
+  (`All sends failed.`), the row was written `failed` and the BullMQ retry then skipped
+  it, because its claim needs `scheduled`. So it was never retried and never reached the
+  DLQ. Now that case rolls the row back to `scheduled` (as the thrown-error path already
+  did), and all 3 attempts run; the final failure marks it `failed` and goes to the DLQ.
+- `No registered devices…` is permanent: still `failed` at once, but the worker now
+  completes the job instead of throwing into no-op retries.
+- New `isRetryableDispatchFailure()`; the failure-reason strings became constants
+  (same text). Immediate broadcasts and every API response are unchanged.
+- Gate: `scripts/verify-notification-retry.ts` (FCM stubbed, real DB, self-cleaning),
+  16/16. Docs: `docs/NOTIFICATION_DEAD_LETTER_QUEUE.md` §4 and §7.
+
+---
+
+## 2026-10-09 — PERF10: PDF rendering moved to the worker (no response change)
+
+- New BullMQ queue `pdf-render` (`src/libs/core/pdfRender.queue.ts`). In an API replica
+  (`WORKER_ENABLED=false`) `renderPdfFromHtml` enqueues the HTML and waits for the PDF
+  bytes from `websankul-worker`, so the response is byte-for-byte the same and Chromium no
+  longer runs in the API processes (2 replicas → 1 shared browser in the worker).
+- Fallbacks keep receipts working exactly as before: no live worker (checked via
+  `getWorkersCount`, cached 10s), an enqueue/Redis error, or a 30s wait timeout → the API
+  renders locally. A render error itself is rethrown (local would fail the same way).
+  Processes that run workers (worker, single-process `yarn dev`) always render locally.
+- Browser pool moved verbatim from `generate.ts` to `libs/core/pdfBrowser.ts`
+  (`renderPdfLocally`); `generate.ts` re-exports `renderPdfFromHtml` / `closePdfBrowser`,
+  so callers are unchanged. Worker concurrency 3 = the pool's page cap.
+- Worker started in `startWorkers()`; queue connections closed in graceful shutdown.
+- No DDL, no env var. Tested end to end on local Redis: no worker → local render (3.3s,
+  14,442 bytes); worker up → rendered by the worker (0.9s, 14,442 bytes, 1 completed job).
+- Deploy: both PM2 apps must run the new build (API enqueues, worker consumes). If only
+  the API is updated, `getWorkersCount` sees the old worker but it never consumes
+  `pdf-render`; the 30s timeout then falls back locally, so deploy both together.
+
+---
+
+## 2026-10-09 — Response contract restored on error paths (supersedes 2026-10-08 S1/S2 notes)
+
+Standing rule: no response shape changes, error paths included. Reverted:
+- Course/ebook create-order errors (validation included) go to `errorHandler` again
+  (500 `{ success, code, data, message, messages }`), as before the refactor. The
+  "400 `{ message, errors }`" bugfix note below is void; no FE doc needed.
+- Package/live-course/test-series no longer rethrow DB outages to `errorHandler` (503);
+  they answer their local 500 `{ success, message }` as before.
+- Promoter customer detail with `:id <= 0` answers 404 "Customer not found." as before
+  (the guard stays so id 0 can't fall through to the unfiltered list).
+- `verify-payment-handlers.ts` now asserts these error paths: 42/42 on both the new code
+  and HEAD.
+Value-only differences that remain (shape unchanged): admin test-series `total` under a
+category filter is the true count (was the page's filtered length), and promoter
+customer detail caps one customer's subscriptions at 1000 per type (was 100000).
+
+---
+
+## 2026-10-09 — Audit: client-material batching, more typing, rule guard
+
+- **client-material `getCategoryContents`.** Child-folder `count` / `isNewlyAdded` /
+  `havingChildDirectory` were 5 queries per child (2 subtree CTEs, 3 counts). Now one
+  `selfFkDescendantsByRoot` CTE + 3 `groupBy` for the page. Same rules (subtree active
+  material count; any created in the last 10 days). The IST `$use` shift applies to
+  `groupBy` args too (action-agnostic), so the `created_at` cutoff compares the same way.
+  Unused `leafCount` / `hasNewlyAdded` / `subtreeCategoryIds` deleted.
+  `verify-catalog-batching.ts` gained the old-vs-new check: 334/334 on local data.
+- **CQ2.4** 13 `data: any` payloads typed `Prisma.<Model>Unchecked{Create,Update,UpdateMany}Input`;
+  tsc emit byte-identical. Total this audit: 61 `any` typed.
+- **CQ1.2** live-course facade kept on purpose as the module entry point (18 importers
+  use it as a namespace spanning several concern files).
+- **Rule guard** `yarn check:rules` (`scripts/check-code-rules.ts`, no new dependency):
+  fails on `limit/take: 100000`, an OTP value in a log call, `modules/` importing an HTTP
+  layer, or the `any` count rising above its baseline (1817; lower it after cleanups).
+
+---
+
+## 2026-10-09 — Audit: CQ2.8, CQ2.6, CQ2.4 (where clauses), CMT6
+
+- **CQ2.8** `listScheduledForRehydrate` (boot rehydrate of scheduled pushes) reads in
+  PK pages of 1000 instead of one unbounded query; same rows, never capped.
+  `listPromocodesForPackage` / `listPromocodesForScope` (admin, every code ever created)
+  match the JSON coverage on `id, appliesToType, appliesToIds` only, then load full rows
+  for the kept ids in the same order. Same results. Not capped (a cap would drop rows):
+  admin image-notification list, CMS lists, public promocodes (already live-only).
+- **CQ2.6** `modules/` no longer imports `admin/`, `client/` or `promoter/` except the
+  BullMQ notification scheduler (kept: background job, needs sign-off to move). Moved
+  with `git mv`, contents unchanged except relative imports:
+  `client/referral/{credit-referrer,debit-wallet}.ts` -> `modules/referral/`;
+  `admin/referral/referral.service.ts` -> `modules/referral/referral-admin.service.ts`;
+  `promoter/dashboard/overview.service.ts` -> `modules/promoter-data/promoter-data.range.ts`;
+  `admin/live/streamos.{service,provider,v1.service}.ts` -> `libs/streamos/`
+  (11 importers incl. 4 scripts updated).
+- **CQ2.4 (partial)** 48 `where: any` now typed `Prisma.<Model>WhereInput`. Compiled JS
+  byte-identical to before the pass (`tsc` emit `diff -r` empty). 2 files kept `any`:
+  `client-trending` and `inquiry` pass plain strings into enum filters.
+- **CMT6** JSDoc on `hasAccessToAnyLiveCourse`, `getOwnedCourseIds`, `getPurchaseCounts`.
+
+---
+
+## 2026-10-09 — Audit cleanup batches (no behaviour change, one N+1 fix)
+
+- **CQ2.3 id parsers.** New `utils/parseId.parsePositiveInt`; 91 copies of the
+  `Number(v)` + positive-integer check (85 exact, 6 with redundant null/"" guards) are
+  now aliases of it. Same names, same callers. 0 mismatches over 116 edge inputs vs every
+  old variant body.
+- **CQ2.3 pagination.** 29 hand-rolled `page`/`limit` pairs now call `parseListQuery`
+  with each site's own `defaultLimit`/`maxLimit`, so caps are unchanged. 0 mismatches
+  over 2312 input/cap combinations.
+- **S7 receipts.** `receiptPayment` / `singleLineItem` / `flatTotals` builders in
+  purchase history. All 7 receipt builders byte-identical to HEAD on stubbed rows.
+- **S3 purchase history.** The 5 per-source row mappers of `listSubscriptions` are named
+  top-level functions over a `HistoryLookups` object; fetch rounds unchanged. Output
+  byte-identical to HEAD (all row kinds, own-sub windows, legacy fallback, 2 page slices).
+- **CQ3.4** `PAID_BOOK_ORDER_STATUSES` in `shared/enums` replaces 4 inline copies.
+- **CMT4** `CACHE_TTL.CATALOG_SHARED` (60s) replaces 10 inline `ttlSeconds: 60`;
+  named `MAX_FEED_COURSES` / `MAX_TIMETABLE_SESSIONS` in the live feeds.
+- **CQ2.1 / CMT2** `(sql)` / `(mysql)` / `[mysql]` dropped from 342 log messages (log
+  text only; none reached a response). Unused `Faq*MongoInput` types removed.
+- **CQ1.3** Public StreamOS recording webhook moved to
+  `admin/live/streamos.webhook.controller.ts` (statement-identical move).
+  `listLiveSessions` loads linked courses/folders for the page in 2 queries via new
+  `admin-live.getLinkedForSessions` (was 3 per session); same order and DTO.
+- **CQ1.8** Client controllers no longer import Prisma: `findActivePackageRef`,
+  `findPackagesByIds`, `listGoalsWithLabels` added to `catalog-package.detail.sql`.
+- Not done, need sign-off (they change responses): CQ1.6 (catch blocks return
+  `e.message`; switching changes 500 bodies the app may show), CQ3.2 (merging the two Zod
+  formatters changes 422 `errors` keys on admin role/permission/video).
+
+---
+
+## 2026-10-09 — Audit follow-ups: RazorpayX client, client-free batching, Fixed log
+
+- Deleted `src/client/payment/razorpayx.ts` (zero importers; payouts are manual). The
+  drain-only `/webhooks/razorpay-payout` route is kept until prod has zero pending payout
+  rows (query in the `app.ts` comment). `RAZORPAYX_ACCOUNT_NUMBER` was already unused.
+- `client-free` `enrichPackages`: plans and subscriber counts are now one `findMany` and
+  one `groupBy` for the page instead of two queries per package. Same filter and
+  `duration asc` order (no tiebreak, as before). Not covered by the verify script
+  (private helper): check the free-packages section on staging.
+- CQ0.3 step 2 sweep: no other per-row purchase/subscription lookups inside `map(async)`.
+- `docs/CODE_QUALITY_AUDIT.md` added (copy of the audit) with a "Fixed" changelog table.
+
+---
+
+## 2026-10-08 — Audit "do now" batch: PERF6, PERF7, PERF9, S4 (no schema change)
+
+- **PERF6 package list enrichment.** `enrichPackagesShared` did 4 queries per package
+  (plans, subscriber count, type, goal). Now 4 per page: new
+  `commerce-price.listActivePricesByPackages` (wraps the existing
+  `listActiveByPackages` repo call), one `groupBy` for subscriber counts, one `findMany`
+  each for types and goals. Same plan order (duration asc, id asc) and DTO.
+- **PERF7 trending ebooks.** `fetchTrendingEbooksOnly` loaded every trending ebook and
+  filtered free/paid in JS. The rule "free = min active plan price is 0, no plans = 0" is
+  now a relation filter on `plans`, so `skip/take/count` run in SQL and plans load only
+  for the page. Same items, order and `total`. The free-dashboard section (`take: 100`
+  then filter) is unchanged on purpose: changing it would change which ebooks appear.
+- **PERF9 directory children.** Material and video `/children` count each child with one
+  `groupBy` (new repo `countActiveMaterialsByCategories` / `countActiveVideosByCategories`).
+  Exam `/children` now counts exams only for leaf children, since directories report
+  their folder count; still one count per leaf because of the multi-category pivot.
+  Live-course recording `/children` was already batched. The dead per-category
+  `countActiveMaterials` and `countActiveVideosByCategory` were deleted (no callers).
+- **S4 resume feed.** `listMyLearningProgress` kept an always-empty live pointer set wired
+  through 7 queries/maps and a card loop. Removed with `resolveSessions` and
+  `sessionPositions` (only used there). Output identical: every removed branch was
+  guarded by the empty set.
+- Gate: `scripts/verify-catalog-batching.ts` gained PERF6/7/9 old-vs-new checks (needs DB).
+
+---
+
+## 2026-10-08 — S1/S2 payment handler dedupe (no query change)
+
+- `client/payment/verify.controller.ts`: the six copy-pasted claim blocks are now an
+  ordered `VERIFY_STEPS` table, run sequentially in the same order (course → package →
+  ebook → book → live-course → test-series). Same finds, verifies, CRM params, cache
+  flush and responses. Log lines lost their `(mysql)` suffix.
+- New `client/payment/payment-order.shared.ts` holds the steps the five create-order
+  handlers copied: Zod fields, customer/Razorpay prologue, promo re-validation, wallet
+  coins, shipping snapshot, receipt id, error tail. Each handler keeps its own step order
+  and response keys. Test series keeps its own promo block (breakdown pricing).
+- Behaviour change (bugfix): course and ebook returned the promise of an inner function
+  without `await`, so ZodErrors skipped the local catch and became a global 500. They now
+  return the 400 `{ message, errors }` the other three types return. DB outages are
+  rethrown to `errorHandler` (503) on all five. FE doc: `docs/client/PAYMENT_CREATE_ORDER_ERRORS.md`.
+- Gate: `scripts/verify-payment-handlers.ts` (DB-free, stubs every service): 41/41 on the
+  new code. On HEAD the same script fails only the two Zod-400 checks.
+
+---
+
+## 2026-10-08 — CQ1.2 split of admin-live-course.service.ts (move only, no query change)
+
+- The 3223-line `modules/admin-live-course/admin-live-course.service.ts` is now a
+  re-export facade over `live-course.{shared,crud,subscription,schedule,chat,client,
+  recording,preview,feed,vod}` files in the same folder. No importer changed.
+- Proof: all 197 top-level statements are byte-identical to HEAD (only an `export`
+  keyword added on 6 shared helpers), and the facade exports exactly the same 124
+  names. Every file loads at runtime with no undefined export. No query, DTO or
+  behaviour change.
+
+---
+
+## 2026-10-08 — Code quality audit, P0 + selected P1 (no schema/DDL change)
+
+Source: `CODE_QUALITY_AUDIT.md` (2026-10-08). No DDL, no index, no response-shape change
+except the test-series `total` bugfix below.
+
+- **CQ0.1 OTP no longer logged.** `client/auth/auth.service.ts`: removed the colored
+  `console.log` of every generated OTP, the OTP in the "2Factor not configured" warning,
+  and the submitted `otp` in the `validateOtp service invoked` log. SMS failures now log
+  the message only (the axios error carried the URL, which embeds the API key and OTP).
+- **CQ0.2 promoter customer detail.** `GET /promoter/customers/:id` no longer loads up to
+  100k customers + 2×100k subscriptions and filters in JS. `listPromoterCustomers` gained
+  `customerId` (narrows `id`, empty unless attributed) and `listCourseSubs`/`listEbookSubs`
+  (+counts) gained `AND s.customer_id = ?`. Same JSON. `:id <= 0` is now 400 (was 404).
+- **CQ0.3 package list purchase state.** `listPackagesCached` / `enrichPackagesSql` use
+  `getActivePackageSubMap` (one query per page) instead of `getActivePackageSubscription`
+  per row. Same predicate and latest-`endAt` pick, so `isPurchased`/`daysLeft` are unchanged.
+- **CQ1.1 / PERF3 / PERF5 batched category counts.** Package detail `videos`/`materials`/
+  `tests` groups and client catalog `materials`/`tests` now resolve every subtree in one
+  recursive CTE (`descendantsByRoot` for video, new `selfFkDescendantsByRoot` for the
+  material/exam self-FK trees) and count children/items with `groupBy`. Exam item counts
+  stay one `count` per category: an exam can sit in several categories via the pivot, so
+  per-category tallies cannot be summed.
+- **S5 admin test-series list (bugfix).** The exam-category filter ran after `skip/take`,
+  so pages came back short or empty and `total` was the page's filtered length. The
+  filter now resolves matching ids first, then pages + counts with `id IN (...)`.
+  `total` is now the true filtered total.
+- **CQ1.7 layering.** The five report query parsers moved from admin controllers to
+  `modules/report-query/report-query.ts`; controllers and `export-job.registry.ts` both
+  import from there. Logic unchanged.
+- Gate: `scripts/verify-catalog-batching.ts` compares the batched counts and the package
+  sub map against the old per-row queries (read-only, needs the DB).
+
+---
 
 ## 2026-10-07 — Audit compliance check (read-only, no query change)
 

@@ -5,11 +5,9 @@ import type {
   BankAccountCreateInput,
   BankAccountUpdateInput,
 } from "./customer-bank-account.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseBankAccountId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseBankAccountId = parsePositiveInt;
 
 type Result<T> =
   | { ok: true; status: number; data: T }

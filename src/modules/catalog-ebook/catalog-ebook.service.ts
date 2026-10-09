@@ -15,11 +15,10 @@ import type {
   EbookPlanDto,
   ListEbooksOptions,
 } from "./catalog-ebook.types";
+import { parsePositiveInt } from "../../utils/parseId";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
-export const parseEbookId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEbookId = parsePositiveInt;
 
 const daysBetween = (from: Date, to: Date): number => computeDaysLeft(to, from) ?? 0;
 
@@ -109,7 +108,7 @@ export const getEbookDetailWithPlans = async (
 ): Promise<EbookListItemDto | null> => {
   const cached = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogEbook, `detail:${id}`),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const row = await repo.findActiveById(id);
       if (!row) return null;
@@ -157,7 +156,7 @@ export const listEbooksWithPlans = async (
       CacheEntity.CatalogEbook,
       `list:${cache.hashFilter({ ...filter, skip: opts.skip, take: opts.take })}`
     ),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const [rows, total] = await Promise.all([
         repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),

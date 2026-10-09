@@ -13,7 +13,7 @@ export const getReferralStatus = async (_req: Request, res: Response) => {
 
   try {
     const data = await svcReferralStatus();
-    logger.info("getReferralStatus success (sql)", { traceId, enabled: data.enabled });
+    logger.info("getReferralStatus success", { traceId, enabled: data.enabled });
     // The app only gates on `enabled`.
     return res.status(200).json({
       success: true,
@@ -31,7 +31,7 @@ export const getTerms = async (_req: Request, res: Response) => {
 
   try {
     const data = await rcService.listActiveTermsForClient();
-    logger.info("getTerms success (sql)", { traceId, count: data.length });
+    logger.info("getTerms success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data: omitList(data, ["order"]) });
   } catch (error: any) {
     logger.error("getTerms failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -45,7 +45,7 @@ export const getFaqs = async (_req: Request, res: Response) => {
 
   try {
     const data = await rcService.listActiveFaqsForClient();
-    logger.info("getFaqs success (sql)", { traceId, count: data.length });
+    logger.info("getFaqs success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data: omitList(data, ["order"]) });
   } catch (error: any) {
     logger.error("getFaqs failed", { traceId, error: getErrorMessage(error), stack: error.stack });

@@ -13,12 +13,10 @@ import type { Book } from "@prisma/client";
 import { fmtExportDate } from "../../utils/csvExport";
 import { BookOrderStatus } from "../../shared/enums";
 import { resolveOrderLines, orderLineBookIds, type OrderLine } from "../book-order/book-order.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseBookId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseBookId = parsePositiveInt;
 
 // A bare "YYYY-MM-DD" is pinned to the IST day edge (from → 00:00:00.000, to →
 // 23:59:59.999 at +05:30) so a calendar pick covers the full IST day; a naive UTC

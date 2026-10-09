@@ -4,11 +4,10 @@
  */
 import { prisma } from "../../config/prisma";
 import { matchesAllTokens } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseWlId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseWlId = parsePositiveInt;
 
 export type WlType = "course" | "package" | "ebook" | "book";
 const WL_TYPES: WlType[] = ["course", "package", "ebook", "book"];
@@ -31,7 +30,7 @@ export const listWishlistMysql = async (
   itemType: WlType | null,
   opts: { search?: string; skip: number; limit: number },
 ) => {
-  const where: any = { customerId };
+  const where: Prisma.WishlistWhereInput = { customerId };
   if (itemType) where.itemType = itemType;
   const entries = await prisma.wishlist.findMany({ where, orderBy: { createdAt: "desc" } });
 

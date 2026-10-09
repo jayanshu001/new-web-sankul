@@ -53,7 +53,7 @@ export const getAdministrators = async (req: Request, res: Response) => {
       page: pageNum,
       limit: limitNum,
     });
-    logger.info("getAdministrators success (sql)", { traceId, total });
+    logger.info("getAdministrators success", { traceId, total });
     return res.status(200).json({
       success: true,
       data: {
@@ -80,15 +80,15 @@ export const getAdministratorById = async (req: Request, res: Response) => {
   try {
     const bigId = adminSql.parseAdminBigId(id);
     if (!bigId) {
-      logger.warn("getAdministratorById invalid id (sql)", { traceId, id });
+      logger.warn("getAdministratorById invalid id", { traceId, id });
       return res.status(400).json({ success: false, message: "Invalid Administrator ID" });
     }
     const adminDto = await adminSql.getAdministrator(bigId);
     if (!adminDto) {
-      logger.warn("getAdministratorById not found (sql)", { traceId, id });
+      logger.warn("getAdministratorById not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
     }
-    logger.info("getAdministratorById success (sql)", { traceId, id });
+    logger.info("getAdministratorById success", { traceId, id });
     return res.status(200).json({ success: true, data: adminDto });
   } catch (error: any) {
     logger.error("getAdministratorById failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -105,7 +105,7 @@ export const getAdministratorPreRequisites = async (_req: Request, res: Response
     const builtInRoles = ADMIN_ROLE_VALUES.map((r) => ({ value: r, label: r }));
 
     const roles = await adminSql.listAssignableRoles();
-    logger.info("getAdministratorPreRequisites success (sql)", { traceId, roleCount: roles.length });
+    logger.info("getAdministratorPreRequisites success", { traceId, roleCount: roles.length });
     return res.status(200).json({ success: true, data: { roles, builtInRoles } });
   } catch (error: any) {
     logger.error("getAdministratorPreRequisites failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -124,7 +124,7 @@ export const createAdministrator = async (req: Request, res: Response) => {
     const data = createAdministratorSchema.parse(req.body);
 
     if (await adminSql.emailInUse(data.email)) {
-      logger.warn("createAdministrator email conflict (sql)", { traceId, email: data.email });
+      logger.warn("createAdministrator email conflict", { traceId, email: data.email });
       return res.status(409).json({
         success: false,
         message: "Administrator with this email already exists.",
@@ -133,7 +133,7 @@ export const createAdministrator = async (req: Request, res: Response) => {
 
     const roleId = resolveSqlRoleId(data.role);
     if (roleId !== undefined && !(await adminSql.roleExists(roleId))) {
-      logger.warn("createAdministrator unknown role (sql)", { traceId, role: data.role });
+      logger.warn("createAdministrator unknown role", { traceId, role: data.role });
       return res.status(400).json({ success: false, message: "Invalid role id." });
     }
 
@@ -148,7 +148,7 @@ export const createAdministrator = async (req: Request, res: Response) => {
       roleId,
     });
 
-    logger.info("createAdministrator success (sql)", { traceId, adminId: result._id, email: result.email });
+    logger.info("createAdministrator success", { traceId, adminId: result._id, email: result.email });
     return res.status(201).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) { logger.warn("createAdministrator validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
@@ -174,26 +174,26 @@ export const updateAdministrator = async (req: Request, res: Response) => {
 
     const bigId = adminSql.parseAdminBigId(id);
     if (!bigId) {
-      logger.warn("updateAdministrator invalid id (sql)", { traceId, id });
+      logger.warn("updateAdministrator invalid id", { traceId, id });
       return res.status(400).json({ success: false, message: "Invalid Administrator ID" });
     }
 
     const existing = await adminSql.getAdministrator(bigId);
     if (!existing) {
-      logger.warn("updateAdministrator not found (sql)", { traceId, id });
+      logger.warn("updateAdministrator not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
     }
 
     if (data.email && data.email.toLowerCase() !== existing.email) {
       if (await adminSql.emailInUse(data.email, bigId)) {
-        logger.warn("updateAdministrator email in use (sql)", { traceId, id, email: data.email });
+        logger.warn("updateAdministrator email in use", { traceId, id, email: data.email });
         return res.status(409).json({ success: false, message: "Email already in use." });
       }
     }
 
     const roleId = resolveSqlRoleId(data.role);
     if (roleId !== undefined && !(await adminSql.roleExists(roleId))) {
-      logger.warn("updateAdministrator unknown role (sql)", { traceId, role: data.role });
+      logger.warn("updateAdministrator unknown role", { traceId, role: data.role });
       return res.status(400).json({ success: false, message: "Invalid role id." });
     }
 
@@ -213,7 +213,7 @@ export const updateAdministrator = async (req: Request, res: Response) => {
       roleId,
     });
 
-    logger.info("updateAdministrator success (sql)", { traceId, id });
+    logger.info("updateAdministrator success", { traceId, id });
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) { logger.warn("updateAdministrator validation failed", { traceId, id, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
@@ -239,19 +239,19 @@ export const deleteAdministrator = async (req: Request, res: Response) => {
 
     const bigId = adminSql.parseAdminBigId(id);
     if (!bigId) {
-      logger.warn("deleteAdministrator invalid id (sql)", { traceId, id });
+      logger.warn("deleteAdministrator invalid id", { traceId, id });
       return res.status(400).json({ success: false, message: "Invalid Administrator ID" });
     }
     const existing = await adminSql.getAdministrator(bigId);
     if (!existing) {
-      logger.warn("deleteAdministrator not found (sql)", { traceId, id });
+      logger.warn("deleteAdministrator not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
     }
     if (existing.image) deleteFromS3FileUrl(existing.image).catch(() => {});
     // ws_users has no soft-delete column → hard delete the row (+ tokens and
     // spatie role/permission pivots) so it disappears from the list.
     await adminSql.deleteAdministrator(bigId);
-    logger.info("deleteAdministrator success (sql)", { traceId, id });
+    logger.info("deleteAdministrator success", { traceId, id });
     return res.status(200).json({
       success: true,
       message: "Administrator deleted successfully",
@@ -279,17 +279,17 @@ export const toggleAdministratorStatus = async (req: Request, res: Response) => 
 
     const bigId = adminSql.parseAdminBigId(id);
     if (!bigId) {
-      logger.warn("toggleAdministratorStatus invalid id (sql)", { traceId, id });
+      logger.warn("toggleAdministratorStatus invalid id", { traceId, id });
       return res.status(400).json({ success: false, message: "Invalid Administrator ID" });
     }
     const existing = await adminSql.getAdministrator(bigId);
     if (!existing) {
-      logger.warn("toggleAdministratorStatus not found (sql)", { traceId, id });
+      logger.warn("toggleAdministratorStatus not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
     }
     const newStatus = !existing.status;
     await adminSql.setAdministratorStatus(bigId, newStatus);
-    logger.info("toggleAdministratorStatus success (sql)", { traceId, id, newStatus });
+    logger.info("toggleAdministratorStatus success", { traceId, id, newStatus });
     return res.status(200).json({ success: true, data: { status: newStatus } });
   } catch (error: any) {
     logger.error("toggleAdministratorStatus failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });

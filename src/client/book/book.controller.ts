@@ -82,7 +82,7 @@ export const listBooks = async (req: Request, res: Response) => {
       qty: qtyByBookId.get(b._id) ?? 0,
       isPurchased: purchasedSet.has(b._id),
     }));
-    logger.info("listBooks success (mysql)", { traceId, customerId, type, count: decoratedMysql.length });
+    logger.info("listBooks success", { traceId, customerId, type, count: decoratedMysql.length });
     return res.status(200).json({ success: true, data: { books: omitList(decoratedMysql, BOOK_LIST_OMIT) }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -122,7 +122,7 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
         ),
       }));
     const resType = wantFree ? "free" : "paid";
-    logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: items.length });
+    logger.info("listTrendingBooks success", { traceId, type: resType, count: items.length });
     return res.status(200).json({
       success: true,
       data: { type: resType, items, total: items.length },
@@ -196,14 +196,14 @@ export const getBookDetail = async (req: Request, res: Response) => {
   try {
     const bookIdInt = Number(id);
     if (!Number.isInteger(bookIdInt) || bookIdInt <= 0) {
-      logger.warn("getBookDetail invalid id (mysql)", { traceId, customerId, id });
+      logger.warn("getBookDetail invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid book id." });
     }
     const base = resolveBase(req);
     const custIdForToken = Number.isInteger(Number(customerId)) ? Number(customerId) : null;
     const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base), new Date(), custIdForToken);
     if (!dto) {
-      logger.warn("getBookDetail not found (mysql)", { traceId, customerId, id });
+      logger.warn("getBookDetail not found", { traceId, customerId, id });
       return res.status(404).json({ success: false, message: "Book not found." });
     }
     let isPurchased = false;
@@ -212,7 +212,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
       const purchased = await getPurchasedBookIdSet(customerIdInt);
       isPurchased = purchased.has(dto._id);
     }
-    logger.info("getBookDetail success (mysql)", { traceId, customerId, id, isPurchased });
+    logger.info("getBookDetail success", { traceId, customerId, id, isPurchased });
     return res.status(200).json({ success: true, data: omit({ ...dto, isPurchased }, BOOK_DETAIL_OMIT) });
   } catch (error: any) {
     logger.error("getBookDetail failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
@@ -395,7 +395,7 @@ export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
       });
     }
     const awbData = await fetchLiveAWBData(awb);
-    logger.info("getMyOrderTrackingLive success (sql)", { traceId, customerId, orderId: id });
+    logger.info("getMyOrderTrackingLive success", { traceId, customerId, orderId: id });
     return res.status(200).json({ success: true, data: awbData });
   } catch (error: any) {
     logger.error("getMyOrderTrackingLive failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });

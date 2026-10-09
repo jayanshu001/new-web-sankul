@@ -2,11 +2,9 @@
 import { commerceSubscriptionRepository as repo } from "./commerce-subscription.repository";
 import { toSubscriptionDto } from "./commerce-subscription.transformer";
 import type { SubscriptionDto } from "./commerce-subscription.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseSubscriptionId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseSubscriptionId = parsePositiveInt;
 
 export const hasActivePackageSubscription = async (
   customerId: number,

@@ -19,7 +19,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await buildPromoterDashboard(pid);
-    logger.info("getDashboard success (sql)", { traceId, promoterId, subscriptionCount: data.summary.subscriptionCount });
+    logger.info("getDashboard success", { traceId, promoterId, subscriptionCount: data.summary.subscriptionCount });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getDashboard failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
@@ -43,7 +43,7 @@ export const getDashboardOverview = async (req: Request, res: Response) => {
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await buildPromoterOverviewSql(pid, range, { startDate, endDate });
-    logger.info("getDashboardOverview success (sql)", { traceId, promoterId });
+    logger.info("getDashboardOverview success", { traceId, promoterId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getDashboardOverview failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });

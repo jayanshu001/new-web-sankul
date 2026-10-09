@@ -3,8 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { extractPromoterAttribution } from "../order-code-snapshot/order-code-snapshot.service";
 import { computeEndAt } from "../../utils/planDuration";
-import { creditReferrer } from "../../client/referral/credit-referrer";
-import { debitWallet } from "../../client/referral/debit-wallet";
+import { creditReferrer } from "../referral/credit-referrer";
+import { debitWallet } from "../referral/debit-wallet";
 // Shared with the package path so both book the course/material split identically.
 import { computeMaterialSplit } from "../commerce-order/commerce-order.service";
 

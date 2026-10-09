@@ -8,6 +8,12 @@ export const listActivePricesByPackage = async (packageId: number): Promise<Pric
   return rows.map(toPriceDto);
 };
 
+/** Batched `listActivePricesByPackage`: same filter and duration-asc order, one query. */
+export const listActivePricesByPackages = async (packageIds: number[]): Promise<PriceDto[]> => {
+  const rows = await repo.listActiveByPackages(packageIds);
+  return rows.map(toPriceDto);
+};
+
 export const listActivePricesByEbook = async (ebookId: number): Promise<PriceDto[]> => {
   const rows = await repo.listActiveByEbook(ebookId);
   return rows.map(toPriceDto);

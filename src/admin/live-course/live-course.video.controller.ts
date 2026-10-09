@@ -83,15 +83,15 @@ export const listVideosInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("listVideosInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("listVideosInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
     const { data, total } = await liveCourseSql.lcListVideosInFolder(fid, { skip, take: limit });
-    logger.info("listVideosInFolder success (sql)", { traceId, liveCourseId, folderId, count: data.length, total });
+    logger.info("listVideosInFolder success", { traceId, liveCourseId, folderId, count: data.length, total });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (err) {
-    logger.error("listVideosInFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("listVideosInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list videos.", 500);
   }
 };
@@ -107,14 +107,14 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("createVideoInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("createVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     let validated: z.infer<typeof createVideoSchema>;
     try {
       validated = createVideoSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) { logger.warn("createVideoInFolder validation failed (sql)", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
+      if (err instanceof z.ZodError) { logger.warn("createVideoInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
     const video = await liveCourseSql.lcCreateVideoInFolder(fid, {
@@ -122,10 +122,10 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
       priceType: validated.priceType, youtube_id: validated.youtube_id, aws_id: validated.aws_id,
       vimeo_id: validated.vimeo_id, order: validated.order, status: validated.status,
     });
-    logger.info("createVideoInFolder success (sql)", { traceId, liveCourseId, folderId, videoId: video._id });
+    logger.info("createVideoInFolder success", { traceId, liveCourseId, folderId, videoId: video._id });
     return success(res, { video }, "Video added.", 201);
   } catch (err) {
-    logger.error("createVideoInFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("createVideoInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to add video.", 500);
   }
 };
@@ -143,32 +143,32 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("createVideoFromRecording folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("createVideoFromRecording folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     let validated: z.infer<typeof fromRecordingSchema>;
     try {
       validated = fromRecordingSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) { logger.warn("createVideoFromRecording validation failed (sql)", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
+      if (err instanceof z.ZodError) { logger.warn("createVideoFromRecording validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
     const sid = liveCourseSql.parseLiveId(validated.liveSessionId);
-    if (sid == null) { logger.warn("createVideoFromRecording session not found (sql)", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session not found.", 404); }
+    if (sid == null) { logger.warn("createVideoFromRecording session not found", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session not found.", 404); }
     const result = await liveCourseSql.lcCreateVideoFromRecording(fid, {
       liveSessionId: sid, recordingIndex: validated.recordingIndex, quality: validated.quality,
       title: validated.title, priceType: validated.priceType, order: validated.order,
     });
-    if (result === "session_not_found") { logger.warn("createVideoFromRecording session not found (sql)", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session not found.", 404); }
-    if (result === "no_recordings") { logger.warn("createVideoFromRecording no recordings (sql)", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session has no recordings yet.", 409); }
+    if (result === "session_not_found") { logger.warn("createVideoFromRecording session not found", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session not found.", 404); }
+    if (result === "no_recordings") { logger.warn("createVideoFromRecording no recordings", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session has no recordings yet.", 409); }
     if (result === "recording_not_found" || result === "no_path") {
-      logger.warn("createVideoFromRecording recording not found (sql)", { traceId, liveSessionId: validated.liveSessionId, quality: validated.quality, index: validated.recordingIndex });
+      logger.warn("createVideoFromRecording recording not found", { traceId, liveSessionId: validated.liveSessionId, quality: validated.quality, index: validated.recordingIndex });
       return failure(res, validated.quality ? `No recording with quality "${validated.quality}".` : "No recording found at that index.", 404);
     }
-    logger.info("createVideoFromRecording success (sql)", { traceId, liveCourseId, folderId, liveSessionId: validated.liveSessionId, videoId: result.video._id, alreadyExisted: result.alreadyExisted });
+    logger.info("createVideoFromRecording success", { traceId, liveCourseId, folderId, liveSessionId: validated.liveSessionId, videoId: result.video._id, alreadyExisted: result.alreadyExisted });
     return success(res, { video: result.video, alreadyExisted: result.alreadyExisted }, result.alreadyExisted ? "Recording already present in this folder." : "Video added from recording.", result.alreadyExisted ? 200 : 201);
   } catch (err) {
-    logger.error("createVideoFromRecording failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("createVideoFromRecording failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to add video from recording.", 500);
   }
 };
@@ -184,17 +184,17 @@ export const deleteVideoInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("deleteVideoInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("deleteVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     const vid = liveCourseSql.parseLiveId(videoId);
-    if (vid == null) { logger.warn("deleteVideoInFolder invalid videoId (sql)", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
+    if (vid == null) { logger.warn("deleteVideoInFolder invalid videoId", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
     const deleted = await liveCourseSql.lcDeleteVideoInFolder(fid, vid);
-    if (!deleted) { logger.warn("deleteVideoInFolder not found (sql)", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
-    logger.info("deleteVideoInFolder success (sql)", { traceId, videoId, folderId });
+    if (!deleted) { logger.warn("deleteVideoInFolder not found", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
+    logger.info("deleteVideoInFolder success", { traceId, videoId, folderId });
     return success(res, { id: videoId }, "Video deleted.");
   } catch (err) {
-    logger.error("deleteVideoInFolder failed (sql)", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("deleteVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete video.", 500);
   }
 };
@@ -210,17 +210,17 @@ export const getVideoInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("getVideoInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("getVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     const vid = liveCourseSql.parseLiveId(videoId);
-    if (vid == null) { logger.warn("getVideoInFolder invalid videoId (sql)", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
+    if (vid == null) { logger.warn("getVideoInFolder invalid videoId", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
     const video = await liveCourseSql.lcGetVideoInFolder(fid, vid);
-    if (!video) { logger.warn("getVideoInFolder not found (sql)", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
-    logger.info("getVideoInFolder success (sql)", { traceId, videoId });
+    if (!video) { logger.warn("getVideoInFolder not found", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
+    logger.info("getVideoInFolder success", { traceId, videoId });
     return success(res, { video }, "Video fetched.");
   } catch (err) {
-    logger.error("getVideoInFolder failed (sql)", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("getVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch video.", 500);
   }
 };
@@ -238,16 +238,16 @@ export const getLectureForAdmin = async (req: Request, res: Response) => {
   try {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const vid = liveCourseSql.parseLiveId(videoId);
-    if (cid == null || vid == null) { logger.warn("getLectureForAdmin invalid ids (sql)", { traceId, liveCourseId, videoId }); return failure(res, "Invalid live course or video id.", 422); }
+    if (cid == null || vid == null) { logger.warn("getLectureForAdmin invalid ids", { traceId, liveCourseId, videoId }); return failure(res, "Invalid live course or video id.", 422); }
     const r = await liveCourseSql.clientLectureVideoInCourse(cid, vid);
-    if (r === "video_not_found") { logger.warn("getLectureForAdmin video not found (sql)", { traceId, videoId }); return failure(res, "Lecture not found.", 404); }
-    if (r === "mismatch") { logger.warn("getLectureForAdmin course mismatch (sql)", { traceId, liveCourseId, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
+    if (r === "video_not_found") { logger.warn("getLectureForAdmin video not found", { traceId, videoId }); return failure(res, "Lecture not found.", 404); }
+    if (r === "mismatch") { logger.warn("getLectureForAdmin course mismatch", { traceId, liveCourseId, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
     const sourceId = r.platform === "youtube" ? r.youtube_id : r.platform === "vimeo" ? r.vimeo_id : r.aws_id;
     const { token, enc } = newEncryptor();
-    logger.info("getLectureForAdmin success (sql)", { traceId, videoId, platform: r.platform });
+    logger.info("getLectureForAdmin success", { traceId, videoId, platform: r.platform });
     return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, token, videoURL: enc(sourceId) }, "Lecture fetched.");
   } catch (err) {
-    logger.error("getLectureForAdmin failed (sql)", { traceId, liveCourseId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("getLectureForAdmin failed", { traceId, liveCourseId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch lecture.", 500);
   }
 };
@@ -263,24 +263,24 @@ export const updateVideoInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("updateVideoInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("updateVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     const vid = liveCourseSql.parseLiveId(videoId);
-    if (vid == null) { logger.warn("updateVideoInFolder invalid videoId (sql)", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
+    if (vid == null) { logger.warn("updateVideoInFolder invalid videoId", { traceId, videoId }); return failure(res, "Invalid video id.", 422); }
     let validated: z.infer<typeof updateVideoSchema>;
     try {
       validated = updateVideoSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) { logger.warn("updateVideoInFolder validation failed (sql)", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
+      if (err instanceof z.ZodError) { logger.warn("updateVideoInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
     const video = await liveCourseSql.lcUpdateVideoInFolder(fid, vid, validated);
-    if (!video) { logger.warn("updateVideoInFolder not found (sql)", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
-    logger.info("updateVideoInFolder success (sql)", { traceId, videoId, folderId });
+    if (!video) { logger.warn("updateVideoInFolder not found", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
+    logger.info("updateVideoInFolder success", { traceId, videoId, folderId });
     return success(res, { video }, "Video updated.");
   } catch (err) {
-    logger.error("updateVideoInFolder failed (sql)", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("updateVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update video.", 500);
   }
 };
@@ -296,24 +296,24 @@ export const reorderVideosInFolder = async (req: Request, res: Response) => {
     const cid = liveCourseSql.parseLiveId(liveCourseId);
     const fid = liveCourseSql.parseLiveId(folderId);
     if (cid == null || fid == null || !(await liveCourseSql.lcFolderBelongsToCourse(fid, cid))) {
-      logger.warn("reorderVideosInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
+      logger.warn("reorderVideosInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     let validated: z.infer<typeof reorderVideosSchema>;
     try {
       validated = reorderVideosSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) { logger.warn("reorderVideosInFolder validation failed (sql)", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
+      if (err instanceof z.ZodError) { logger.warn("reorderVideosInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
     const orders = validated.orders
       .map((o) => ({ id: liveCourseSql.parseLiveId(o.id), order: o.order }))
       .filter((o): o is { id: number; order: number } => o.id != null);
     const result = await liveCourseSql.lcReorderVideosInFolder(fid, orders);
-    logger.info("reorderVideosInFolder success (sql)", { traceId, liveCourseId, folderId, matched: result.matched, modified: result.modified });
+    logger.info("reorderVideosInFolder success", { traceId, liveCourseId, folderId, matched: result.matched, modified: result.modified });
     return success(res, { matched: result.matched, modified: result.modified }, "Videos reordered.");
   } catch (err) {
-    logger.error("reorderVideosInFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("reorderVideosInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to reorder videos.", 500);
   }
 };

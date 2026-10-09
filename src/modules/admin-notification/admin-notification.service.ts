@@ -14,13 +14,12 @@ import { buildPrismaPrefixSearch, searchTokens } from "../../utils/searchFilter"
 import { sendPush } from "../../utils/fcm";
 import { parseContentDeepLink } from "../../utils/notificationTarget";
 import logger from "../../utils/logger";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 
 /** Parse a numeric string id to a positive int, else null. */
-export const parseIntId = (v: string): number | null => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseIntId = parsePositiveInt;
 
 const intIds = (vals?: string[]): number[] =>
   (vals ?? []).map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0);
@@ -35,6 +34,19 @@ export interface ResolvedAudience {
   isAll: boolean;
   customerIds: number[];
 }
+
+// Failure reasons stored on ws_notification.failure_reason (and shown to admins).
+const FAILURE_FCM_NOT_CONFIGURED = "FCM not configured.";
+const FAILURE_NO_DEVICES = "No registered devices for the selected audience.";
+const FAILURE_ALL_SENDS_FAILED = "All sends failed.";
+
+/**
+ * Worth retrying? Only "All sends failed.": FCM was reached and rejected every device,
+ * which is usually an outage. No devices / FCM not configured are permanent, so a
+ * retry would fail the same way.
+ */
+export const isRetryableDispatchFailure = (r: { status: string; failureReason: string | null }): boolean =>
+  r.status === "failed" && r.failureReason === FAILURE_ALL_SENDS_FAILED;
 
 export interface DispatchResult {
   status: "sent" | "failed";
@@ -208,10 +220,10 @@ export async function dispatchAudience(
   const failureReason =
     status === "failed"
       ? sendResult.skipped
-        ? "FCM not configured."
+        ? FAILURE_FCM_NOT_CONFIGURED
         : sendResult.attempted === 0
-          ? "No registered devices for the selected audience."
-          : "All sends failed."
+          ? FAILURE_NO_DEVICES
+          : FAILURE_ALL_SENDS_FAILED
       : null;
 
   if (!isBroadcast && resolved.customerIds.length && status === "sent") {
@@ -309,6 +321,16 @@ export async function dispatchScheduledById(
       },
       audienceFromSnapshot(claimed.audience)
     );
+    if (isRetryableDispatchFailure(result)) {
+      // Hand the row back so the BullMQ retry can claim it again (same as the throw path
+      // below). If every attempt fails, the worker's "failed" listener marks it failed
+      // and copies the job to the DLQ.
+      await prisma.notification.update({
+        where: { id },
+        data: { status: "scheduled", sentAt: null, updatedAt: new Date() },
+      });
+      return result;
+    }
     await prisma.notification.update({
       where: { id },
       data: {
@@ -347,13 +369,26 @@ export async function markFailed(notificationId: string, reason: string): Promis
   });
 }
 
-/** Boot rehydrate source: ids of all still-"scheduled" notifications. */
+const REHYDRATE_PAGE = 1000;
+
+/**
+ * Boot rehydrate source: ids of all still-"scheduled" notifications. Read in PK pages
+ * (same reason as the token pager above); never capped, since a dropped row is a push
+ * that silently never goes out.
+ */
 export async function listScheduledForRehydrate(): Promise<{ id: string; scheduledAt: Date }[]> {
-  const rows = await prisma.notification.findMany({
-    where: { status: "scheduled", scheduledAt: { not: null } },
-    select: { id: true, scheduledAt: true },
-  });
-  return rows.map((r) => ({ id: String(r.id), scheduledAt: r.scheduledAt as Date }));
+  const out: { id: string; scheduledAt: Date }[] = [];
+  for (let cursor = 0; ; ) {
+    const rows = await prisma.notification.findMany({
+      where: { status: "scheduled", scheduledAt: { not: null }, id: { gt: cursor } },
+      select: { id: true, scheduledAt: true },
+      orderBy: { id: "asc" },
+      take: REHYDRATE_PAGE,
+    });
+    for (const r of rows) out.push({ id: String(r.id), scheduledAt: r.scheduledAt as Date });
+    if (rows.length < REHYDRATE_PAGE) return out;
+    cursor = rows[rows.length - 1].id;
+  }
 }
 
 /** Create a scheduled parent row; returns its int id (BullMQ jobId = `notif-${id}`). */
@@ -649,7 +684,7 @@ export async function updateImageNotification(
 ): Promise<any | null> {
   const exists = await prisma.imageNotification.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return null;
-  const data: any = {};
+  const data: Prisma.ImageNotificationUncheckedUpdateInput = {};
   if (input.image !== undefined) data.image = input.image;
   if (input.redirectUrl !== undefined) data.redirect_url = input.redirectUrl;
   if (input.active !== undefined) data.active = input.active;

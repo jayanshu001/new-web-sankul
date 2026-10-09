@@ -9,6 +9,9 @@ import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { pick } from "../../utils/pick";
+import { parsePositiveInt } from "../../utils/parseId";
+import { PAID_BOOK_ORDER_STATUSES } from "../../shared/enums";
+import type { Prisma } from "@prisma/client";
 
 // Raw-row fields the app's SearchScreen renders; everything else on the row is dropped to
 // stop over-fetch/leak. Computed fields are layered on after this pick. See docs/api-optimization.
@@ -23,17 +26,14 @@ const SEARCH_CARD_RAW_FIELDS = [
 export type SearchType = "courses" | "packages" | "liveCourses" | "books" | "ebooks" | "testSeries";
 export const SEARCH_TYPES: SearchType[] = ["courses", "packages", "liveCourses", "books", "ebooks", "testSeries"];
 
-const parseId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseId = parsePositiveInt;
 
 const fetchType = async (type: SearchType, q: string, skip: number, take: number) => {
   const name = (q || "").trim();
   const nameSearch = buildPrismaSearch(name, ["name"]);
   switch (type) {
     case "courses": {
-      const where: any = { status: true, ...(nameSearch ?? {}) };
+      const where: Prisma.CourseWhereInput = { status: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.course.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.course.count({ where }),
@@ -41,7 +41,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "packages": {
-      const where: any = { active: true, ...(nameSearch ?? {}) };
+      const where: Prisma.PackageWhereInput = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.package.findMany({ where, orderBy: { created_at: "desc" }, skip, take }),
         prisma.package.count({ where }),
@@ -49,7 +49,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "liveCourses": {
-      const where: any = { status: true, ...(nameSearch ?? {}) };
+      const where: Prisma.LiveCourseWhereInput = { status: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.liveCourse.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.liveCourse.count({ where }),
@@ -57,7 +57,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "books": {
-      const where: any = { active: true, ...(nameSearch ?? {}) };
+      const where: Prisma.BookWhereInput = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.book.findMany({ where, orderBy: { created_at: "desc" }, skip, take }),
         prisma.book.count({ where }),
@@ -65,7 +65,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "ebooks": {
-      const where: any = { active: true, ...(nameSearch ?? {}) };
+      const where: Prisma.EBookWhereInput = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.eBook.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.eBook.count({ where }),
@@ -153,6 +153,7 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
 
   if (type === "books") {
     const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: "verified" }, select: { id: true } });
+    // const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: { in: PAID_BOOK_ORDER_STATUSES } }, select: { id: true } });
     const orderIds = orders.map((o) => String(o.id)); // ws_book_order_item.order_id is a string
     const owned = new Set<number>();
     if (orderIds.length) {

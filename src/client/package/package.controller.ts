@@ -19,10 +19,11 @@ import {
   listPackagesByGoalLabelSql,
   listPackagesByGoalLabelScopedSql,
   listPackagesByGoalIndividualSql,
+  findPackagesByIds,
+  listGoalsWithLabels,
 } from "../../modules/catalog-package/catalog-package.detail.sql";
 import cache from "../../libs/cache";
 import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscription/commerce-subscription.service";
-import { prisma as prismaPkg } from "../../config/prisma";
 import { listChatMessagesMysql } from "../../modules/package-chat/package-chat.service";
 import { hasActivePackageSubscription } from "../../modules/commerce-subscription/commerce-subscription.service";
 import { queueCRMLead } from "../../utils/crm";
@@ -38,10 +39,10 @@ export const getPackageDetail = async (req: Request, res: Response) => {
 
   try {
     const pid = parsePackageId(id);
-    if (!pid) { logger.warn("getPackageDetail invalid id (mysql)", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
+    if (!pid) { logger.warn("getPackageDetail invalid id", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
-    if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
+    if (!detailSql) { logger.warn("getPackageDetail not found", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
     // Nested catalog trees are dropped (the app loads tabs via GET /client/catalog/…),
     // along with the empty promo list and unused package fields.
     const { videos, materials, tests, availablePromoCode, package: pkg, ...restDetail } = detailSql as any;
@@ -49,7 +50,7 @@ export const getPackageDetail = async (req: Request, res: Response) => {
       ...restDetail,
       package: omit(pkg, ["packageType", "goal", "isPopular", "subtitle", "examCountdownCategoryIds", "examCountdownIds"]),
     };
-    logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
+    logger.info("getPackageDetail success", { traceId, packageId: id });
     if (req.user?.id) {
       queueCRMLead({ params: { userId: req.user.id, packageId: pid }, leadType: CRM_LEAD_TYPE.VIEW_PACKAGE }, { traceId, userId: req.user.id, packageId: pid });
     }
@@ -76,8 +77,7 @@ export const listPackages = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
     const skip = (pageNum - 1) * limitNum;
 
     const cid = req.user?.id ? Number(req.user.id) : null;
@@ -97,7 +97,7 @@ export const listPackages = async (req: Request, res: Response) => {
       resolveBase(req)
     );
     const slimData = omitList(dataSql, ["goalLabelId", "active", "pcMaterialId", "examId", "packageTypeId", "goalId", "order"]);
-    logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
+    logger.info("listPackages success", { traceId, total: totalSql, returned: dataSql.length });
     return res.status(200).json({
       success: true,
       data: slimData,
@@ -116,7 +116,7 @@ export const listPackagesByType = async (req: Request, res: Response) => {
 
   try {
     const tid = parsePackageId(typeId);
-    if (!tid) { logger.warn("listPackagesByType invalid id (mysql)", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
+    if (!tid) { logger.warn("listPackagesByType invalid id", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { search, page, limit, skip } = parseListQuery(req.query);
     const listOpts = { search, skip, take: limit };
@@ -126,7 +126,7 @@ export const listPackagesByType = async (req: Request, res: Response) => {
       Number.isInteger(cid) ? cid : null,
       resolveBase(req)
     );
-    logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length, total });
+    logger.info("listPackagesByType success", { traceId, typeId, count: enrichedSql.length, total });
     return res.status(200).json({ success: true, data: enrichedSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackagesByType failed", { traceId, typeId, error: getErrorMessage(error), stack: error.stack });
@@ -177,7 +177,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     // `search` filters each group's packages by name; `skip`/`take` page each group.
     // `pagination.total` is the sum of per-group match counts.
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const goals = await prismaPkg.customerTargetGoal.findMany({ select: { id: true, name: true, labels: true } });
+    const goals = await listGoalsWithLabels();
     const goalById = new Map(goals.map((g) => [g.id, g]));
 
     const labelName = (goalId: number, labelId: number): string | null => {
@@ -226,7 +226,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     const combined = [...labelGroups, ...goalGroups];
     const resultSql = combined.map((c) => c.entry);
     const total = combined.reduce((acc, c) => acc + c.total, 0);
-    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: labelGroups.length, goalCount: goalGroups.length, total });
+    logger.info("listPackagesByGoal success", { traceId, labelCount: labelGroups.length, goalCount: goalGroups.length, total });
     return res.status(200).json({ success: true, data: resultSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackagesByGoal failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -263,11 +263,11 @@ export const listMyPackages = async (req: Request, res: Response) => {
     const now = new Date();
 
     const cid = Number(customerId);
-    if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const { search, page, limit, skip } = parseListQuery(req.query);
     const activeSubs = (await listActiveSubscriptionsByCustomer(cid)).filter((s) => s.targetPackageId);
     const pkgIds = [...new Set(activeSubs.map((s) => Number(s.targetPackageId)).filter(Number.isInteger))];
-    const pkgs = pkgIds.length ? await prismaPkg.package.findMany({ where: { id: { in: pkgIds } } }) : [];
+    const pkgs = await findPackagesByIds(pkgIds);
     const enriched = await enrichPackagesSql(pkgs, cid, resolveBase(req));
     const byId = new Map(enriched.map((p) => [p._id, p]));
     const dataAll = activeSubs.map((s) => ({
@@ -281,7 +281,7 @@ export const listMyPackages = async (req: Request, res: Response) => {
       : dataAll;
     const total = filtered.length;
     const dataSql = filtered.slice(skip, skip + limit);
-    logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length, total });
+    logger.info("listMyPackages success", { traceId, customerId, count: dataSql.length, total });
     return res.status(200).json({ success: true, data: dataSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listMyPackages failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -302,22 +302,21 @@ export const getChatMessages = async (req: Request, res: Response) => {
     const packageIdInt = Number(packageId);
     const customerIdInt = Number(customerId);
     if (!Number.isInteger(packageIdInt) || packageIdInt <= 0) {
-      logger.warn("getChatMessages invalid id (mysql)", { traceId, customerId, packageId });
+      logger.warn("getChatMessages invalid id", { traceId, customerId, packageId });
       return res.status(400).json({ success: false, message: "Invalid package id." });
     }
     const activeMysql = await hasActivePackageSubscription(customerIdInt, packageIdInt);
     if (!activeMysql) {
-      logger.warn("getChatMessages no active subscription (mysql)", { traceId, customerId, packageId });
+      logger.warn("getChatMessages no active subscription", { traceId, customerId, packageId });
       return res.status(403).json({
         success: false,
         message: "You must have an active subscription to view package chat.",
       });
     }
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
     const { data, total } = await listChatMessagesMysql(packageIdInt, pageNum, limitNum);
-    logger.info("getChatMessages success (mysql)", { traceId, customerId, packageId, total });
+    logger.info("getChatMessages success", { traceId, customerId, packageId, total });
     return res.status(200).json({
       success: true,
       data,

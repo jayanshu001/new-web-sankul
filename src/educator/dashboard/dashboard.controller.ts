@@ -15,7 +15,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const eid = eduDashSql.parseEduId(String(educatorId));
     if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await eduDashSql.buildEducatorDashboard(eid);
-    logger.info("getDashboard success (sql)", { traceId, educatorId });
+    logger.info("getDashboard success", { traceId, educatorId });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getDashboard failed", { traceId, educatorId, error: getErrorMessage(error), stack: error.stack });

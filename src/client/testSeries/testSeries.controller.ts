@@ -69,7 +69,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
       base: resolveBase(req),
       buildShareUrl,
     });
-    logger.info("listTestSeries success (sql)", { traceId, customerId, total });
+    logger.info("listTestSeries success", { traceId, customerId, total });
     return success(
       res,
       { data, total, page, limit, pagination: buildPagination(total, page, limit) },
@@ -89,11 +89,11 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
 
   try {
     const tsId = parseCtsId(id);
-    if (tsId == null) { logger.warn("getTestSeriesDetail invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+    if (tsId == null) { logger.warn("getTestSeriesDetail invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const cidNum = customerId ? parseCtsId(String(customerId)) : null;
     const out = await getTestSeriesDetailMysql({ id: tsId, customerId: cidNum, now: new Date(), base: resolveBase(req), buildShareUrl });
-    if (!out) { logger.warn("getTestSeriesDetail not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
-    logger.info("getTestSeriesDetail success (sql)", { traceId, customerId, id, isPurchased: out.isPurchased });
+    if (!out) { logger.warn("getTestSeriesDetail not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
+    logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased: out.isPurchased });
     if (customerId) {
       queueCRMLead({ params: { userId: customerId, testSeriesId: tsId }, leadType: CRM_LEAD_TYPE.VIEW_TEST_SERIES }, { traceId, customerId, testSeriesId: tsId });
     }
@@ -113,12 +113,12 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
 
   try {
     const tsId = parseCtsId(id);
-    if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+    if (tsId == null) { logger.warn("listSeriesPapers invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
     const { search, page, limit, skip } = parseListQuery(req.query);
     const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date(), search: search ?? null, page, limit, skip });
-    if (!out) { logger.warn("listSeriesPapers not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
-    logger.info("listSeriesPapers success (sql)", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
+    if (!out) { logger.warn("listSeriesPapers not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
+    logger.info("listSeriesPapers success", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
     return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories, pagination: buildPagination(out.papersTotal, page, limit) }, "Fetched.");
   } catch (e: any) {
     logger.error("listSeriesPapers failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
@@ -224,7 +224,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       limit,
       skip,
     });
-    logger.info("listMySubscriptions success (sql)", { traceId, customerId, count: total });
+    logger.info("listMySubscriptions success", { traceId, customerId, count: total });
     return success(res, { data, total, pagination: buildPagination(total, page, limit) }, "Fetched.");
   } catch (e: any) {
     logger.error("listMySubscriptions failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });

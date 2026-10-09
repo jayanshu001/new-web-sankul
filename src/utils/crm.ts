@@ -5,6 +5,7 @@ import { prisma } from "../config/prisma";
 import { callOutbound } from "../libs/outbound";
 import { TELE_CRM, isTeleCrmConfigured } from "../config/telecrm";
 import { CRM_LEAD_TYPE } from "../shared/enums";
+import { parsePositiveInt } from "./parseId";
 
 export interface GenerateCRMLeadParams {
   userId: string | number;
@@ -26,11 +27,7 @@ interface ProductContext {
   suffix: string | null;
 }
 
-const toId = (v: string | number | null | undefined): number | null => {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const toId = parsePositiveInt;
 
 const nowFormatted = (): string =>
   new Date().toLocaleString("en-GB", {

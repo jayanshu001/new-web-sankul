@@ -1,11 +1,9 @@
 // Inquiries: admin list/detail/delete and app or web enquiry submission.
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseInquiryId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseInquiryId = parsePositiveInt;
 
 const COURSES = new Set(["UPSC","GPSC","STI","DYSO","RFO","PI","PSI","Constable","CCE","Talati","Forest","TET_TAT","FHW_MPHW"]);
 const MODES = new Set(["online","offline"]);

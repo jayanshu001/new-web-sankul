@@ -10,11 +10,10 @@
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseLnId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseLnId = parsePositiveInt;
 
 type Guard<T> = T | { error: string; status: number };
 
@@ -114,7 +113,7 @@ export const listNotes = async (
   key: { videoId?: number; liveSessionId?: number },
   opts: { search?: string; skip?: number; take?: number } = {}
 ) => {
-  const where: any = { customerId, lectureType };
+  const where: Prisma.LectureNoteWhereInput = { customerId, lectureType };
   if (key.videoId != null) where.videoId = key.videoId;
   if (key.liveSessionId != null) where.liveSessionId = key.liveSessionId;
   const contentSearch = buildPrismaSearch(opts.search, ["content"]);
@@ -175,7 +174,7 @@ export const findOwnedAudioNote = (id: number, customerId: number) =>
   prisma.lectureAudioNote.findFirst({ where: { id, customerId } });
 
 export const updateAudioNote = async (id: number, patch: { title?: string; timestampSec?: number }) => {
-  const data: any = { updatedAt: new Date() };
+  const data: Prisma.LectureAudioNoteUncheckedUpdateInput = { updatedAt: new Date() };
   if (patch.title !== undefined) data.title = patch.title;
   if (patch.timestampSec !== undefined) data.timestampSec = patch.timestampSec;
   return audioNoteDto(await prisma.lectureAudioNote.update({ where: { id }, data }));

@@ -1,17 +1,11 @@
 // Admin plans: course/package/ebook price plan CRUD with frozen paid terms.
 import { adminPlanRepository as repo, OWNED } from "./admin-plan.repository";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parsePlanId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
-const toInt = (v: unknown): number | null => {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePlanId = parsePositiveInt;
+const toInt = parsePositiveInt;
 
 type OwnerKey = "courseId" | "packageId" | "ebookId";
 const resolveOwner = (p: { courseId?: number | null; packageId?: number | null; ebookId?: number | null }): { key: OwnerKey; id: number } | null => {

@@ -4,18 +4,17 @@
  * plan links (ws_promoted_package_course_ebook). DTOs stringify ids (`_id`) and keep
  * the snake_case `promo_start_at` / `promo_expire_at` keys.
  */
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import logger from "../../utils/logger";
+import { parsePositiveInt } from "../../utils/parseId";
 
 // Timestamp/window fields are snake_case on `Promocode`; discount/appliesTo
 // columns keep camelCase Prisma names via @map.
 
-export const parsePcId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePcId = parsePositiveInt;
 
 export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
@@ -227,7 +226,7 @@ export const listPromocodes = async (opts: {
   limitNum: number;
   pageNum: number;
 }) => {
-  const where: any = {};
+  const where: Prisma.PromocodeWhereInput = {};
   if (opts.search) where.promocode = { contains: opts.search.toUpperCase() };
   if (opts.status !== null) where.status = opts.status;
   if (opts.type) where.type = opts.type;
@@ -259,16 +258,29 @@ export const listPromocodes = async (opts: {
   };
 };
 
+// The JSON id match can't run in SQL, and these admin reads cover every code ever
+// created (no status/date filter). So match on the three columns appliesToGroups reads,
+// then load full rows only for the ids kept, in the same order.
+const coveringIds = async (
+  where: Prisma.PromocodeWhereInput,
+  orderBy: Prisma.PromocodeOrderByWithRelationInput,
+  type: AppliesToType,
+  id: number
+): Promise<number[]> => {
+  const rows = await prisma.promocode.findMany({ where, orderBy, select: { id: true, appliesToType: true, appliesToIds: true } });
+  return rows.filter((r) => appliesToGroups(r).some((g) => g.type === type && g.ids.includes(id))).map((r) => r.id);
+};
+const promocodesInOrder = async (ids: number[]) => {
+  if (!ids.length) return [];
+  const byId = new Map((await prisma.promocode.findMany({ where: { id: { in: ids } } })).map((r) => [r.id, r]));
+  return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => r != null);
+};
+
 /** Newest first. The JSON id match is resolved in memory after narrowing by type. */
 export const listPromocodesForPackage = async (packageId: number) => {
   // "mixed" rows are included and matched via appliesToGroups.
-  const rows = await prisma.promocode.findMany({
-    where: { appliesToType: { in: ["package", "mixed"] } },
-    orderBy: { created_at: "desc" },
-  });
-  return rows
-    .filter((r) => appliesToGroups(r).some((g) => g.type === "package" && g.ids.includes(packageId)))
-    .map(listDto);
+  const ids = await coveringIds({ appliesToType: { in: ["package", "mixed"] } }, { created_at: "desc" }, "package", packageId);
+  return (await promocodesInOrder(ids)).map(listDto);
 };
 
 /**
@@ -282,15 +294,16 @@ export const listPromocodesForScope = async (
   id: number,
   q: { search?: string; page: number; limit: number; skip: number }
 ) => {
-  const rows = await prisma.promocode.findMany({
-    where: {
+  const matched = await coveringIds(
+    {
       appliesToType: { in: [type, "mixed"] },
       ...(q.search ? { promocode: { contains: q.search.toUpperCase() } } : {}),
     },
-    orderBy: { created_at: "desc" },
-  });
-  const matched = rows.filter((r) => appliesToGroups(r).some((g) => g.type === type && g.ids.includes(id)));
-  const data = matched.slice(q.skip, q.skip + q.limit).map(listDto);
+    { created_at: "desc" },
+    type,
+    id
+  );
+  const data = (await promocodesInOrder(matched.slice(q.skip, q.skip + q.limit))).map(listDto);
   return { data, pagination: buildPagination(matched.length, q.page, q.limit) };
 };
 
@@ -363,7 +376,7 @@ export const updatePromocode = async (
   const existing = await prisma.promocode.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return { notFound: true as const };
 
-  const data: any = { updated_at: new Date() };
+  const data: Prisma.PromocodeUncheckedUpdateInput = { updated_at: new Date() };
   if (input.promocode !== undefined) {
     const code = input.promocode.toUpperCase();
     const dup = await prisma.promocode.findFirst({
@@ -636,7 +649,7 @@ export const loadPricingPlansSql = async (entity: {
   type: "package" | "course" | "ebook";
   id: number;
 }) => {
-  const where: any = { status: true };
+  const where: Prisma.PackageCourseEbookPriceWhereInput = { status: true };
   if (entity.type === "package") where.packageId = entity.id;
   else if (entity.type === "course") where.courseId = entity.id;
   else where.ebookId = entity.id;
@@ -750,7 +763,7 @@ export const loadPlansForEntitiesSql = async (
     }));
   }
 
-  const where: any = { status: true };
+  const where: Prisma.PackageCourseEbookPriceWhereInput = { status: true };
   if (type === "package") where.packageId = { in: entityIds };
   else if (type === "course") where.courseId = { in: entityIds };
   else where.ebookId = { in: entityIds };

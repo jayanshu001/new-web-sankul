@@ -3,11 +3,10 @@ import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import { nextOrder } from "../../utils/listOrdering";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseRcId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseRcId = parsePositiveInt;
 
 export interface TermDto {
   _id: string;
@@ -108,7 +107,7 @@ const rcOrderBy = (opts: RcListOpts): any[] => {
 };
 
 export const listTerms = async (opts: RcListOpts = {}): Promise<{ data: TermDto[]; total: number }> => {
-  const where: any = {};
+  const where: Prisma.RefferalTermWhereInput = {};
   const search = buildPrismaPrefixSearch(opts.search, ["text"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
@@ -173,7 +172,7 @@ export const deleteTerm = async (id: number): Promise<boolean> => {
 };
 
 export const listFaqs = async (opts: RcListOpts = {}): Promise<{ data: FaqDto[]; total: number }> => {
-  const where: any = {};
+  const where: Prisma.RefferalFaqWhereInput = {};
   const search = buildPrismaPrefixSearch(opts.search, ["question", "answer"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([

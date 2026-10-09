@@ -2,12 +2,10 @@
 import { adminExamRepository as repo } from "./admin-exam.repository";
 import { setExamCategories, validateLeafCategoryIds } from "../catalog-exam/exam-category-pivot.where";
 import { normalizeTiming, detailsForAttempt } from "../client-exam/client-exam.service";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseExamId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseExamId = parsePositiveInt;
 
 const num = (v: unknown): number => {
   const n = Number(v);

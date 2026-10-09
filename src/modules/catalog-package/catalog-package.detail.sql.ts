@@ -4,19 +4,24 @@ import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
-import { descendantsOf } from "../catalog-category-tree/category-tree.service";
-import { listActivePricesByPackage } from "../commerce-price/commerce-price.service";
-import { getActivePackageSubscription } from "../commerce-subscription/commerce-subscription.service";
+import { descendantsByRoot, selfFkDescendantsByRoot } from "../catalog-category-tree/category-tree.service";
+import { listActivePricesByPackage, listActivePricesByPackages } from "../commerce-price/commerce-price.service";
+import { getActivePackageSubscription, getActivePackageSubMap } from "../commerce-subscription/commerce-subscription.service";
 import { appliesToGroups } from "../promo-code/promo-code.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 import cache, { CacheDomain } from "../../libs/cache";
 import { CacheEntity } from "../../middlewares/flushGroups";
+import { CACHE_TTL } from "../../config/cacheTtl";
+import type { Prisma } from "@prisma/client";
 
-const descendantIds = async (table: string, parentCol: string, rootId: number): Promise<number[]> => {
-  const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
-    `WITH RECURSIVE tree (id) AS (SELECT ${rootId} UNION SELECT c.id FROM ${table} c JOIN tree t ON c.${parentCol} = t.id) SELECT id FROM tree`
-  );
-  return rows.map((r) => Number(r.id));
+// Subtree total from per-category tallies; exact only when an item has one category.
+const sumOverSubtree = (subtree: number[] | undefined, root: number, perCat: Map<number, number>) =>
+  (subtree ?? [root]).reduce((n, id) => n + (perCat.get(id) ?? 0), 0);
+
+const countMap = (rows: any[], key: string) => {
+  const m = new Map<number, number>();
+  for (const r of rows) if (r[key] != null) m.set(r[key], r._count._all);
+  return m;
 };
 
 const videoGroups = async (packageId: number) => {
@@ -30,16 +35,19 @@ const videoGroups = async (packageId: number) => {
   const cats = await prisma.videoCategory.findMany({ where: { id: { in: ids }, status: true } });
   const byId = new Map(cats.map((c) => [c.id, c]));
   const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as typeof cats;
-  return Promise.all(
-    ordered.map(async (cat) => {
-      const subtree = await descendantsOf([cat.id]);
-      const [count, childCount] = await Promise.all([
-        prisma.video.count({ where: { videoCategoryId: { in: subtree }, status: true } }),
-        prisma.videoCategoryRelation.count({ where: { parent: cat.id } }),
-      ]);
-      return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory: childCount > 0, count } };
-    })
-  );
+  // Batched: 3 queries for the whole package instead of 3 per subject.
+  const catIds = ordered.map((c) => c.id);
+  const subtreeByCat = await descendantsByRoot(catIds);
+  const union = [...new Set([...subtreeByCat.values()].flat())];
+  const [videoRows, edgeRows] = await Promise.all([
+    prisma.video.groupBy({ by: ["videoCategoryId"], where: { videoCategoryId: { in: union }, status: true }, _count: { _all: true } }),
+    prisma.videoCategoryRelation.groupBy({ by: ["parent"], where: { parent: { in: catIds } }, _count: { _all: true } }),
+  ]);
+  const perCat = countMap(videoRows, "videoCategoryId");
+  const edges = countMap(edgeRows, "parent");
+  return ordered.map((cat) => ({
+    category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory: (edges.get(cat.id) ?? 0) > 0, count: sumOverSubtree(subtreeByCat.get(cat.id), cat.id, perCat) },
+  }));
 };
 
 const materialGroups = async (packageId: number) => {
@@ -49,16 +57,18 @@ const materialGroups = async (packageId: number) => {
   const cats = await prisma.materialCategory.findMany({ where: { id: { in: ids }, status: true } });
   const byId = new Map(cats.map((c) => [c.id, c]));
   const ordered = refs.map((r) => byId.get(r.materialCategoryId!)).filter(Boolean) as typeof cats;
-  return Promise.all(
-    ordered.map(async (cat) => {
-      const sub = await descendantIds("ws_material_category", "parent", cat.id);
-      const [count, childCount] = await Promise.all([
-        prisma.material.count({ where: { materialCategoryId: { in: sub }, status: true } }),
-        prisma.materialCategory.count({ where: { parent: cat.id, status: true } }),
-      ]);
-      return { category: { _id: String(cat.id), title: cat.name, image: cat.image, havingChildDirectory: childCount > 0, count } };
-    })
-  );
+  const catIds = ordered.map((c) => c.id);
+  const subtreeByCat = await selfFkDescendantsByRoot("ws_material_category", "parent", catIds);
+  const union = [...new Set([...subtreeByCat.values()].flat())];
+  const [materialRows, childRows] = await Promise.all([
+    prisma.material.groupBy({ by: ["materialCategoryId"], where: { materialCategoryId: { in: union }, status: true }, _count: { _all: true } }),
+    prisma.materialCategory.groupBy({ by: ["parent"], where: { parent: { in: catIds }, status: true }, _count: { _all: true } }),
+  ]);
+  const perCat = countMap(materialRows, "materialCategoryId");
+  const children = countMap(childRows, "parent");
+  return ordered.map((cat) => ({
+    category: { _id: String(cat.id), title: cat.name, image: cat.image, havingChildDirectory: (children.get(cat.id) ?? 0) > 0, count: sumOverSubtree(subtreeByCat.get(cat.id), cat.id, perCat) },
+  }));
 };
 
 const examGroups = async (packageId: number) => {
@@ -68,16 +78,20 @@ const examGroups = async (packageId: number) => {
   const cats = await prisma.examCategory.findMany({ where: { id: { in: ids }, status: true } });
   const byId = new Map(cats.map((c) => [c.id, c]));
   const ordered = refs.map((r) => byId.get(r.examCategoryId!)).filter(Boolean) as typeof cats;
+  // Subtrees and child counts batched; the exam count stays per category because an
+  // exam can sit in several categories (pivot), so tallies cannot be summed.
+  const catIds = ordered.map((c) => c.id);
+  const [subtreeByCat, childRows] = await Promise.all([
+    selfFkDescendantsByRoot("ws_exam_category", "parent_id", catIds),
+    prisma.examCategory.groupBy({ by: ["parent"], where: { parent: { in: catIds }, status: true }, _count: { _all: true } }),
+  ]);
+  const children = countMap(childRows, "parent");
   return Promise.all(
     ordered.map(async (cat) => {
-      const sub = await descendantIds("ws_exam_category", "parent_id", cat.id);
-      const [count, childCount] = await Promise.all([
-        prisma.exam.count({
-          where: { AND: [examInCategoriesWhere(sub), { status: true }] },
-        }),
-        prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
-      ]);
-      return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory: childCount > 0, count } };
+      const count = await prisma.exam.count({
+        where: { AND: [examInCategoriesWhere(subtreeByCat.get(cat.id) ?? [cat.id]), { status: true }] },
+      });
+      return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory: (children.get(cat.id) ?? 0) > 0, count } };
     })
   );
 };
@@ -116,7 +130,7 @@ const populateGoal = async (id: number | null) => {
 // Everything here is customer-independent and cached. isPurchased/daysLeft is the
 // only per-customer field and is always computed live in buildPackageDetailSql;
 // package.routes.ts must not wrap this in a user-scoped cacheRoute either.
-const buildPackageDetailShared = async (packageId: number) => {
+export const buildPackageDetailShared = async (packageId: number) => {
   // No `active` filter: the entry is shared and an inactive package must stay
   // reachable for its subscribers. The per-caller gate is in buildPackageDetailSql.
   const pkg = await prisma.package.findFirst({ where: { id: packageId } });
@@ -149,7 +163,7 @@ const buildPackageDetailShared = async (packageId: number) => {
 export const buildPackageDetailSql = async (packageId: number, customerId: number | null, baseUrl?: string) => {
   const shared = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogPackage, `detail:${packageId}`),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: () => buildPackageDetailShared(packageId),
   });
   if (!shared) return null;
@@ -190,39 +204,52 @@ export const buildPackageDetailSql = async (packageId: number, customerId: numbe
 };
 
 // No customerId here; `shareableLink` depends on the request's baseUrl, so callers add it after the cache read.
+// Batched: 4 queries per page (plans, subscriber counts, types, goals) instead of 4 per row.
 const enrichPackagesShared = async (rows: Package[]) => {
-  return Promise.all(
-    rows.map(async (p) => {
-      const [plans, subCount, packageTypeId, goalId] = await Promise.all([
-        splitPlans(p.id),
-        prisma.packageCourseSubscription.count({ where: { packageId: p.id, status: true } }),
-        populatePackageType(p.packageTypeId),
-        populateGoal(p.goalId),
-      ]);
-      return {
-        _id: String(p.id),
-        name: p.name,
-        subtitle: "",
-        description: p.description,
-        image: p.image,
-        withMaterialText: p.withMaterial,
-        withoutMaterialText: p.withoutMaterial,
-        packageTypeId,
-        goalId,
-        goalLabelId: p.goalLabelId != null ? String(p.goalLabelId) : null,
-        isPaid: p.isPaid,
-        isPopular: p.isPopular ?? false,
-        order: p.order_by,
-        active: p.active,
-        pcMaterialId: p.pcMaterialId != null ? String(p.pcMaterialId) : null,
-        examId: p.examId != null ? String(p.examId) : null,
-        createdAt: p.created_at ?? null,
-        updatedAt: p.updated_at ?? null,
-        plans,
-        subscriberCount: subCount,
-      };
-    })
-  );
+  const ids = rows.map((p) => p.id);
+  const typeIds = [...new Set(rows.map((p) => p.packageTypeId).filter((n): n is number => n != null))];
+  const goalIds = [...new Set(rows.map((p) => p.goalId).filter((n): n is number => n != null))];
+  const [prices, subRows, types, goals] = await Promise.all([
+    listActivePricesByPackages(ids),
+    ids.length
+      ? prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: ids }, status: true }, _count: { _all: true } })
+      : Promise.resolve([] as any[]),
+    typeIds.length ? prisma.packageType.findMany({ where: { id: { in: typeIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    goalIds.length ? prisma.customerTargetGoal.findMany({ where: { id: { in: goalIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+  ]);
+  const subCounts = countMap(subRows, "packageId");
+  const typeById = new Map(types.map((t) => [t.id, { _id: String(t.id), name: t.name }]));
+  const goalById = new Map(goals.map((g) => [g.id, { _id: String(g.id), title: g.name }]));
+  return rows.map((p) => {
+    // Same split as splitPlans: active, duration-asc, by withMaterial.
+    const own = prices.filter((x) => x.packageId === String(p.id));
+    const plans = { withMaterial: own.filter((x) => x.withMaterial), withoutMaterial: own.filter((x) => !x.withMaterial) };
+    const subCount = subCounts.get(p.id) ?? 0;
+    const packageTypeId = p.packageTypeId != null ? typeById.get(p.packageTypeId) ?? null : null;
+    const goalId = p.goalId != null ? goalById.get(p.goalId) ?? null : null;
+    return {
+      _id: String(p.id),
+      name: p.name,
+      subtitle: "",
+      description: p.description,
+      image: p.image,
+      withMaterialText: p.withMaterial,
+      withoutMaterialText: p.withoutMaterial,
+      packageTypeId,
+      goalId,
+      goalLabelId: p.goalLabelId != null ? String(p.goalLabelId) : null,
+      isPaid: p.isPaid,
+      isPopular: p.isPopular ?? false,
+      order: p.order_by,
+      active: p.active,
+      pcMaterialId: p.pcMaterialId != null ? String(p.pcMaterialId) : null,
+      examId: p.examId != null ? String(p.examId) : null,
+      createdAt: p.created_at ?? null,
+      updatedAt: p.updated_at ?? null,
+      plans,
+      subscriberCount: subCount,
+    };
+  });
 };
 
 /**
@@ -238,7 +265,7 @@ export const listPackagesCached = async (
 ): Promise<{ rows: Package[]; total: number; data: any[] }> => {
   const { rows, total, shared } = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogPackage, cacheKeyId),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const { rows, total } = await fetchRows();
       const shared = await enrichPackagesShared(rows);
@@ -246,44 +273,32 @@ export const listPackagesCached = async (
     },
   });
 
-  const now = new Date();
-  const data = await Promise.all(
-    shared.map(async (item, i) => {
-      const activeSub = customerId ? await getActivePackageSubscription(customerId, rows[i].id, now) : null;
-      const isPurchased = !!activeSub;
-      return {
-        ...item,
-        isPurchased,
-        daysLeft: isPurchased ? computeDaysLeft(activeSub?.endAt ?? null, now) : null,
-        shareableLink: buildShareUrl("packages", item._id, baseUrl),
-      };
-    })
-  );
-  return { rows, total, data };
+  return { rows, total, data: await mergeLivePurchase(shared, rows, customerId, baseUrl) };
 };
 
 // Uncached variant of listPackagesCached's per-customer merge.
-export const enrichPackagesSql = async (rows: Package[], customerId: number | null, baseUrl?: string) => {
+export const enrichPackagesSql = async (rows: Package[], customerId: number | null, baseUrl?: string) =>
+  mergeLivePurchase(await enrichPackagesShared(rows), rows, customerId, baseUrl);
+
+// One subscription query for the whole page (was one per row).
+const mergeLivePurchase = async (shared: any[], rows: Package[], customerId: number | null, baseUrl?: string) => {
   const now = new Date();
-  const shared = await enrichPackagesShared(rows);
-  return Promise.all(
-    shared.map(async (item, i) => {
-      const activeSub = customerId ? await getActivePackageSubscription(customerId, rows[i].id, now) : null;
-      const isPurchased = !!activeSub;
-      return {
-        ...item,
-        isPurchased,
-        daysLeft: isPurchased ? computeDaysLeft(activeSub?.endAt ?? null, now) : null,
-        shareableLink: buildShareUrl("packages", item._id, baseUrl),
-      };
-    })
-  );
+  const subMap = await getActivePackageSubMap(customerId, rows.map((r) => r.id), now);
+  return shared.map((item, i) => {
+    const isPurchased = subMap.has(rows[i].id);
+    return {
+      ...item,
+      isPurchased,
+      daysLeft: isPurchased ? computeDaysLeft(subMap.get(rows[i].id) ?? null, now) : null,
+      shareableLink: buildShareUrl("packages", item._id, baseUrl),
+    };
+  });
 };
 
 export const listPackagesPaginatedSql = async (opts: {
   search?: string; packageTypeId?: number; goalId?: number; isPaid?: boolean; isPopular?: boolean; skip: number; take: number;
 }) => {
-  const where: any = { active: true };
+  const where: Prisma.PackageWhereInput = { active: true };
   const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) where.AND = search.AND;
   if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
@@ -338,3 +353,14 @@ export const listPackagesByGoalIndividualSql = async (goalId: number, opts: List
   ]);
   return { rows, total };
 };
+
+// Small reads the client package/payment controllers used to run inline.
+export const findPackagesByIds = (ids: number[]) =>
+  ids.length ? prisma.package.findMany({ where: { id: { in: ids } } }) : Promise.resolve([] as Package[]);
+
+/** Active package's id + name, or null; a disabled package must not be purchasable. */
+export const findActivePackageRef = (id: number) =>
+  prisma.package.findFirst({ where: { id, active: true }, select: { id: true, name: true } });
+
+export const listGoalsWithLabels = () =>
+  prisma.customerTargetGoal.findMany({ select: { id: true, name: true, labels: true } });

@@ -97,7 +97,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
     
     const ebookId = parseEbookId(id);
     if (ebookId == null) {
-      logger.warn("getEbookDetail invalid id (mysql)", { traceId, customerId, ebookId: id });
+      logger.warn("getEbookDetail invalid id", { traceId, customerId, ebookId: id });
       return res.status(400).json({ success: false, message: "Please select valid ebook." });
     }
     const custId = customerId != null ? parseEbookId(String(customerId)) : null;
@@ -107,7 +107,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       (eid) => buildShareUrl("ebooks", eid, resolveBase(req))
     );
     if (!ebookData) {
-      logger.warn("getEbookDetail not found (mysql)", { traceId, customerId, ebookId: id });
+      logger.warn("getEbookDetail not found", { traceId, customerId, ebookId: id });
       return res.status(404).json({ success: false, message: "Ebook not found." });
     }
     logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });

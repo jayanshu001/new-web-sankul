@@ -4,11 +4,9 @@ import { formatPaymentMethod, formatPaymentType } from "../../utils/paymentMetho
 import { COURIER } from "../../config/courier";
 import { liveSubDiscountAmount } from "../live-course-order/live-course-order.service";
 import { resolveOrderLines, orderLineBookIds } from "../book-order/book-order.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parsePhId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePhId = parsePositiveInt;
 
 const RECEIPT_BASE = "/api/v1/client/purchase-history";
 
@@ -52,6 +50,195 @@ const pickWindowForTarget = (rows: readonly PcWindow[] | undefined, courseId: nu
   const matches = rows.filter((s) => (courseId ? s.courseId === courseId : packageId ? s.packageId === packageId : true));
   if (!matches.length) return undefined;
   return matches.reduce((best, s) => ((s.endAt?.getTime() ?? 0) > (best.endAt?.getTime() ?? 0) ? s : best));
+};
+
+type Row<F extends (...a: any[]) => Promise<readonly any[]>> = Awaited<ReturnType<F>>[number];
+type PcOrder = Row<typeof repo.listPurchaseOrders>;
+type LiveSub = Row<typeof repo.listLiveSubscriptions>;
+type TsOrder = Row<typeof repo.listTestSeriesOrders>;
+type OrderlessSub = Row<typeof repo.listOrderlessSubs>;
+type OrderlessTsSub = Row<typeof repo.listOrderlessTsSubs>;
+type FbSub = Row<typeof repo.pcSubsByCourseIds>;
+type TsSub = Row<typeof repo.tsSubsForSeries>;
+/** Everything the per-kind row mappers read, resolved once per page by listSubscriptions. */
+type HistoryLookups = {
+  plans: Map<number, Row<typeof repo.pcPlansByIds>>;
+  courses: Map<number, Row<typeof repo.coursesByIds>>;
+  packages: Map<number, Row<typeof repo.packagesByIds>>;
+  types: Map<number, Row<typeof repo.packageTypesByIds>>;
+  trackingByOrder: Map<number | null, Row<typeof repo.pcTrackingByOrderIds>>;
+  subsByOrder: Map<number, PcWindow[]>;
+  latestSubByKey: Map<string, FbSub>;
+  liveCourses: Map<number, Row<typeof repo.liveCoursesByIds>>;
+  testSeries: Map<number, Row<typeof repo.testSeriesByIds>>;
+  tsSubByOrder: Map<number, TsSub>;
+  latestTsSubByTs: Map<number, TsSub>;
+};
+
+// One mapper per purchase source; each returns the same history-row shape.
+const pcOrderRow = (o: PcOrder, L: HistoryLookups) => {
+  const plan = o.planId ? L.plans.get(o.planId) : null;
+  const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
+  const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
+  const course = courseId ? L.courses.get(courseId) : null;
+  const pkg = packageId ? L.packages.get(packageId) : null;
+  const type = pkg?.packageTypeId ? L.types.get(pkg.packageTypeId) : null;
+  // The AWB/status live on the tracking row created at verify; it may be null.
+  const withMaterial = !!plan?.withMaterial;
+  const track = L.trackingByOrder.get(o.id) ?? null;
+  const tracking =
+    withMaterial && track
+      ? { trackingId: String(track.id), courier: courierForAwb(track.id) }
+      : null;
+  const win =
+    pickWindowForTarget(L.subsByOrder.get(o.id), courseId, packageId) ??
+    (courseId ? L.latestSubByKey.get(`c:${courseId}`) : packageId ? L.latestSubByKey.get(`p:${packageId}`) : null) ??
+    null;
+  return {
+    _id: String(o.id),
+    kind: courseId ? "course" : "package",
+    title: course?.name || pkg?.name || "Subscription",
+    author: null, // ws_course has no author column
+    thumbnail: course?.image || pkg?.image || null,
+    badge: type?.name || null,
+    withMaterial,
+    status: withMaterial ? (track?.status ?? null) : null,
+    tracking,
+    amount: o.amount != null ? Number(o.amount) : null,
+    purchasedAt: o.createdAt ?? null,
+    startAt: win?.startAt ?? null,
+    endAt: win?.endAt ?? null,
+    receiptUrl: `${RECEIPT_BASE}/subscriptions/${o.id}/receipt`,
+    meta: {
+      courseId: courseId ? String(courseId) : null,
+      targetPackageId: packageId ? String(packageId) : null,
+      planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
+      razorpayOrderId: o.gatewayOrderId ?? null,
+      razorpayPaymentId: o.gatewayPaymentId ?? null,
+    },
+  };
+};
+
+const liveSubRow = (s: LiveSub, L: HistoryLookups) => {
+  const lc = s.liveCourseId ? L.liveCourses.get(s.liveCourseId) : null;
+  const withMaterial = !!s.withMaterial;
+  // `s.tracking` is the AWB column; the DTO key stays `trackingId`.
+  const tracking =
+    withMaterial && s.tracking != null
+      ? { trackingId: String(s.tracking), courier: courierForAwb(s.tracking) }
+      : null;
+  return {
+    _id: `${LIVE_ID_PREFIX}${s.id}`,
+    kind: "live-course",
+    title: lc?.name || "Live Course",
+    author: null,
+    thumbnail: lc?.image || null,
+    badge: "Live",
+    withMaterial,
+    status: withMaterial ? ((s as any).trackingRow?.status ?? null) : null,
+    tracking,
+    // `amount` = ws_live_course_order.discount_price.
+    amount: s.order?.amount != null ? Number(s.order.amount) : null,
+    purchasedAt: s.createdAt ?? s.startAt ?? null,
+    startAt: s.startAt ?? null,
+    endAt: s.endAt ?? null,
+    receiptUrl: `${RECEIPT_BASE}/subscriptions/${LIVE_ID_PREFIX}${s.id}/receipt`,
+    meta: {
+      liveCourseId: s.liveCourseId != null && s.liveCourseId > 0 ? String(s.liveCourseId) : null,
+      planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+      razorpayOrderId: s.order?.razorpayOrderId ?? null,
+      razorpayPaymentId: s.order?.razorpayPaymentId ?? null,
+    },
+  };
+};
+
+const tsOrderRow = (o: TsOrder, L: HistoryLookups) => {
+  const ts = o.testSeriesId ? L.testSeries.get(o.testSeriesId) : null;
+  const win = L.tsSubByOrder.get(o.id) ?? L.latestTsSubByTs.get(o.testSeriesId) ?? null;
+  return {
+    _id: `${TS_ID_PREFIX}${o.id}`,
+    kind: "test-series",
+    title: ts?.title || "Test Series",
+    author: null,
+    thumbnail: ts?.thumbnail || null,
+    badge: "Test Series",
+    // Test series never ships physical material.
+    withMaterial: false,
+    status: null,
+    tracking: null,
+    amount: o.amount != null ? Number(o.amount) : null,
+    purchasedAt: o.createdAt ?? null,
+    startAt: win?.startAt ?? null,
+    endAt: win?.endAt ?? null,
+    receiptUrl: `${RECEIPT_BASE}/subscriptions/${TS_ID_PREFIX}${o.id}/receipt`,
+    meta: {
+      testSeriesId: o.testSeriesId != null && o.testSeriesId > 0 ? String(o.testSeriesId) : null,
+      planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
+      razorpayOrderId: o.razorpayOrderId ?? null,
+      razorpayPaymentId: o.razorpayPaymentId ?? null,
+    },
+  };
+};
+
+const orderlessPcRow = (s: OrderlessSub, L: HistoryLookups) => {
+  const course = s.courseId ? L.courses.get(s.courseId) : null;
+  const pkg = s.packageId ? L.packages.get(s.packageId) : null;
+  const type = pkg?.packageTypeId ? L.types.get(pkg.packageTypeId) : null;
+  const withMaterial = s.materialAmount != null;
+  const trackStatus = (s as any).packageCourseSubscriptionTracking?.status ?? null;
+  const tracking =
+    withMaterial && s.trackingId != null
+      ? { trackingId: String(s.trackingId), courier: courierForAwb(s.trackingId) }
+      : null;
+  return {
+    _id: `${PCS_ID_PREFIX}${s.id}`,
+    kind: s.courseId ? "course" : "package",
+    title: course?.name || pkg?.name || "Subscription",
+    author: null,
+    thumbnail: course?.image || pkg?.image || null,
+    badge: type?.name || null,
+    withMaterial,
+    status: withMaterial ? trackStatus : null,
+    tracking,
+    amount: s.amount != null ? Number(s.amount) : null,
+    purchasedAt: s.createdAt ?? s.startAt ?? null,
+    startAt: s.startAt ?? null,
+    endAt: s.endAt ?? null,
+    receiptUrl: `${RECEIPT_BASE}/subscriptions/${PCS_ID_PREFIX}${s.id}/receipt`,
+    meta: {
+      courseId: s.courseId != null && s.courseId > 0 ? String(s.courseId) : null,
+      targetPackageId: s.packageId != null && s.packageId > 0 ? String(s.packageId) : null,
+      planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+      razorpayOrderId: null,
+      razorpayPaymentId: null,
+    },
+  };
+};
+
+const orderlessTsRow = (s: OrderlessTsSub, L: HistoryLookups) => {
+  const ts = s.testSeriesId ? L.testSeries.get(s.testSeriesId) : null;
+  return {
+    _id: `${TSS_ID_PREFIX}${s.id}`,
+    kind: "test-series",
+    title: ts?.title || "Test Series",
+    author: null,
+    thumbnail: ts?.thumbnail || null,
+    badge: "Test Series",
+    withMaterial: false,
+    status: null,
+    tracking: null,
+    amount: s.amount != null ? Number(s.amount) : null,
+    purchasedAt: s.createdAt ?? s.startAt ?? null,
+    startAt: s.startAt ?? null,
+    endAt: s.endAt ?? null,
+    receiptUrl: `${RECEIPT_BASE}/subscriptions/${TSS_ID_PREFIX}${s.id}/receipt`,
+    meta: {
+      testSeriesId: s.testSeriesId != null && s.testSeriesId > 0 ? String(s.testSeriesId) : null,
+      planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+      razorpayOrderId: null,
+      razorpayPaymentId: null,
+    },
+  };
 };
 
 // Merged, paged history of course/package, live-course and test-series purchases.
@@ -133,177 +320,23 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
     if (!cur || (s.endAt?.getTime() ?? 0) > (cur.endAt?.getTime() ?? 0)) latestSubByKey.set(key, s);
   }
 
-  const pkgRows = pcOrders.map((o) => {
-    const plan = o.planId ? plans.get(o.planId) : null;
-    const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
-    const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
-    const course = courseId ? courses.get(courseId) : null;
-    const pkg = packageId ? packages.get(packageId) : null;
-    const type = pkg?.packageTypeId ? types.get(pkg.packageTypeId) : null;
-    // The AWB/status live on the tracking row created at verify; it may be null.
-    const withMaterial = !!plan?.withMaterial;
-    const track = trackingByOrder.get(o.id) ?? null;
-    const tracking =
-      withMaterial && track
-        ? { trackingId: String(track.id), courier: courierForAwb(track.id) }
-        : null;
-    const win =
-      pickWindowForTarget(subsByOrder.get(o.id), courseId, packageId) ??
-      (courseId ? latestSubByKey.get(`c:${courseId}`) : packageId ? latestSubByKey.get(`p:${packageId}`) : null) ??
-      null;
-    return {
-      _id: String(o.id),
-      kind: courseId ? "course" : "package",
-      title: course?.name || pkg?.name || "Subscription",
-      author: null, // ws_course has no author column
-      thumbnail: course?.image || pkg?.image || null,
-      badge: type?.name || null,
-      withMaterial,
-      status: withMaterial ? (track?.status ?? null) : null,
-      tracking,
-      amount: o.amount != null ? Number(o.amount) : null,
-      purchasedAt: o.createdAt ?? null,
-      startAt: win?.startAt ?? null,
-      endAt: win?.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${o.id}/receipt`,
-      meta: {
-        courseId: courseId ? String(courseId) : null,
-        targetPackageId: packageId ? String(packageId) : null,
-        planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
-        razorpayOrderId: o.gatewayOrderId ?? null,
-        razorpayPaymentId: o.gatewayPaymentId ?? null,
-      },
-    };
-  });
-
-  const liveRows = liveSubs.map((s) => {
-    const lc = s.liveCourseId ? liveCourses.get(s.liveCourseId) : null;
-    const withMaterial = !!s.withMaterial;
-    // `s.tracking` is the AWB column; the DTO key stays `trackingId`.
-    const tracking =
-      withMaterial && s.tracking != null
-        ? { trackingId: String(s.tracking), courier: courierForAwb(s.tracking) }
-        : null;
-    return {
-      _id: `${LIVE_ID_PREFIX}${s.id}`,
-      kind: "live-course",
-      title: lc?.name || "Live Course",
-      author: null,
-      thumbnail: lc?.image || null,
-      badge: "Live",
-      withMaterial,
-      status: withMaterial ? ((s as any).trackingRow?.status ?? null) : null,
-      tracking,
-      // `amount` = ws_live_course_order.discount_price.
-      amount: s.order?.amount != null ? Number(s.order.amount) : null,
-      purchasedAt: s.createdAt ?? s.startAt ?? null,
-      startAt: s.startAt ?? null,
-      endAt: s.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${LIVE_ID_PREFIX}${s.id}/receipt`,
-      meta: {
-        liveCourseId: s.liveCourseId != null && s.liveCourseId > 0 ? String(s.liveCourseId) : null,
-        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        razorpayOrderId: s.order?.razorpayOrderId ?? null,
-        razorpayPaymentId: s.order?.razorpayPaymentId ?? null,
-      },
-    };
-  });
-
   const tsSubByOrder = new Map(tsSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
   const latestTsSubByTs = new Map<number, (typeof tsSubs)[number]>();
   for (const s of tsSubs) {
     const cur = latestTsSubByTs.get(s.testSeriesId);
     if (!cur || (s.endAt?.getTime() ?? 0) > (cur.endAt?.getTime() ?? 0)) latestTsSubByTs.set(s.testSeriesId, s);
   }
+  const L: HistoryLookups = { plans, courses, packages, types, trackingByOrder, subsByOrder, latestSubByKey, liveCourses, testSeries, tsSubByOrder, latestTsSubByTs };
 
-  const tsRows = tsOrders.map((o) => {
-    const ts = o.testSeriesId ? testSeries.get(o.testSeriesId) : null;
-    const win = tsSubByOrder.get(o.id) ?? latestTsSubByTs.get(o.testSeriesId) ?? null;
-    return {
-      _id: `${TS_ID_PREFIX}${o.id}`,
-      kind: "test-series",
-      title: ts?.title || "Test Series",
-      author: null,
-      thumbnail: ts?.thumbnail || null,
-      badge: "Test Series",
-      // Test series never ships physical material.
-      withMaterial: false,
-      status: null,
-      tracking: null,
-      amount: o.amount != null ? Number(o.amount) : null,
-      purchasedAt: o.createdAt ?? null,
-      startAt: win?.startAt ?? null,
-      endAt: win?.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TS_ID_PREFIX}${o.id}/receipt`,
-      meta: {
-        testSeriesId: o.testSeriesId != null && o.testSeriesId > 0 ? String(o.testSeriesId) : null,
-        planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
-        razorpayOrderId: o.razorpayOrderId ?? null,
-        razorpayPaymentId: o.razorpayPaymentId ?? null,
-      },
-    };
-  });
+  const pkgRows = pcOrders.map((o) => pcOrderRow(o, L));
 
-  const orderlessPkgRows = olSubs.map((s) => {
-    const course = s.courseId ? courses.get(s.courseId) : null;
-    const pkg = s.packageId ? packages.get(s.packageId) : null;
-    const type = pkg?.packageTypeId ? types.get(pkg.packageTypeId) : null;
-    const withMaterial = s.materialAmount != null;
-    const trackStatus = (s as any).packageCourseSubscriptionTracking?.status ?? null;
-    const tracking =
-      withMaterial && s.trackingId != null
-        ? { trackingId: String(s.trackingId), courier: courierForAwb(s.trackingId) }
-        : null;
-    return {
-      _id: `${PCS_ID_PREFIX}${s.id}`,
-      kind: s.courseId ? "course" : "package",
-      title: course?.name || pkg?.name || "Subscription",
-      author: null,
-      thumbnail: course?.image || pkg?.image || null,
-      badge: type?.name || null,
-      withMaterial,
-      status: withMaterial ? trackStatus : null,
-      tracking,
-      amount: s.amount != null ? Number(s.amount) : null,
-      purchasedAt: s.createdAt ?? s.startAt ?? null,
-      startAt: s.startAt ?? null,
-      endAt: s.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${PCS_ID_PREFIX}${s.id}/receipt`,
-      meta: {
-        courseId: s.courseId != null && s.courseId > 0 ? String(s.courseId) : null,
-        targetPackageId: s.packageId != null && s.packageId > 0 ? String(s.packageId) : null,
-        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        razorpayOrderId: null,
-        razorpayPaymentId: null,
-      },
-    };
-  });
+  const liveRows = liveSubs.map((s) => liveSubRow(s, L));
 
-  const orderlessTsRows = olTsSubs.map((s) => {
-    const ts = s.testSeriesId ? testSeries.get(s.testSeriesId) : null;
-    return {
-      _id: `${TSS_ID_PREFIX}${s.id}`,
-      kind: "test-series",
-      title: ts?.title || "Test Series",
-      author: null,
-      thumbnail: ts?.thumbnail || null,
-      badge: "Test Series",
-      withMaterial: false,
-      status: null,
-      tracking: null,
-      amount: s.amount != null ? Number(s.amount) : null,
-      purchasedAt: s.createdAt ?? s.startAt ?? null,
-      startAt: s.startAt ?? null,
-      endAt: s.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TSS_ID_PREFIX}${s.id}/receipt`,
-      meta: {
-        testSeriesId: s.testSeriesId != null && s.testSeriesId > 0 ? String(s.testSeriesId) : null,
-        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        razorpayOrderId: null,
-        razorpayPaymentId: null,
-      },
-    };
-  });
+  const tsRows = tsOrders.map((o) => tsOrderRow(o, L));
+
+  const orderlessPkgRows = olSubs.map((s) => orderlessPcRow(s, L));
+
+  const orderlessTsRows = olTsSubs.map((s) => orderlessTsRow(s, L));
 
   const data = [...pkgRows, ...liveRows, ...tsRows, ...orderlessPkgRows, ...orderlessTsRows]
     .sort((a, b) => (b.purchasedAt?.getTime() ?? 0) - (a.purchasedAt?.getTime() ?? 0))
@@ -448,6 +481,14 @@ export const getSubscriptionTrackingLiveMysql = async (
 // Lines come from the order_items JSON only (as before), via book-order's
 // resolveOrderLines with no child rows: every JSON shape (bookId / item / item_id),
 // removed-from-cart qty-0 lines dropped.
+const parseOrderItems = (json: string | null): any[] => {
+  if (!json) return [];
+  try { const a = JSON.parse(json); return Array.isArray(a) ? a : []; } catch { return []; }
+};
+
+// order_items shape differs: current orders write `{ bookId, qty, price, ... }`, legacy rows
+// `{ item, name, qty, price }`. Accept both.
+const itemBookId = (it: any): number | null => parsePositiveInt(it?.bookId ?? it?.item);
 
 export const listBooks = async (customerId: number, statuses: string[], skip: number, take: number, page: number, limit: number, search?: string) => {
   const [orders, total] = await Promise.all([
@@ -501,6 +542,16 @@ export const listBooks = async (customerId: number, statuses: string[], skip: nu
   return { data, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
 };
 
+// Receipt building blocks shared by every kind; key order matches the receipt contract.
+const receiptPayment = (method: string, razorpayOrderId?: string | null, razorpayPaymentId?: string | null, transactionId?: string | null) => ({
+  method,
+  razorpayOrderId: razorpayOrderId ?? null,
+  razorpayPaymentId: razorpayPaymentId ?? null,
+  transactionId: transactionId || null,
+});
+const singleLineItem = (name: string, amount: number) => [{ name, qty: 1, unitPrice: amount, lineTotal: amount }];
+const flatTotals = (amount: number) => ({ subTotal: amount, grandTotal: amount, currency: "INR" as const });
+
 export const getEbookReceiptMysql = async (orderId: number, customerId: number) => {
   const order = await repo.ebookOrderForReceipt(orderId, customerId);
   if (!order) return null;
@@ -517,25 +568,9 @@ export const getEbookReceiptMysql = async (orderId: number, customerId: number) 
     paidAt: order.updatedAt ?? null,
     status: order.status,
     customer: { id: order.userId != null ? String(order.userId) : "" },
-    payment: {
-      method: formatPaymentMethod(order.paymentMethod) || "Online",
-      razorpayOrderId: order.gatewayOrderId ?? null,
-      razorpayPaymentId: order.gatewayPaymentId ?? null,
-      transactionId: order.bankTransactionId || null,
-    },
-    items: [
-      {
-        name: ebook?.name || "E-Book purchase",
-        qty: 1,
-        unitPrice: order.orderPrice,
-        lineTotal: order.orderPrice,
-      },
-    ],
-    totals: {
-      subTotal: order.orderPrice,
-      grandTotal: order.orderPrice,
-      currency: "INR" as const,
-    },
+    payment: receiptPayment(formatPaymentMethod(order.paymentMethod) || "Online", order.gatewayOrderId, order.gatewayPaymentId, order.bankTransactionId),
+    items: singleLineItem(ebook?.name || "E-Book purchase", order.orderPrice),
+    totals: flatTotals(order.orderPrice),
     extra: {
       ebookId: ebook ? String(ebook.id) : null,
       planId: order.planId != null ? String(order.planId) : null,
@@ -635,25 +670,9 @@ export const getCourseReceiptMysql = async (orderId: number, customerId: number)
     paidAt: order.createdAt ?? null,
     status: "verified",
     customer: { id: String(order.userId ?? customerId) },
-    payment: {
-      method: formatPaymentMethod(order.paymentMethod) || "Online",
-      razorpayOrderId: order.gatewayOrderId ?? null,
-      razorpayPaymentId: order.gatewayPaymentId ?? null,
-      transactionId: order.bankTransactionId || null,
-    },
-    items: [
-      {
-        name: lineName,
-        qty: 1,
-        unitPrice: amount,
-        lineTotal: amount,
-      },
-    ],
-    totals: {
-      subTotal: amount,
-      grandTotal: amount,
-      currency: "INR" as const,
-    },
+    payment: receiptPayment(formatPaymentMethod(order.paymentMethod) || "Online", order.gatewayOrderId, order.gatewayPaymentId, order.bankTransactionId),
+    items: singleLineItem(lineName, amount),
+    totals: flatTotals(amount),
     extra: {
       courseId: courseId ? String(courseId) : null,
       targetPackageId: packageId ? String(packageId) : null,
@@ -689,14 +708,9 @@ export const getCourseReceiptBySubMysql = async (subId: number, customerId: numb
     status: "verified",
     customer: { id: String(sub.customerId) },
     // `payment_type` (backend|online) is all an order-less sub has.
-    payment: {
-      method: formatPaymentType(sub.payment_type) || "Online",
-      razorpayOrderId: null,
-      razorpayPaymentId: null,
-      transactionId: null,
-    },
-    items: [{ name: lineName, qty: 1, unitPrice: amount, lineTotal: amount }],
-    totals: { subTotal: amount, grandTotal: amount, currency: "INR" as const },
+    payment: receiptPayment(formatPaymentType(sub.payment_type) || "Online"),
+    items: singleLineItem(lineName, amount),
+    totals: flatTotals(amount),
     extra: {
       courseId: sub.courseId != null ? String(sub.courseId) : null,
       targetPackageId: sub.packageId != null ? String(sub.packageId) : null,
@@ -736,20 +750,8 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
     // The order says "complete"; the receipt has always said "verified".
     status: "verified",
     customer: { id: String(sub.customerId) },
-    payment: {
-      method: formatPaymentMethod(pay.paymentMethod) || "Online",
-      razorpayOrderId: pay.razorpayOrderId ?? null,
-      razorpayPaymentId: pay.razorpayPaymentId ?? null,
-      transactionId: pay.bankTransactionId || null,
-    },
-    items: [
-      {
-        name: course?.name ? `Live Course: ${course.name}` : "Live Course subscription",
-        qty: 1,
-        unitPrice: subTotal,
-        lineTotal: subTotal,
-      },
-    ],
+    payment: receiptPayment(formatPaymentMethod(pay.paymentMethod) || "Online", pay.razorpayOrderId, pay.razorpayPaymentId, pay.bankTransactionId),
+    items: singleLineItem(course?.name ? `Live Course: ${course.name}` : "Live Course subscription", subTotal),
     totals: {
       subTotal,
       discount,
@@ -794,26 +796,10 @@ export const getTestSeriesReceiptMysql = async (orderId: number, customerId: num
     paidAt: order.createdAt ?? null,
     status: "verified",
     customer: { id: String(order.customerId) },
-    payment: {
-      // A missing method is not evidence of a gateway.
-      method: formatPaymentMethod(order.paymentMethod) || "Online",
-      razorpayOrderId: order.razorpayOrderId ?? null,
-      razorpayPaymentId: order.razorpayPaymentId ?? null,
-      transactionId: order.bankTransactionId || null,
-    },
-    items: [
-      {
-        name: ts?.title || "Test Series subscription",
-        qty: 1,
-        unitPrice: total,
-        lineTotal: total,
-      },
-    ],
-    totals: {
-      subTotal: total,
-      grandTotal: total,
-      currency: "INR" as const,
-    },
+    // A missing method is not evidence of a gateway.
+    payment: receiptPayment(formatPaymentMethod(order.paymentMethod) || "Online", order.razorpayOrderId, order.razorpayPaymentId, order.bankTransactionId),
+    items: singleLineItem(ts?.title || "Test Series subscription", total),
+    totals: flatTotals(total),
     extra: {
       testSeriesId: String(order.testSeriesId),
       planId: order.planId != null ? String(order.planId) : null,
@@ -842,14 +828,9 @@ export const getTestSeriesReceiptBySubMysql = async (subId: number, customerId: 
     paidAt: sub.createdAt ?? null,
     status: sub.status ? "verified" : "inactive",
     customer: { id: String(sub.customerId) },
-    payment: {
-      method: formatPaymentType(sub.paymentType) || "Online",
-      razorpayOrderId: null,
-      razorpayPaymentId: null,
-      transactionId: null,
-    },
-    items: [{ name: ts?.title || "Test Series subscription", qty: 1, unitPrice: total, lineTotal: total }],
-    totals: { subTotal: total, grandTotal: total, currency: "INR" as const },
+    payment: receiptPayment(formatPaymentType(sub.paymentType) || "Online"),
+    items: singleLineItem(ts?.title || "Test Series subscription", total),
+    totals: flatTotals(total),
     extra: {
       testSeriesId: String(sub.testSeriesId),
       planId: sub.planId != null ? String(sub.planId) : null,

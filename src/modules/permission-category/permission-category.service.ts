@@ -2,11 +2,10 @@
 import { prisma } from "../../config/prisma";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parsePcatId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePcatId = parsePositiveInt;
 
 export interface PermissionCategoryDto {
   id: string;
@@ -70,7 +69,7 @@ export const listCategories = async (
 ): Promise<ListCategoriesResult> => {
   const { search, status, page, per_page, sortBy, sortDir } = opts;
 
-  const where: any = {};
+  const where: Prisma.PermissionCategoryRowWhereInput = {};
   if (typeof status === "boolean") where.status = status;
   const titleSearch = buildPrismaPrefixSearch(search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
@@ -185,7 +184,7 @@ export const updateCategory = async (
     if (dupe) return { ok: false, code: "slug_exists" };
   }
 
-  const data: any = {};
+  const data: Prisma.PermissionCategoryRowUncheckedUpdateInput = {};
   if (input.title !== undefined) data.title = input.title;
   if (input.slug !== undefined) data.slug = input.slug;
   if (input.order !== undefined) data.orderBy = input.order;

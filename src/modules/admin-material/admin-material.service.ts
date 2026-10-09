@@ -4,12 +4,10 @@ import { nextOrder } from "../../utils/listOrdering";
 import { buildPagination } from "../../utils/listQuery";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import type { MaterialCategory, Material } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseMaterialId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseMaterialId = parsePositiveInt;
 
 const slugify = (input: string): string =>
   input.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

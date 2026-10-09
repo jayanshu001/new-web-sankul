@@ -1,10 +1,8 @@
 // Client my subscriptions: active course, package, live-course and ebook cards.
 import { clientMySubscriptionsRepository as repo } from "./client-my-subscriptions.repository";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseMySubId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseMySubId = parsePositiveInt;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const daysLeftOf = (endAt: Date | null, now: Date) =>

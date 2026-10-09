@@ -27,7 +27,7 @@ export const listWishlist = async (req: Request, res: Response) => {
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     const typeFilter = itemType && isWlType(itemType) ? itemType : null;
     const { data, count, total } = await listWishlistMysql(cidNum, typeFilter, { search, skip, limit });
-    logger.info("listWishlist success (sql)", { traceId, customerId: userId, count, total });
+    logger.info("listWishlist success", { traceId, customerId: userId, count, total });
     return res.status(200).json({ success: true, data, count, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listWishlist failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
@@ -49,15 +49,15 @@ export const addToWishlist = async (req: Request, res: Response) => {
     const itemType = String(req.body?.itemType ?? "");
     const itemIdNum = parseWlId(String(req.body?.itemId ?? ""));
     if (!isWlType(itemType) || itemIdNum == null) {
-      logger.warn("addToWishlist validation failed (sql)", { traceId, customerId: userId, itemType, itemId: req.body?.itemId });
+      logger.warn("addToWishlist validation failed", { traceId, customerId: userId, itemType, itemId: req.body?.itemId });
       return res.status(400).json({ success: false, message: "Invalid itemType or itemId." });
     }
     if (!(await itemExists(itemType, itemIdNum))) {
-      logger.warn("addToWishlist item not found (sql)", { traceId, customerId: userId, itemType, itemId: itemIdNum });
+      logger.warn("addToWishlist item not found", { traceId, customerId: userId, itemType, itemId: itemIdNum });
       return res.status(404).json({ success: false, message: "Item not found." });
     }
     const outcome = await addWishlistMysql(cidNum, itemType, itemIdNum);
-    logger.info("addToWishlist success (sql)", { traceId, customerId: userId, itemType, itemId: itemIdNum, outcome });
+    logger.info("addToWishlist success", { traceId, customerId: userId, itemType, itemId: itemIdNum, outcome });
     if (outcome === "exists") return res.status(200).json({ success: true, message: "Already in wishlist." });
     return res.status(201).json({ success: true });
   } catch (e: any) {
@@ -82,8 +82,8 @@ export const removeFromWishlist = async (req: Request, res: Response) => {
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     if (!isWlType(itemType) || itemIdNum == null) return res.status(400).json({ success: false, message: "Invalid itemId." });
     const removed = await removeWishlistMysql(cidNum, itemType, itemIdNum);
-    if (!removed) { logger.warn("removeFromWishlist not found (sql)", { traceId, customerId: userId, itemType, itemId }); return res.status(404).json({ success: false, message: "Not in wishlist." }); }
-    logger.info("removeFromWishlist success (sql)", { traceId, customerId: userId, itemType, itemId });
+    if (!removed) { logger.warn("removeFromWishlist not found", { traceId, customerId: userId, itemType, itemId }); return res.status(404).json({ success: false, message: "Not in wishlist." }); }
+    logger.info("removeFromWishlist success", { traceId, customerId: userId, itemType, itemId });
     return res.status(200).json({ success: true, message: "Removed." });
   } catch (e: any) {
     logger.error("removeFromWishlist failed", { traceId, customerId: userId, itemType, itemId, error: getErrorMessage(e), stack: e.stack });
@@ -103,9 +103,9 @@ export const checkWishlist = async (req: Request, res: Response) => {
     const cidNum = parseWlId(String(userId));
     const itemIdNum = parseWlId(String(itemId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
-    if (!isWlType(itemType) || itemIdNum == null) { logger.warn("checkWishlist invalid params (sql)", { traceId, customerId: userId, itemType, itemId }); return res.status(400).json({ success: false, message: "Invalid params." }); }
+    if (!isWlType(itemType) || itemIdNum == null) { logger.warn("checkWishlist invalid params", { traceId, customerId: userId, itemType, itemId }); return res.status(400).json({ success: false, message: "Invalid params." }); }
     const inWishlist = await checkWishlistMysql(cidNum, itemType, itemIdNum);
-    logger.info("checkWishlist success (sql)", { traceId, customerId: userId, itemType, itemId, inWishlist });
+    logger.info("checkWishlist success", { traceId, customerId: userId, itemType, itemId, inWishlist });
     return res.status(200).json({ success: true, data: { inWishlist } });
   } catch (e: any) {
     logger.error("checkWishlist failed", { traceId, customerId: userId, itemType, itemId, error: getErrorMessage(e), stack: e.stack });

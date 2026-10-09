@@ -45,6 +45,7 @@ import {
   stopOtpUnblockScheduler,
 } from "./modules/customer-auth/otp-unblock.scheduler";
 import { closePdfBrowser } from "./libs/core/generate";
+import { initPdfRenderScheduler, shutdownPdfRenderScheduler } from "./libs/core/pdfRender.queue";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
 const PORT = process.env.PORT || 5000;
@@ -135,6 +136,12 @@ const buildPreClose =
         });
       }
     }
+    // API replicas hold pdf-render producer connections, the worker its consumer.
+    try {
+      await shutdownPdfRenderScheduler();
+    } catch (err) {
+      logger.warn("[shutdown] pdf-render queue close failed", { err: (err as Error).message });
+    }
     try {
       await closePdfBrowser();
     } catch (err) {
@@ -179,6 +186,9 @@ const startWorkers = async (): Promise<void> => {
   const t5 = Date.now();
   await initJobsScheduler();
   bootMs("jobs-content-lifecycle scheduler", t5);
+  const t6 = Date.now();
+  await initPdfRenderScheduler();
+  bootMs("pdf-render worker", t6);
 };
 
 const startServer = async () => {

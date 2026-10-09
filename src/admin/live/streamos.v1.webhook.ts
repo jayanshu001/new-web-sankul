@@ -11,9 +11,10 @@
 
 import logger from "../../utils/logger";
 import * as adminLiveSql from "../../modules/admin-live/admin-live.service";
-import { getRecordingByAssetId } from "./streamos.provider";
+import { getRecordingByAssetId } from "../../libs/streamos/streamos.provider";
 import { streamosEnvTag } from "../../config/streamos";
 import type { LiveSession } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
 
 export interface V1WebhookBody {
   event?: string;
@@ -46,12 +47,8 @@ export const isForeignEnvironment = (body: V1WebhookBody): boolean => {
   return tag != null && tag !== streamosEnvTag();
 };
 
-const sessionIdFromTags = (data: Record<string, any> | undefined): number | null => {
-  const raw = tagValue(data, "wsSessionId");
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const sessionIdFromTags = (data: Record<string, any> | undefined): number | null =>
+  parsePositiveInt(tagValue(data, "wsSessionId"));
 
 /** The documented correlation field: the stream KEY, not the public_id stored as `streamId`. */
 const streamKeyFromBody = (data: Record<string, any> | undefined): string | null =>

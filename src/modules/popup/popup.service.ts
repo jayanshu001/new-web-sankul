@@ -2,11 +2,9 @@
 import { popupRepository } from "./popup.repository";
 import { toPopupDto } from "./popup.transformer";
 import type { PopupCreateInput, PopupDto, PopupUpdateInput } from "./popup.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parsePopupId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePopupId = parsePositiveInt;
 
 export const listPopups = async (): Promise<PopupDto[]> => {
   const rows = await popupRepository.findMany();

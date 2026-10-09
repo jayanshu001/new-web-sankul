@@ -40,7 +40,7 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
     const { positionSec, durationSec } = progressBodySchema.parse(req.body);
     const r = await sqlReportLiveSession({ customerId: cid, liveSessionId: lsid, positionSec, durationSec });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-    logger.info("reportLiveSessionProgress (sql) success", { traceId, customerId: userId, liveSessionId: lsid });
+    logger.info("reportLiveSessionProgress success", { traceId, customerId: userId, liveSessionId: lsid });
     return res.status(200).json({ success: true, data: toProgressDto(r.row) });
   } catch (e: any) {
     if (e.issues) { logger.warn("reportLiveSessionProgress validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
@@ -64,7 +64,7 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
     const sid = parseLpId(String(userId));
     if (sid == null) return res.status(200).json({ success: true, data: { cards: [], resumeNext: null, pagination: buildPagination(0, page, limit) } });
     const { cards, resumeNext, total } = await sqlListMyLearningProgress(sid, { search, skip, limit });
-    logger.info("listMyLearningProgress (sql) success", { traceId, customerId: userId, cardCount: cards.length });
+    logger.info("listMyLearningProgress success", { traceId, customerId: userId, cardCount: cards.length });
     return res.status(200).json({ success: true, data: { cards, resumeNext, pagination: buildPagination(total, page, limit) } });
   } catch (e: any) {
     logger.error("listMyLearningProgress failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });

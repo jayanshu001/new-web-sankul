@@ -32,7 +32,7 @@ export const recordEbookDownload = async (req: Request, res: Response) => {
     if (!(await dlSql.hasActiveSub(cid, eId))) return res.status(403).json({ success: false, message: "Active subscription required to download." });
     if (!ebook.bookUrl) return res.status(404).json({ success: false, message: "This ebook has no downloadable PDF." });
     await dlSql.recordDownload(cid, eId);
-    logger.info("recordEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
+    logger.info("recordEbookDownload success", { traceId, customerId: uid, ebookId });
     // Entitlement is checked above. Return a media token (exchanged at /media/resolve
     // for a short-lived presigned URL), never a raw URL.
     const mediaToken = signMediaToken({ k: "ebook", id: ebook.id, scope: { kind: "ebook", id: ebook.id }, cust: cid });
@@ -59,7 +59,7 @@ export const listEbookDownloads = async (req: Request, res: Response) => {
     const cid = dlSql.parseDlId(String(uid));
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
     const data = await dlSql.listDownloads(cid);
-    logger.info("listEbookDownloads success (sql)", { traceId, customerId: uid, count: data.length });
+    logger.info("listEbookDownloads success", { traceId, customerId: uid, count: data.length });
     // Downloads hub reads only _id/ebookId/name/mediaToken
     // (see docs/api-optimization/GET_client_ebooks_downloads.md).
     return res.status(200).json({ success: true, data: omitList(data, ["author", "image", "thumbnail", "language", "downloadedAt"]) });
@@ -86,7 +86,7 @@ export const removeEbookDownload = async (req: Request, res: Response) => {
     if (cid == null || eId == null) return res.status(400).json({ success: false, message: "Invalid id." });
     const ok = await dlSql.removeDownload(cid, eId);
     if (!ok) return res.status(404).json({ success: false, message: "Download not found." });
-    logger.info("removeEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
+    logger.info("removeEbookDownload success", { traceId, customerId: uid, ebookId });
     return res.status(200).json({ success: true, message: "Removed from downloads." });
   } catch (error: any) {
     logger.error("removeEbookDownload failed", { traceId, customerId: uid, ebookId, error: getErrorMessage(error), stack: error.stack });

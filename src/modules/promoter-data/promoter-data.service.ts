@@ -2,11 +2,10 @@
 import { promoterDataRepository as repo } from "./promoter-data.repository";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parsePromoterId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePromoterId = parsePositiveInt;
 
 const fullToName = (full: string | null | undefined): string => {
   const parts = (full ?? "").trim().split(/\s+/).filter(Boolean);
@@ -18,15 +17,16 @@ const splitName = (full: string | null | undefined) => {
   return { firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1] : "" };
 };
 
-// Customers attributed to this promoter (search + paged).
+// Customers attributed to this promoter (search + paged). `customerId` narrows to
+// that one customer, and yields nothing unless they are attributed.
 export const listPromoterCustomers = async (
   promoterId: number,
-  opts: { search?: string; page: number; limit: number }
+  opts: { search?: string; customerId?: number; page: number; limit: number }
 ): Promise<{ items: any[]; total: number }> => {
   const ids = await repo.listCustomerIds(promoterId);
-  if (!ids.length) return { items: [], total: 0 };
+  if (!ids.length || (opts.customerId && !ids.includes(opts.customerId))) return { items: [], total: 0 };
 
-  const where: any = { id: { in: ids }, isAccountDeleted: false };
+  const where: Prisma.CustomerWhereInput = { id: opts.customerId ?? { in: ids }, isAccountDeleted: false };
   const search = buildPrismaSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
   if (search) where.AND = search.AND;
   const skip = (opts.page - 1) * opts.limit;
@@ -59,13 +59,13 @@ export const listPromoterCustomers = async (
 
 export const listPromoterSubscriptions = async (
   promoterId: number,
-  opts: { type: "course" | "ebook"; from?: Date; to?: Date; page: number; limit: number }
+  opts: { type: "course" | "ebook"; from?: Date; to?: Date; customerId?: number; page: number; limit: number }
 ): Promise<{ items: any[]; total: number }> => {
   const skip = (opts.page - 1) * opts.limit;
   if (opts.type === "ebook") {
     const [rows, total] = await Promise.all([
-      repo.listEbookSubs(promoterId, { from: opts.from, to: opts.to, skip, take: opts.limit }),
-      repo.countEbookSubs(promoterId, { from: opts.from, to: opts.to }),
+      repo.listEbookSubs(promoterId, { from: opts.from, to: opts.to, customerId: opts.customerId, skip, take: opts.limit }),
+      repo.countEbookSubs(promoterId, { from: opts.from, to: opts.to, customerId: opts.customerId }),
     ]);
     return {
       items: rows.map((s) => ({
@@ -81,8 +81,8 @@ export const listPromoterSubscriptions = async (
     };
   }
   const [rows, total] = await Promise.all([
-    repo.listCourseSubs(promoterId, { from: opts.from, to: opts.to, skip, take: opts.limit }),
-    repo.countCourseSubs(promoterId, { from: opts.from, to: opts.to }),
+    repo.listCourseSubs(promoterId, { from: opts.from, to: opts.to, customerId: opts.customerId, skip, take: opts.limit }),
+    repo.countCourseSubs(promoterId, { from: opts.from, to: opts.to, customerId: opts.customerId }),
   ]);
   return {
     items: rows.map((s) => ({
@@ -137,7 +137,7 @@ export const buildPromoterDashboard = async (promoterId: number) => {
 };
 
 const countPromoterPromocodes = async (promoterId: number, activeOnly: boolean, now: Date): Promise<number> => {
-  const where: any = { promoterId };
+  const where: Prisma.PromocodeWhereInput = { promoterId };
   if (activeOnly) {
     where.status = true;
     where.promo_expire_at = { gt: now };

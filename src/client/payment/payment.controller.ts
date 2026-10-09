@@ -31,7 +31,7 @@ export const createBookOrderPayment = async (req: Request, res: Response) => {
 
     const customerIdInt = Number(customerId);
     if (!Number.isInteger(customerIdInt)) {
-      logger.warn("createBookOrderPayment[mysql] non-int customer id", { traceId, customerId });
+      logger.warn("createBookOrderPaymentnon-int customer id", { traceId, customerId });
       return res.status(400).json({ success: false, message: "Invalid customer id." });
     }
     return createBookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
@@ -65,7 +65,7 @@ const createBookOrderMysqlPath = async (
       ZERO_AMOUNT: { status: 400, message: "This order has nothing payable. Please review your cart." },
     };
     const r = map[preview.code];
-    logger.warn("createBookOrderPayment[mysql] precondition", { traceId, customerId, code: preview.code });
+    logger.warn("createBookOrderPaymentprecondition", { traceId, customerId, code: preview.code });
     return res.status(r.status).json({ success: false, message: r.message });
   }
 
@@ -88,7 +88,7 @@ const createBookOrderMysqlPath = async (
     userIp: req.ip ?? null,
   });
 
-  logger.info("createBookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount });
+  logger.info("createBookOrderPaymentsuccess", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount });
   return res.status(201).json({
     success: true,
     data: omit({

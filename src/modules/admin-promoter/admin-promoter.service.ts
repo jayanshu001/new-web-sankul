@@ -8,7 +8,9 @@ import {
   resolveRange,
   bucketFormatFor,
   type RangeKey,
-} from "../../promoter/dashboard/overview.service";
+} from "../promoter-data/promoter-data.range";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 /**
  * Admin promoter management (ws_promoter). The promoter DTO shape is frozen:
@@ -23,10 +25,7 @@ import {
 
 const SALT_ROUNDS = 10;
 
-export const parsePromoterId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePromoterId = parsePositiveInt;
 
 interface PromoterRow {
   id: number;
@@ -73,7 +72,7 @@ export const listPromoters = async (opts: {
   page: number;
   limit: number;
 }): Promise<{ data: any[]; total: number }> => {
-  const where: any = { is_delete: false };
+  const where: Prisma.PromoterWhereInput = { is_delete: false };
   if (opts.status !== undefined) where.status = opts.status;
   const search = buildPrismaPrefixSearch(opts.search, ["full_name", "email", "phone"]);
   if (search) Object.assign(where, search);
@@ -374,7 +373,7 @@ const buildPromoterDashboardSql = async (scope: DashboardScope) => {
   const { start, end } = resolveRange(range, now, { startDate: scope.startDate, endDate: scope.endDate });
   const { unit } = bucketFormatFor(range, { start, end });
 
-  const where: any = {};
+  const where: Prisma.PackageCourseSubscriptionWhereInput = {};
   // One promoter, or all promoter-attributed rows (excludes regular purchases with a
   // null promoterId).
   where.promoterId = scope.promoterId != null ? scope.promoterId : { not: null };

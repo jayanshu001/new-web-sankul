@@ -4,8 +4,8 @@ import type {
   PromocodeSnapshot,
   ReferralSnapshot,
 } from "../order-code-snapshot/order-code-snapshot.types";
-import { creditReferrer } from "../../client/referral/credit-referrer";
-import { debitWallet } from "../../client/referral/debit-wallet";
+import { creditReferrer } from "../referral/credit-referrer";
+import { debitWallet } from "../referral/debit-wallet";
 import { ebookOrderRepository as repo } from "./ebook-order.repository";
 import { toEbookOrderRow, toEbookOrderDto } from "./ebook-order.transformer";
 import type {
@@ -13,11 +13,9 @@ import type {
   EbookOrderDto,
   EbookOrderRow,
 } from "./ebook-order.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseEbookOrderId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEbookOrderId = parsePositiveInt;
 
 /** Null when the plan is missing, has no ebook, is free, or is deactivated (so a disabled price row can't be bought). */
 export const findEbookPlanForOrder = async (

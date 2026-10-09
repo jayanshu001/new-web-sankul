@@ -12,6 +12,8 @@ import type {
   BookListItemDto,
   ListBooksOptions,
 } from "./catalog-book.types";
+import { parsePositiveInt } from "../../utils/parseId";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
 /**
  * Books with an empty `terms_and_conditions` fall back to the module-level
@@ -20,10 +22,7 @@ import type {
  */
 const bookTermsFallback = (): Promise<string> => getModuleTermsText("book");
 
-export const parseBookId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseBookId = parsePositiveInt;
 
 const decorate = (
   dto: BookDto,
@@ -69,7 +68,7 @@ export const getBookById = async (
 ): Promise<BookListItemDto | null> => {
   const shared = await cache.aside({
     key: cache.key(CacheDomain.Client, CacheEntity.CatalogBook, `detail:${id}`),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const [row, fallbackTerms] = await Promise.all([repo.findActiveById(id), bookTermsFallback()]);
       return row ? toBookSharedDto(row, fallbackTerms) : null;
@@ -96,7 +95,7 @@ export const listBooksData = async (
       CacheEntity.CatalogBook,
       `list:${cache.hashFilter({ ...filter, skip: opts.skip, take: opts.take })}`
     ),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const [rows, total, fallbackTerms] = await Promise.all([
         repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),

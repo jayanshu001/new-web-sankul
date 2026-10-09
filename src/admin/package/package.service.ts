@@ -10,6 +10,7 @@ import {
 } from "../../modules/package-chat/package-chat.service";
 import * as adminPackage from "../../modules/admin-package/admin-package.service";
 import * as promoCode from "../../modules/promo-code/promo-code.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 const assertPkgSqlId = (id: string, label: string): number => {
   const n = adminPackage.parsePackageId(id);
@@ -171,8 +172,7 @@ export const listPromotedCodes = async (
 // book can belong to a package; always returns an empty, correctly-shaped page.
 export const listBooks = async (packageId: string, query: PaginationQuery) => {
   assertPkgSqlId(packageId, "package");
-  const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(query.limit ?? "20", 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: query.page, limit: query.limit }, { defaultLimit: 20, maxLimit: 100 });
 
   return {
     data: [] as unknown[],
@@ -212,8 +212,7 @@ export const expandSubjectsToRelations = async (packageId: string) => {
 };
 
 export const listChatMessages = async (packageId: string, query: PaginationQuery) => {
-  const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: query.page, limit: query.limit }, { defaultLimit: 50, maxLimit: 200 });
 
   const pid = parsePackageChatId(packageId);
   if (pid == null) throw new HttpError(400, "Invalid package id.");

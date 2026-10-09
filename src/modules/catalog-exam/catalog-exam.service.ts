@@ -7,11 +7,9 @@ import type {
   ExamCategoryChildrenResult,
   ExamCategoryDto,
 } from "./catalog-exam.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseExamCategoryId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseExamCategoryId = parsePositiveInt;
 
 export const findCategoryById = async (id: number): Promise<ExamCategoryDto | null> => {
   const row = await repo.findCategoryById(id);
@@ -34,17 +32,18 @@ export const getCategoryChildren = async (
   ]);
 
   const childIds = children.map((c) => c.id);
-  const [examCounts, childCountRows] = await Promise.all([
-    Promise.all(childIds.map((cid) => repo.countExams(cid))),
-    repo.childCountsByParent(childIds),
-  ]);
+  const childCountRows = await repo.childCountsByParent(childIds);
   const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
+  // Exams are counted only for leaves, the only rows that report them. Still one count
+  // per leaf: an exam can sit in several categories (pivot), so a groupBy cannot do it.
+  const leafIds = childIds.filter((id) => !childFolderCount.get(id));
+  const examCounts = new Map(await Promise.all(leafIds.map(async (id) => [id, await repo.countExams(id)] as const)));
 
-  const list = children.map((c, i) => {
+  const list = children.map((c) => {
     const folders = childFolderCount.get(c.id) ?? 0;
     const havingChildDirectory = folders > 0;
     // Catalog contract: a directory reports its child-folder count, a leaf its own test count.
-    const count = havingChildDirectory ? folders : examCounts[i];
+    const count = havingChildDirectory ? folders : examCounts.get(c.id) ?? 0;
     return {
       category: { ...toExamCategoryDto(c), count, havingChildDirectory },
     };

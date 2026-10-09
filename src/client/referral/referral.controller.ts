@@ -70,7 +70,7 @@ export const getMyTransactions = async (req: Request, res: Response) => {
     const cid = parseRefCustomerId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { items, total } = await svcListTransactions(cid, { type, search, page: pageNum, limit: limitNum });
-    logger.info("getMyTransactions success (sql)", { traceId, customerId, total });
+    logger.info("getMyTransactions success", { traceId, customerId, total });
     // MyRewards reads _id/coin/status/createdAt + bankAccount.{bankName,accountNumber}
     // only (see docs/api-optimization/GET_client_referral_transactions.md).
     const data = (items ?? []).map((t: any) => ({
@@ -192,7 +192,7 @@ export const generateReferralCode = async (req: Request, res: Response) => {
       if (result.reason === "already") return res.status(400).json({ success: false, message: "You can't generate referral code again." });
       return res.status(400).json({ success: false, message: "Referral code is not available, please try another one." });
     }
-    logger.info("generateReferralCode success (sql)", { traceId, customerId, code });
+    logger.info("generateReferralCode success", { traceId, customerId, code });
     return res.status(200).json({ success: true, data: result.data });
   } catch (error: any) {
     if (error.issues) { logger.warn("generateReferralCode validation failed", { traceId, customerId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }

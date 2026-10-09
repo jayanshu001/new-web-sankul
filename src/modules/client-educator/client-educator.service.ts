@@ -1,11 +1,9 @@
 // Educator profile: educator detail with their courses, plans and purchase state.
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseEducatorId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEducatorId = parsePositiveInt;
 
 const num = (v: unknown): number => {
   const n = Number(v);

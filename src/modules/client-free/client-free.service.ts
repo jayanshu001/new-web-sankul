@@ -24,6 +24,7 @@ import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 import { searchTokens, buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
+import type { Prisma } from "@prisma/client";
 
 // For self-referencing category tables (material/exam).
 const descendantIds = async (table: string, parentCol: string, rootIds: number[]): Promise<number[]> => {
@@ -308,7 +309,7 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
 
 // Free = min active plan price == 0 (ws_ebook has no isPaid). Shape mirrors /client/ebooks.
 export const freeEbooks = async (opts: { customerId: number | null; search: string | null; language: string | null; page: number; limit: number; skip: number; shareBase: string }) => {
-  const where: any = { active: true };
+  const where: Prisma.EBookWhereInput = { active: true };
   const ebookSearch = buildPrismaSearch(opts.search, ["name", "author"]);
   if (ebookSearch) where.AND = ebookSearch.AND;
   if (opts.language) where.language = opts.language as any;
@@ -422,11 +423,15 @@ const enrichPackages = async (packages: any[], customerId: number | null, baseUr
   const packageIds = packages.map((p) => p.id);
   const { packageDaysLeft } = await resolveOwnedEndAt(customerId, [], packageIds);
   const { buildShareUrl } = await import("../../deeplinking/shareRedirect");
-  return Promise.all(packages.map(async (p) => {
-    const [plans, subCount] = await Promise.all([
-      prisma.packageCourseEbookPrice.findMany({ where: { packageId: p.id, status: true }, orderBy: { duration: "asc" } }),
-      prisma.packageCourseSubscription.count({ where: { packageId: p.id, status: true } }),
-    ]);
+  // Batched: one plans query and one subscriber-count groupBy for the page (was 2 per package).
+  const [allPlans, subRows] = await Promise.all([
+    prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds }, status: true }, orderBy: { duration: "asc" } }),
+    prisma.packageCourseSubscription.groupBy({ by: ["packageId"], where: { packageId: { in: packageIds }, status: true }, _count: { _all: true } }),
+  ]);
+  const subCounts = new Map(subRows.map((r) => [r.packageId, r._count._all]));
+  return packages.map((p) => {
+    const plans = allPlans.filter((pl) => pl.packageId === p.id);
+    const subCount = subCounts.get(p.id) ?? 0;
     return {
       kind: "package" as const,
       ...p, _id: String(p.id),
@@ -436,7 +441,7 @@ const enrichPackages = async (packages: any[], customerId: number | null, baseUr
       isPurchased: packageDaysLeft.has(p.id),
       daysLeft: packageDaysLeft.get(p.id) ?? null,
     };
-  }));
+  });
 };
 
 /** Per-customer active endAt (days left) for course/package ids (longest wins; null=lifetime). */

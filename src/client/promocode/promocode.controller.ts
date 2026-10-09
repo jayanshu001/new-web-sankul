@@ -53,7 +53,7 @@ export const listPromocodes = async (req: Request, res: Response) => {
       appliesTo = { type: appliesToType!, id: nid };
     }
     const result = await pcSql.listPublicPromocodes({ skip, limitNum, pageNum, appliesTo });
-    logger.info("listPromocodes success (mysql)", { traceId, total: result.pagination.total, type: appliesToType, filtered: filterById });
+    logger.info("listPromocodes success", { traceId, total: result.pagination.total, type: appliesToType, filtered: filterById });
     return res.status(200).json({
       success: true,
       data: result.data,
@@ -107,7 +107,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
     }
     const sqlEntity = await pcSql.detectEntitySql(nid);
     if (!sqlEntity) {
-      logger.warn("applyPromocode id matches no entity (sql)", { traceId, customerId: userId, promocode, rawId });
+      logger.warn("applyPromocode id matches no entity", { traceId, customerId: userId, promocode, rawId });
       return res.status(404).json({
         success: false,
         message: "No package, course, or ebook found for the selected item.",
@@ -116,7 +116,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
 
     const pricingPlans: PlanDoc[] = (await pcSql.loadPricingPlansSql(sqlEntity)).map((p) => ({ ...p }));
     if (!pricingPlans.length) {
-      logger.warn("applyPromocode no pricing plans (sql)", { traceId, customerId: userId, sqlEntity });
+      logger.warn("applyPromocode no pricing plans", { traceId, customerId: userId, sqlEntity });
       return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
     }
 
@@ -157,12 +157,12 @@ export const applyPromocode = async (req: Request, res: Response) => {
           },
         });
       }
-      logger.warn("applyPromocode invalid code (sql)", { traceId, customerId: userId, promocode: code });
+      logger.warn("applyPromocode invalid code", { traceId, customerId: userId, promocode: code });
       return res.status(400).json({ success: false, message: "Invalid promocode!" });
     }
 
     if (!pcSql.promoCovers(promo, { type: sqlEntity.type, id: sqlEntity.id })) {
-      logger.warn("applyPromocode not covered (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+      logger.warn("applyPromocode not covered", { traceId, customerId: userId, promocode: code, sqlEntity });
       return res.status(404).json({ success: false, message: "This promocode is not valid for this course!" });
     }
 
@@ -176,7 +176,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const hasLinks = planDiscounts.size > 0;
 
     if (!hasLinks && !(promoDiscountValue > 0)) {
-      logger.warn("applyPromocode zero discount (sql)", { traceId, customerId: userId, promocode: code });
+      logger.warn("applyPromocode zero discount", { traceId, customerId: userId, promocode: code });
       return res.status(400).json({ success: false, message: "This promocode has no discount configured." });
     }
 
@@ -213,11 +213,11 @@ export const applyPromocode = async (req: Request, res: Response) => {
 
     if (hasLinks && !matchedAny) {
       // covered entity but none of its plans have a link row for this code
-      logger.warn("applyPromocode no plan links for item (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+      logger.warn("applyPromocode no plan links for item", { traceId, customerId: userId, promocode: code, sqlEntity });
       return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
     }
 
-    logger.info("applyPromocode success (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+    logger.info("applyPromocode success", { traceId, customerId: userId, promocode: code, sqlEntity });
     return res.status(200).json({
       success: true,
       data: {

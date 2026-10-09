@@ -151,7 +151,7 @@ export const getCart = async (req: Request, res: Response) => {
     const cid = cartSql.parseCartId(userId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const data = await cartSql.getCart(cid);
-    logger.info("getCart success (sql)", { traceId, customerId: userId, itemCount: data.summary.itemCount });
+    logger.info("getCart success", { traceId, customerId: userId, itemCount: data.summary.itemCount });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getCart failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });

@@ -31,7 +31,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       page: pageNum,
       limit: limitNum,
     });
-    logger.info("listMySubscriptions success (sql)", { traceId, promoterId, type, total });
+    logger.info("listMySubscriptions success", { traceId, promoterId, type, total });
     return res.status(200).json({
       success: true,
       data: items,
@@ -69,7 +69,7 @@ export const subscriptionReport = async (req: Request, res: Response) => {
       const [year, month] = String(r.ym).split("-").map(Number);
       return { _id: { year, month }, count: Number(r.count) || 0, revenue: Number(r.revenue) || 0, commission: Math.round(Number(r.commission) || 0) };
     });
-    logger.info("subscriptionReport success (sql)", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
+    logger.info("subscriptionReport success", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
     return res.status(200).json({ success: true, data: { byCourse, byMonth } });
   } catch (e: any) {
     logger.error("subscriptionReport failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });

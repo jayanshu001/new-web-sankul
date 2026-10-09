@@ -11,7 +11,8 @@ const normalize = (raw: string): string =>
 export const record = async (customerId: number | null, rawQuery: string): Promise<void> => {
   if (!customerId || !Number.isInteger(customerId)) return;
   const query = normalize(rawQuery);
-  // Mirror the search endpoint's min-length rule — don't store 1-char noise.
+  // Don't store 1-char noise. The search endpoint itself has no min length (an empty
+  // q lists everything), so this is a history-only rule.
   if (query.length < 2) return;
   if (query.length > 255) return;
 

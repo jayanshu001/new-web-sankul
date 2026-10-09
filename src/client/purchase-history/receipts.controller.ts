@@ -1,6 +1,5 @@
 // Client purchase history: receipt and subscription tracking handlers.
 import { Request, Response } from "express";
-import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
@@ -76,11 +75,11 @@ export const getBookReceipt = async (req: Request, res: Response) => {
 
     const oid = parsePhId(id);
     const cidNum = parsePhId(String(userId));
-    if (oid == null) { logger.warn("getBookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    if (oid == null) { logger.warn("getBookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
     if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const data = await getBookReceiptMysql(oid, cidNum);
-    if (!data) { logger.warn("getBookReceipt not found (sql)", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
-    logger.info("getBookReceipt success (sql)", { traceId, customerId: userId, orderId: id });
+    if (!data) { logger.warn("getBookReceipt not found", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+    logger.info("getBookReceipt success", { traceId, customerId: userId, orderId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getBookReceipt failed", { traceId, customerId: userId, orderId: id, error: getErrorMessage(e), stack: e.stack });
@@ -116,7 +115,7 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
       ? id.slice(TS_ID_PREFIX.length)
       : id;
     const sid = parsePhId(raw);
-    if (sid == null) { logger.warn("getCourseReceipt invalid id (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    if (sid == null) { logger.warn("getCourseReceipt invalid id", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const data = isLive
       ? await getLiveCourseReceiptMysql(sid, cidNum)
@@ -127,8 +126,8 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
       : isTss
       ? await getTestSeriesReceiptBySubMysql(sid, cidNum)
       : await getCourseReceiptMysql(sid, cidNum);
-    if (!data) { logger.warn("getCourseReceipt not found (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(404).json({ success: false, message: "Subscription not found." }); }
-    logger.info("getCourseReceipt success (sql)", { traceId, customerId: userId, subscriptionId: id });
+    if (!data) { logger.warn("getCourseReceipt not found", { traceId, customerId: userId, subscriptionId: id }); return res.status(404).json({ success: false, message: "Subscription not found." }); }
+    logger.info("getCourseReceipt success", { traceId, customerId: userId, subscriptionId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getCourseReceipt failed", { traceId, customerId: userId, subscriptionId: id, error: getErrorMessage(e), stack: e.stack });
@@ -147,11 +146,11 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
 
     const oid = parsePhId(id);
     const cidNum = parsePhId(String(userId));
-    if (oid == null) { logger.warn("getEbookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    if (oid == null) { logger.warn("getEbookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
     if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const data = await getEbookReceiptMysql(oid, cidNum);
-    if (!data) { logger.warn("getEbookReceipt not found (sql)", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
-    logger.info("getEbookReceipt success (sql)", { traceId, customerId: userId, orderId: id });
+    if (!data) { logger.warn("getEbookReceipt not found", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+    logger.info("getEbookReceipt success", { traceId, customerId: userId, orderId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("getEbookReceipt failed", { traceId, customerId: userId, orderId: id, error: getErrorMessage(e), stack: e.stack });
@@ -175,7 +174,7 @@ export const getSubscriptionTracking = async (req: Request, res: Response) => {
 
     const data = await getSubscriptionTrackingMysql(id, cidNum);
     if (!data) return res.status(404).json({ success: false, message: "Tracking not available for this order." });
-    logger.info("getSubscriptionTracking success (sql)", { traceId, customerId: userId, subscriptionId: id });
+    logger.info("getSubscriptionTracking success", { traceId, customerId: userId, subscriptionId: id });
     return res.status(200).json({ success: true, data: { ...data, trackingUrl: buildTrackingUrl(data.awb ?? undefined) } });
   } catch (e: any) {
     logger.error("getSubscriptionTracking failed", { traceId, customerId: userId, subscriptionId: id, error: getErrorMessage(e), stack: e.stack });
@@ -208,7 +207,7 @@ export const getSubscriptionTrackingLive = async (req: Request, res: Response) =
       });
     }
     const awbData = await fetchLiveAWBData(awb);
-    logger.info("getSubscriptionTrackingLive success (sql)", { traceId, customerId: userId, subscriptionId: id });
+    logger.info("getSubscriptionTrackingLive success", { traceId, customerId: userId, subscriptionId: id });
     return res.status(200).json({ success: true, data: awbData });
   } catch (e: any) {
     logger.error("getSubscriptionTrackingLive failed", { traceId, customerId: userId, subscriptionId: id, error: getErrorMessage(e), stack: e.stack });

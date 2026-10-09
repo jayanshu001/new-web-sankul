@@ -1,11 +1,10 @@
 // Client payments: live-course promo preview and create-order handlers.
 import { Request, Response } from "express";
 import { z } from "zod";
-import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
-import { resolveWalletUsage } from "../../modules/referral/referral.service";
+import { findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
 import { getClientIp } from "../../utils/clientIp";
 import logger from "../../utils/logger";
@@ -20,24 +19,17 @@ import {
   createLiveCourseOrderMysql,
 } from "../../modules/live-course-order/live-course-order.service";
 import { customerAddressRepository } from "../../modules/customer-address/customer-address.repository";
+import {
+  planIdField, shippingIdField, promocodeField, coinField, requirePaymentCustomer,
+  applyOrderPromo, applyOrderWallet, receiptIdFor, promoEcho, createOrderFailure,
+} from "./payment-order.shared";
 
 const createOrderSqlSchema = z.object({
-  planId: z.coerce
-    .number({ invalid_type_error: "Please select a valid plan." })
-    .int("Please select a valid plan.")
-    .positive("Please select a valid plan."),
-  promocode: z.string().trim().min(1, "Promo code cannot be empty. Remove it or enter a valid code.").optional(),
+  planId: planIdField("Please select a valid plan."),
+  promocode: promocodeField,
   withMaterial: z.boolean().optional(),
-  customerShippingId: z.coerce
-    .number({ invalid_type_error: "Please select a valid delivery address." })
-    .int("Please select a valid delivery address.")
-    .positive("Please select a valid delivery address.")
-    .optional(),
-  coin: z.coerce
-    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
-    .int("Coins to redeem must be a whole number.")
-    .min(0, "Coins to redeem cannot be negative.")
-    .optional(),
+  customerShippingId: shippingIdField,
+  coin: coinField,
 });
 
 const applyPromoSqlSchema = z.object({
@@ -179,7 +171,7 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
         return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
       }
 
-      logger.info("applyLiveCoursePromo success (sql)", { traceId, customerId, liveCourseId, promocode: body.promocode });
+      logger.info("applyLiveCoursePromo success", { traceId, customerId, liveCourseId, promocode: body.promocode });
       return res.status(200).json({
         success: true,
         data: {
@@ -210,137 +202,98 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
 
 // Body: { planId, promocode? }.
 export const createLiveCourseOrderPayment = async (req: Request, res: Response) => {
+  const name = "createLiveCourseOrderPayment";
   const traceId = req.traceId;
-  const customerId = req.user?.id;
-  logger.info("createLiveCourseOrderPayment invoked", { traceId, path: req.originalUrl, customerId });
+  logger.info(`${name} invoked`, { traceId, path: req.originalUrl, customerId: req.user?.id });
 
   try {
-    if (!customerId) { logger.warn("createLiveCourseOrderPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
-
-    const rp = getRazorpay();
-    if (!rp) {
-      logger.error("createLiveCourseOrderPayment razorpay not configured", { traceId, customerId });
-      return res.status(500).json({
-        success: false,
-        message: "Razorpay credentials not configured on the server.",
-      });
+    const ctx = requirePaymentCustomer(req, res, name);
+    if (!ctx) return;
+    const { customerId, rp } = ctx;
+    const body = createOrderSqlSchema.parse(req.body);
+    const planSql = await findLiveCoursePlanForOrder(body.planId);
+    if (!planSql) {
+      logger.warn(`${name} plan not found/zero-price/inactive`, { traceId, customerId, planId: body.planId });
+      return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
+    }
+    // A disabled live course must not be purchasable even if an active plan still points at it.
+    const courseSql = await findLiveCourse(planSql.liveCourseId);
+    if (!courseSql || courseSql.status === false) {
+      logger.warn(`${name} live course inactive/missing`, { traceId, customerId, liveCourseId: planSql.liveCourseId });
+      return res.status(404).json({ success: false, message: "This live course is currently unavailable. Please choose another." });
     }
 
-    {
-      const customerIdInt = Number(customerId);
-      if (!Number.isInteger(customerIdInt)) {
-        logger.warn("createLiveCourseOrderPayment[mysql] non-int customer id", { traceId, customerId });
-        return res.status(400).json({ success: false, message: "Invalid customer id." });
+    // Material belongs to the selected plan; when it ships material, validate the address.
+    // ponytail: still stores the address-book id, not a ws_customer_shipping snapshot
+    // (see project memory "order shipping id source"); switch to resolveOrderShipping
+    // together with the reader side.
+    const withMaterialSql = planSql.withMaterial;
+    let shippingIdSql: number | null = null;
+    if (withMaterialSql && body.customerShippingId) {
+      const owned = await customerAddressRepository.findActiveOwned(body.customerShippingId, customerId);
+      if (!owned) {
+        logger.warn(`${name} address not owned`, { traceId, customerId, customerShippingId: body.customerShippingId });
+        return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
       }
-      const body = createOrderSqlSchema.parse(req.body);
-      const planSql = await findLiveCoursePlanForOrder(body.planId);
-      if (!planSql) {
-        logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price/inactive", { traceId, customerId, planId: body.planId });
-        return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
-      }
-      // A disabled live course must not be purchasable even if an active plan still points at it.
-      const courseSql = await findLiveCourse(planSql.liveCourseId);
-      if (!courseSql || courseSql.status === false) {
-        logger.warn("createLiveCourseOrderPayment[mysql] live course inactive/missing", { traceId, customerId, liveCourseId: planSql.liveCourseId });
-        return res.status(404).json({ success: false, message: "This live course is currently unavailable. Please choose another." });
-      }
-
-      // Material belongs to the selected plan; when it ships material, validate the address.
-      const withMaterialSql = planSql.withMaterial;
-      let shippingIdSql: number | null = null;
-      if (withMaterialSql && body.customerShippingId) {
-        const owned = await customerAddressRepository.findActiveOwned(body.customerShippingId, customerIdInt);
-        if (!owned) {
-          logger.warn("createLiveCourseOrderPayment[mysql] address not owned", { traceId, customerId, customerShippingId: body.customerShippingId });
-          return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
-        }
-        shippingIdSql = body.customerShippingId;
-      }
-
-      let chargeAmount = planSql.price;
-      let promocodeIdNum: number | null = null;
-      let originalAmount: number | null = null;
-      let discountAmount: number | null = null;
-      let referrerIdNum: number | null = null;
-      if (body.promocode) {
-        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId, customerIdInt);
-        if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
-        if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
-        chargeAmount = result.finalAmount;
-        const pid = Number(String(result.promo._id));
-        promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
-        originalAmount = result.originalAmount;
-        discountAmount = result.discountAmount;
-        referrerIdNum = result.referrerId ?? null;
-      }
-
-      // Snapshot the redeemed code into exactly one column (promocode → `promocode`,
-      // referral → `refferalcode`; both null when none), same contract as
-      // ws_package_course_order. planKind "livePlan" is required: ws_live_course_plan
-      // shares an id space with ws_package_course_ebook_price, so "price" would snapshot
-      // an unrelated plan and its promoter percentage.
-      const codeSnapshot = await buildOrderCodeSnapshots({
-        promocodeId: promocodeIdNum,
-        referrerId: referrerIdNum,
-        planId: body.planId,
-        planKind: "livePlan",
-      });
-
-      // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
-      const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
-      if (walletUsage.error) {
-        logger.warn("createLiveCourseOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
-        return res.status(400).json({ success: false, message: walletUsage.error });
-      }
-      if (walletUsage.coin > 0) {
-        chargeAmount = chargeAmount - walletUsage.coin;
-        if (chargeAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
-      }
-
-      const nowSql = new Date();
-      const receiptId = `live-${nowSql.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
-      const rzpOrder = await createRazorpayOrder(rp, {
-        amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
-        notes: { kind: "live-course", liveCourseId: String(planSql.liveCourseId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
-      });
-      const { orderId } = await createLiveCourseOrderMysql({
-        customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
-        amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: walletUsage.coin,
-        // `originalAmount` stays null when no promo ran; the service falls back to the
-        // charged amount so `price` is always the list price, as on package.
-        originalAmount,
-        uniqueId: receiptId,
-        razorpayOrderPayload: JSON.stringify(rzpOrder),
-        codeDiscount: discountAmount ?? 0,
-        referrerId: referrerIdNum,
-        ipAddress: getClientIp(req, 255),
-        promocodeSnapshot: codeSnapshot.promocode, refferalcodeSnapshot: codeSnapshot.refferalcode,
-        withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
-      });
-      logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
-      queueCRMLead(
-        { params: { userId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId, amount: chargeAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
-        { traceId, customerId, orderId }
-      );
-      return res.status(201).json({
-        success: true,
-        data: omit({
-          // Wire contract: the key stays `subscriptionId` but carries the order id (no
-          // subscription exists until verify, which is keyed on razorpay_order_id).
-          subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
-          liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
-          plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
-          promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
-        }, PAYMENT_ORDER_ECHO_KEYS),
-      });
+      shippingIdSql = body.customerShippingId;
     }
+
+    const promo = await applyOrderPromo(res, ctx, body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId);
+    if (!promo) return;
+
+    // Snapshot the redeemed code into exactly one column (promocode → `promocode`,
+    // referral → `refferalcode`; both null when none), same contract as
+    // ws_package_course_order. planKind "livePlan" is required: ws_live_course_plan
+    // shares an id space with ws_package_course_ebook_price, so "price" would snapshot
+    // an unrelated plan and its promoter percentage.
+    const codeSnapshot = await buildOrderCodeSnapshots({
+      promocodeId: promo.promocodeIdNum,
+      referrerId: promo.referrerIdNum,
+      planId: body.planId,
+      planKind: "livePlan",
+    });
+
+    const wallet = await applyOrderWallet(res, ctx, body.coin, planSql.price, promo.chargeAmount);
+    if (!wallet) return;
+    const { chargeAmount } = wallet;
+
+    const nowSql = new Date();
+    const receiptId = receiptIdFor("live", nowSql.getTime());
+    const rzpOrder = await createRazorpayOrder(rp, {
+      amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
+      notes: { kind: "live-course", liveCourseId: String(planSql.liveCourseId), planId: String(body.planId), customerId: String(customerId), ...(promo.promocodeIdNum ? { promocodeId: String(promo.promocodeIdNum) } : {}) },
+    });
+    const { orderId } = await createLiveCourseOrderMysql({
+      customerId, liveCourseId: planSql.liveCourseId, planId: body.planId,
+      amount: chargeAmount, razorpayOrderId: rzpOrder.id, coin: wallet.coin,
+      // `originalAmount` stays null when no promo ran; the service falls back to the
+      // charged amount so `price` is always the list price, as on package.
+      originalAmount: promo.originalAmount,
+      uniqueId: receiptId,
+      razorpayOrderPayload: JSON.stringify(rzpOrder),
+      codeDiscount: promo.discountAmount ?? 0,
+      referrerId: promo.referrerIdNum,
+      ipAddress: getClientIp(req, 255),
+      promocodeSnapshot: codeSnapshot.promocode, refferalcodeSnapshot: codeSnapshot.refferalcode,
+      withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
+    });
+    logger.info(`${name} success`, { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+    queueCRMLead(
+      { params: { userId: customerId, liveCourseId: planSql.liveCourseId, planId: body.planId, amount: chargeAmount }, leadType: CRM_LEAD_TYPE.PAYMENT_MODE },
+      { traceId, customerId, orderId }
+    );
+    return res.status(201).json({
+      success: true,
+      data: omit({
+        // Wire contract: the key stays `subscriptionId` but carries the order id (no
+        // subscription exists until verify, which is keyed on razorpay_order_id).
+        subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
+        liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
+        plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
+        promo: promoEcho(promo, chargeAmount),
+      }, PAYMENT_ORDER_ECHO_KEYS),
+    });
   } catch (e: any) {
-    if (e instanceof ZodError) {
-      logger.warn("createLiveCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues });
-      const { message, errors } = formatZodError(e);
-      return res.status(400).json({ success: false, message, errors });
-    }
-    logger.error("createLiveCourseOrderPayment failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
+    return createOrderFailure(res, e, name, traceId, req.user?.id);
   }
 };

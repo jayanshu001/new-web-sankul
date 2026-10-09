@@ -13,6 +13,7 @@ import {
   toEducatorDto,
   verifyEducatorPassword,
 } from "../../modules/educator-auth/educator-auth.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
 // JWT secrets routed through the keyring (config/jwtKeys.ts).
 const JWT_ACCESS_TTL_DAYS = 1;
@@ -22,10 +23,7 @@ const SALT_ROUNDS = 10;
 const addDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
 /** Parse a JWT/route educator id ("20") to a positive int; null if invalid. */
-const parseEducatorId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseEducatorId = parsePositiveInt;
 
 // Email/password login; deactivates prior tokens and issues a fresh access/refresh pair.
 export async function educatorLogin(email: string, password: string, traceId?: string) {
@@ -33,17 +31,17 @@ export async function educatorLogin(email: string, password: string, traceId?: s
 
   const row = await repo.findActiveByEmail(email);
   if (!row) {
-    logger.warn("educatorLogin service invalid credentials (sql)", { traceId, email });
+    logger.warn("educatorLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
   if (!row.password) {
-    logger.warn("educatorLogin service no password set (sql)", { traceId, educatorId: row.id });
+    logger.warn("educatorLogin service no password set", { traceId, educatorId: row.id });
     return { ok: false, message: "Account has no password set." };
   }
   // Legacy rows store MD5, modern rows bcrypt; verifyEducatorPassword handles both.
   const match = await verifyEducatorPassword(password, row.password);
   if (!match) {
-    logger.warn("educatorLogin service invalid credentials (sql)", { traceId, email });
+    logger.warn("educatorLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
@@ -62,7 +60,7 @@ export async function educatorLogin(email: string, password: string, traceId?: s
     JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
   );
 
-  logger.info("educatorLogin service success (sql)", { traceId, educatorId: dto.id });
+  logger.info("educatorLogin service success", { traceId, educatorId: dto.id });
   return { ok: true, message: "Login successful.", token, refreshToken, educator: dto };
 }
 
@@ -78,13 +76,13 @@ export async function educatorRefresh(refreshToken: string, traceId?: string) {
 
     const db = await repo.findActiveTokenByRefresh(refreshToken, id);
     if (!db) {
-      logger.warn("educatorRefresh service revoked (sql)", { traceId, educatorId: id });
+      logger.warn("educatorRefresh service revoked", { traceId, educatorId: id });
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
     const row = await repo.findActiveById(id);
     if (!row) {
-      logger.warn("educatorRefresh service educator not found (sql)", { traceId, educatorId: id });
+      logger.warn("educatorRefresh service educator not found", { traceId, educatorId: id });
       return { ok: false, message: "Educator not found or disabled." };
     }
 
@@ -103,10 +101,10 @@ export async function educatorRefresh(refreshToken: string, traceId?: string) {
       JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
     );
 
-    logger.info("educatorRefresh service success (sql)", { traceId, educatorId: dto.id });
+    logger.info("educatorRefresh service success", { traceId, educatorId: dto.id });
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, educator: dto };
   } catch (err) {
-    logger.error("educatorRefresh service error (sql)", { traceId, error: (err as Error).message });
+    logger.error("educatorRefresh service error", { traceId, error: (err as Error).message });
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }
@@ -124,7 +122,7 @@ export async function educatorLogout(educatorId: string, traceId?: string) {
   const id = parseEducatorId(educatorId);
   if (id) await repo.deactivateAllTokens(id);
   await redisClient.del(`educator_session:${educatorId}`);
-  logger.info("educatorLogout service success (sql)", { traceId, educatorId });
+  logger.info("educatorLogout service success", { traceId, educatorId });
   return { ok: true, message: "Successfully logged out." };
 }
 
@@ -140,21 +138,21 @@ export async function educatorChangePassword(
   if (!id) return { ok: false, message: "Educator not found." };
   const row = await repo.findById(id);
   if (!row) {
-    logger.warn("educatorChangePassword service educator not found (sql)", { traceId, educatorId });
+    logger.warn("educatorChangePassword service educator not found", { traceId, educatorId });
     return { ok: false, message: "Educator not found." };
   }
   if (!row.password) {
-    logger.warn("educatorChangePassword service no password set (sql)", { traceId, educatorId });
+    logger.warn("educatorChangePassword service no password set", { traceId, educatorId });
     return { ok: false, message: "No current password set." };
   }
   const match = await verifyEducatorPassword(currentPassword, row.password);
   if (!match) {
-    logger.warn("educatorChangePassword service wrong current password (sql)", { traceId, educatorId });
+    logger.warn("educatorChangePassword service wrong current password", { traceId, educatorId });
     return { ok: false, message: "Current password is incorrect." };
   }
   // New password is always stored as bcrypt (upgrading legacy MD5 on change).
   await repo.updatePassword(id, await bcrypt.hash(newPassword, SALT_ROUNDS));
-  logger.info("educatorChangePassword service success (sql)", { traceId, educatorId });
+  logger.info("educatorChangePassword service success", { traceId, educatorId });
   return { ok: true, message: "Password updated successfully." };
 }
 
@@ -169,11 +167,11 @@ export async function educatorUpdateProfile(
   if (!id) return { ok: false, message: "Educator not found." };
   const existing = await repo.findById(id);
   if (!existing) {
-    logger.warn("educatorUpdateProfile service educator not found (sql)", { traceId, educatorId });
+    logger.warn("educatorUpdateProfile service educator not found", { traceId, educatorId });
     return { ok: false, message: "Educator not found." };
   }
   const updated = await repo.updateProfile(id, data);
-  logger.info("educatorUpdateProfile service success (sql)", { traceId, educatorId });
+  logger.info("educatorUpdateProfile service success", { traceId, educatorId });
   return { ok: true, message: "Profile updated.", educator: toEducatorDto(updated) };
 }
 
@@ -184,9 +182,9 @@ export async function educatorGetProfile(educatorId: string, traceId?: string) {
   if (!id) return { ok: false, message: "Educator not found." };
   const row = await repo.findById(id);
   if (!row) {
-    logger.warn("educatorGetProfile service educator not found (sql)", { traceId, educatorId });
+    logger.warn("educatorGetProfile service educator not found", { traceId, educatorId });
     return { ok: false, message: "Educator not found." };
   }
-  logger.info("educatorGetProfile service success (sql)", { traceId, educatorId });
+  logger.info("educatorGetProfile service success", { traceId, educatorId });
   return { ok: true, message: "ok", educator: toEducatorDto(row) };
 }

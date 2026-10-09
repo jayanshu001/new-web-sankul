@@ -3,15 +3,13 @@ import { adminCourseRepository as repo } from "./admin-course.repository";
 import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
-import { buildPagination } from "../../utils/listQuery";
+import { buildPagination, parseListQuery } from "../../utils/listQuery";
 import { countPlanUsage, countPlanUsageOne } from "../../utils/planUsage";
 import type { Course } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseCourseId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCourseId = parsePositiveInt;
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
@@ -100,8 +98,7 @@ export const getPreRequisites = async () => {
 export interface ListCoursesQuery { search?: string; status?: string; isPaid?: string; isPopular?: string; page?: string; limit?: string; sortBy?: string; sortOrder?: string }
 
 export const listCourses = async (q: ListCoursesQuery) => {
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "10", 10) || 10, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 10, maxLimit: 100 });
   const opts = {
     search: q.search,
     status: q.status === "true" ? true : q.status === "false" ? false : undefined,
@@ -486,8 +483,7 @@ const toVideoCategoryDto = (v: any) => ({
 });
 
 export const listCourseVideoCategories = async (q: { page?: string; limit?: string }) => {
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "50", 10) || 50, 1), 200);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 50, maxLimit: 200 });
   const [rows, total] = await Promise.all([
     repo.listVideoCategories({ skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.countVideoCategories(),
@@ -531,8 +527,7 @@ export const deleteCourseVideoCategory = async (id: number): Promise<"not_found"
 const toMaterialDto = (m: any) => ({ _id: String(m.id), title: m.title, createdAt: m.created_at ?? null, updatedAt: m.updated_at ?? null });
 
 export const listCourseMaterials = async (q: { page?: string; limit?: string }) => {
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "50", 10) || 50, 1), 200);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 50, maxLimit: 200 });
   const [rows, total] = await Promise.all([
     repo.listMaterials({ skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.countMaterials(),
@@ -570,8 +565,7 @@ const toRelationDto = (r: any) => ({
 });
 
 export const listVideoCategoryRelations = async (q: { page?: string; limit?: string }) => {
-  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "50", 10) || 50, 1), 200);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: q.page, limit: q.limit }, { defaultLimit: 50, maxLimit: 200 });
   const [rows, total] = await Promise.all([
     repo.listRelations({ skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.countRelations(),

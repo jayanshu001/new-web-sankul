@@ -58,13 +58,13 @@ export async function adminLogin(
 
   const row = await adminAuthRepository.findActiveByEmail(email);
   if (!row) {
-    logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
+    logger.warn("adminLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
   const isMatch = await bcrypt.compare(password, row.password);
   if (!isMatch) {
-    logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
+    logger.warn("adminLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
@@ -93,7 +93,7 @@ export async function adminLogin(
     JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
   );
 
-  logger.info("adminLogin service success (sql)", { traceId, adminId: dto.id });
+  logger.info("adminLogin service success", { traceId, adminId: dto.id });
   return { ok: true, message: "Login successful.", token, refreshToken, admin: dto as unknown as Record<string, unknown> };
 }
 
@@ -111,7 +111,7 @@ export async function getAdminProfile(
   if (!id) return { ok: false, message: "Admin not found." };
   const row = await adminAuthRepository.findActiveById(id);
   if (!row) {
-    logger.warn("getAdminProfile service admin missing or disabled (sql)", { traceId, adminId });
+    logger.warn("getAdminProfile service admin missing or disabled", { traceId, adminId });
     return { ok: false, message: "Admin not found or disabled." };
   }
   const dto = await buildSqlAdminDto(row);
@@ -150,7 +150,7 @@ export async function createAdminUser(data: {
     isDark: false,
   });
 
-  logger.info("createAdminUser service success (sql)", { traceId, email: data.email });
+  logger.info("createAdminUser service success", { traceId, email: data.email });
   return { ok: true, message: "Admin user created successfully." };
 }
 
@@ -166,16 +166,16 @@ export async function changeAdminPassword(
   if (!id) return { ok: false, message: "Admin not found." };
   const row = await adminAuthRepository.findById(id);
   if (!row) {
-    logger.warn("changeAdminPassword service admin not found (sql)", { traceId, adminId });
+    logger.warn("changeAdminPassword service admin not found", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
   const isMatch = await bcrypt.compare(currentPassword, row.password);
   if (!isMatch) {
-    logger.warn("changeAdminPassword service wrong current password (sql)", { traceId, adminId });
+    logger.warn("changeAdminPassword service wrong current password", { traceId, adminId });
     return { ok: false, message: "Current password is incorrect." };
   }
   await adminAuthRepository.updatePassword(id, await bcrypt.hash(newPassword, SALT_ROUNDS));
-  logger.info("changeAdminPassword service success (sql)", { traceId, adminId });
+  logger.info("changeAdminPassword service success", { traceId, adminId });
   return { ok: true, message: "Password updated successfully." };
 }
 
@@ -194,13 +194,13 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
 
     const dbToken = await adminAuthRepository.findActiveTokenByRefresh(refreshToken, id);
     if (!dbToken) {
-      logger.warn("refreshAdminToken invalid token (sql)", { traceId });
+      logger.warn("refreshAdminToken invalid token", { traceId });
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
     const row = await adminAuthRepository.findActiveById(id);
     if (!row) {
-      logger.warn("refreshAdminToken admin missing or disabled (sql)", { traceId, adminUserId: String(id) });
+      logger.warn("refreshAdminToken admin missing or disabled", { traceId, adminUserId: String(id) });
       return { ok: false, message: "Admin not found or disabled." };
     }
 
@@ -227,10 +227,10 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
       JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
     );
 
-    logger.info("refreshAdminToken service success (sql)", { traceId, adminUserId: dto.id });
+    logger.info("refreshAdminToken service success", { traceId, adminUserId: dto.id });
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, admin: dto };
   } catch (err) {
-    logger.error("refreshAdminToken service error (sql)", { traceId, error: (err as Error).message });
+    logger.error("refreshAdminToken service error", { traceId, error: (err as Error).message });
     // A DB outage must not look like a bad token (401 logs the admin out); rethrow for a 503.
     if (isDatabaseUnavailableError(err)) throw err;
     return { ok: false, message: "Invalid or expired refresh token." };
@@ -247,10 +247,10 @@ export async function logoutAdmin(adminId: string, traceId?: string) {
     const id = parseAdminId(adminId);
     if (id) await adminAuthRepository.deactivateAllTokens(id);
     await redisClient.del(`admin_session:${adminId}`);
-    logger.info("logoutAdmin service success (sql)", { traceId, adminId });
+    logger.info("logoutAdmin service success", { traceId, adminId });
     return { ok: true, message: "Successfully logged out." };
   } catch (error) {
-    logger.error("logoutAdmin service error (sql)", { traceId, adminId, error: (error as Error).message });
+    logger.error("logoutAdmin service error", { traceId, adminId, error: (error as Error).message });
     return { ok: false, message: "Failed to logout securely." };
   }
 }
@@ -266,7 +266,7 @@ export async function updateAdminProfile(
   if (!id) return { ok: false, message: "Admin not found." };
   const existing = await adminAuthRepository.findById(id);
   if (!existing) {
-    logger.warn("updateAdminProfile service admin not found (sql)", { traceId, adminId });
+    logger.warn("updateAdminProfile service admin not found", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
   // Best-effort cleanup of the replaced S3 image.
@@ -277,7 +277,7 @@ export async function updateAdminProfile(
     );
   }
   const updated = await adminAuthRepository.updateProfile(id, data);
-  logger.info("updateAdminProfile service success (sql)", { traceId, adminId });
+  logger.info("updateAdminProfile service success", { traceId, adminId });
   return {
     ok: true,
     message: "Admin profile updated successfully.",

@@ -6,11 +6,10 @@
 import { prisma } from "../../config/prisma";
 import { parseLabels } from "../../utils/goalSelection";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseId = parsePositiveInt;
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
@@ -22,7 +21,7 @@ export const listStates = async (opts?: {
   skip?: number;
   take?: number;
 }): Promise<{ data: any[]; total: number }> => {
-  const where: any = {};
+  const where: Prisma.CustomerStateWhereInput = {};
   if (opts?.active !== undefined) where.active = opts.active;
   const search = buildPrismaPrefixSearch(opts?.search, ["name", "state_code"]);
   if (search) where.AND = search.AND;
@@ -51,7 +50,7 @@ export const updateState = async (
 ): Promise<Envelope<any>> => {
   const exists = await prisma.customerState.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return { ok: false, status: 404, message: "State not found" };
-  const data: any = {};
+  const data: Prisma.CustomerStateUncheckedUpdateInput = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.stateCode !== undefined) data.state_code = input.stateCode;
   if (input.active !== undefined) data.active = input.active;
@@ -75,7 +74,7 @@ const districtDto = (d: any) => ({
 });
 
 export const listDistricts = async (filter: { stateId?: number; active?: boolean }) => {
-  const where: any = {};
+  const where: Prisma.CustomerDistictWhereInput = {};
   if (filter.stateId !== undefined) where.stateId = filter.stateId;
   if (filter.active !== undefined) where.active = filter.active;
   const rows = await prisma.customerDistict.findMany({
@@ -108,7 +107,7 @@ export const updateDistrict = async (
     const state = await prisma.customerState.findUnique({ where: { id: input.stateId }, select: { id: true } });
     if (!state) return { ok: false, status: 404, message: "State not found" };
   }
-  const data: any = {};
+  const data: Prisma.CustomerDistictUncheckedUpdateInput = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.stateId !== undefined) data.stateId = input.stateId;
   if (input.active !== undefined) data.active = input.active;
@@ -146,7 +145,7 @@ export const updateEducation = async (
 ): Promise<Envelope<any>> => {
   const exists = await prisma.customerEducation.findUnique({ where: { id }, select: { id: true } });
   if (!exists) return { ok: false, status: 404, message: "Education not found" };
-  const data: any = {};
+  const data: Prisma.CustomerEducationUncheckedUpdateInput = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.status !== undefined) data.status = input.status;
   const row = await prisma.customerEducation.update({ where: { id }, data });
@@ -208,7 +207,7 @@ export const updateTargetGoal = async (
 ): Promise<Envelope<any>> => {
   const exists = await prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true, labels: true } });
   if (!exists) return { ok: false, status: 404, message: "Target Goal not found" };
-  const data: any = {};
+  const data: Prisma.CustomerTargetGoalUncheckedUpdateInput = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.image !== undefined) data.image = input.image;
   if (input.active !== undefined) data.active = input.active;

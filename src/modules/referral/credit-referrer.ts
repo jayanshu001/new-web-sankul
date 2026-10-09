@@ -1,5 +1,5 @@
 // Referral rewards: credits the referrer after a verified purchase.
-import { creditReferrerMysql } from "../../modules/referral/referral.service";
+import { creditReferrerMysql } from "./referral.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 

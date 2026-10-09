@@ -17,6 +17,7 @@
  *   testSeries  : ws_test_series_price          (testSeriesId) ← complete TestSeriesOrder
  */
 import { prisma } from "../../config/prisma";
+import type { Prisma } from "@prisma/client";
 
 export type PopularityScope = "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 export const POPULARITY_SCOPES: PopularityScope[] = ["course", "package", "ebook", "liveCourse", "testSeries"];
@@ -33,7 +34,7 @@ function pickWinner(plans: PlanRow[], paidByPlan: Map<number, number>): number |
 }
 
 async function loadCpe(field: "courseId" | "packageId" | "ebookId", productId?: number) {
-  const where: any = { status: true, [field]: productId != null ? productId : { not: null } };
+  const where: Prisma.PackageCourseEbookPriceWhereInput = { status: true, [field]: productId != null ? productId : { not: null } };
   const plans = await prisma.packageCourseEbookPrice.findMany({
     where, select: { id: true, price: true, courseId: true, packageId: true, ebookId: true },
   });

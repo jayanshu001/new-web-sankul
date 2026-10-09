@@ -26,7 +26,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const { dashboard, testimonial } = await clientDashSql.buildHomeDashboard(cid);
     // todayDate/logo/unreadNotifications are dropped too (badge uses /notifications/count).
     const slimSections = dashboard.filter((s: any) => !DASHBOARD_DROP_SECTIONS.has(s.type));
-    logger.info("getDashboard success (sql)", { traceId, customerId: userId, sections: slimSections.length });
+    logger.info("getDashboard success", { traceId, customerId: userId, sections: slimSections.length });
     return res.status(200).json({ dashboard: slimSections, testimonial });
   } catch (e: any) {
     logger.error("getDashboard failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
@@ -53,7 +53,7 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
     const sid = clientDashSql.parseCdId(String(userId));
     if (sid == null) return res.status(200).json({ resumeLecture: null, recentPackage: null, recentCourse: null });
     const { resumeLecture, recentCourse, recentPackage } = await lpHubSql.buildResumeDashboard(sid);
-    logger.info("getResumeDashboard success (sql)", { traceId, customerId: userId });
+    logger.info("getResumeDashboard success", { traceId, customerId: userId });
     return res.status(200).json({ resumeLecture, recentPackage, recentCourse });
   } catch (e: any) {
     logger.error("getResumeDashboard failed", {
@@ -77,7 +77,7 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
     const slimDashboard = dashboard
       .filter((s: any) => FREE_DASHBOARD_KEEP_SECTIONS.has(s.type))
       .map((s: any) => ({ ...s, data: pickList(s.data as any[], FREE_EBOOK_CARD_FIELDS) }));
-    logger.info("getFreeDashboard success (sql)", { traceId, sections: slimDashboard.length });
+    logger.info("getFreeDashboard success", { traceId, sections: slimDashboard.length });
     return res.status(200).json({ dashboard: slimDashboard });
   } catch (e: any) {
     logger.error("getFreeDashboard failed", { traceId, error: getErrorMessage(e), stack: e.stack });

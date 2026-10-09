@@ -2,11 +2,10 @@
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseCtsId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCtsId = parsePositiveInt;
 
 const num = (v: any): number => (v == null ? 0 : Number(v.toString?.() ?? v) || 0);
 
@@ -59,7 +58,7 @@ export type ListOpts = {
 };
 
 export const listTestSeriesMysql = async (opts: ListOpts) => {
-  const where: any = { status: true };
+  const where: Prisma.TestSeriesWhereInput = { status: true };
   const search = buildPrismaSearch(opts.search, ["title"]);
   if (search) where.AND = search.AND;
 
@@ -391,7 +390,7 @@ export type MySubsOpts = {
 };
 
 export const listMySubscriptionsMysql = async (opts: MySubsOpts) => {
-  const where: any = { customerId: opts.customerId, status: true };
+  const where: Prisma.TestSeriesSubscriptionWhereInput = { customerId: opts.customerId, status: true };
   // `search` matches the series title, resolved to ids first so findMany + count share the where.
   if (opts.search) {
     const matched = await prisma.testSeries.findMany({

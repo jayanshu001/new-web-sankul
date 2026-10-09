@@ -10,16 +10,11 @@ import type {
   VideoDto,
   VideoEncryptInput,
 } from "./catalog-video.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseVideoId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseVideoId = parsePositiveInt;
 
-export const parseVideoCategoryId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseVideoCategoryId = parsePositiveInt;
 
 export const findVideoById = async (id: number): Promise<VideoDto | null> => {
   const row = await repo.findVideoById(id);
@@ -32,9 +27,6 @@ export const listActiveVideosByCategory = async (
   const rows = await repo.listActiveVideosByCategory(videoCategoryId);
   return rows.map(toVideoDto);
 };
-
-export const countActiveVideosByCategory = (videoCategoryId: number): Promise<number> =>
-  repo.countActiveVideosByCategory(videoCategoryId);
 
 /** Returns the `encryptVideoSource` input; the caller does the encryption. Null if missing/disabled. */
 export const getVideoEncryptInput = async (
@@ -64,16 +56,16 @@ export const getVideoCategoryChildren = async (
   ]);
   const childIds = children.map((c) => c.id);
   const [videoCounts, childCountRows] = await Promise.all([
-    Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
+    repo.countActiveVideosByCategories(childIds),
     repo.childCountsByParent(childIds),
   ]);
   const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
-  const list = children.map((c, i) => {
+  const list = children.map((c) => {
     const folders = childFolderCount.get(c.id) ?? 0;
     const havingChildDirectory = folders > 0;
     // Catalog contract: a directory reports its child-folder count, a leaf its own video count.
-    const count = havingChildDirectory ? folders : videoCounts[i];
+    const count = havingChildDirectory ? folders : videoCounts.get(c.id) ?? 0;
     return { category: { ...toVideoCategoryDto(c), count, havingChildDirectory } };
   });
   return { parent: toVideoCategoryDto(parentRow), list, total };

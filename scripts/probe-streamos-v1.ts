@@ -33,7 +33,7 @@ import {
   endLiveStream,
   getLiveStream,
   StreamosError,
-} from "../src/admin/live/streamos.v1.service";
+} from "../src/libs/streamos/streamos.v1.service";
 
 const WRITE = process.env.PROBE_WRITE === "1" || process.env.PROBE_WRITE === "true";
 

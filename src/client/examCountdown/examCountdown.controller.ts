@@ -49,7 +49,7 @@ export const listCountdowns = async (req: Request, res: Response) => {
       categoryId: catId, search: search || null, includePast: includePast === "true",
       skip, limitNum: limit, pageNum: page, todayUTC: todayUTC(),
     });
-    logger.info("listCountdowns success (sql)", { traceId, total: r.total });
+    logger.info("listCountdowns success", { traceId, total: r.total });
     // ExamCountdownListing cards never read category._id (see docs/api-optimization).
     const data = (r.data ?? []).map((row: any) =>
       row?.category ? { ...row, category: omit(row.category, ["_id"]) } : row
@@ -74,7 +74,7 @@ export const upcomingCountdowns = async (req: Request, res: Response) => {
     const r = await ecSql.upcomingCountdownsClient({
       search: search || null, skip, limit, page, todayUTC: todayUTC(),
     });
-    logger.info("upcomingCountdowns success (sql)", { traceId, count: r.data.length });
+    logger.info("upcomingCountdowns success", { traceId, count: r.data.length });
     return res.status(200).json({
       success: true, data: r.data,
       pagination: buildPagination(r.total, page, limit),

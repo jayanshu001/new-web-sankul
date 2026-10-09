@@ -24,6 +24,7 @@ import {
   updateImageNotification as sqlUpdateImage,
   deleteImageNotification as sqlDeleteImage,
 } from "../../modules/admin-notification/admin-notification.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 const isValidId = (v: string) => parseIntId(v) != null;
 
@@ -228,8 +229,7 @@ export const listNotifications = async (req: Request, res: Response) => {
       sortOrder = "desc",
     } = req.query as Record<string, string>;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 10, maxLimit: 100 });
     const skip = (pageNum - 1) * limitNum;
 
     const { data, total } = await sqlListAdminLog({
@@ -302,8 +302,7 @@ export const listTargetOptions = async (req: Request, res: Response) => {
         message: `entity is required and must be one of: ${TARGET_ENTITIES.join(", ")}`,
       });
     }
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 50 });
     const skip = (pageNum - 1) * limitNum;
 
     const { data, total } = await sqlSearchTargetOptions({

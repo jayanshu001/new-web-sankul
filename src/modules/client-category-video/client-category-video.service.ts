@@ -6,11 +6,10 @@
  */
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
-export const parseCvId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCvId = parsePositiveInt;
 
 export const findCategory = (id: number) =>
   prisma.videoCategory.findFirst({ where: { id }, select: { id: true, title: true, image: true } });
@@ -25,7 +24,7 @@ const videoSelect = {
 export const listVideos = async (opts: {
   categoryId: number; search: string | null; priceType: "free" | "paid" | null; skip: number; limitNum: number;
 }) => {
-  const where: any = { videoCategoryId: opts.categoryId, status: true };
+  const where: Prisma.VideoWhereInput = { videoCategoryId: opts.categoryId, status: true };
   const search = buildPrismaSearch(opts.search, ["title"]);
   if (search) where.AND = search.AND;
   if (opts.priceType) where.priceType = opts.priceType;

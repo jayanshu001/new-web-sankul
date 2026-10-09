@@ -10,6 +10,8 @@ import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { redisClient } from "../../config/redis";
 import { parseLabels as parseStoredLabels } from "../../utils/goalSelection";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 const ADMIN_GOALS_CACHE_KEY = "cache:admin:goals:list";
 const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
@@ -19,10 +21,7 @@ const invalidateGoalCaches = async (traceId?: string) => {
   catch (err) { logger.warn("goal cache invalidation failed", { traceId, error: (err as Error).message }); }
 };
 
-export const parseGoalId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseGoalId = parsePositiveInt;
 
 const dto = (g: any) => ({
   _id: String(g.id),
@@ -89,7 +88,7 @@ export const getGoals = async (
   logger.info("getGoals service invoked", { traceId, query });
   const { search, isActive, page = 1, limit = 10, sortOrder = "desc" } = query;
 
-  const where: any = {};
+  const where: Prisma.CustomerTargetGoalWhereInput = {};
   const nameSearch = buildPrismaPrefixSearch(typeof search === "string" ? search : undefined, ["name"]);
   if (nameSearch) Object.assign(where, nameSearch);
   if (isActive !== undefined && isActive !== "") where.active = isActive === "true" || isActive === true;

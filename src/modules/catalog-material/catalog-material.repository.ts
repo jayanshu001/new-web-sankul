@@ -23,8 +23,12 @@ export const catalogMaterialRepository = {
     ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
   }),
 
-  countActiveMaterials: (categoryId: number) =>
-    prisma.material.count({ where: { materialCategoryId: categoryId, status: true } }),
+  /** categoryId → direct active material count for every id, in one query. */
+  countActiveMaterialsByCategories: async (categoryIds: number[]): Promise<Map<number, number>> => {
+    if (!categoryIds.length) return new Map();
+    const rows = await prisma.material.groupBy({ by: ["materialCategoryId"], where: { materialCategoryId: { in: categoryIds }, status: true }, _count: { _all: true } });
+    return new Map(rows.map((r) => [r.materialCategoryId as number, r._count._all]));
+  },
 
   /** Distinct parent ids among `categoryIds` that have an active child, in one query. */
   parentsWithChildren: (categoryIds: number[]) =>

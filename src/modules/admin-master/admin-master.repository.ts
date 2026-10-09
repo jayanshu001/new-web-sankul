@@ -2,6 +2,7 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
 import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+import type { Prisma } from "@prisma/client";
 
 /**
  * Admin "master" lookup-table CRUD:
@@ -127,7 +128,7 @@ export const adminMasterRepository = {
     prisma.videoCategoryRelation.deleteMany({ where: { OR: [{ parent: id }, { child: id }] } }),
 
   vcListFiltered: (opts: { search?: string; status?: boolean; educatorId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
-    const where: any = {};
+    const where: Prisma.VideoCategoryWhereInput = {};
     // Unanchored `contains` (not prefix search): no title index, so a prefix anchor only
     // dropped mid-title matches (see pcmWhere below).
     const search = buildPrismaSearch(opts.search, ["title", "slug"]);
@@ -145,7 +146,7 @@ export const adminMasterRepository = {
     return prisma.videoCategory.findMany({ where, orderBy, skip: opts.skip, take: opts.take });
   },
   vcCountFiltered: (opts: { search?: string; status?: boolean; educatorId?: number }) => {
-    const where: any = {};
+    const where: Prisma.VideoCategoryWhereInput = {};
     const search = buildPrismaSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
@@ -249,7 +250,7 @@ export const adminMasterRepository = {
   subCategoriesForCategory: async (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
     const childIds = await childIdsOf(categoryId);
     if (!childIds.length) return [];
-    const where: any = { id: { in: childIds } };
+    const where: Prisma.VideoCategoryWhereInput = { id: { in: childIds } };
     const search = buildPrismaSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
@@ -264,7 +265,7 @@ export const adminMasterRepository = {
   countSubCategoriesForCategory: async (categoryId: number, opts: { search?: string; status?: boolean }) => {
     const childIds = await childIdsOf(categoryId);
     if (!childIds.length) return 0;
-    const where: any = { id: { in: childIds } };
+    const where: Prisma.VideoCategoryWhereInput = { id: { in: childIds } };
     const search = buildPrismaSearch(opts.search, ["title", "slug"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
@@ -303,7 +304,7 @@ export const adminMasterRepository = {
   },
 
   videosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string; skip: number; take: number }) => {
-    const where: any = { videoCategoryId: categoryId };
+    const where: Prisma.VideoWhereInput = { videoCategoryId: categoryId };
     const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
@@ -311,7 +312,7 @@ export const adminMasterRepository = {
     return prisma.video.findMany({ where, select: { id: true, title: true, slug: true, status: true, order: true, platform: true }, orderBy: [{ order: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take });
   },
   countVideosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string }) => {
-    const where: any = { videoCategoryId: categoryId };
+    const where: Prisma.VideoWhereInput = { videoCategoryId: categoryId };
     const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;

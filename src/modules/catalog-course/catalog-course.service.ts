@@ -18,11 +18,10 @@ import type {
   PaginatedCourses,
 } from "./catalog-course.types";
 import type { PriceDto } from "../commerce-price/commerce-price.types";
+import { parsePositiveInt } from "../../utils/parseId";
+import { CACHE_TTL } from "../../config/cacheTtl";
 
-export const parseCourseId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCourseId = parsePositiveInt;
 
 /** Active-course counts are computed only for the returned page; `total` is the full match count. */
 export const listCourseCategoriesWithCounts = async (
@@ -96,7 +95,7 @@ export const listCoursesWithPlans = async (
       CacheEntity.CatalogCourse,
       `list:${cache.hashFilter({ isPopular: opts.isPopular, search: opts.search, categoryId: opts.categoryId, sortField, dir, skip, limit })}`
     ),
-    ttlSeconds: 60,
+    ttlSeconds: CACHE_TTL.CATALOG_SHARED,
     load: async () => {
       const [rows, total] = await repo.paginateActiveCourses({
         where: { isPopular: opts.isPopular, search: opts.search, categoryId: opts.categoryId },

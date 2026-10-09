@@ -3,6 +3,7 @@ import logger from "../../utils/logger";
 import { prisma } from "../../config/prisma";
 import { redisClient } from "../../config/redis";
 import { parseGoalSelection, parseLabels, reconcileGoalSelection, type GoalSelection, type CatalogGoal } from "../../utils/goalSelection";
+import { parsePositiveInt } from "../../utils/parseId";
 
 // Goals are the `ws_customer_target_goal` master, each optionally carrying labels
 // ([{ id, name }] JSON). The customer's selection lives on `ws_customer.goal` as
@@ -10,10 +11,7 @@ import { parseGoalSelection, parseLabels, reconcileGoalSelection, type GoalSelec
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
 const PROFILE_CACHE_PREFIX = "cache:client:profile:";
 
-const parseGoalCustomerId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const parseGoalCustomerId = parsePositiveInt;
 
 /**
  * Accepts `[{ goalId, labelIds }]` or a legacy flat id array; unknown goals are dropped

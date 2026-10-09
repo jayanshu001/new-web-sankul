@@ -8,11 +8,9 @@ import type {
   BannerSliderDto,
   BannerUpdateInput,
 } from "./banner-slider.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseBannerId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseBannerId = parsePositiveInt;
 
 // Client list in curated order with an optional key filter (unpaginated).
 export const listBanners = async (opts?: {

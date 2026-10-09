@@ -7,11 +7,9 @@ import {
   getDaysLeftMap,
   getOwnedCourseIds,
 } from "../admin-live-course/admin-live-course.service";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCustomerId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCustomerId = parsePositiveInt;
 
 // Planner/Smart are package types (ws_package.package_type_id); live-course is ws_live_course.
 export type RecentKind = "planner" | "smart" | "live-course";

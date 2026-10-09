@@ -6,11 +6,9 @@ import {
   toCustomerDto,
   type CustomerDto,
 } from "./admin-customer.transformer";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCustomerId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCustomerId = parsePositiveInt;
 
 const parseIntId = (v?: string | null): number | undefined => {
   if (v === undefined || v === null || v === "") return undefined;

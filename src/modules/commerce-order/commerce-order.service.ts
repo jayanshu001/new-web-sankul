@@ -4,8 +4,8 @@ import type {
   PromocodeSnapshot,
   ReferralSnapshot,
 } from "../order-code-snapshot/order-code-snapshot.types";
-import { creditReferrer } from "../../client/referral/credit-referrer";
-import { debitWallet } from "../../client/referral/debit-wallet";
+import { creditReferrer } from "../referral/credit-referrer";
+import { debitWallet } from "../referral/debit-wallet";
 import { commerceOrderRepository as repo } from "./commerce-order.repository";
 import type { MaterialFulfillment } from "./commerce-order.repository";
 import {
@@ -17,11 +17,9 @@ import type {
   CreatedCourseOrder,
   VerifiedCourseSubscriptionDto,
 } from "./commerce-order.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCommerceOrderId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCommerceOrderId = parsePositiveInt;
 
 /**
  * A material plan's digital portion may never be booked at ₹0: accounting needs a non-zero

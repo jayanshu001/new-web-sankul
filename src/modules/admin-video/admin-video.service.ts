@@ -2,12 +2,10 @@
 import { adminVideoRepository as repo } from "./admin-video.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { nextOrder } from "../../utils/listOrdering";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseVideoId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseVideoId = parsePositiveInt;
 
 // Response shape is frozen (admin table parses it).
 const toItem = (v: any) => ({

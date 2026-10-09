@@ -1,7 +1,7 @@
 // Client webhooks: Razorpay payment and StreamOS recording routes.
 import { Router } from "express";
 import { paymentWebhook } from "./webhook.controller";
-import { recordingWebhook } from "../../admin/live/live.controller";
+import { recordingWebhook } from "../../admin/live/streamos.webhook.controller";
 
 const router = Router();
 

@@ -12,6 +12,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as adminBook from "../../modules/admin-book/admin-book.service";
+import { parseOrderReportQuery } from "../../modules/report-query/report-query";
 
 export const getBooks = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -44,7 +45,7 @@ export const getBooks = async (req: Request, res: Response) => {
       page: pageNum,
       limit: limitNum,
     });
-    logger.info("getBooks success (mysql)", { traceId, total });
+    logger.info("getBooks success", { traceId, total });
     return res.status(200).json({
       success: true,
       data,
@@ -65,8 +66,8 @@ export const getBookById = async (req: Request, res: Response) => {
     const numId = adminBook.parseBookId(id);
     if (!numId) { logger.warn("getBookById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const book = await adminBook.getBook(numId);
-    if (!book) { logger.warn("getBookById not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
-    logger.info("getBookById success (mysql)", { traceId, id });
+    if (!book) { logger.warn("getBookById not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+    logger.info("getBookById success", { traceId, id });
     return res.status(200).json({ success: true, data: book });
   } catch (error: any) {
     logger.error("getBookById failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -135,7 +136,7 @@ export const createBook = async (req: Request, res: Response) => {
     // packageIds/bookFileName/bookUrl are dropped: books have no full-book PDF and
     // those fields have no ws_book columns.
     const created = await adminBook.createBook(data as any);
-    logger.info("createBook success (mysql)", { traceId, bookId: created._id });
+    logger.info("createBook success", { traceId, bookId: created._id });
     return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
     if (error.issues) { logger.warn("createBook validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
@@ -175,8 +176,8 @@ export const updateBook = async (req: Request, res: Response) => {
       });
     }
     const updated = await adminBook.updateBook(sqlId, data as any);
-    if (!updated) { logger.warn("updateBook not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
-    logger.info("updateBook success (mysql)", { traceId, id });
+    if (!updated) { logger.warn("updateBook not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+    logger.info("updateBook success", { traceId, id });
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) { logger.warn("updateBook validation failed", { traceId, id, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
@@ -194,8 +195,8 @@ export const deleteBook = async (req: Request, res: Response) => {
     const numId = adminBook.parseBookId(id);
     if (!numId) { logger.warn("deleteBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const ok = await adminBook.deleteBook(numId);
-    if (!ok) { logger.warn("deleteBook not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
-    logger.info("deleteBook success (mysql)", { traceId, id });
+    if (!ok) { logger.warn("deleteBook not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+    logger.info("deleteBook success", { traceId, id });
     return res.status(200).json({ success: true, message: "Book deleted." });
   } catch (error: any) {
     logger.error("deleteBook failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -212,8 +213,8 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
     const numId = adminBook.parseBookId(id);
     if (!numId) { logger.warn("toggleBookStatus invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const newStatus = await adminBook.toggleBookStatus(numId);
-    if (newStatus === null) { logger.warn("toggleBookStatus not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
-    logger.info("toggleBookStatus success (mysql)", { traceId, id, newStatus });
+    if (newStatus === null) { logger.warn("toggleBookStatus not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+    logger.info("toggleBookStatus success", { traceId, id, newStatus });
     return res.status(200).json({ success: true, data: { status: newStatus } });
   } catch (error: any) {
     logger.error("toggleBookStatus failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -230,8 +231,8 @@ export const toggleBookTrending = async (req: Request, res: Response) => {
     const numId = adminBook.parseBookId(id);
     if (!numId) { logger.warn("toggleBookTrending invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const newValue = await adminBook.toggleBookTrending(numId);
-    if (newValue === null) { logger.warn("toggleBookTrending not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
-    logger.info("toggleBookTrending success (mysql)", { traceId, id, newValue });
+    if (newValue === null) { logger.warn("toggleBookTrending not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+    logger.info("toggleBookTrending success", { traceId, id, newValue });
     return res.status(200).json({ success: true, data: { isTrending: newValue } });
   } catch (error: any) {
     logger.error("toggleBookTrending failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -246,7 +247,7 @@ export const reorderBooks = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderBooksSchema.parse(req.body);
     await adminBook.reorderBooks(orders);
-    logger.info("reorderBooks success (mysql)", { traceId, count: orders.length });
+    logger.info("reorderBooks success", { traceId, count: orders.length });
     return res.status(200).json({ success: true, message: "Book order updated." });
   } catch (error: any) {
     if (error.issues) { logger.warn("reorderBooks validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
@@ -254,20 +255,6 @@ export const reorderBooks = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// Shared filter mapping for the orders report list and its CSV/Excel exports.
-export const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
-  customerId: q.customerId,
-  bookId: q.bookId,
-  state: q.state,
-  // Date range bounds `createdAt` at IST day edges; dateFrom/dateTo and
-  // fromDate/toDate are legacy aliases of createdFrom/createdTo.
-  fromDate: q.createdFrom ?? q.dateFrom ?? q.fromDate,
-  toDate: q.createdTo ?? q.dateTo ?? q.toDate,
-  search: q.search,
-  sortBy: q.sortBy,
-  sortOrder: q.sortOrder,
-});
 
 export const getOrders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -283,7 +270,7 @@ export const getOrders = async (req: Request, res: Response) => {
       page: pageNum,
       limit: limitNum,
     });
-    logger.info("getOrders success (mysql)", { traceId, total });
+    logger.info("getOrders success", { traceId, total });
     return res.status(200).json({
       success: true,
       items,
@@ -305,7 +292,7 @@ export const exportOrdersCsv = async (req: Request, res: Response) => {
     const filename = `book-orders-${new Date().toISOString().slice(0, 10)}.csv`;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    logger.info("exportOrdersCsv success (mysql)", { traceId });
+    logger.info("exportOrdersCsv success", { traceId });
     return res.status(200).send(csv);
   } catch (error: any) {
     logger.error("exportOrdersCsv failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -323,7 +310,7 @@ export const exportOrdersExcel = async (req: Request, res: Response) => {
     const filename = `book-orders-${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    logger.info("exportOrdersExcel success (mysql)", { traceId });
+    logger.info("exportOrdersExcel success", { traceId });
     return res.status(200).send(buf);
   } catch (error: any) {
     logger.error("exportOrdersExcel failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -340,8 +327,8 @@ export const getOrderById = async (req: Request, res: Response) => {
     const numId = adminBook.parseBookId(id);
     if (!numId) { logger.warn("getOrderById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
     const order = await adminBook.getOrder(numId);
-    if (!order) { logger.warn("getOrderById not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
-    logger.info("getOrderById success (mysql)", { traceId, id });
+    if (!order) { logger.warn("getOrderById not found", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+    logger.info("getOrderById success", { traceId, id });
     return res.status(200).json({ success: true, data: order });
   } catch (error: any) {
     logger.error("getOrderById failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -418,7 +405,7 @@ export const getSettings = async (_req: Request, res: Response) => {
 
   try {
     const data = await adminBook.getBookSettings();
-    logger.info("getSettings success (mysql)", { traceId });
+    logger.info("getSettings success", { traceId });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getSettings failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -433,7 +420,7 @@ export const updateSettings = async (req: Request, res: Response) => {
   try {
     const data = updateSettingsSchema.parse(req.body);
     const updated = await adminBook.updateBookSettings(data as any);
-    logger.info("updateSettings success (mysql)", { traceId });
+    logger.info("updateSettings success", { traceId });
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) { logger.warn("updateSettings validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }

@@ -3,11 +3,9 @@
  * Subscription `package_id` is the package itself (not the plan).
  */
 import { prisma } from "../../config/prisma";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseEpId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEpId = parsePositiveInt;
 
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 const planBuckets = (plans: any[]) => ({

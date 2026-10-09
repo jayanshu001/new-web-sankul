@@ -37,9 +37,10 @@ export async function dispatchAudience(
 
 /**
  * Used by the BullMQ worker. Atomically flips "scheduled" → "sent" so job
- * re-deliveries cannot double-send. Throws on dispatch failure so BullMQ retries;
- * on final failure the caller sets status="failed". Returns null if the row was
- * already claimed/cancelled.
+ * re-deliveries cannot double-send. A thrown error or a retryable failure
+ * (isRetryableDispatchFailure) leaves the row "scheduled" so the BullMQ retry can claim
+ * it again; on final failure the worker sets status="failed". Permanent failures are
+ * written as "failed" at once. Returns null if the row was already claimed/cancelled.
  */
 export async function dispatchScheduledById(
   notificationId: string,

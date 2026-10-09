@@ -6,11 +6,9 @@ import type {
   PackageChatPage,
   PostChatInput,
 } from "./package-chat.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parsePackageChatId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parsePackageChatId = parsePositiveInt;
 
 export const packageExists = (packageId: number): Promise<boolean> =>
   repo.packageExists(packageId);

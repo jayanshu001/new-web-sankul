@@ -12,7 +12,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { prisma } from "../../config/prisma";
 import { s3Config, DO_BUCKET, isOwnBucketUrl } from "../../middlewares/upload";
 import { resolveVideoSource } from "../../utils/videoResolver";
-import { getDetails as getStreamDetails } from "../../admin/live/streamos.provider";
+import { getDetails as getStreamDetails } from "../../libs/streamos/streamos.provider";
 import { hasActiveCourseSub, hasActivePackageSub } from "../client-lecture/client-lecture.service";
 import { hasAccessToAnyLiveCourse, resolveLivePreviewStateSql } from "../admin-live-course/admin-live-course.service";
 import { hasActiveSub as hasActiveEbookSub } from "../client-ebook-download/client-ebook-download.service";

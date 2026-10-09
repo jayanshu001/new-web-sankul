@@ -55,3 +55,4 @@ graphify-out/
 /.redis-*/
 ecosystem.config.cjs
 /graft/
+/old_db/

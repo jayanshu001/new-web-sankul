@@ -7,6 +7,7 @@ import type {
   EnquiryDto,
   EnquiryInput,
 } from "./offline-enquiry.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
 export {
   OFFLINE_BATCH_QUALIFICATIONS,
@@ -21,10 +22,7 @@ export class DuplicateEnquiryError extends Error {
   }
 }
 
-export const parseOfflineEnquiryId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseOfflineEnquiryId = parsePositiveInt;
 
 export const enquiryBatchExists = (batchId: number): Promise<boolean> =>
   repo.batchExists(batchId);

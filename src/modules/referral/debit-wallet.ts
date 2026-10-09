@@ -1,5 +1,5 @@
 // Referral wallet: debits redeemed coins after a verified purchase.
-import { debitWalletForOrderMysql } from "../../modules/referral/referral.service";
+import { debitWalletForOrderMysql } from "./referral.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 

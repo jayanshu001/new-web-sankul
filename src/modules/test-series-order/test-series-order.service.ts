@@ -5,8 +5,8 @@ import type { TestSeriesOrder, TestSeriesSubscription } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { extractPromoterAttribution } from "../order-code-snapshot/order-code-snapshot.service";
 import { computeEndAt } from "../../utils/planDuration";
-import { creditReferrer } from "../../client/referral/credit-referrer";
-import { debitWallet } from "../../client/referral/debit-wallet";
+import { creditReferrer } from "../referral/credit-referrer";
+import { debitWallet } from "../referral/debit-wallet";
 
 const num = (v: any): number => (v == null ? 0 : Number(v.toString?.() ?? v) || 0);
 

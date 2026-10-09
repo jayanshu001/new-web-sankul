@@ -117,11 +117,11 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
 
   try {
     const lid = liveSql.parseLiveId(id);
-    if (!lid) { logger.warn("getLiveCourseForClient invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    if (!lid) { logger.warn("getLiveCourseForClient invalid id", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const r = await liveSql.getLiveCourseDetailForClient(lid, Number.isInteger(cid) ? cid : null, resolveBase(req));
-    if (r === "not_found") { logger.warn("getLiveCourseForClient not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-    logger.info("getLiveCourseForClient success (mysql)", { traceId, userId, id });
+    if (r === "not_found") { logger.warn("getLiveCourseForClient not found", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("getLiveCourseForClient success", { traceId, userId, id });
     if (userId) {
       queueCRMLead({ params: { userId, liveCourseId: lid }, leadType: CRM_LEAD_TYPE.VIEW_LIVE_COURSE }, { traceId, userId, liveCourseId: lid });
     }
@@ -164,7 +164,7 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
 
   try {
     const lid = liveSql.parseLiveId(id);
-    if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    if (!lid) { logger.warn("listLiveCourseRecordings invalid id", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { search, page, limit } = parseListQuery(req.query);
 
@@ -172,16 +172,16 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
     // hub never pays for VOD resolution or media-token signing it won't render.
     if (isTruthyFlag(req.query.summary)) {
       const s = await liveSql.getRecordingFolderSummaryForClient(lid, Number.isInteger(cid) ? cid : null, { search, page, limit });
-      if (s === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id, summary: true }); return failure(res, "Live course not found.", 404); }
-      logger.info("listLiveCourseRecordings summary success (mysql)", { traceId, id, folderCount: s.folders.length });
+      if (s === "not_found") { logger.warn("listLiveCourseRecordings not found", { traceId, id, summary: true }); return failure(res, "Live course not found.", 404); }
+      logger.info("listLiveCourseRecordings summary success", { traceId, id, folderCount: s.folders.length });
       const folders = (s.folders ?? []).map((f: any) => omit(f, ["image", "order"]));
       const { liveCourse: _lc, daysLeft: _dl, totalLectures: _tl, purchaseOptions: _po, ...restS } = s;
       return success(res, { ...restS, folders, pagination: buildPagination(s.total, s.page, s.limit) }, "Recording folders fetched.");
     }
 
     const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, { search, page, limit });
-    if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-    logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
+    if (r === "not_found") { logger.warn("listLiveCourseRecordings not found", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("listLiveCourseRecordings success", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
     const folders = (r.folders ?? []).map((f: any) => ({
       ...omit(f, ["image", "order"]),
       lectures: (f.lectures ?? []).map(slimRecordingLecture),
@@ -205,13 +205,13 @@ export const getLiveCourseRecordingFolder = async (req: Request, res: Response) 
   try {
     const lid = liveSql.parseLiveId(id);
     const fid = liveSql.parseLiveId(folderId);
-    if (!lid || !fid) { logger.warn("getLiveCourseRecordingFolder invalid ids (mysql)", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
+    if (!lid || !fid) { logger.warn("getLiveCourseRecordingFolder invalid ids", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { search, page, limit } = parseListQuery(req.query);
     const r = await liveSql.getRecordingFolderDetailForClient(lid, fid, Number.isInteger(cid) ? cid : null, { search, page, limit });
-    if (r === "not_found") { logger.warn("getLiveCourseRecordingFolder course not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-    if (r === "folder_not_found") { logger.warn("getLiveCourseRecordingFolder folder not found (mysql)", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
-    logger.info("getLiveCourseRecordingFolder success (mysql)", { traceId, id, folderId, lectureCount: r.lectureCount });
+    if (r === "not_found") { logger.warn("getLiveCourseRecordingFolder course not found", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    if (r === "folder_not_found") { logger.warn("getLiveCourseRecordingFolder folder not found", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
+    logger.info("getLiveCourseRecordingFolder success", { traceId, id, folderId, lectureCount: r.lectureCount });
     const lectures = (r.lectures ?? []).map(slimRecordingLecture);
     const { liveCourse: _lc, daysLeft: _dl, purchaseOptions: _po, image: _img, order: _ord, ...restR } = r;
     return success(res, { ...restR, lectures, pagination: buildPagination(r.total, r.page, r.limit) }, "Folder lectures fetched.");
@@ -232,13 +232,13 @@ export const listLiveCourseRecordingFolderChildren = async (req: Request, res: R
   try {
     const lid = liveSql.parseLiveId(id);
     const fid = liveSql.parseLiveId(folderId);
-    if (!lid || !fid) { logger.warn("listLiveCourseRecordingFolderChildren invalid ids (mysql)", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
+    if (!lid || !fid) { logger.warn("listLiveCourseRecordingFolderChildren invalid ids", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { search, page, limit } = parseListQuery(req.query);
     const r = await liveSql.getRecordingFolderChildrenForClient(lid, fid, Number.isInteger(cid) ? cid : null, { search, page, limit });
-    if (r === "not_found") { logger.warn("listLiveCourseRecordingFolderChildren course not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-    if (r === "folder_not_found") { logger.warn("listLiveCourseRecordingFolderChildren folder not found (mysql)", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
-    logger.info("listLiveCourseRecordingFolderChildren success (mysql)", { traceId, id, folderId, childCount: r.list.length });
+    if (r === "not_found") { logger.warn("listLiveCourseRecordingFolderChildren course not found", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    if (r === "folder_not_found") { logger.warn("listLiveCourseRecordingFolderChildren folder not found", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
+    logger.info("listLiveCourseRecordingFolderChildren success", { traceId, id, folderId, childCount: r.list.length });
     // Slimmed like /recordings so a child row is byte-identical to a hub row.
     const slimFolder = (f: any) => omit(f, ["image", "order"]);
     const { liveCourse: _lc, daysLeft: _dl, purchaseOptions: _po, ...restR } = r;
@@ -265,14 +265,14 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
   try {
     const lid = liveSql.parseLiveId(id);
     const vid = liveSql.parseLiveId(videoId);
-    if (!lid || !vid) { logger.warn("getLiveCourseLecture invalid ids (mysql)", { traceId, id, videoId }); return failure(res, "Invalid live course or video id.", 422); }
+    if (!lid || !vid) { logger.warn("getLiveCourseLecture invalid ids", { traceId, id, videoId }); return failure(res, "Invalid live course or video id.", 422); }
     const r = await liveSql.clientLectureVideoInCourse(lid, vid);
-    if (r === "video_not_found") { logger.warn("getLiveCourseLecture video not found (mysql)", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
-    if (r === "mismatch") { logger.warn("getLiveCourseLecture course mismatch (mysql)", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
+    if (r === "video_not_found") { logger.warn("getLiveCourseLecture video not found", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
+    if (r === "mismatch") { logger.warn("getLiveCourseLecture course mismatch", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const entitled = await liveSql.isLectureEntitled(lid, Number.isInteger(cid) ? cid : null, r.priceType);
     if (!entitled) {
-      logger.warn("getLiveCourseLecture not subscribed (mysql)", { traceId, userId, id, videoId });
+      logger.warn("getLiveCourseLecture not subscribed", { traceId, userId, id, videoId });
       return failure(res, "Subscribe to this live course to watch this lecture.", 403, {}, { purchaseOptions: await liveSql.buildPurchaseOptionsSql([lid]) });
     }
     // No inline media: mint a customer-bound token exchanged at /media/resolve.
@@ -280,7 +280,7 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
     const mediaToken = r.priceType === "free"
       ? signMediaToken({ k: "video", id: Number(r._id), free: true, cust: cid! })
       : signMediaToken({ k: "video", id: Number(r._id), scope: { kind: "liveCourse", id: lid }, cust: cid! });
-    logger.info("getLiveCourseLecture success (mysql)", { traceId, userId, id, videoId, platform: r.platform });
+    logger.info("getLiveCourseLecture success", { traceId, userId, id, videoId, platform: r.platform });
     return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, mediaToken }, "Lecture fetched.");
   } catch (err) {
     logger.error("getLiveCourseLecture failed", { traceId, userId, id, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -297,12 +297,12 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
 
   try {
     const lid = liveSql.parseLiveId(id);
-    if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
     const { search, page: pageN, limit: limitN } = parseListQuery(req.query);
     const cid = req.user?.id ? Number(req.user.id) : null;
     const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN, search);
-    if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-    logger.info("listLiveCourseSessionRecordings success (mysql)", { traceId, id, total: r.total, returned: r.lectures.length });
+    if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("listLiveCourseSessionRecordings success", { traceId, id, total: r.total, returned: r.lectures.length });
     const lectures = omitList(r.lectures, ["status", "subject", "scheduledAt", "scheduledAtDisplay", "endAt", "locked"]);
     const { liveCourse: _lc, subscribed: _sub, ...restR } = r;
     return success(res, { ...restR, lectures, pagination: buildPagination(r.total, r.page, r.limit) }, "Live classes fetched.");
@@ -329,10 +329,10 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
       typeof req.query.status === "string" ? req.query.status : "all";
 
     const cid = Number(customerId);
-    if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer (mysql)", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
+    if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
     const { search, page, limit } = parseListQuery(req.query);
     const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req), { search, page, limit });
-    logger.info("listMyLiveCourses success (mysql)", { traceId, customerId, count: r.total });
+    logger.info("listMyLiveCourses success", { traceId, customerId, count: r.total });
     const liveCourses = omitList(r.liveCourses, ["classType", "daysLeft", "plan", "startAt", "endAt", "paymentStatus", "active"]);
     return success(res, { ...r, liveCourses, pagination: buildPagination(r.total, r.page, r.limit) }, "Your live courses fetched.");
   } catch (err) {
@@ -427,7 +427,7 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
     if (cid == null) return failure(res, "Invalid live course id.", 422);
     const r = await liveSql.getScheduleForClient(cid, liveSql.parseLiveId(String(req.user?.id ?? "")), req.query.upcoming === "true");
     if (r === "not_found") return failure(res, "Live course not found.", 404);
-    logger.info("getLiveCourseSchedule success (sql)", { traceId, id, timetableCount: r.timetable.length, folderCount: r.scheduleFolders.length });
+    logger.info("getLiveCourseSchedule success", { traceId, id, timetableCount: r.timetable.length, folderCount: r.scheduleFolders.length });
     const timetable = omitList(r.timetable, ["sessionId", "endAt", "status", "streamId"]);
     const scheduleFolders = omitList(r.scheduleFolders, ["image", "order", "status"]);
     const { liveCourse: _lc, total: _total, daysLeft: _dl, ...restR } = r;
@@ -454,7 +454,7 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
     const cid = liveSql.parseLiveId(String(customerId));
     if (cid == null) return success(res, { liveCourses: [], totalLiveCourses: 0 }, "Your schedule fetched.");
     const r = await liveSql.listMyScheduleForClient(cid);
-    logger.info("listMyScheduleByCategory success (sql)", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
+    logger.info("listMyScheduleByCategory success", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
     const liveCourses = (r.liveCourses ?? []).map((c: any) => ({
       ...omit(c, ["image", "daysLeft"]),
       scheduleFolders: omitList(c.scheduleFolders, ["image", "order", "entryCount"]),

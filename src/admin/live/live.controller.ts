@@ -1,13 +1,13 @@
-// Admin live sessions: HTTP handlers for session lifecycle, StreamOS and recording webhooks.
+// Admin live sessions: HTTP handlers for session lifecycle and StreamOS admin tools.
+// The public recording webhook lives in streamos.webhook.controller.ts.
 import { Request, Response } from "express";
-import crypto from "crypto";
 import {
   getUploadedVideoDetails as streamosGetUploadedVideoDetails,
   getOrgDetails as streamosGetOrgDetails,
   updateWebhook as streamosUpdateWebhook,
   enrichMp4Sizes as streamosEnrichMp4Sizes,
   StreamosError,
-} from "./streamos.service";
+} from "../../libs/streamos/streamos.service";
 // Dispatches per session (the row's own streamProvider), so legacy sessions keep
 // using the legacy API after STREAMOS_PROVIDER is flipped to v1.
 import {
@@ -17,21 +17,15 @@ import {
   getDetails as streamosGetDetails,
   pushCredentialsExpired,
   providerOf,
-} from "./streamos.provider";
+} from "../../libs/streamos/streamos.provider";
 import { streamosV1ApiKey, streamosV1WebhookSecret } from "../../config/streamos";
-import { verifyStreamosSignature } from "../../utils/streamosSignature";
-import {
-  resolveSession as resolveV1Session,
-  applyEvent as applyV1Event,
-  isForeignEnvironment as isForeignV1Environment,
-} from "./streamos.v1.webhook";
 import { isStreamosV1 } from "../../config/streamos";
 import {
   registerWebhook as streamosV1RegisterWebhook,
   getAsset as streamosV1GetAsset,
   listWebhooks as streamosV1ListWebhooks,
   type StreamosV1Event,
-} from "./streamos.v1.service";
+} from "../../libs/streamos/streamos.v1.service";
 
 // The events our recording pipeline depends on. RECORDING_READY stores the asset
 // pointer; TRANSCODING_COMPLETED is the one that actually publishes a playable
@@ -50,33 +44,7 @@ import {
   cancelRemindersForSession,
 } from "../../client/live-reminder/live-reminder.service";
 import * as adminLiveSql from "../../modules/admin-live/admin-live.service";
-
-type ILiveSessionRecording = {
-  quality?: string;
-  file_size?: number;
-  path: string;
-};
-
-// Legacy StreamOS doesn't sign callbacks, so the webhook URL is registered with
-// `?key=<secret>`. When unset we warn but still accept (enforce-only-if-configured,
-// like the Razorpay webhook); it must be set in production.
-const STREAMOS_WEBHOOK_SECRET = process.env.STREAMOS_WEBHOOK_SECRET || "";
-
-function secretMatches(provided: string): boolean {
-  if (provided.length !== STREAMOS_WEBHOOK_SECRET.length) return false;
-  return crypto.timingSafeEqual(
-    Buffer.from(provided),
-    Buffer.from(STREAMOS_WEBHOOK_SECRET)
-  );
-}
-
-// Streamos stream ids are strings (e.g. "T_17787583234029"). Accept a string
-// or a number (legacy / loose callers) and return a trimmed non-empty string.
-function parseStreamIdParam(raw: unknown): string | null {
-  if (typeof raw !== "string" && typeof raw !== "number") return null;
-  const s = String(raw).trim();
-  return s.length > 0 ? s : null;
-}
+import { STREAMOS_WEBHOOK_SECRET, parseStreamIdParam } from "./streamos.webhook.controller";
 
 function parseScheduledAt(raw: unknown): Date | null | undefined {
   if (raw === undefined) return undefined;            // omitted → don't change
@@ -169,7 +137,7 @@ export const createLiveSession = async (req: Request, res: Response) => {
         scheduledAt: scheduledAt ?? null,
         status: "SCHEDULED",
       });
-      logger.info("createLiveSession scheduled (sql)", { traceId, sessionId: row.id });
+      logger.info("createLiveSession scheduled", { traceId, sessionId: row.id });
       return success(
         res,
         { session: adminLiveSql.toPublicView(row, liveCourseIds, undefined, courseFoldersSql) },
@@ -237,20 +205,16 @@ export const listLiveSessions = async (req: Request, res: Response) => {
         skip: (page - 1) * limit,
         take: limit,
       });
-      const sessions = await Promise.all(
-        rows.map(async (row) => {
-          const [courses, courseFolders] = await Promise.all([
-            adminLiveSql.getLinkedCourses(row.id),
-            adminLiveSql.getLinkedCourseFolders(row.id),
-          ]);
-          return adminLiveSql.toPublicView(
-            row,
-            courses.map((c) => Number(c._id)),
-            courses,
-            courseFolders
-          );
-        })
-      );
+      const linked = await adminLiveSql.getLinkedForSessions(rows.map((r) => r.id));
+      const sessions = rows.map((row) => {
+        const { courses, courseFolders } = linked.get(row.id)!;
+        return adminLiveSql.toPublicView(
+          row,
+          courses.map((c) => Number(c._id)),
+          courses,
+          courseFolders
+        );
+      });
       return success(res, { sessions, total, page, limit }, "Live sessions fetched.");
   } catch (err) {
     logger.error("listLiveSessions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -286,7 +250,7 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
             // file_size is filled from Content-Length.
             if (details.mp4Recordings.length > 0) patch.mp4Recordings = await streamosEnrichMp4Sizes(details.mp4Recordings);
             patch.status = "READY";
-            logger.info("getLiveSessionStatus recordings recovered (sql)", {
+            logger.info("getLiveSessionStatus recordings recovered", {
               traceId, sessionId: row.id, streamId: row.streamId, count: details.recordings.length,
             });
             const liveClassId = String(row.streamId);
@@ -309,11 +273,11 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
           }
         } catch (err) {
           if (err instanceof StreamosError) {
-            logger.warn("getLiveSessionStatus streamos error (sql)", {
+            logger.warn("getLiveSessionStatus streamos error", {
               traceId, sessionId: row.id, message: err.message, upstreamStatus: err.upstreamStatus,
             });
           } else {
-            logger.warn("getLiveSessionStatus streamos error (sql)", {
+            logger.warn("getLiveSessionStatus streamos error", {
               traceId, sessionId: row.id, error: getErrorMessage(err),
             });
           }
@@ -422,7 +386,7 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
       if (resultSql === "no_path")
         return failure(res, "Recording has no playable path.", 422);
 
-      logger.info("promoteSessionRecording success (sql)", {
+      logger.info("promoteSessionRecording success", {
         traceId,
         sessionId: rowSql.id,
         folderId: folderIdSql,
@@ -512,7 +476,7 @@ export const provisionLiveSession = async (req: Request, res: Response) => {
       adminLiveSql.getLinkedCourses(updatedSql.id),
       adminLiveSql.getLinkedCourseFolders(updatedSql.id),
     ]);
-    logger.info("provisionLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId, alreadyProvisioned });
+    logger.info("provisionLiveSession success", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId, alreadyProvisioned });
     return success(
       res,
       { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
@@ -591,7 +555,7 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
         adminLiveSql.getLinkedCourses(updatedSql.id),
         adminLiveSql.getLinkedCourseFolders(updatedSql.id),
       ]);
-      logger.info("startScheduledLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId });
+      logger.info("startScheduledLiveSession success", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId });
       // Fire-and-forget "class is live" push to buyers (idempotent per stream run);
       // must not delay or fail the /start response.
       void adminLiveSql
@@ -714,14 +678,14 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       }
       if (scheduleChangedSql) {
         await syncRemindersForSession(String(rowSql.id)).catch((e) =>
-          logger.error("updateScheduledLiveSession reminder sync failed (sql)", { traceId, error: getErrorMessage(e) })
+          logger.error("updateScheduledLiveSession reminder sync failed", { traceId, error: getErrorMessage(e) })
         );
       }
       const [coursesSql, courseFoldersSql] = await Promise.all([
         adminLiveSql.getLinkedCourses(rowSql.id),
         adminLiveSql.getLinkedCourseFolders(rowSql.id),
       ]);
-      logger.info("updateScheduledLiveSession success (sql)", { traceId, sessionId: rowSql.id });
+      logger.info("updateScheduledLiveSession success", { traceId, sessionId: rowSql.id });
       return success(
         res,
         { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
@@ -746,9 +710,9 @@ export const deleteLiveSession = async (req: Request, res: Response) => {
       }
       await adminLiveSql.deleteSession(rowSql.id);
       await cancelRemindersForSession(String(rowSql.id)).catch((e) =>
-        logger.error("deleteLiveSession reminder cleanup failed (sql)", { traceId, error: getErrorMessage(e) })
+        logger.error("deleteLiveSession reminder cleanup failed", { traceId, error: getErrorMessage(e) })
       );
-      logger.info("deleteLiveSession success (sql)", { traceId, sessionId: rowSql.id, status: rowSql.status });
+      logger.info("deleteLiveSession success", { traceId, sessionId: rowSql.id, status: rowSql.status });
       return success(res, { id: String(rowSql.id) }, "Live session deleted.");
   } catch (err) {
     logger.error("deleteLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -782,7 +746,7 @@ export const endLiveSession = async (req: Request, res: Response) => {
       });
 
       const closedSql = await adminLiveSql.closeOpenAttendance(streamId, endedAtSql);
-      logger.info("endLiveSession success (sql)", {
+      logger.info("endLiveSession success", {
         traceId, streamId, found: Boolean(updatedSql), attendanceClosed: closedSql,
       });
       return success(res, { streamId, status: "ENDED" }, "Live stream ended.");
@@ -1102,179 +1066,5 @@ export const getRecordingHealth = async (req: Request, res: Response) => {
   } catch (err) {
     logger.error("getRecordingHealth failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to compute recording health.", 500);
-  }
-};
-
-// StreamOS v1 deliveries share the legacy callback URL and are told apart by
-// v1's headers. They are HMAC-signed, retried up to 6x with a stable
-// X-Streamos-Delivery id, and expect a 2xx within 10 seconds.
-const handleV1RecordingWebhook = async (req: Request, res: Response, traceId?: string) => {
-  const event = String(req.headers["x-streamos-event"] ?? "");
-  const deliveryId = String(req.headers["x-streamos-delivery"] ?? "");
-  const signature = req.headers["x-streamos-signature"] as string | undefined;
-
-  // No unauthenticated fallback: v1 signs every delivery, so an unverifiable one
-  // is a misconfiguration or a forgery.
-  const secret = streamosV1WebhookSecret();
-  const verdict = verifyStreamosSignature((req as any).rawBody, signature, secret);
-  if (!verdict.ok) {
-    logger.warn("StreamOS v1 webhook rejected", { traceId, event, deliveryId, reason: verdict.reason });
-    return res.status(401).json({ success: false, message: "Unauthorized." });
-  }
-  // Docs specify `{timestamp}.{rawBody}`; once a real delivery confirms
-  // "timestamped", drop the body-only fallback in utils/streamosSignature.ts.
-  logger.info("StreamOS v1 webhook verified", { traceId, event, deliveryId, scheme: verdict.scheme });
-
-  const body = req.body ?? {};
-
-  // Claim the delivery before any work: a re-run retry would duplicate Video rows.
-  // Without the header, a payload-derived key still makes retries collide.
-  const claimKey =
-    deliveryId || `${event}:${String(body?.data?.recording?.asset_id ?? body?.data?.video?.id ?? "")}`;
-  if (claimKey) {
-    let firstTime = true;
-    try {
-      firstTime = await adminLiveSql.claimWebhookDelivery(claimKey, event || null);
-    } catch (err) {
-      // A failed claim must not drop the delivery — process it and accept the
-      // (small) duplicate risk rather than losing the recording entirely.
-      logger.error("StreamOS v1 delivery claim failed", { traceId, claimKey, error: getErrorMessage(err) });
-    }
-    if (!firstTime) {
-      logger.info("StreamOS v1 webhook replay ignored", { traceId, event, deliveryId });
-      return res.status(200).json({ success: true, message: "Already processed." });
-    }
-  }
-
-  // Staging and production share one StreamOS organisation and API key, so drop
-  // the other environment's deliveries before correlation (wrong-class attachment).
-  if (isForeignV1Environment(body)) {
-    logger.info("StreamOS v1 webhook ignored (other environment)", { traceId, event, deliveryId });
-    return res.status(200).json({ success: true, message: "Acknowledged (other environment)." });
-  }
-
-  // Documented payloads carry no stream id; resolveSession tries several keys.
-  const session = await resolveV1Session(body);
-  if (!session) {
-    // Ack so StreamOS stops retrying (it won't become attributable later); logged
-    // at error because it needs a human.
-    logger.error("StreamOS v1 webhook could not be correlated to a session", {
-      traceId,
-      event,
-      deliveryId,
-      dataKeys: Object.keys(body?.data ?? {}),
-    });
-    return res.status(200).json({ success: true, message: "Acknowledged (no matching session)." });
-  }
-
-  const result = await applyV1Event(body, session);
-  if (!result.handled) {
-    logger.warn("StreamOS v1 webhook not applied", { traceId, event, sessionId: session.id, reason: result.reason });
-    return res.status(200).json({ success: true, message: `Acknowledged (${result.reason}).` });
-  }
-
-  // Notify viewers only once the recording is playable.
-  if (event === "VIDEO_TRANSCODING_COMPLETED" && session.streamId) {
-    const liveClassId = String(session.streamId);
-    const fresh = await adminLiveSql.findSessionByAnyId(String(session.id));
-    io?.to(roomKey(liveClassId)).emit("recordings_ready", {
-      streamId: session.streamId,
-      liveClassId,
-      status: "READY",
-      recordings: fresh ? adminLiveSql.hlsRecordingsOf(fresh) : [],
-    });
-  }
-
-  logger.info("StreamOS v1 webhook applied", { traceId, event, sessionId: session.id, reason: result.reason });
-  return res.status(200).json({ success: true, message: result.reason });
-};
-
-// Legacy deliveries authenticate with STREAMOS_WEBHOOK_SECRET via `?key=` or the
-// `x-webhook-secret` header; otherwise a guessed streamId could inject recording
-// URLs and auto-create Videos in course folders.
-export const recordingWebhook = async (req: Request, res: Response) => {
-  const traceId = req.traceId;
-  logger.info("recordingWebhook invoked", { traceId, path: req.originalUrl });
-
-  try {
-    if (req.headers["x-streamos-event"] || req.headers["x-streamos-signature"]) {
-      return await handleV1RecordingWebhook(req, res, traceId);
-    }
-
-    if (STREAMOS_WEBHOOK_SECRET) {
-      const provided =
-        (typeof req.query.key === "string" ? req.query.key : "") ||
-        (typeof req.headers["x-webhook-secret"] === "string"
-          ? (req.headers["x-webhook-secret"] as string)
-          : "");
-      if (!provided || !secretMatches(provided)) {
-        logger.warn("recordingWebhook rejected missing secret", { traceId });
-        return res.status(401).json({ success: false, message: "Unauthorized." });
-      }
-    } else {
-      logger.warn(
-        "Recording webhook: STREAMOS_WEBHOOK_SECRET is not set — accepting request unauthenticated. Set it in production."
-      );
-    }
-
-    const streamId = parseStreamIdParam(req.body?.streamId);
-    const rawRecordings = req.body?.recordings;
-
-    if (!streamId) {
-      logger.warn("recordingWebhook invalid streamId", { traceId, body: req.body });
-      return res.status(400).json({ success: false, message: "Invalid streamId." });
-    }
-    if (!Array.isArray(rawRecordings)) {
-      logger.warn("recordingWebhook recordings not array", { traceId, streamId });
-      return res.status(400).json({ success: false, message: "recordings must be an array." });
-    }
-
-    // StreamOS has shipped paths with a stray trailing quote (`"`, `%22`, or
-    // double-encoded `%2522`); strip it so we don't persist unplayable URLs.
-    const stripTrailingQuote = (s: string) => s.replace(/(?:"|%22|%2522)+$/i, "");
-    const normalizeRecs = (raw: any): ILiveSessionRecording[] =>
-      (Array.isArray(raw) ? raw : [])
-        .filter((r: any) => r && typeof r.path === "string" && r.path.length > 0)
-        .map((r: any) => ({
-          quality: typeof r.quality === "string" ? r.quality : undefined,
-          file_size: typeof r.file_size === "number" ? r.file_size : Number(r.file_size) || undefined,
-          path: stripTrailingQuote(r.path),
-        }));
-
-    const recordings: ILiveSessionRecording[] = normalizeRecs(rawRecordings);
-    // Persisted only when present so a callback without mp4Links doesn't clobber
-    // an mp4 captured via the poll path. file_size comes from Content-Length
-    // (StreamOS omits it on mp4Links).
-    const mp4Recordings: ILiveSessionRecording[] = await streamosEnrichMp4Sizes(
-      normalizeRecs(req.body?.mp4Links ?? req.body?.mp4links)
-    );
-
-      const updatedSql = await adminLiveSql.updateByStreamId(streamId, {
-        recordings,
-        status: "READY",
-        ...(mp4Recordings.length > 0 ? { mp4Recordings } : {}),
-      });
-      if (!updatedSql) {
-        logger.warn("recordingWebhook stream not found (sql)", { traceId, streamId });
-        return res.status(200).json({ success: true, message: "Acknowledged (no matching stream)." });
-      }
-      // Best-effort, never throws.
-      await adminLiveSql.maybeAutoPromoteRecordingSql({
-        sessionId: updatedSql.id,
-        sessionTitle: updatedSql.title ?? null,
-        recordings,
-      });
-      const liveClassIdSql = String(streamId);
-      io?.to(roomKey(liveClassIdSql)).emit("recordings_ready", {
-        streamId,
-        liveClassId: liveClassIdSql,
-        status: "READY",
-        recordings,
-      });
-      logger.info("recordingWebhook success (sql)", { traceId, streamId, recordingCount: recordings.length });
-      return res.status(200).json({ success: true, message: "Recording saved." });
-  } catch (err) {
-    logger.error("recordingWebhook failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return res.status(200).json({ success: false, message: "Internal error logged." });
   }
 };

@@ -10,7 +10,6 @@ import * as tsSql from "../../modules/admin-testseries/admin-testseries.service"
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { parseListQuery } from "../../utils/listQuery";
-import { assertReportStatus } from "../../utils/reportFilters";
 import {
   createTestSeriesSchema,
   updateTestSeriesSchema,
@@ -23,6 +22,7 @@ import {
   grantSubscriptionSchema,
   updateSubscriptionSchema,
 } from "./testSeries.validation";
+import { parseTestSeriesSubReportQuery } from "../../modules/report-query/report-query";
 
 function zodIssueResponse(res: Response, err: z.ZodError) {
   const messages = err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
@@ -477,23 +477,6 @@ export const deletePrice = async (req: Request, res: Response) => {
   }
 };
 
-// Shared filter mapping for the subscription report list and its CSV/Excel
-// exports (page/limit apply only to the paginated list).
-export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
-  testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
-  customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
-  // 422s an unrecognised status instead of silently returning an unfiltered list.
-  status: assertReportStatus(q.status),
-  paymentMethod: q.paymentMethod,
-  // Date range bounds `createdAt` at IST day edges; dateFrom/dateTo and
-  // fromDate/toDate are legacy aliases of createdFrom/createdTo.
-  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
-  dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
-  search: q.search,
-  sortBy: q.sortBy,
-  sortOrder: q.sortOrder,
-});
-
 export const listSubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -506,7 +489,7 @@ export const listSubscriptions = async (req: Request, res: Response) => {
     const l = Math.min(100, Math.max(1, parseInt(q.limit ?? "20", 10) || 20));
 
     const { summary, data, pagination } = await tsSql.listSubscriptions({
-      ...parseSubReportQuery(q),
+      ...parseTestSeriesSubReportQuery(q),
       page: p,
       limit: l,
     });
@@ -524,7 +507,7 @@ export const exportSubscriptionsCsv = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
   try {
-    const csv = await tsSql.buildSubscriptionsCsv(parseSubReportQuery(req.query as Record<string, string>));
+    const csv = await tsSql.buildSubscriptionsCsv(parseTestSeriesSubReportQuery(req.query as Record<string, string>));
     const filename = `test-series-subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -540,7 +523,7 @@ export const exportSubscriptionsExcel = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("exportSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
   try {
-    const buf = await tsSql.buildSubscriptionsXlsx(parseSubReportQuery(req.query as Record<string, string>));
+    const buf = await tsSql.buildSubscriptionsXlsx(parseTestSeriesSubReportQuery(req.query as Record<string, string>));
     const filename = `test-series-subscriptions-${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);

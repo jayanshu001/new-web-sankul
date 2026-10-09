@@ -8,7 +8,7 @@ import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { REVERT_DEACTIVATION_ERRORS, dateShiftConfirmation } from "../subscription/subscription.controller";
 import { isSuperAdmin } from "../../middlewares/requirePermission";
 import { PaymentMethod } from "../../shared/enums";
-import { assertReportStatus } from "../../utils/reportFilters";
+import { buildLiveCourseSubReportQuery } from "../../modules/report-query/report-query";
 
 // Payment method, amount and reference ids persist inline on the subscription row.
 // Ref ids arrive only for their method.
@@ -51,26 +51,6 @@ const updateSubscriptionSchema = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
 
-// Shared by the report list and its CSV/Excel exports so all three honor one param
-// contract. `:id` (when present) pins the liveCourseId filter.
-export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
-  liveCourseId: paramsId ? String(paramsId) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
-  customerId: q.customerId ? String(q.customerId) : undefined,
-  // 422s an unrecognised status instead of silently returning an unfiltered list.
-  status: assertReportStatus(q.status),
-  paymentMethod: q.paymentMethod,
-  activationType: q.activationType,
-  // Bounds `createdAt` at IST day edges. dateFrom/dateTo and fromDate/toDate are
-  // legacy aliases of createdFrom/createdTo.
-  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
-  dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
-  startFrom: q.startFrom,
-  endTo: q.endTo,
-  search: q.search,
-  sortBy: q.sortBy,
-  sortOrder: q.sortOrder,
-});
-
 // Envelope is hand-rolled { success, summary, data, pagination } (siblings, not
 // nested under success()'s `data`), matching the course/package report endpoint.
 export const listLiveCourseSubscriptions = async (req: Request, res: Response) => {
@@ -81,7 +61,7 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
     const q = req.query as Record<string, string>;
     const page = Math.max(1, parseInt(q.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(q.limit, 10) || 20));
-    const r = await liveSql.listSubscriptions({ ...buildSubReportQuery(q, req.params.id), page, limit });
+    const r = await liveSql.listSubscriptions({ ...buildLiveCourseSubReportQuery(q, req.params.id), page, limit });
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
     // Summary cards are super-admin only.
@@ -97,7 +77,7 @@ export const exportLiveCourseSubscriptionsCsv = async (req: Request, res: Respon
   const traceId = req.traceId;
   logger.info("exportLiveCourseSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
   try {
-    const r = await liveSql.buildSubscriptionsCsv(buildSubReportQuery(req.query as Record<string, string>, req.params.id));
+    const r = await liveSql.buildSubscriptionsCsv(buildLiveCourseSubReportQuery(req.query as Record<string, string>, req.params.id));
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
     const filename = `live-course-subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -115,7 +95,7 @@ export const exportLiveCourseSubscriptionsExcel = async (req: Request, res: Resp
   const traceId = req.traceId;
   logger.info("exportLiveCourseSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
   try {
-    const r = await liveSql.buildSubscriptionsXlsx(buildSubReportQuery(req.query as Record<string, string>, req.params.id));
+    const r = await liveSql.buildSubscriptionsXlsx(buildLiveCourseSubReportQuery(req.query as Record<string, string>, req.params.id));
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
     const filename = `live-course-subscriptions-${new Date().toISOString().slice(0, 10)}.xlsx`;

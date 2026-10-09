@@ -24,13 +24,12 @@ import { buildNotificationRouting } from "../../utils/notificationTarget";
 import logger from "../../utils/logger";
 import { buildPrismaPrefixSearch } from "../../utils/searchFilter";
 import type { LiveSession as SqlLiveSession } from "@prisma/client";
+import { parsePositiveInt } from "../../utils/parseId";
+import type { Prisma } from "@prisma/client";
 
 
 /** Parse a positive int id from a string, else null. */
-export const parseAlId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseAlId = parsePositiveInt;
 
 const idStr = (v: number | null | undefined): string | null =>
   v != null && v > 0 ? String(v) : null;
@@ -180,6 +179,37 @@ export const getLinkedCourseFolders = async (liveSessionId: number): Promise<Cou
     orderBy: { id: "asc" },
   });
   return rows.map((r) => ({ liveCourseId: r.liveCourseId, folderId: r.folderId ?? null }));
+};
+
+/**
+ * `getLinkedCourses` + `getLinkedCourseFolders` for a page of sessions in 2 queries
+ * (was 3 per session). Same link order (id asc) and DTO shapes.
+ */
+export const getLinkedForSessions = async (
+  liveSessionIds: number[]
+): Promise<Map<number, { courses: any[]; courseFolders: CourseFolderLink[] }>> => {
+  const out = new Map<number, { courses: any[]; courseFolders: CourseFolderLink[] }>(
+    liveSessionIds.map((id) => [id, { courses: [], courseFolders: [] }])
+  );
+  if (!liveSessionIds.length) return out;
+  const links = await prisma.liveSessionCourse.findMany({
+    where: { liveSessionId: { in: liveSessionIds } },
+    select: { liveSessionId: true, liveCourseId: true, folderId: true },
+    orderBy: { id: "asc" },
+  });
+  const courseIds = [...new Set(links.map((l) => l.liveCourseId))];
+  const courses = courseIds.length
+    ? await prisma.liveCourse.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true, image: true } })
+    : [];
+  const byId = new Map(courses.map((c) => [c.id, c]));
+  for (const l of links) {
+    const entry = out.get(l.liveSessionId);
+    if (!entry) continue;
+    entry.courseFolders.push({ liveCourseId: l.liveCourseId, folderId: l.folderId ?? null });
+    const c = byId.get(l.liveCourseId);
+    if (c) entry.courses.push({ _id: String(c.id), name: c.name, image: c.image ?? null, thumbnail: null });
+  }
+  return out;
 };
 
 /**
@@ -534,7 +564,7 @@ export interface ListInput {
 export const listSessions = async (
   input: ListInput
 ): Promise<{ rows: SqlLiveSession[]; total: number }> => {
-  const where: any = {};
+  const where: Prisma.LiveSessionWhereInput = {};
   // Multiple OR-groups (upcoming split, search) can't both live on `where.OR`
   // without clobbering each other — collect them here and AND them together.
   const and: any[] = [];

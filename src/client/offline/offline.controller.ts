@@ -99,7 +99,7 @@ export const listCentersByCity = async (req: Request, res: Response) => {
 
   try {
     const cid = parseOfflineId(cityId);
-    if (cid == null) { logger.warn("listCentersByCity invalid id (mysql)", { traceId, cityId }); return res.status(400).json({ success: false, message: "Invalid city id." }); }
+    if (cid == null) { logger.warn("listCentersByCity invalid id", { traceId, cityId }); return res.status(400).json({ success: false, message: "Invalid city id." }); }
 
     const byCity = await getCentersWithBatchesByCitiesMysql([cid]);
     const data = byCity.get(String(cid)) ?? [];
@@ -166,9 +166,9 @@ export const getCenterDetail = async (req: Request, res: Response) => {
 
   try {
     const cid = parseOfflineId(id);
-    if (cid == null) { logger.warn("getCenterDetail invalid id (mysql)", { traceId, centerId: id }); return res.status(400).json({ success: false, message: "Invalid center id." }); }
+    if (cid == null) { logger.warn("getCenterDetail invalid id", { traceId, centerId: id }); return res.status(400).json({ success: false, message: "Invalid center id." }); }
     const data = await getCenterDetailMysql(cid);
-    if (!data) { logger.warn("getCenterDetail not found (mysql)", { traceId, centerId: id }); return res.status(404).json({ success: false, message: "Center not found." }); }
+    if (!data) { logger.warn("getCenterDetail not found", { traceId, centerId: id }); return res.status(404).json({ success: false, message: "Center not found." }); }
     logger.info("getCenterDetail success", { traceId, centerId: id, batchCount: data.batches.length, source: "mysql" });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -184,9 +184,9 @@ export const getBatchDetail = async (req: Request, res: Response) => {
 
   try {
     const bid = parseOfflineId(id);
-    if (bid == null) { logger.warn("getBatchDetail invalid id (mysql)", { traceId, batchId: id }); return res.status(400).json({ success: false, message: "Invalid batch id." }); }
+    if (bid == null) { logger.warn("getBatchDetail invalid id", { traceId, batchId: id }); return res.status(400).json({ success: false, message: "Invalid batch id." }); }
     const data = await getBatchDetailMysql(bid);
-    if (!data) { logger.warn("getBatchDetail not found (mysql)", { traceId, batchId: id }); return res.status(404).json({ success: false, message: "Batch not found." }); }
+    if (!data) { logger.warn("getBatchDetail not found", { traceId, batchId: id }); return res.status(404).json({ success: false, message: "Batch not found." }); }
     logger.info("getBatchDetail success", { traceId, batchId: id, source: "mysql" });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -205,7 +205,7 @@ export const submitEnquiry = async (req: Request, res: Response) => {
     // userId may be null (stored as the 0 sentinel).
     const data = enquiryMysqlSchema.parse(req.body);
     if (!(await enquiryBatchExists(data.batchId))) {
-      logger.warn("submitEnquiry batch not found (mysql)", { traceId, batchId: data.batchId });
+      logger.warn("submitEnquiry batch not found", { traceId, batchId: data.batchId });
       return res.status(404).json({ success: false, message: "Batch not found." });
     }
     const customerIdInt = userId != null ? Number(userId) : null;
@@ -217,7 +217,7 @@ export const submitEnquiry = async (req: Request, res: Response) => {
       qualification: data.qualification,
       batchId: data.batchId,
     });
-    logger.info("submitEnquiry success (mysql)", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
+    logger.info("submitEnquiry success", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
     return res.status(201).json({ success: true, data: enquiry });
   } catch (e: any) {
     if (e.issues) { logger.warn("submitEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
@@ -251,7 +251,7 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
     const data = batchEnquirySchema.parse(req.body);
 
     if (!(await enquiryBatchExists(data.batchId))) {
-      logger.warn("submitBatchEnquiry batch not found (mysql)", { traceId, batchId: data.batchId });
+      logger.warn("submitBatchEnquiry batch not found", { traceId, batchId: data.batchId });
       return res.status(404).json({ success: false, message: "Batch not found." });
     }
 
@@ -266,11 +266,11 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
       batchId: data.batchId,
     });
 
-    logger.info("submitBatchEnquiry success (mysql)", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
+    logger.info("submitBatchEnquiry success", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
     return res.status(201).json({ success: true, data: enquiry });
   } catch (e: any) {
     if (e.issues) { logger.warn("submitBatchEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
-    if (e instanceof DuplicateEnquiryError) { logger.warn("submitBatchEnquiry duplicate (mysql)", { traceId, customerId: userId }); return res.status(409).json({ success: false, message: e.message }); }
+    if (e instanceof DuplicateEnquiryError) { logger.warn("submitBatchEnquiry duplicate", { traceId, customerId: userId }); return res.status(409).json({ success: false, message: e.message }); }
     logger.error("submitBatchEnquiry failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }

@@ -5,18 +5,14 @@ import { matchesAllTokens } from "../../utils/searchFilter";
 import type {
   FaqCategory,
   FaqCreateInput,
-  FaqCreateMongoInput,
   FaqDto,
   FaqTypeDto,
   FaqUpdateInput,
-  FaqUpdateMongoInput,
 } from "./faq.types";
 import { FAQ_TYPES } from "./faq.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseFaqId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseFaqId = parsePositiveInt;
 
 /**
  * Case- and space-insensitive, since the UI shows the label ("Referral") while
@@ -101,20 +97,20 @@ export const getFaqById = async (id: string): Promise<FaqDto | null> => {
 };
 
 export const createFaq = async (
-  input: FaqCreateInput | FaqCreateMongoInput
+  input: FaqCreateInput
 ): Promise<FaqDto> => {
-  const row = await faqRepository.create(input as FaqCreateInput);
+  const row = await faqRepository.create(input);
   return toFaqDto(row);
 };
 
 export const updateFaq = async (
   id: string,
-  input: FaqUpdateInput | FaqUpdateMongoInput
+  input: FaqUpdateInput
 ): Promise<FaqDto | null> => {
   const numId = parseFaqId(id);
   if (!numId) return null;
   try {
-    const row = await faqRepository.update(numId, input as FaqUpdateInput);
+    const row = await faqRepository.update(numId, input);
     return toFaqDto(row);
   } catch {
     return null;

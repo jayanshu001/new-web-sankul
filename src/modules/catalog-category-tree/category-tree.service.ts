@@ -41,6 +41,35 @@ export const descendantsOf = async (rootIds: number[]): Promise<number[]> => {
 };
 
 /**
+ * Self-FK analogue of `descendantsByRoot` for the material/exam category trees
+ * (no relation table): root -> its subtree ids (inclusive), in one recursive CTE.
+ * Roots are seeded literally, so a missing root row still maps to itself.
+ */
+export const selfFkDescendantsByRoot = async (
+  table: "ws_material_category" | "ws_exam_category",
+  parentCol: "parent" | "parent_id",
+  rootIds: number[]
+): Promise<Map<number, number[]>> => {
+  const roots = [...new Set(rootIds.filter((n) => Number.isInteger(n) && n > 0))];
+  const out = new Map<number, number[]>(roots.map((r) => [r, [r]]));
+  if (!roots.length) return out;
+  const seed = roots.map((id) => `SELECT ${id} AS root, ${id} AS id`).join(" UNION ALL ");
+  const rows = await prisma.$queryRawUnsafe<{ root: number; id: number }[]>(
+    `WITH RECURSIVE tree (root, id) AS (
+       ${seed}
+       UNION
+       SELECT t.root, c.id FROM ${table} c JOIN tree t ON c.${parentCol} = t.id
+     )
+     SELECT root, id FROM tree`
+  );
+  for (const r of rows) {
+    const bucket = out.get(Number(r.root));
+    if (bucket && Number(r.id) !== Number(r.root)) bucket.push(Number(r.id));
+  }
+  return out;
+};
+
+/**
  * Same as calling `descendantsOf([root])` per root, but resolves every root in one
  * recursive CTE that carries the seed `root` through, then buckets by root.
  */

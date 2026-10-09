@@ -12,16 +12,14 @@ import { adminEbookRepository as repo } from "./admin-ebook.repository";
 import { populateExamCountdowns, parseIdArray } from "../exam-countdown/exam-countdown.service";
 import { PaymentMethod } from "@prisma/client";
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
-import { buildPagination } from "../../utils/listQuery";
+import { buildPagination, parseListQuery } from "../../utils/listQuery";
 import { fmtExportDate } from "../../utils/csvExport";
 import { appendAdminRemark, planAddDays } from "../../utils/subscriptionRemarkHistory";
 import { adminSubscriptionRepository } from "../admin-subscription/admin-subscription.repository";
+import { parsePositiveInt } from "../../utils/parseId";
 
 
-export const parseEbookId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseEbookId = parsePositiveInt;
 
 // Case-insensitive map so the UI can send "backend"/"Backend".
 const PAYMENT_METHOD_BY_LOWER: Record<string, PaymentMethod> = Object.fromEntries(
@@ -123,8 +121,7 @@ const toEbookRefDto = (e: { id: number; name: string; image?: string | null; thu
 export interface ListEbooksQuery { search?: string; author?: string; publisher?: string; language?: string; status?: string; page?: string; limit?: string }
 
 export const listEbooks = async (query: ListEbooksQuery) => {
-  const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
-  const limitNum = Math.min(Math.max(parseInt(query.limit ?? "20", 10) || 20, 1), 100);
+  const { page: pageNum, limit: limitNum } = parseListQuery({ page: query.page, limit: query.limit }, { defaultLimit: 20, maxLimit: 100 });
   const opts = {
     search: query.search,
     author: query.author,

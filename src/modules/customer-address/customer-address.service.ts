@@ -2,11 +2,9 @@
 import { customerAddressRepository as repo } from "./customer-address.repository";
 import { toAddressDto } from "./customer-address.transformer";
 import type { AddressCreateInput, AddressUpdateInput } from "./customer-address.types";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseAddressId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseAddressId = parsePositiveInt;
 
 type Result<T> = { ok: true; status: number; data: T } | { ok: false; status: number; message: string };
 

@@ -7,6 +7,7 @@ import {
   listPromoterCustomers,
   listPromoterSubscriptions,
 } from "../../modules/promoter-data/promoter-data.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 export const listMyCustomers = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -17,13 +18,12 @@ export const listMyCustomers = async (req: Request, res: Response) => {
     if (!promoterId) { logger.warn("listMyCustomers unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+    const { page: pageNum, limit: limitNum } = parseListQuery({ page, limit }, { defaultLimit: 20, maxLimit: 500 });
 
     const pid = parsePromoterId(promoterId);
     if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const { items, total } = await listPromoterCustomers(pid, { search, page: pageNum, limit: limitNum });
-    logger.info("listMyCustomers success (sql)", { traceId, promoterId, total });
+    logger.info("listMyCustomers success", { traceId, promoterId, total });
     return res.status(200).json({
       success: true,
       data: items,
@@ -48,18 +48,20 @@ export const getMyCustomerDetail = async (req: Request, res: Response) => {
     const pid = parsePromoterId(promoterId);
     const cid = Number(customerId);
     if (!pid || !Number.isInteger(cid)) return res.status(400).json({ success: false, message: "Invalid id." });
-    // Attribution: the customer must appear in this promoter's attributed set.
-    const { items } = await listPromoterCustomers(pid, { page: 1, limit: 100000 });
-    const customer = items.find((c) => c._id === String(cid));
-    if (!customer) { logger.warn("getMyCustomerDetail not attributed (sql)", { traceId, promoterId, customerId }); return res.status(404).json({ success: false, message: "Customer not found." }); }
-    // Pull this promoter's subs, then keep only this customer's.
+    // A non-positive id never matches a customer; answer exactly as before (404), and never
+    // let customerId 0 fall through to the unfiltered list.
+    if (cid <= 0) return res.status(404).json({ success: false, message: "Customer not found." });
+    // Attribution: empty unless the customer is in this promoter's attributed set.
+    const { items: [customer] } = await listPromoterCustomers(pid, { customerId: cid, page: 1, limit: 1 });
+    if (!customer) { logger.warn("getMyCustomerDetail not attributed", { traceId, promoterId, customerId }); return res.status(404).json({ success: false, message: "Customer not found." }); }
+    // One customer's subs under one promoter is a small set; the cap is only a ceiling.
     const [courseAll, ebookAll] = await Promise.all([
-      listPromoterSubscriptions(pid, { type: "course", page: 1, limit: 100000 }),
-      listPromoterSubscriptions(pid, { type: "ebook", page: 1, limit: 100000 }),
+      listPromoterSubscriptions(pid, { type: "course", customerId: cid, page: 1, limit: 1000 }),
+      listPromoterSubscriptions(pid, { type: "ebook", customerId: cid, page: 1, limit: 1000 }),
     ]);
-    const courseSubscriptions = courseAll.items.filter((s) => s.customerId?._id === String(cid));
-    const ebookSubscriptions = ebookAll.items.filter((s) => s.customerId?._id === String(cid));
-    logger.info("getMyCustomerDetail success (sql)", { traceId, promoterId, customerId, courseSubs: courseSubscriptions.length, ebookSubs: ebookSubscriptions.length });
+    const courseSubscriptions = courseAll.items;
+    const ebookSubscriptions = ebookAll.items;
+    logger.info("getMyCustomerDetail success", { traceId, promoterId, customerId, courseSubs: courseSubscriptions.length, ebookSubs: ebookSubscriptions.length });
     return res.status(200).json({ success: true, data: { customer, courseSubscriptions, ebookSubscriptions } });
   } catch (e: any) {
     logger.error("getMyCustomerDetail failed", { traceId, promoterId, customerId, error: getErrorMessage(e), stack: e.stack });

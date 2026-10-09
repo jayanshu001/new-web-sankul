@@ -8,13 +8,15 @@ import * as liveSql from "../admin-live-course/admin-live-course.service";
 import * as tsSql from "../admin-testseries/admin-testseries.service";
 import * as ebookSql from "../admin-ebook/admin-ebook.service";
 import * as bookSql from "../admin-book/admin-book.service";
-import * as referralAdmin from "../../admin/referral/referral.service";
+import * as referralAdmin from "../referral/referral-admin.service";
 // Same param parsers as the sync /export endpoints, so the filter contract is identical.
-import { reportQueryFrom } from "../../admin/subscription/subscription.controller";
-import { buildSubReportQuery } from "../../admin/live-course/live-course.subscription.controller";
-import { parseSubReportQuery as parseTsReportQuery } from "../../admin/testSeries/testSeries.controller";
-import { parseSubReportQuery as parseEbookReportQuery } from "../../admin/ebook/ebook-subscription.controller";
-import { parseOrderReportQuery } from "../../admin/book/book.controller";
+import {
+  reportQueryFrom,
+  buildLiveCourseSubReportQuery as buildSubReportQuery,
+  parseTestSeriesSubReportQuery as parseTsReportQuery,
+  parseEbookSubReportQuery as parseEbookReportQuery,
+  parseOrderReportQuery,
+} from "../report-query/report-query";
 import type { ReportSource } from "../../utils/reportStream";
 
 export type ExportFormat = "csv" | "excel";

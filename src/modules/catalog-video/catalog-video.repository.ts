@@ -13,8 +13,12 @@ export const catalogVideoRepository = {
       orderBy: [{ order: "asc" }, { created_at: "asc" }],
     }),
 
-  countActiveVideosByCategory: (videoCategoryId: number) =>
-    prisma.video.count({ where: { status: true, videoCategoryId } }),
+  /** categoryId → direct active video count for every id, in one query. */
+  countActiveVideosByCategories: async (videoCategoryIds: number[]): Promise<Map<number, number>> => {
+    if (!videoCategoryIds.length) return new Map();
+    const rows = await prisma.video.groupBy({ by: ["videoCategoryId"], where: { status: true, videoCategoryId: { in: videoCategoryIds } }, _count: { _all: true } });
+    return new Map(rows.map((r) => [r.videoCategoryId as number, r._count._all]));
+  },
 
   findCategoryById: (id: number) =>
     prisma.videoCategory.findFirst({ where: { id, status: true } }),

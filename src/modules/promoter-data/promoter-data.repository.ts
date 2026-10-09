@@ -18,7 +18,7 @@ const num = (v: unknown): number => {
 };
 
 export const promoterDataRepository = {
-  listCourseSubs: (promoterId: number, opts: { from?: Date; to?: Date; skip: number; take: number }) =>
+  listCourseSubs: (promoterId: number, opts: { from?: Date; to?: Date; customerId?: number; skip: number; take: number }) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT s.id, s.customer_id AS customerId, s.amount, s.status, s.created_at AS createdAt,
               s.course_id AS courseId, s.package_id AS packageId,
@@ -33,25 +33,27 @@ export const promoterDataRepository = {
        WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
          ${opts.from ? "AND s.created_at >= ?" : ""}
          ${opts.to ? "AND s.created_at <= ?" : ""}
+         ${opts.customerId ? "AND s.customer_id = ?" : ""}
        ORDER BY s.created_at DESC, s.id DESC
        LIMIT ? OFFSET ?`,
-      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), opts.take, opts.skip]
+      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), ...(opts.customerId ? [opts.customerId] : []), opts.take, opts.skip]
     ),
 
-  countCourseSubs: async (promoterId: number, opts: { from?: Date; to?: Date }) => {
+  countCourseSubs: async (promoterId: number, opts: { from?: Date; to?: Date; customerId?: number }) => {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT COUNT(*) AS n
        FROM ws_package_course_subscription s
        JOIN ws_package_course_order o ON o.id = s.order_id
        WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
          ${opts.from ? "AND s.created_at >= ?" : ""}
-         ${opts.to ? "AND s.created_at <= ?" : ""}`,
-      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : [])]
+         ${opts.to ? "AND s.created_at <= ?" : ""}
+         ${opts.customerId ? "AND s.customer_id = ?" : ""}`,
+      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), ...(opts.customerId ? [opts.customerId] : [])]
     );
     return num(rows[0]?.n);
   },
 
-  listEbookSubs: (promoterId: number, opts: { from?: Date; to?: Date; skip: number; take: number }) =>
+  listEbookSubs: (promoterId: number, opts: { from?: Date; to?: Date; customerId?: number; skip: number; take: number }) =>
     prisma.$queryRawUnsafe<any[]>(
       `SELECT s.id, s.customer_id AS customerId, s.price AS amount, s.status, s.created_at AS createdAt,
               s.ebook_id AS ebookId,
@@ -66,20 +68,22 @@ export const promoterDataRepository = {
        WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
          ${opts.from ? "AND s.created_at >= ?" : ""}
          ${opts.to ? "AND s.created_at <= ?" : ""}
+         ${opts.customerId ? "AND s.customer_id = ?" : ""}
        ORDER BY s.created_at DESC, s.id DESC
        LIMIT ? OFFSET ?`,
-      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), opts.take, opts.skip]
+      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), ...(opts.customerId ? [opts.customerId] : []), opts.take, opts.skip]
     ),
 
-  countEbookSubs: async (promoterId: number, opts: { from?: Date; to?: Date }) => {
+  countEbookSubs: async (promoterId: number, opts: { from?: Date; to?: Date; customerId?: number }) => {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT COUNT(*) AS n
        FROM ws_ebook_subscription s
        JOIN ws_ebook_order o ON o.id = s.order_id
        WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
          ${opts.from ? "AND s.created_at >= ?" : ""}
-         ${opts.to ? "AND s.created_at <= ?" : ""}`,
-      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : [])]
+         ${opts.to ? "AND s.created_at <= ?" : ""}
+         ${opts.customerId ? "AND s.customer_id = ?" : ""}`,
+      ...[promoterId, ...(opts.from ? [opts.from] : []), ...(opts.to ? [opts.to] : []), ...(opts.customerId ? [opts.customerId] : [])]
     );
     return num(rows[0]?.n);
   },

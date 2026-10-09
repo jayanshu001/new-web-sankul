@@ -55,7 +55,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
   if (!cid) return { ok: false as const, message: "Customer not found." };
   const result = await svcUpdateProfile(cid, data);
   if (result.ok) await invalidateProfileCaches(customerId, traceId);
-  logger.info("updateCustomerProfile service done (mysql)", { traceId, customerId, ok: result.ok });
+  logger.info("updateCustomerProfile service done", { traceId, customerId, ok: result.ok });
   return result;
 }
 
@@ -68,11 +68,11 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
     const cached = await redisClient.get(cacheKey);
     if (cached) {
       const parsed = JSON.parse(cached);
-      logger.info("getCustomerProfile cache hit (mysql)", { traceId, customerId, count: parsed?.goals?.length ?? 0 });
+      logger.info("getCustomerProfile cache hit", { traceId, customerId, count: parsed?.goals?.length ?? 0 });
       return { ok: true, message: "Profile fetched successfully.", data: parsed };
     }
   } catch (err) {
-    logger.warn("getCustomerProfile cache read failed (mysql)", { traceId, customerId, error: (err as Error).message });
+    logger.warn("getCustomerProfile cache read failed", { traceId, customerId, error: (err as Error).message });
   }
 
   const cid = parseProfileId(customerId);
@@ -82,7 +82,7 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
     try {
       await redisClient.set(cacheKey, JSON.stringify(result.data), "EX", PROFILE_CACHE_TTL_SECONDS);
     } catch (err) {
-      logger.warn("getCustomerProfile cache write failed (mysql)", { traceId, customerId, error: (err as Error).message });
+      logger.warn("getCustomerProfile cache write failed", { traceId, customerId, error: (err as Error).message });
     }
   }
   return result;
@@ -108,7 +108,7 @@ export async function upsertCustomerProfilePicture(
   if (!result.ok) return result;
   if (result.data.previousUrl) {
     deleteFromS3FileUrl(result.data.previousUrl).catch((err) =>
-      logger.warn("upsertCustomerProfilePicture failed to delete old image (mysql)", { traceId, customerId, error: (err as Error).message })
+      logger.warn("upsertCustomerProfilePicture failed to delete old image", { traceId, customerId, error: (err as Error).message })
     );
   }
   await invalidateProfileCaches(customerId, traceId);
@@ -129,9 +129,9 @@ export async function deleteCustomerAccount(customerId: string, traceId?: string
   try {
     await redisClient.del(`customer_session:${customerId}`);
   } catch (err) {
-    logger.warn("deleteCustomerAccount cache clear failed (mysql)", { traceId, customerId, error: (err as Error).message });
+    logger.warn("deleteCustomerAccount cache clear failed", { traceId, customerId, error: (err as Error).message });
   }
-  logger.info("deleteCustomerAccount service completed (mysql)", { traceId, customerId });
+  logger.info("deleteCustomerAccount service completed", { traceId, customerId });
   return { ok: true, message: result.message };
 }
 
@@ -144,7 +144,7 @@ export async function updateCustomerFirebaseToken(
   logger.info("updateCustomerFirebaseToken service invoked", { traceId, phoneNumber });
 
   const result = await svcUpdateFirebaseByPhone(phoneNumber, firebaseToken, platform);
-  logger.info("updateCustomerFirebaseToken service done (mysql)", { traceId, phoneNumber, ok: result.ok });
+  logger.info("updateCustomerFirebaseToken service done", { traceId, phoneNumber, ok: result.ok });
   return result.ok ? { ok: true, message: result.message } : result;
 }
 
@@ -184,7 +184,7 @@ export async function deleteCustomerProfilePicture(customerId: string, traceId?:
   if (!result.ok) return result;
   if (result.data.previousUrl) {
     deleteFromS3FileUrl(result.data.previousUrl).catch((err) =>
-      logger.warn("deleteCustomerProfilePicture failed to delete old image (mysql)", { traceId, customerId, error: (err as Error).message })
+      logger.warn("deleteCustomerProfilePicture failed to delete old image", { traceId, customerId, error: (err as Error).message })
     );
   }
   await invalidateProfileCaches(customerId, traceId);

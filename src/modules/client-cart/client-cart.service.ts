@@ -2,11 +2,9 @@
 import { clientCartRepository as repo } from "./client-cart.repository";
 import { resolveShippingIdForAddress } from "../customer-shipping/customer-shipping.service";
 import { getFreeShippingMin } from "../book-order/book-order.service";
+import { parsePositiveInt } from "../../utils/parseId";
 
-export const parseCartId = (id: string): number | null => {
-  const n = Number(id);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+export const parseCartId = parsePositiveInt;
 
 const num = (v: unknown): number => {
   const n = Number(v);
