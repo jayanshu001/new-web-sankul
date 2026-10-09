@@ -7,7 +7,7 @@ import { RANK_ERROR } from "../modules/rank-predictor/rank-predictor.types";
 import { renderPdfFromHtml } from "../libs/core/generate";
 import logger from "./logger";
 
-const MAX_BYTES = 25 * 1024 * 1024;
+const MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 3;
 const PDF_MAGIC = "%PDF-";

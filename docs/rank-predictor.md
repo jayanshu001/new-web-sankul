@@ -374,7 +374,7 @@ gain `normalized_score` (null when not normalising); standing gains `raw_score` 
 `POST /papers/:examId/submissions` takes either a `file` (PDF upload) **or** a `sheet_url`.
 The link is fetched by the backend (`src/utils/sheetUrlFetch.ts`): https only, no
 credentials in the URL, every address it resolves to (and every redirect hop, max 3) must be
-public, 25 MB and 20 s caps, and the body must carry `%PDF-` in its first 1 KB. The check is
+public, 50 MB and 20 s caps, and the body must carry `%PDF-` in its first 1 KB. The check is
 repeated on the socket's own DNS lookup, so a host that re-resolves to an internal address
 after the first check (DNS rebinding) is still refused. Errors: `400 sheet_url_invalid`,
 `422 sheet_url_unreachable`. After the download it is the same pipeline as an upload.
@@ -394,7 +394,7 @@ An uploaded `file` (student sheet and admin answer-key PDF, `uploadRankPdfToMemo
 `src/middlewares/upload.ts`) must be `application/pdf` **and** carry `%PDF-` in its first 1 KB —
 the declared type alone is the client's word. One file, ≤ 50 text fields. Errors (previously
 a 500): `415` "Only PDF response sheets are accepted." (`file_not_pdf`), `413` "That PDF is
-larger than 25 MB." (`file_too_large`), `400` "Send one PDF in the `file` field."
+larger than 50 MB." (`file_too_large`), `400` "Send one PDF in the `file` field."
 (`invalid_upload`).
 
 `POST /papers/:examId/submissions/marks` takes `{ marks, series?, shift? }` for a student with no
@@ -587,7 +587,7 @@ Prisma confined to the repository:
 | `src/client/client.routes.ts` | Mount, before the catch-alls |
 | `src/admin/permission/permissions.catalog.ts` | Three `mod()` entries (papers and submissions carry `delete`), `CATALOG_VERSION` → `2026.09.21-4` |
 | `src/middlewares/rbacRouteMap.ts` | Route → permission rules |
-| `src/middlewares/upload.ts` | `uploadRankPdfToMemory` — memoryStorage, 25 MB, PDF only |
+| `src/middlewares/upload.ts` | `uploadRankPdfToMemory` — memoryStorage, 50 MB, PDF only |
 | `src/config/env.ts`, `.env.example` | `OCR_*` variables |
 
 ### 5.2 `websankul-admin`

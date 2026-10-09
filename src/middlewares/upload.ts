@@ -419,7 +419,7 @@ export const deleteFromS3FileUrl = async (fileUrl: string) => {
   }
 };
 
-const RANK_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const RANK_PDF_MAX_BYTES = 50 * 1024 * 1024;
 const PDF_MAGIC = "%PDF-";
 /** Readers accept the header anywhere in the first 1 KB, so a valid sheet may have bytes before it. */
 const PDF_HEADER_WINDOW = 1024;
@@ -457,7 +457,7 @@ export const uploadRankPdfToMemory = {
       if (err instanceof multer.MulterError) {
         return next(
           err.code === "LIMIT_FILE_SIZE"
-            ? uploadError(413, "That PDF is larger than 25 MB.", "file_too_large")
+            ? uploadError(413, "That PDF is larger than 50 MB.", "file_too_large")
             : uploadError(400, "Send one PDF in the `file` field.", "invalid_upload")
         );
       }
