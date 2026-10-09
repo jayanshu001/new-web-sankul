@@ -53,7 +53,7 @@ router.use(authenticate);
 router.post(
   "/papers/:examId/submissions",
   validate({ params: examIdParamSchema }),
-  uploadRankPdfToMemory.single("file"),
+  uploadRankPdfToMemory.single("file", { html: true }),
   validate({ body: submissionCreateSchema }),
   createSubmission
 );

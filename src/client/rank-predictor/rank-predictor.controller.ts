@@ -11,7 +11,7 @@ import {
 } from "../../modules/rank-predictor/rank-predictor.types";
 import { getSignedRankPdfUrl } from "../../utils/rankSheetStorage";
 import { success } from "../../utils/httpResponse";
-import { SheetUrlError, fetchSheetPdf } from "../../utils/sheetUrlFetch";
+import { SheetUrlError, fetchSheetPdf, printDigialmSheet } from "../../utils/sheetUrlFetch";
 
 interface ExamListQuery {
   search?: string;
@@ -94,7 +94,24 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
   await requireActiveExam(req);
 
   let sheet: { buffer: Buffer; fileName: string };
-  if (req.file) {
+  if (req.file?.mimetype === "text/html") {
+    // Digialm refuses our server's IP, so the app downloads the sheet on the
+    // phone and sends the page itself; it is printed here as a link would be.
+    try {
+      sheet = {
+        buffer: await printDigialmSheet(req.file.buffer.toString("utf8")),
+        fileName: req.file.originalname.replace(/\.html?$/i, "") + ".pdf",
+      };
+    } catch (error) {
+      if (!(error instanceof SheetUrlError)) throw error;
+      const notSheet = error.code === RANK_ERROR.SHEET_URL_INVALID;
+      throw new HttpError(
+        notSheet ? 415 : 422,
+        notSheet ? "That file is not a Digialm response sheet." : "We could not read that sheet.",
+        { error: notSheet ? "file_not_pdf" : RANK_ERROR.UNKNOWN_EXTRACTION_ERROR }
+      );
+    }
+  } else if (req.file) {
     sheet = { buffer: req.file.buffer, fileName: req.file.originalname };
   } else {
     try {

@@ -18,6 +18,8 @@ const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
  * page is never handed to the browser.
  */
 const isDigialmHost = (host: string): boolean => host === "digialm.com" || host.endsWith(".digialm.com");
+/** Labels every Digialm response sheet prints; an uploaded page without them is not one. */
+const DIGIALM_MARKERS = ["Participant ID", "Question ID", "Chosen Option"];
 
 export class SheetUrlError extends Error {
   constructor(
@@ -115,13 +117,8 @@ const get = (url: URL): Promise<IncomingMessage> =>
     const req = request(url, {
       lookup: publicOnlyLookup,
       timeout: TIMEOUT_MS,
-      // Digialm sits behind Akamai, which refuses non-browser user agents from
-      // datacenter IPs (works from a laptop, 403s from the server).
-      headers: {
-        accept: "application/pdf, text/html;q=0.9",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      },
+      // Some hosts refuse a request with no user agent; `fetch` used to send one.
+      headers: { accept: "application/pdf, text/html;q=0.9", "user-agent": "WebSankul-RankPredictor/1.0" },
     });
     req.on("response", resolve);
     req.on("timeout", () => req.destroy(new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE)));
@@ -164,6 +161,20 @@ const fileNameOf = (url: URL): string => {
   // Only ever a label for the reader; keep it to plain characters.
   name = name.replace(/[^\w.\- ]+/g, "_").slice(0, 120).replace(/\.html?$/i, ".pdf");
   return name.toLowerCase().endsWith(".pdf") ? name : "sheet.pdf";
+};
+
+/**
+ * Print a Digialm HTML response sheet to PDF for the reader. Offline: scripts off
+ * and every request but `data:` refused, so the page cannot reach anything.
+ */
+export const printDigialmSheet = async (html: string): Promise<Buffer> => {
+  if (!DIGIALM_MARKERS.every((marker) => html.includes(marker))) {
+    throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a Digialm sheet");
+  }
+  return renderPdfFromHtml(html, { offline: true }).catch((error: unknown) => {
+    logger.warn("[sheet-url] could not print sheet", { error: (error as Error)?.message });
+    throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE, "could not print the sheet");
+  });
 };
 
 /**
@@ -211,11 +222,7 @@ export const fetchSheetPdf = async (rawUrl: string): Promise<{ buffer: Buffer; f
       if (!isHtml || !isDigialmHost(url.hostname.toLowerCase())) {
         throw new SheetUrlError(RANK_ERROR.SHEET_URL_INVALID, "not a PDF");
       }
-      const pdf = await renderPdfFromHtml(buffer.toString("utf8"), { offline: true }).catch((error: unknown) => {
-        logger.warn("[sheet-url] could not print sheet", { host: url.hostname, error: (error as Error)?.message });
-        throw new SheetUrlError(RANK_ERROR.SHEET_URL_UNREACHABLE, "could not print the sheet");
-      });
-      return { buffer: pdf, fileName: fileNameOf(url) };
+      return { buffer: await printDigialmSheet(buffer.toString("utf8")), fileName: fileNameOf(url) };
     }
 
     return { buffer, fileName: fileNameOf(url) };

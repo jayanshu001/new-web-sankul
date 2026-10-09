@@ -429,25 +429,31 @@ const uploadError = (statusCode: number, message: string, error: string) =>
   Object.assign(new Error(message), { statusCode, errorObject: { error } });
 
 const NOT_A_PDF = () => uploadError(415, "Only PDF response sheets are accepted.", "file_not_pdf");
+const NOT_A_SHEET = () =>
+  uploadError(415, "Only PDF or Digialm (.html) response sheets are accepted.", "file_not_pdf");
 
-const rankPdfMulter = multer({
-  ...MULTER_UTF8,
-  storage: multer.memoryStorage(),
-  // One file; text fields keep multer's 1 MB size default (a pasted answer key can be long).
-  limits: { fileSize: RANK_PDF_MAX_BYTES, files: 1, fields: 50 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype === "application/pdf") return cb(null, true);
-    cb(NOT_A_PDF());
-  },
-});
+const rankPdfMulter = (html: boolean) =>
+  multer({
+    ...MULTER_UTF8,
+    storage: multer.memoryStorage(),
+    // One file; text fields keep multer's 1 MB size default (a pasted answer key can be long).
+    limits: { fileSize: RANK_PDF_MAX_BYTES, files: 1, fields: 50 },
+    fileFilter: (_req, file, cb) => {
+      if (file.mimetype === "application/pdf" || (html && file.mimetype === "text/html")) return cb(null, true);
+      cb(html ? NOT_A_SHEET() : NOT_A_PDF());
+    },
+  });
+const rankPdfOnly = rankPdfMulter(false);
+const rankPdfOrHtml = rankPdfMulter(true);
 
 /**
  * The optional `file` field of a rank-predictor upload, kept in memory. The declared
  * type is the client's word, so the bytes must also start with the PDF header.
+ * `html: true` also takes a Digialm HTML sheet, which the caller checks and prints.
  */
 export const uploadRankPdfToMemory = {
-  single: (field: string): import("express").RequestHandler => (req, res, next) =>
-    rankPdfMulter.single(field)(req, res, (err?: unknown) => {
+  single: (field: string, { html = false }: { html?: boolean } = {}): import("express").RequestHandler => (req, res, next) =>
+    (html ? rankPdfOrHtml : rankPdfOnly).single(field)(req, res, (err?: unknown) => {
       if (err instanceof multer.MulterError) {
         return next(
           err.code === "LIMIT_FILE_SIZE"
@@ -456,8 +462,12 @@ export const uploadRankPdfToMemory = {
         );
       }
       if (err) return next(err);
-      if (req.file && !req.file.buffer.subarray(0, PDF_HEADER_WINDOW).toString("latin1").includes(PDF_MAGIC)) {
-        return next(NOT_A_PDF());
+      if (
+        req.file &&
+        req.file.mimetype === "application/pdf" &&
+        !req.file.buffer.subarray(0, PDF_HEADER_WINDOW).toString("latin1").includes(PDF_MAGIC)
+      ) {
+        return next(html ? NOT_A_SHEET() : NOT_A_PDF());
       }
       next();
     }),
