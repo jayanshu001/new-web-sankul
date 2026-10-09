@@ -471,8 +471,8 @@ const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void 
     }
   }
 
-  if (scope?.subject && (scope.shiftKey || scope.casteCategory || scope.gender)) {
-    throw new HttpError(400, "A subject board cannot be narrowed by shift, category or gender.", {
+  if (scope?.subject && (scope.shiftKey || scope.casteCategory || scope.gender || scope.exServiceman)) {
+    throw new HttpError(400, "A subject board cannot be narrowed by shift, category, gender or ex-serviceman.", {
       error: RANK_ERROR.RANK_BREAKDOWN_DISABLED,
       breakdown: RANK_BY.SUBJECT,
     });
@@ -1131,6 +1131,7 @@ export const rankPredictorService = {
     ]);
     const casteCategory: CasteCategory | null = casteCategoryOf(profile);
     const gender = genderOf(profile);
+    const exServiceman = profile?.isExServiceman === true;
     const enabled = rankByOf(exam);
 
     if (!score) {
@@ -1150,6 +1151,7 @@ export const rankPredictorService = {
         overall_gender: null,
         shift_gender: null,
         category_gender: null,
+        ex_serviceman: null,
         shift: null,
         shift_category: null,
         subjects: null,
@@ -1168,8 +1170,17 @@ export const rankPredictorService = {
 
     // Each standing is its own count over the same scores, so they are issued
     // together rather than one after another.
-    const [overall, category, shift, shiftCategory, overallGender, shiftGender, categoryGender, subjectRows] =
-      await Promise.all([
+    const [
+      overall,
+      category,
+      shift,
+      shiftCategory,
+      overallGender,
+      shiftGender,
+      categoryGender,
+      exServicemanBoard,
+      subjectRows,
+    ] = await Promise.all([
       across(),
       categoryOn ? across({ casteCategory }) : null,
       shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey }) : null,
@@ -1179,6 +1190,7 @@ export const rankPredictorService = {
       gender ? across({ gender }) : null,
       gender && shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey, gender }) : null,
       gender && categoryOn ? across({ casteCategory, gender }) : null,
+      exServiceman ? across({ exServiceman }) : null,
       enabled.includes(RANK_BY.SUBJECT) ? repo.listSubjectScores(score.id) : null,
     ]);
 
@@ -1220,6 +1232,7 @@ export const rankPredictorService = {
       overall_gender: overallGender ? positionOf(overallGender) : null,
       shift_gender: shiftGender ? positionOf(shiftGender) : null,
       category_gender: categoryGender ? positionOf(categoryGender) : null,
+      ex_serviceman: exServicemanBoard ? positionOf(exServicemanBoard) : null,
       shift: shift && shiftKey ? { key: shiftKey, ...positionOf(shift) } : null,
       shift_category: shiftCategory ? positionOf(shiftCategory) : null,
       subjects,

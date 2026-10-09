@@ -362,6 +362,11 @@ paper with fewer than two shifts, or a degenerate spread falls back to raw marks
 gain `normalized_score` (null when not normalising); standing gains `raw_score` and
 `normalized_score`. Leaderboards also take `gender`.
 
+**Ex-serviceman board.** No DDL; reads `ws_ocr_profiles.is_ex_serviceman`. Standing gains
+`ex_serviceman` (position), filled only when the viewer's profile says ex-serviceman, else
+`null`. It spans shifts, so it orders on normalised marks like the overall board. Not gated by
+`rank_by`, like the gender boards. Leaderboards also take `exServiceman=true`.
+
 ---
 
 #### Other ways a student can submit

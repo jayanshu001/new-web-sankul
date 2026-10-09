@@ -23,17 +23,18 @@ const countOf = (rows: CountRow[] | undefined): number => asNumber(rows?.[0]?.c)
 
 /**
  * The scores a board covers: the whole paper, narrowed by shift, caste
- * category and/or gender. The profile join is inner and only present for a category or gender board — a
+ * category, gender and/or ex-serviceman status. The profile join is inner and only present for a category or gender board — a
  * candidate with no category answered is in neither the numerator nor the
  * denominator there, though they still count towards the overall rank.
  */
 const scopedScores = (examId: bigint, scope: BoardScope = {}) => Prisma.sql`
   FROM ws_ocr_scores s
-  ${scope.casteCategory || scope.gender ? Prisma.sql`JOIN ws_ocr_profiles p ON p.customer_id = s.customer_id` : Prisma.empty}
+  ${scope.casteCategory || scope.gender || scope.exServiceman ? Prisma.sql`JOIN ws_ocr_profiles p ON p.customer_id = s.customer_id` : Prisma.empty}
   WHERE s.exam_id = ${examId}
   ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
   ${scope.casteCategory ? Prisma.sql`AND p.caste_category = ${scope.casteCategory}` : Prisma.empty}
-  ${scope.gender ? Prisma.sql`AND p.gender = ${scope.gender}` : Prisma.empty}`;
+  ${scope.gender ? Prisma.sql`AND p.gender = ${scope.gender}` : Prisma.empty}
+  ${scope.exServiceman ? Prisma.sql`AND p.is_ex_serviceman = 1` : Prisma.empty}`;
 
 const countScores = (examId: bigint, scope?: BoardScope) =>
   prisma.$queryRaw<CountRow[]>`SELECT COUNT(*) c ${scopedScores(examId, scope)}`;
@@ -485,7 +486,7 @@ export const rankPredictorRepository = {
     if (scope.subject) return rankPredictorRepository.subjectLeaderboardPage(examId, scope.subject, skip, take);
 
     const mark = boardScore(normalization);
-    const byProfile = Boolean(scope.casteCategory || scope.gender);
+    const byProfile = Boolean(scope.casteCategory || scope.gender || scope.exServiceman);
     // Rank and page on the scores alone, then join names for just the page: the
     // board is read on every refresh, and joining customers, submissions and
     // profiles for every candidate before keeping twenty was most of its cost.
@@ -506,6 +507,7 @@ export const rankPredictorRepository = {
            ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
            ${scope.casteCategory ? Prisma.sql`AND fp.caste_category = ${scope.casteCategory}` : Prisma.empty}
            ${scope.gender ? Prisma.sql`AND fp.gender = ${scope.gender}` : Prisma.empty}
+           ${scope.exServiceman ? Prisma.sql`AND fp.is_ex_serviceman = 1` : Prisma.empty}
            ORDER BY board_mark DESC, s.id ASC
            LIMIT ${take} OFFSET ${skip}
         ) r

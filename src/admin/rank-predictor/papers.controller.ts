@@ -60,12 +60,12 @@ export const deletePaper = asyncHandler(async (req: Request, res: Response) => {
 
 export const getPaperLeaderboard = asyncHandler(async (req: Request, res: Response) => {
   const { page, limit } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
-  const { shift, category, gender, subject } = leaderboardScopeQuerySchema.parse(req.query);
+  const { shift, category, gender, exServiceman, subject } = leaderboardScopeQuerySchema.parse(req.query);
   const { entries, total } = await rankPredictorService.getAdminLeaderboard({
     examId: bigIntParam(req, "examId"),
     page,
     pageSize: limit,
-    scope: { shiftKey: shift, casteCategory: category, gender, subject },
+    scope: { shiftKey: shift, casteCategory: category, gender, exServiceman, subject },
   });
 
   return res.json({

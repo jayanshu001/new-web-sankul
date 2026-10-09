@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-10-09 — Rank predictor: ex-serviceman board
+
+> **DDL / backfill:** none — reads the existing `ws_ocr_profiles.is_ex_serviceman`.
+>
+> `BoardScope` gains `exServiceman`; when true, `scopedScores` / `leaderboardPage` inner-join
+> `ws_ocr_profiles` and add `AND is_ex_serviceman = 1` (a NULL/false profile is in neither count).
+> `GET …/rank/me` gains `ex_serviceman: position|null` — one extra `rankForExam` count, issued only
+> when the viewer's profile has `is_ex_serviceman = 1`; it spans shifts, so it uses normalized marks
+> like `overall_gender`. Not gated by `rank_by` (same as the gender boards). Client + admin
+> leaderboards take `exServiceman=true|false`; with `subject` → `400 rank_breakdown_disabled`.
+> FE doc: `docs/client/RANK_STANDING.md`.
+
+---
+
 ## 2026-10-09 — Rank predictor: per-paper submission options (`ws_ocr_exams.submission_modes`)
 
 > **DDL:** `docs/migration/schema-changes/2026-10-09_ocr_submission_modes.sql` — one nullable

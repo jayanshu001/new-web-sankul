@@ -27,6 +27,7 @@ interface LeaderboardQuery {
   shift?: string;
   category?: CasteCategory;
   gender?: Gender;
+  exServiceman?: boolean;
   subject?: string;
 }
 
@@ -85,12 +86,12 @@ export const getExam = asyncHandler(async (req: Request, res: Response) =>
 export const getLeaderboard = asyncHandler(async (req: Request, res: Response) => {
   await requireActiveExam(req);
 
-  const { page, pageSize, shift, category, gender, subject } = req.query as unknown as LeaderboardQuery;
+  const { page, pageSize, shift, category, gender, exServiceman, subject } = req.query as unknown as LeaderboardQuery;
   const { entries, total } = await rankPredictorService.getLeaderboard({
     examId: examIdOf(req),
     page,
     pageSize,
-    scope: { shiftKey: shift, casteCategory: category, gender, subject },
+    scope: { shiftKey: shift, casteCategory: category, gender, exServiceman, subject },
     viewerCustomerId: optionalCustomerIdOf(req),
   });
 

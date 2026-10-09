@@ -186,6 +186,9 @@ export const leaderboardScopeQuerySchema = z.object({
   shift: shiftKeySchema.optional(),
   category: z.enum(CASTE_CATEGORIES).optional(),
   gender: z.enum(GENDERS).optional(),
+  exServiceman: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .optional(),
   subject: z.string().trim().min(1).max(100).optional(),
 });
 

@@ -492,6 +492,8 @@ export interface RankStandingDto {
   overall_gender: RankPositionDto | null;
   shift_gender: RankPositionDto | null;
   category_gender: RankPositionDto | null;
+  /** Standing among ex-servicemen; null unless the viewer's profile says they are one. */
+  ex_serviceman: RankPositionDto | null;
   /** Standing within the viewer's own shift; null unless the paper ranks by shift and the sheet names one. */
   shift: (RankPositionDto & { key: string }) | null;
   /** Standing within the viewer's shift AND category together. */
@@ -646,6 +648,8 @@ export interface BoardScope {
   shiftKey?: string | null;
   casteCategory?: CasteCategory | null;
   gender?: Gender | null;
+  /** Only `true` narrows: the board of candidates who answered they are ex-servicemen. */
+  exServiceman?: boolean | null;
   subject?: string | null;
 }
 
