@@ -10,6 +10,7 @@ import {
   MAX_SYLLABUS_SUBJECTS,
   RANK_BY_VALUES,
   MAX_TOTAL_QUESTIONS,
+  SUBMISSION_MODES,
   SUBMISSION_STATUSES,
   type SubmissionStatus,
 } from "./rank-predictor.types";
@@ -111,6 +112,11 @@ const rankBySchema = z
   .array(z.enum(RANK_BY_VALUES))
   .transform((values) => [...new Set(values)]);
 
+const submissionModesSchema = z
+  .array(z.enum(SUBMISSION_MODES))
+  .min(1, "Leave students at least one way to submit.")
+  .transform((values) => [...new Set(values)]);
+
 export const examCreateSchema = z.object({
   code: z.string().trim().min(1).max(100),
   name: z.string().trim().min(1).max(255),
@@ -125,6 +131,7 @@ export const examCreateSchema = z.object({
   syllabus: syllabusSchema.optional(),
   rankBy: rankBySchema.optional(),
   paperShifts: paperShiftsSchema.optional(),
+  submissionModes: submissionModesSchema.optional(),
   isActive: z.coerce.boolean().optional(),
 });
 

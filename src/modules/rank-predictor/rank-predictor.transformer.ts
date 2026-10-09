@@ -7,6 +7,7 @@ import {
   KEY_SOURCE,
   LEGACY_RANK_BY,
   RANK_BY_VALUES,
+  SUBMISSION_MODES,
   type KeySource,
   type PaperShift,
   type RankBy,
@@ -30,6 +31,7 @@ import {
   type RankLeaderboardEntryDto,
   type RankScoreDto,
   type RankSubmissionDto,
+  type SubmissionMode,
   type SubmissionStatus,
 } from "./rank-predictor.types";
 
@@ -127,6 +129,12 @@ export const rankByOf = (row: Pick<OcrExam, "rankBy">): RankBy[] =>
     ? RANK_BY_VALUES.filter((value) => (row.rankBy as unknown[]).includes(value))
     : [...LEGACY_RANK_BY];
 
+/** How students may submit. A paper with no stored choice takes every way it always did. */
+export const submissionModesOf = (row: Pick<OcrExam, "submissionModes">): SubmissionMode[] =>
+  Array.isArray(row.submissionModes)
+    ? SUBMISSION_MODES.filter((value) => (row.submissionModes as unknown[]).includes(value))
+    : [...SUBMISSION_MODES];
+
 export const paperShiftsOf = (row: Pick<OcrExam, "paperShifts">): PaperShift[] =>
   Array.isArray(row.paperShifts) ? (row.paperShifts as unknown as PaperShift[]) : [];
 
@@ -195,6 +203,7 @@ export const toRankExamDto = (
   syllabus: syllabusOf(row),
   rank_by: rankByOf(row),
   paper_shifts: paperShiftsOf(row),
+  submission_modes: submissionModesOf(row),
   is_active: row.isActive,
   created_at: row.createdAt,
 });

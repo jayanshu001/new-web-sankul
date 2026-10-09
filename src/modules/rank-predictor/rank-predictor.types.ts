@@ -102,6 +102,8 @@ export const RANK_ERROR = {
   SHIFT_REQUIRED: "shift_required",
   SHIFT_NOT_LISTED: "shift_not_listed",
   SHIFTS_REQUIRED: "shifts_required",
+  SUBMISSION_MODE_DISABLED: "submission_mode_disabled",
+  SUBMISSION_MODES_INVALID: "submission_modes_invalid",
   UNKNOWN_EXTRACTION_ERROR: "unknown_error",
 } as const;
 
@@ -162,6 +164,18 @@ export const RANK_BY = {
 export type RankBy = (typeof RANK_BY)[keyof typeof RANK_BY];
 
 export const RANK_BY_VALUES = Object.values(RANK_BY) as [RankBy, ...RankBy[]];
+
+/** The ways a student can hand in a result; an admin can switch each off per paper. */
+export const SUBMISSION_MODE = {
+  /** The `file` field: a PDF, or a Digialm page the app downloaded. */
+  PDF: "pdf",
+  URL: "url",
+  MARKS: "marks",
+} as const;
+
+export type SubmissionMode = (typeof SUBMISSION_MODE)[keyof typeof SUBMISSION_MODE];
+
+export const SUBMISSION_MODES = Object.values(SUBMISSION_MODE) as [SubmissionMode, ...SubmissionMode[]];
 
 /** What a paper that predates `rank_by` shows: the category rank it always had. */
 export const LEGACY_RANK_BY: readonly RankBy[] = [RANK_BY.CATEGORY];
@@ -309,6 +323,8 @@ export interface RankExamDto {
   rank_by: RankBy[];
   /** Slots the admin set up, with any per-slot cancellations. Required on a marks_only paper. */
   paper_shifts: PaperShift[];
+  /** How students may submit. A paper that never chose takes all three. */
+  submission_modes: SubmissionMode[];
   is_active: boolean;
   created_at: Date | null;
   /** Slots on offer: the admin's, plus any read off scored sheets. Only on the single-paper read. */
@@ -578,6 +594,7 @@ export interface ExamCreateInput {
   syllabus?: SyllabusSubject[];
   rankBy?: RankBy[];
   paperShifts?: PaperShift[];
+  submissionModes?: SubmissionMode[];
   isActive?: boolean;
 }
 

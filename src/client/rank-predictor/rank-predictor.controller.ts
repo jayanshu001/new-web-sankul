@@ -4,10 +4,12 @@ import { HttpError } from "../../middlewares/errorHandler";
 import { rankPredictorService } from "../../modules/rank-predictor/rank-predictor.service";
 import {
   RANK_ERROR,
+  SUBMISSION_MODE,
   type CandidateProfileInput,
   type CasteCategory,
   type Gender,
   type RankExamDto,
+  type SubmissionMode,
 } from "../../modules/rank-predictor/rank-predictor.types";
 import { getSignedRankPdfUrl } from "../../utils/rankSheetStorage";
 import { success } from "../../utils/httpResponse";
@@ -46,6 +48,22 @@ const requireActiveExam = async (req: Request): Promise<RankExamDto> => {
   }
 
   return exam;
+};
+
+const MODE_DISABLED_MESSAGE: Record<SubmissionMode, string> = {
+  [SUBMISSION_MODE.PDF]: "This paper does not take sheet uploads.",
+  [SUBMISSION_MODE.URL]: "This paper does not take sheet links.",
+  [SUBMISSION_MODE.MARKS]: "This paper does not take typed marks.",
+};
+
+/** Checked before a link is fetched, so a switched-off way costs nothing. */
+const requireSubmissionMode = (exam: RankExamDto, mode: SubmissionMode): void => {
+  if (!exam.submission_modes.includes(mode)) {
+    throw new HttpError(422, MODE_DISABLED_MESSAGE[mode], {
+      error: RANK_ERROR.SUBMISSION_MODE_DISABLED,
+      submission_modes: exam.submission_modes,
+    });
+  }
 };
 
 export const listExams = asyncHandler(async (req: Request, res: Response) => {
@@ -91,7 +109,8 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
     });
   }
 
-  await requireActiveExam(req);
+  const exam = await requireActiveExam(req);
+  requireSubmissionMode(exam, req.file ? SUBMISSION_MODE.PDF : SUBMISSION_MODE.URL);
 
   let sheet: { buffer: Buffer; fileName: string };
   if (req.file?.mimetype === "text/html") {
@@ -141,7 +160,7 @@ export const createSubmission = asyncHandler(async (req: Request, res: Response)
 });
 
 export const createMarksSubmission = asyncHandler(async (req: Request, res: Response) => {
-  await requireActiveExam(req);
+  requireSubmissionMode(await requireActiveExam(req), SUBMISSION_MODE.MARKS);
 
   const { series, marks, shift } = req.body as {
     series?: string | null;

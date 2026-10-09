@@ -3124,6 +3124,8 @@ model OcrExam {
   rankBy         Json?     @map("rank_by")
   /// [{ key: "YYYY-MM-DDTHH:MM", cancelled_questions: number[] }]; required for marks_only.
   paperShifts    Json?     @map("paper_shifts")
+  /// Ways students may submit: "pdf" | "url" | "marks". Null = all three.
+  submissionModes Json?    @map("submission_modes")
   isActive       Boolean   @default(true) @map("is_active")
   createdBy      Int?      @map("created_by")
   createdAt      DateTime? @map("created_at") @db.Timestamp(0)

@@ -40,6 +40,7 @@ import {
   sectionByQuestionOf,
   sheetKeyMapOf,
   paperShiftsOf,
+  submissionModesOf,
   withShiftCancellations,
   syllabusOf,
   toAdminLeaderboardEntryDto,
@@ -63,6 +64,8 @@ import {
   RANK_BY,
   PRISMA_UNIQUE_VIOLATION,
   RANK_ERROR,
+  SUBMISSION_MODE,
+  SUBMISSION_MODES,
   SUBMISSION_STATUS,
   SUBMISSION_WARNING,
   type ActorType,
@@ -73,6 +76,7 @@ import {
   type BoardScope,
   type CandidateProfileInput,
   type KeySource,
+  type SubmissionMode,
   type MarkingScheme,
   type PaperShift,
   type RankBy,
@@ -358,6 +362,15 @@ const cancellationsOf = (shifts: PaperShift[]): Record<string, number[]> =>
       .filter((shift) => shift.cancelled_questions.length)
       .map((shift) => [shift.key, shift.cancelled_questions])
   );
+
+/** A marks_only paper takes nothing but typed marks, so switching those off would close it. */
+const assertSubmissionModesFor = (keySource: KeySource, modes: SubmissionMode[]): void => {
+  if (keySource === KEY_SOURCE.MARKS_ONLY && !modes.includes(SUBMISSION_MODE.MARKS)) {
+    throw new HttpError(422, "A marks-only paper must accept typed marks.", {
+      error: RANK_ERROR.SUBMISSION_MODES_INVALID,
+    });
+  }
+};
 
 /**
  * A marks_only paper has no sheet to read a slot off, so students pick from the
@@ -1404,6 +1417,7 @@ export const rankPredictorService = {
     }
 
     assertShiftsFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.paperShifts ?? [], input.totalQuestions);
+    assertSubmissionModesFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.submissionModes ?? [...SUBMISSION_MODES]);
 
     const exam = await repo.createExam({
       code: input.code,
@@ -1419,6 +1433,8 @@ export const rankPredictorService = {
       // An unset choice stays null so the paper keeps its legacy (category-only) behaviour.
       ...(input.rankBy === undefined ? {} : { rankBy: input.rankBy as never }),
       paperShifts: (input.paperShifts ?? []) as never,
+      // Unset stays null: every way to submit, as before.
+      ...(input.submissionModes === undefined ? {} : { submissionModes: input.submissionModes as never }),
       isActive: input.isActive ?? true,
       createdBy: input.adminId,
       createdAt: new Date(),
@@ -1447,6 +1463,10 @@ export const rankPredictorService = {
       input.keySource ?? keySourceOf(exam),
       input.paperShifts ?? paperShiftsOf(exam),
       input.totalQuestions ?? exam.totalQuestions
+    );
+    assertSubmissionModesFor(
+      input.keySource ?? keySourceOf(exam),
+      input.submissionModes ?? submissionModesOf(exam)
     );
 
     if (input.paperSeries) {
@@ -1478,6 +1498,9 @@ export const rankPredictorService = {
       ...(input.syllabus === undefined ? {} : { syllabus: input.syllabus as never }),
       ...(input.rankBy === undefined ? {} : { rankBy: input.rankBy as never }),
       ...(input.paperShifts === undefined ? {} : { paperShifts: input.paperShifts as never }),
+      ...(input.submissionModes === undefined
+        ? {}
+        : { submissionModes: input.submissionModes as never }),
       ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
       updatedAt: new Date(),
     });
