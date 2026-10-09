@@ -15,6 +15,86 @@
 
 ---
 
+## 2026-10-09 — Rank predictor: ex-serviceman board
+
+> **DDL / backfill:** none — reads the existing `ws_ocr_profiles.is_ex_serviceman`.
+>
+> `BoardScope` gains `exServiceman`; when true, `scopedScores` / `leaderboardPage` inner-join
+> `ws_ocr_profiles` and add `AND is_ex_serviceman = 1` (a NULL/false profile is in neither count).
+> `GET …/rank/me` gains `ex_serviceman: position|null` — one extra `rankForExam` count, issued only
+> when the viewer's profile has `is_ex_serviceman = 1`; it spans shifts, so it uses normalized marks
+> like `overall_gender`. Not gated by `rank_by` (same as the gender boards). Client + admin
+> leaderboards take `exServiceman=true|false`; with `subject` → `400 rank_breakdown_disabled`.
+> FE doc: `docs/client/RANK_STANDING.md`.
+
+---
+
+## 2026-10-09 — Rank predictor: per-paper submission options (`ws_ocr_exams.submission_modes`)
+
+> **DDL:** `docs/migration/schema-changes/2026-10-09_ocr_submission_modes.sql` — one nullable
+> JSON column, `ALGORITHM=INSTANT`. **Apply it BEFORE deploying** this build: Prisma selects the
+> column on every `OcrExam` read, so without it every rank-predictor paper read fails.
+> **Backfill:** none — NULL means all three modes (`pdf`, `url`, `marks`), today's behaviour.
+>
+> Admin `POST/PUT /admin/rank-predictor/papers` take `submissionModes` (non-empty subset;
+> a `marks_only` paper must keep `marks` → `422 submission_modes_invalid`). Every paper DTO gains
+> `submission_modes`. Client `POST …/submissions` (file → `pdf`, `sheet_url` → `url`) and
+> `POST …/submissions/marks` (`marks`) answer `422 submission_mode_disabled` for a switched-off way,
+> checked before any link is fetched.
+
+## 2026-10-09 — Book orders: one line-item resolver (JSON first, qty-0 lines dropped); drop `shipped`/`delivered`
+
+> **DDL / backfill:** none. **Read-source change:** every book-order line-item reader now
+> resolves through ONE helper, `book-order.transformer.resolveOrderLines`:
+> - `ws_book_order.order_items` JSON is the source of truth whenever every bought line has a
+>   book id; `ws_book_order_item` rows are only the fallback. Three JSON shapes are read:
+>   `{bookId,…}` (SQL checkout), `{item,…}` (legacy), `{item_id,…}` (oldest legacy, 2021 —
+>   carries NO `list_price`/`shipping_price`; its child rows hold 0 for both too, so those
+>   values were never recorded).
+> - **qty <= 0 lines are dropped** from both sources: legacy carts kept a book removed before
+>   checkout as a qty-0 line (JSON + child row alike). Not bought — prod check: the order total
+>   equals Σ (price + shipping) × qty over the qty > 0 lines.
+> - Readers: admin orders report + CSV/XLSX export + `getOrder`, dashboard recent book orders +
+>   book ranking (no longer unions table + JSON), client `GET /client/books/orders` +
+>   `/orders/:id` (detail populates books via new `findBookRefs`, no `active` filter), client
+>   purchase-history books + its receipt (its own parser removed), and the book receipt PDF.
+>
+> **Prod verification (read-only, 2026-10-09):** 249,681 verified orders — all resolve from the
+> JSON (0 fallback, 0 empty), 735 qty-0 lines dropped, 246,557 (98.7%) sum exactly to
+> `order_price`; the 3,124 that do not are `{item_id}`-shape orders whose shipping was never
+> stored. The `qty = 0` child rows (317 with an order + 6 orphans) are correct data — no backfill.
+>
+> **Status filter:** `shipped`/`delivered` were Mongo-era values nothing writes (prod: only
+> `pending` 238,045 / `verified` 249,681). Removed from `BookOrderStatus`, the admin status
+> schema, and the `status IN (…)` filters in `findPurchasedBookIds`, client dashboard, client
+> search, purchase-history books and the receipt gate — now `status = 'verified'`.
+> **Response shape:** unchanged. Client doc: `docs/client/BOOK_ORDER_LINE_ITEMS.md`.
+
+## 2026-10-08 — Rank predictor: shift normalisation, shift picker, gender leaderboard
+
+> **DDL:** none (`rank_by` is JSON; new value `"normalized"`). **Query:** new
+> `shiftStats` (one CTE with `ROW_NUMBER/COUNT OVER` per shift and overall → mean+SD and
+> top-0.1% mean). `rankForExam` / `leaderboardPage` take an optional per-shift linear map
+> and compare/order/average on `CASE s.shift_key WHEN … THEN raw*scale+offset ELSE raw END`
+> (ties within 1e-6). `leaderboardPage` gains `AND p.gender = ?`. **Writes:** marks entries
+> store the picked `shift_key`; confirm may fill a missing `shift_key`. **Response
+> (additive):** standing `raw_score`, `normalized_score`; leaderboard/nearby/admin rows
+> `normalized_score`. New error `422 shift_required`. Docs: `docs/rank-predictor.md`,
+> `docs/client/RANK_STANDING.md`.
+
+## 2026-10-08 — Rank predictor: gender boards, averages, syllabus-order subjects
+
+> **DDL:** none. **Query:** `rankForExam` (`rank-predictor.repository.ts`) also returns
+> `AVG(raw_score)` for the board; `BoardScope` gains `gender` (joins `ws_ocr_profiles`,
+> `AND p.gender = ?`, same inner-join rule as category). `getStanding` adds three gender
+> boards (overall / shift / category). **Response:** `GET …/standing` only gains keys —
+> `average_marks`, `category_percentile`, `category_average_marks`, `gender`,
+> `overall_gender`, `shift_gender`, `category_gender`; every `RankPositionDto` gains
+> `average_marks`. **Subjects:** a syllabus with no question ranges on a sheet with no
+> printed sections is cut in syllabus order, each subject getting a share of the questions
+> proportional to its `marks` (equal if marks are not all set) — `splitInSyllabusOrder`.
+> Docs: `docs/client/RANK_STANDING.md`.
+
 ## 2026-10-07 — Audit compliance check (read-only, no query change)
 
 - Re-checked the code against `docs/SCALABILITY_OPTIMIZATION_AUDIT.md` and

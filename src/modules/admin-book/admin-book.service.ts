@@ -12,6 +12,7 @@ import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-cou
 import type { Book } from "@prisma/client";
 import { fmtExportDate } from "../../utils/csvExport";
 import { BookOrderStatus } from "../../shared/enums";
+import { resolveOrderLines, orderLineBookIds, type OrderLine } from "../book-order/book-order.transformer";
 
 
 export const parseBookId = (id: string): number | null => {
@@ -288,32 +289,12 @@ export const reorderBooks = async (orders: Array<{ id: string; orderBy: number }
   );
 };
 
-// Legacy book orders keep line items in the `order_items` JSON column; only newer
-// orders have ws_book_order_item rows. Prefer child rows, fall back to the JSON snapshot.
-type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number; shippingPrice: number };
-
-const itemsFromChildRows = (rows: any[]): OrderItemShape[] =>
-  rows.map((it) => ({ bookId: it.bookId ?? null, name: it.Book?.name ?? null, qty: it.qty, price: it.price, shippingPrice: it.shipping_price ?? 0 }));
-
-const itemsFromJson = (json: string | null): OrderItemShape[] => {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return [];
-    return arr.map((it: any) => ({
-      bookId: it.item != null ? Number(it.item) : null,
-      name: it.name ?? null,
-      qty: Number(it.qty) || 0,
-      price: Number(it.price) || 0,
-      shippingPrice: Number(it.shippingPrice ?? it.shipping_price ?? 0) || 0,
-    }));
-  } catch {
-    return [];
-  }
-};
+// ── orders: line items ─────────────────────────────────────────────────────────
+// Resolved by book-order's resolveOrderLines (order_items JSON preferred, else
+// ws_book_order_item rows) — the same lines client my-orders and the receipt show.
 
 // books: id → metadata, to hydrate the `bookId` populate shape.
-const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
+const toOrderItemDto = (it: OrderLine, books: Map<number, any>) => {
   const book = it.bookId != null ? books.get(it.bookId) : undefined;
   return {
     bookId: book
@@ -392,13 +373,14 @@ const resolveOrderOpts = async (q: OrderReportQuery) => {
 // list DTO and the export.
 export type EnrichedOrder = {
   row: any;
-  lineItems: OrderItemShape[];
+  lineItems: OrderLine[];
   books: Map<number, any>;
   totalWeight: number | null;
   shippingPrice: number | null;
 };
 
-// Line items (child rows preferred, else JSON), books hydrated in one query, report totals derived.
+// Resolve each order's line items (order_items JSON preferred, else child rows),
+// hydrate the referenced books in one query, and derive the report totals.
 export const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
   const childRows = await repo.findOrderItems(rows.map((r) => r.receiptId));
   const childByKey = new Map<string, any[]>();
@@ -407,10 +389,9 @@ export const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
     arr.push(it);
     childByKey.set(it.order_id, arr);
   }
-  const itemsByOrder = new Map<number, OrderItemShape[]>();
+  const itemsByOrder = new Map<number, OrderLine[]>();
   for (const r of rows) {
-    const child = childByKey.get(r.receiptId);
-    itemsByOrder.set(r.id, child?.length ? itemsFromChildRows(child) : itemsFromJson(r.orderItems));
+    itemsByOrder.set(r.id, resolveOrderLines(r.orderItems, childByKey.get(r.receiptId) ?? []));
   }
 
   const books = await loadBooks([...itemsByOrder.values()].flat());
@@ -629,8 +610,9 @@ export async function orderExportSource(q: OrderReportQuery): Promise<ReportSour
   };
 }
 
-const loadBooks = async (items: OrderItemShape[]): Promise<Map<number, any>> => {
-  const ids = [...new Set(items.map((i) => i.bookId).filter((id): id is number => id != null))];
+/** Batch-load the books referenced by a set of line items, keyed by id. */
+const loadBooks = async (items: OrderLine[]): Promise<Map<number, any>> => {
+  const ids = orderLineBookIds(items);
   const rows = await repo.findBooksByIds(ids);
   return new Map(rows.map((b) => [b.id, b]));
 };
@@ -639,7 +621,7 @@ export const getOrder = async (id: number) => {
   const order = await repo.findOrderById(id);
   if (!order) return null;
   const childRows = await repo.findOrderItems([order.receiptId]);
-  const lineItems = childRows.length ? itemsFromChildRows(childRows) : itemsFromJson(order.orderItems);
+  const lineItems = resolveOrderLines(order.orderItems, childRows);
   const books = await loadBooks(lineItems);
   return {
     _id: String(order.id),

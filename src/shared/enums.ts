@@ -146,8 +146,6 @@ export type RefferalTransactionStatus =
 export const BookOrderStatus = {
   PENDING: "pending",
   VERIFIED: "verified",
-  SHIPPED: "shipped",
-  DELIVERED: "delivered",
   CANCELLED: "cancelled",
   FAILED: "failed",
 } as const;

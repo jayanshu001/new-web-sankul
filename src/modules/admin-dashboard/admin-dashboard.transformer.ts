@@ -4,6 +4,7 @@
  * (`paidAmount`, `targetPackageId`, `customerId`, `items[].bookId` …).
  */
 import { splitFullName } from "../customer-profile/customer-profile.name";
+import type { OrderLine } from "../book-order/book-order.transformer";
 
 const num = (v: any) => (v == null ? 0 : Number(v));
 
@@ -69,31 +70,11 @@ export const toLiveCourseSubDto = (row: any, customers: Map<number, any>, course
   liveCourseId: toCatalogRef(row.liveCourseId != null ? courses.get(row.liveCourseId) : null),
 });
 
-// Legacy book orders keep line items in the `order_items` JSON snapshot; newer orders
-// have ws_book_order_item rows. Prefer child rows, fall back to JSON (same as
-// admin-book's getOrder).
-type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number };
+// ── recent book orders (items[].bookId populated) ──────────────────────────────
+// Line items are resolved by book-order's resolveOrderLines (order_items JSON
+// preferred, else ws_book_order_item rows) — mirroring admin-book's getOrder contract.
 
-export const itemsFromChildRows = (rows: any[]): OrderItemShape[] =>
-  rows.map((it) => ({ bookId: it.bookId ?? null, name: it.Book?.name ?? null, qty: it.qty, price: it.price }));
-
-export const itemsFromJson = (json: string | null): OrderItemShape[] => {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return [];
-    return arr.map((it: any) => ({
-      bookId: it.item != null ? Number(it.item) : null,
-      name: it.name ?? null,
-      qty: Number(it.qty) || 0,
-      price: Number(it.price) || 0,
-    }));
-  } catch {
-    return [];
-  }
-};
-
-const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
+const toOrderItemDto = (it: OrderLine, books: Map<number, any>) => {
   const book = it.bookId != null ? books.get(it.bookId) : undefined;
   return {
     bookId: book
@@ -107,7 +88,7 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
   };
 };
 
-export const toBookOrderDto = (row: any, items: OrderItemShape[], books: Map<number, any>) => ({
+export const toBookOrderDto = (row: any, items: OrderLine[], books: Map<number, any>) => ({
   _id: String(row.id),
   receiptId: row.receiptId,
   amount: num(row.amount),

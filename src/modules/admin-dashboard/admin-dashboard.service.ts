@@ -6,6 +6,7 @@
  */
 import { prisma } from "../../config/prisma";
 import * as dashTransformer from "./admin-dashboard.transformer";
+import { resolveOrderLines, orderLineBookIds } from "../book-order/book-order.transformer";
 import { istDay } from "../../libs/customerActivity";
 
 
@@ -202,17 +203,14 @@ export const fetchRecent = async (type: ActivityType, w: Win, skip: number, take
     case "book": {
       // Paid only, like the Book Orders card/report — pending checkouts are not purchases.
       const orders = await prisma.bookOrder.findMany({ where: { status: "verified", createdAt }, select: { id: true, receiptId: true, amount: true, status: true, createdAt: true, orderItems: true }, orderBy: order, skip, take });
-      // Line items: child rows preferred, else the order_items JSON; then batch-load books.
+      // Line items: the order_items JSON preferred, else child rows; then batch-load books.
       const childRows = orders.length
         ? await prisma.bookOrderItem.findMany({ where: { order_id: { in: orders.map((o) => o.receiptId) } }, include: { Book: { select: { name: true } } } })
         : [];
       const childByReceipt = new Map<string, any[]>();
       for (const it of childRows) childByReceipt.set(it.order_id, [...(childByReceipt.get(it.order_id) ?? []), it]);
-      const itemsByOrder = new Map(orders.map((o) => {
-        const child = childByReceipt.get(o.receiptId);
-        return [o.id, child?.length ? dashTransformer.itemsFromChildRows(child) : dashTransformer.itemsFromJson(o.orderItems)] as const;
-      }));
-      const bookIds = [...new Set([...itemsByOrder.values()].flat().map((i) => i.bookId).filter((id): id is number => id != null))];
+      const itemsByOrder = new Map(orders.map((o) => [o.id, resolveOrderLines(o.orderItems, childByReceipt.get(o.receiptId) ?? [])] as const));
+      const bookIds = orderLineBookIds([...itemsByOrder.values()].flat());
       const bookRows = bookIds.length ? await prisma.book.findMany({ where: { id: { in: bookIds } }, ...productRef }) : [];
       const bookMap = new Map(bookRows.map((b) => [b.id, b]));
       return orders.map((o) => dashTransformer.toBookOrderDto(o, itemsByOrder.get(o.id) ?? [], bookMap));
@@ -364,10 +362,9 @@ const rankEbooks = async (w: Win): Promise<RankRow[]> => {
   return rows.map((r) => ({ id: Number(r.id), orders: Number(r.orders), revenue: num(r.revenue) }));
 };
 
-// A book "sells" in an order when the Book Orders report's book filter would list that
-// order: the book is in ws_book_order_item OR in the order's order_items JSON
-// (admin-book findOrderKeysByBookId reads both). Revenue is item price × qty, from the
-// item table when it has the line, else from the JSON.
+// A book "sells" in an order when it is one of the order's line items — resolved the
+// same way as the Book Orders report (admin-book resolveOrderLines: the order_items
+// JSON when valid, else ws_book_order_item). Revenue is item price × qty.
 const rankBooks = async (w: Win): Promise<RankRow[]> => {
   const orders = await prisma.bookOrder.findMany({
     where: { createdAt: { gte: w.start, lte: w.end }, status: "verified" },
@@ -379,20 +376,14 @@ const rankBooks = async (w: Win): Promise<RankRow[]> => {
         select: { order_id: true, bookId: true, qty: true, price: true },
       })
     : [];
-  const tableByOrder = new Map<string, { bookId: number; qty: number; price: number }[]>();
-  for (const it of tableItems) {
-    const list = tableByOrder.get(it.order_id) ?? [];
-    list.push({ bookId: it.bookId as number, qty: it.qty, price: it.price });
-    tableByOrder.set(it.order_id, list);
-  }
+  const tableByOrder = new Map<string, typeof tableItems>();
+  for (const it of tableItems) tableByOrder.set(it.order_id, [...(tableByOrder.get(it.order_id) ?? []), it]);
   const byBook = new Map<number, RankRow>();
   for (const order of orders) {
-    const fromTable = tableByOrder.get(order.receiptId) ?? [];
-    const tableBooks = new Set(fromTable.map((i) => i.bookId));
-    const fromJson = dashTransformer.itemsFromJson(order.orderItems)
-      .filter((i): i is typeof i & { bookId: number } => i.bookId != null && !tableBooks.has(i.bookId));
+    const items = resolveOrderLines(order.orderItems, tableByOrder.get(order.receiptId) ?? [])
+      .filter((i): i is typeof i & { bookId: number } => i.bookId != null);
     const booksInOrder = new Set<number>();
-    for (const item of [...fromTable, ...fromJson]) {
+    for (const item of items) {
       const row = byBook.get(item.bookId) ?? { id: item.bookId, orders: 0, revenue: 0 };
       if (!booksInOrder.has(item.bookId)) row.orders++;
       row.revenue += item.price * item.qty;

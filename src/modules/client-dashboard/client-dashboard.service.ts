@@ -129,7 +129,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
   const ebookEndAt = new Map<number, Date>();
   if (customerId) {
     if (bookIds.length) {
-      const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: { in: ["verified", "shipped", "delivered"] } }, select: { id: true } });
+      const orders = await prisma.bookOrder.findMany({ where: { userId: customerId, status: "verified" }, select: { id: true } });
       if (orders.length) { const items = await prisma.bookOrderItem.findMany({ where: { order_id: { in: orders.map((o) => String(o.id)) }, bookId: { in: bookIds } }, select: { bookId: true } }); for (const it of items) if (it.bookId != null) ownedBookSet.add(it.bookId); }
     }
     if (ebookIds.length) {

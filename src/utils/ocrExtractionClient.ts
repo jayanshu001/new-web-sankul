@@ -5,6 +5,8 @@ import {
   RANK_ERROR,
   type AnswerKeyMap,
   type ExtractionKind,
+  type SheetCandidate,
+  type SheetQuestion,
 } from "../modules/rank-predictor/rank-predictor.types";
 
 export interface OcrExtractionResult {
@@ -14,6 +16,10 @@ export interface OcrExtractionResult {
   answers: Record<string, number | null>;
   low_confidence_questions: number[];
   embedded_key_for_reference_only: AnswerKeyMap | null;
+  /** Header table of a Digialm sheet; absent/null for OMR and for sheets with no header. */
+  candidate?: SheetCandidate | null;
+  /** Per-question detail, including the sheet's own correct option; empty for OMR. */
+  questions?: SheetQuestion[];
 }
 
 export class OcrExtractionError extends Error {
@@ -29,15 +35,17 @@ export class OcrExtractionError extends Error {
 const EXTRACT_PATH = "/extract";
 const INTERNAL_TOKEN_HEADER = "X-Internal-Token";
 const PDF_CONTENT_TYPE = "application/pdf";
+/** A Digialm response sheet as served; the reader takes the page itself as well as its PDF. */
+export const HTML_CONTENT_TYPE = "text/html";
 const OUTBOUND_LABEL = "ocr:extract";
 const OUTBOUND_ATTEMPTS = 2;
 const STRUCTURED_ERROR_STATUSES = new Set([413, 415, 422]);
 
-const toFormData = (fileBuffer: Buffer, fileName: string): FormData => {
+const toFormData = (fileBuffer: Buffer, fileName: string, contentType: string): FormData => {
   const form = new FormData();
   form.append(
     "file",
-    new Blob([new Uint8Array(fileBuffer)], { type: PDF_CONTENT_TYPE }),
+    new Blob([new Uint8Array(fileBuffer)], { type: contentType }),
     fileName
   );
   return form;
@@ -46,7 +54,8 @@ const toFormData = (fileBuffer: Buffer, fileName: string): FormData => {
 // Retries transport failures only; 413/415/422 become OcrExtractionError codes.
 export const extractResponseSheet = async (
   fileBuffer: Buffer,
-  fileName: string
+  fileName: string,
+  contentType: string = PDF_CONTENT_TYPE
 ): Promise<OcrExtractionResult> => {
   if (!isOcrServiceConfigured()) {
     throw new OcrExtractionError(
@@ -59,7 +68,7 @@ export const extractResponseSheet = async (
     async () => {
       const response = await fetch(`${OCR_SERVICE.BASE_URL}${EXTRACT_PATH}`, {
         method: "POST",
-        body: toFormData(fileBuffer, fileName),
+        body: toFormData(fileBuffer, fileName, contentType),
         headers: { [INTERNAL_TOKEN_HEADER]: OCR_SERVICE.INTERNAL_TOKEN },
       });
 

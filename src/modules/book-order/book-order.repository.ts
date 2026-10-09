@@ -56,10 +56,11 @@ export const bookOrderRepository = {
       include: { shipping: true },
     }),
 
-  findOrderItemsWithBook: (orderKey: string) =>
-    prisma.bookOrderItem.findMany({
-      where: { order_id: orderKey },
-      include: { Book: true },
+  /** Book refs for populating line items — no `active` filter (past orders keep delisted books). */
+  findBookRefs: (ids: number[]) =>
+    prisma.book.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, thumbnail: true, author: true },
     }),
 
   findActiveCartState: (customerId: number) =>
@@ -69,10 +70,13 @@ export const bookOrderRepository = {
       orderBy: { id: "desc" },
     }),
 
-  /** Distinct book ids from the customer's orders in a fulfilled status (verified/shipped/delivered). */
+  /**
+   * Distinct book ids the customer has PURCHASED — any paid (`verified`) order,
+   * joined to its item rows. `verified` is the only paid status ever written.
+   */
   findPurchasedBookIds: async (customerId: number): Promise<number[]> => {
     const orders = await prisma.bookOrder.findMany({
-      where: { userId: customerId, status: { in: ["verified", "shipped", "delivered"] } },
+      where: { userId: customerId, status: "verified" },
       select: { receiptId: true },
     });
     if (!orders.length) return [];

@@ -7,6 +7,7 @@ import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
 import { normalizeTiming } from "../../modules/client-exam/client-exam.service";
 import { formatPaymentMethod, resolvePaymentReference } from "../../utils/paymentMethod";
+import { resolveOrderLines, orderLineBookIds } from "../../modules/book-order/book-order.transformer";
 
 // Resolve the EJS template from the repo root so it works under both
 // tsx (src/) and compiled dist/ runs.
@@ -129,13 +130,24 @@ function releasePageSlot(): void {
   if (next) next();
 }
 
-// Renders on the shared browser, at most MAX_CONCURRENT_PAGES at a time.
-export async function renderPdfFromHtml(html: string): Promise<Buffer> {
+/**
+ * `offline` is for HTML we did not write (a student's response-sheet link): page
+ * scripts are off and every request except inline `data:` is aborted, so the page
+ * can never make the server fetch anything.
+ */
+export async function renderPdfFromHtml(html: string, { offline = false }: { offline?: boolean } = {}): Promise<Buffer> {
   await acquirePageSlot();
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
     try {
+      if (offline) {
+        await page.setJavaScriptEnabled(false);
+        await page.setRequestInterception(true);
+        page.on("request", (request) =>
+          request.url().startsWith("data:") ? request.continue() : request.abort()
+        );
+      }
       await page.setContent(html, { waitUntil: "load" });
       // Wait for web fonts so the PDF never rasterises with a fallback font lacking
       // Gujarati/Hindi glyphs; capped at 5s so a slow font CDN can't hang the render.
@@ -206,33 +218,34 @@ async function loadBookReceiptFromMysql(
       amount: true,
       paidAt: true,
       createdAt: true,
+      orderItems: true,
       user: { select: { fullName: true, phoneNumber: true, emailAddress: true } },
     },
   });
   if (!order) throw new Error("Order not found.");
-  // Offline/free orders have no gatewayPaymentId, so gate on the paid statuses
-  // the purchase-history listing exposes.
-  if (!["verified", "shipped", "delivered"].includes(order.status)) {
+  // Offline / free book orders (cash, bank, QR, Backend, free) never carry a
+  // gatewayPaymentId — they are settled manually. Gate on the order status
+  // instead, matching the paid states the purchase-history listing exposes.
+  if (order.status !== "verified") {
     throw new Error("Order has not been paid yet.");
   }
   if (!order.user) throw new Error("Customer not found.");
 
-  const orderItems = await prisma.bookOrderItem.findMany({
-    where: { order_id: order.receiptId },
-    select: {
-      qty: true,
-      price: true,
-      shipping_price: true,
-      Book: { select: { name: true } },
-    },
-  });
+  // order_items JSON preferred, child rows as fallback (book-order resolveOrderLines).
+  const childRows = await prisma.bookOrderItem.findMany({ where: { order_id: order.receiptId } });
+  const lines = resolveOrderLines(order.orderItems, childRows);
+  const bookIds = orderLineBookIds(lines);
+  const bookNames = new Map(
+    (bookIds.length ? await prisma.book.findMany({ where: { id: { in: bookIds } }, select: { id: true, name: true } }) : [])
+      .map((b) => [b.id, b.name])
+  );
 
-  const items: ReceiptItem[] = orderItems.map((it) => {
-    const name = it.Book?.name || "Book";
+  const items: ReceiptItem[] = lines.map((it) => {
+    const name = it.name || (it.bookId != null ? bookNames.get(it.bookId) : null) || "Book";
     return {
       name: `${name}${it.qty > 1 ? ` × ${it.qty}` : ""}`,
       validity: "-",
-      amount: (it.price * it.qty + (it.shipping_price || 0)).toFixed(2),
+      amount: (it.price * it.qty + (it.shippingPrice || 0)).toFixed(2),
     };
   });
 

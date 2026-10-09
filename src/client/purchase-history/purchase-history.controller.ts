@@ -40,12 +40,11 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
   }
 };
 
-// Success states only (verified / shipped / delivered): the tab is "what I bought".
-const BOOK_SUCCESS_STATUSES = [
-  BookOrderStatus.VERIFIED,
-  BookOrderStatus.SHIPPED,
-  BookOrderStatus.DELIVERED,
-];
+// GET /api/v1/client/purchase-history/books
+// Drives the "Books" tab. Returns BookOrders in success states only
+// (verified — the only paid status ever written) — pending/failed are hidden
+// because the screen is "what I bought", not "every order I ever started".
+const BOOK_SUCCESS_STATUSES = [BookOrderStatus.VERIFIED];
 
 export const listBooksHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;

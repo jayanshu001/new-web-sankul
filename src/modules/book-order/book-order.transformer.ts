@@ -111,26 +111,88 @@ const toShippingDto = (s: CustomerShipping): MyOrderShippingDto => ({
   updatedAt: s.updated_at ?? null,
 });
 
-const toMyItemDto = (it: BookOrderItem): MyOrderItemDto => ({
+// ── order line items ────────────────────────────────────────────────────────
+// Every book order carries its lines in the `order_items` JSON snapshot, in one of
+// three shapes: legacy `{item,name,qty,list_price,price,shipping_price}`, older legacy
+// `{item_id,qty,price,shipping_price,…}`, or SQL-checkout `{bookId,qty,listPrice,price,
+// shippingPrice}`. Legacy carts kept a book REMOVED before checkout as a qty-0 line (in
+// the JSON and the child row alike) — it was not bought (prod: the order total is exactly
+// Σ (price + shipping) × qty over the qty > 0 lines), so qty <= 0 lines are dropped from
+// both sources. The JSON is the source of truth whenever every remaining line has a book
+// id; ws_book_order_item rows are only the fallback. ONE resolver for every reader
+// (client my-orders + purchase history, admin report/export/detail, dashboard, receipts).
+export type OrderLine = {
+  bookId: number | null;
+  name: string | null;
+  qty: number;
+  listPrice: number;
+  price: number;
+  shippingPrice: number;
+};
+
+const linesFromJson = (json: string | null): OrderLine[] => {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    if (!Array.isArray(arr)) return [];
+    return arr.map((it: any) => {
+      const raw = it?.bookId ?? it?.item ?? it?.item_id;
+      return {
+        bookId: raw != null && Number.isInteger(Number(raw)) && Number(raw) > 0 ? Number(raw) : null,
+        name: it?.name ?? null,
+        qty: Number(it?.qty) || 0,
+        listPrice: Number(it?.listPrice ?? it?.list_price ?? 0) || 0,
+        price: Number(it?.price) || 0,
+        shippingPrice: Number(it?.shippingPrice ?? it?.shipping_price ?? 0) || 0,
+      };
+    });
+  } catch {
+    return [];
+  }
+};
+
+const linesFromRows = (rows: any[]): OrderLine[] =>
+  rows.map((it) => ({
+    bookId: it.bookId ?? null,
+    name: it.Book?.name ?? null,
+    qty: it.qty ?? 0,
+    listPrice: it.list_price ?? 0,
+    price: it.price ?? 0,
+    shippingPrice: it.shipping_price ?? 0,
+  }));
+
+const bought = (lines: OrderLine[]) => lines.filter((it) => it.qty > 0);
+
+/** An order's bought lines (qty > 0): the order_items JSON when every line has a book id, else its child rows. */
+export const resolveOrderLines = (json: string | null, childRows: any[]): OrderLine[] => {
+  const fromJson = bought(linesFromJson(json));
+  const jsonOk = fromJson.length > 0 && fromJson.every((it) => it.bookId != null);
+  return jsonOk || !childRows.length ? fromJson : bought(linesFromRows(childRows));
+};
+
+/** Distinct book ids referenced by a set of lines — for the one batched book lookup. */
+export const orderLineBookIds = (lines: OrderLine[]): number[] =>
+  [...new Set(lines.map((l) => l.bookId).filter((id): id is number => id != null))];
+
+export type OrderLineBook = Pick<Book, "id" | "name" | "thumbnail" | "author">;
+
+/** Line item with `bookId` left as a string (list view — unpopulated). */
+const toMyItemDto = (it: OrderLine): MyOrderItemDto => ({
   bookId: idStr(it.bookId),
   qty: it.qty,
-  listPrice: it.list_price,
+  listPrice: it.listPrice,
   price: it.price,
-  shippingPrice: it.shipping_price,
+  shippingPrice: it.shippingPrice,
 });
 
-const toMyItemDtoPopulated = (
-  it: BookOrderItem & { Book?: Book | null }
-): MyOrderItemDto => {
-  const b = it.Book;
+/** Line item with `bookId` populated (detail view — Mongo `.populate`). */
+const toMyItemDtoPopulated = (it: OrderLine, books: Map<number, OrderLineBook>): MyOrderItemDto => {
+  const b = it.bookId != null ? books.get(it.bookId) : undefined;
   return {
+    ...toMyItemDto(it),
     bookId: b
       ? { _id: String(b.id), name: b.name, thumbnail: b.thumbnail ?? null, author: b.author ?? null }
       : idStr(it.bookId),
-    qty: it.qty,
-    listPrice: it.list_price,
-    price: it.price,
-    shippingPrice: it.shipping_price,
   };
 };
 
@@ -162,16 +224,17 @@ const buildBase = (
 
 export const toMyOrderListDto = (
   o: BookOrder,
-  items: BookOrderItem[]
-): MyOrderDto => buildBase(o, items.map(toMyItemDto), idStr(o.shippingId));
+  lines: OrderLine[]
+): MyOrderDto => buildBase(o, lines.map(toMyItemDto), idStr(o.shippingId));
 
 export const toMyOrderDetailDto = (
   o: BookOrder & { shipping?: CustomerShipping | null },
-  items: (BookOrderItem & { Book?: Book | null })[]
+  lines: OrderLine[],
+  books: Map<number, OrderLineBook>
 ): MyOrderDto =>
   buildBase(
     o,
-    items.map(toMyItemDtoPopulated),
+    lines.map((it) => toMyItemDtoPopulated(it, books)),
     o.shipping ? toShippingDto(o.shipping) : idStr(o.shippingId)
   );
 

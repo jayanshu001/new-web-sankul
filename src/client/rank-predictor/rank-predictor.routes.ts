@@ -10,11 +10,13 @@ import {
   examListQuerySchema,
   leaderboardPrivacySchema,
   leaderboardQuerySchema,
+  marksSubmissionSchema,
   submissionCreateSchema,
   submissionIdParamSchema,
 } from "../../modules/rank-predictor/rank-predictor.validation";
 import {
   confirmSubmission,
+  createMarksSubmission,
   createSubmission,
   getCandidateProfile,
   getExam,
@@ -22,6 +24,7 @@ import {
   getLeaderboardPrivacy,
   getMyAnswerReview,
   getMyRank,
+  getMySheetStatus,
   getMyRanks,
   getSubmission,
   getSubmissionFile,
@@ -52,9 +55,15 @@ router.use(authenticate);
 router.post(
   "/papers/:examId/submissions",
   validate({ params: examIdParamSchema }),
-  uploadRankPdfToMemory.single("file"),
+  uploadRankPdfToMemory.single("file", { html: true }),
   validate({ body: submissionCreateSchema }),
   createSubmission
+);
+
+router.post(
+  "/papers/:examId/submissions/marks",
+  validate({ params: examIdParamSchema, body: marksSubmissionSchema }),
+  createMarksSubmission
 );
 
 router.get(
@@ -76,6 +85,7 @@ router.post(
 );
 
 router.get("/papers/:examId/rank/me", validate({ params: examIdParamSchema }), getMyRank);
+router.get("/papers/:examId/status/me", validate({ params: examIdParamSchema }), getMySheetStatus);
 router.get(
   "/papers/:examId/review/me",
   validate({ params: examIdParamSchema }),
