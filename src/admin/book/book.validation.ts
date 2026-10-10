@@ -102,3 +102,8 @@ export const updateSettingsSchema = z.object({
   termsAndConditions: z.array(z.string()).optional(),
   gstRate: z.number().min(0).optional(),
 });
+
+// Courier AWB: always 12 digits (e.g. 119401177420).
+export const setTrackingCounterSchema = z.object({
+  nextTrackingId: z.number().int().min(100_000_000_000).max(999_999_999_999),
+});

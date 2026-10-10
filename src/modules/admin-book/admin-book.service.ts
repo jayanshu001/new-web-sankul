@@ -716,3 +716,25 @@ export const updateBookSettings = async (data: {
   });
   return toBookSettingDto(row);
 };
+
+// ── Tracking ID counter (ws_book_tracking AUTO_INCREMENT) ───────────────────
+
+export const getTrackingCounter = async () => ({
+  nextTrackingId: await repo.getTrackingAutoIncrement(),
+});
+
+/**
+ * Set the next AWB. Must exceed the highest AWB already issued — MySQL would silently
+ * bump a lower value back to MAX+1, so the admin would be told a number that isn't
+ * what the next order gets. Returns `{ error }` for that case (controller → 400).
+ */
+export const setTrackingCounter = async (
+  value: number,
+): Promise<{ data: { nextTrackingId: number | null } } | { error: string }> => {
+  const max = await repo.maxTrackingId();
+  if (max != null && value <= max) {
+    return { error: `Next tracking ID must be greater than the highest issued ID (${max}).` };
+  }
+  await repo.setTrackingAutoIncrement(value);
+  return { data: await getTrackingCounter() };
+};

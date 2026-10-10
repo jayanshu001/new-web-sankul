@@ -253,6 +253,9 @@ R("GET", "/books/settings", "cms.free-delivery.view");
 R("PUT", "/books/settings", "cms.free-delivery.edit");
 R("GET", "/books/orders/export/:format", ...view("books.orders")); // was unmapped
 R("GET", "/books/orders/list", ...view("books.orders"));
+// Changing the next AWB is a write on shared courier state → books.edit, not the view-only report key.
+R("GET", "/books/orders/tracking-counter", ...view("books.orders"));
+R("PUT", "/books/orders/tracking-counter", "books.edit");
 R("GET", "/books/orders/:id", ...view("books.orders"));
 R("PATCH", "/books/orders/:id/status", "books.edit");
 R("PATCH", "/books/orders/:id/tracking", "books.edit");

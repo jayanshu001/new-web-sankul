@@ -157,6 +157,30 @@ export const adminBookRepository = {
     for (const r of rows) keys.add(r.order_id);
     return [...keys];
   },
+
+  // ── book tracking AUTO_INCREMENT (the next courier AWB) ────────────────────
+
+  /**
+   * Next AUTO_INCREMENT of ws_book_tracking. MySQL 8 caches information_schema stats
+   * (default 24h), so a plain read lags real inserts — zero the expiry on the SAME
+   * connection (interactive txn) before reading.
+   */
+  getTrackingAutoIncrement: () =>
+    prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET SESSION information_schema_stats_expiry = 0");
+      const rows = await tx.$queryRaw<{ next: bigint | number | null }[]>`
+        SELECT AUTO_INCREMENT AS next FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_book_tracking'`;
+      return rows[0]?.next != null ? Number(rows[0].next) : null;
+    }),
+  /** Highest AWB already issued (null when the table is empty). */
+  maxTrackingId: async () => {
+    const row = await prisma.bookTracking.aggregate({ _max: { tracking_id: true } });
+    return row._max.tracking_id != null ? Number(row._max.tracking_id) : null;
+  },
+  /** `value` must be a validated positive integer — DDL cannot take bind params. */
+  setTrackingAutoIncrement: (value: number) =>
+    prisma.$executeRawUnsafe(`ALTER TABLE ws_book_tracking AUTO_INCREMENT = ${Math.trunc(value)}`),
 };
 
 function buildWhere(opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean }): Prisma.BookWhereInput {
