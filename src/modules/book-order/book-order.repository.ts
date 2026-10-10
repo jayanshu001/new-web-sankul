@@ -191,6 +191,13 @@ export const bookOrderRepository = {
       // loser of a concurrent /verify + webhook matches 0 rows and stops here, so
       // it never allocates a second AWB (a rolled-back insert would still burn the
       // AUTO_INCREMENT value) and the parcel ships once.
+      // Lock the row first: updateMany alone did NOT serialize /verify vs the
+      // webhook — both claimed and both inserted an AWB (prod, 2026-10-05+). A
+      // locking read always sees the latest committed status, so the loser
+      // blocks here until the winner commits, then sees "verified" and stops.
+      const [locked] = await tx.$queryRaw<{ status: string }[]>`
+        SELECT status FROM ws_book_order WHERE id = ${input.orderId} FOR UPDATE`;
+      if (locked?.status !== "pending") return null;
       const claim = await tx.bookOrder.updateMany({
         where: { id: input.orderId, status: "pending" },
         data: {
