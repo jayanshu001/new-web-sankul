@@ -4,7 +4,6 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { fulfillLiveCourseWebhookMysql } from "../../modules/live-course-order/live-course-order.service";
 import { fulfillEbookWebhookMysql } from "../../modules/ebook-order/ebook-order.service";
-import { fulfillBookWebhookMysql } from "../../modules/book-order/book-order.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
@@ -22,7 +21,11 @@ function verifySignature(rawBody: string, signature: string): boolean {
 // Razorpay webhook. Expects X-Razorpay-Signature header.
 export const paymentWebhook = async (req: Request, res: Response) => {
   const traceId = req.traceId;
-  logger.info("paymentWebhook invoked", { traceId, path: req.originalUrl, event: req.body?.event });
+  logger.info("paymentWebhook invoked", {
+    traceId,
+    path: req.originalUrl,
+    event: req.body?.event,
+  });
 
   try {
     const signature = req.headers["x-razorpay-signature"] as string;
@@ -30,7 +33,9 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     // the JSON body-parser (app.ts), not a re-serialized `JSON.stringify(req.body)`
     // (whitespace/key-order differences there cause valid webhooks to fail).
     const rawBodyBuf = (req as any).rawBody as Buffer | undefined;
-    const rawBody = rawBodyBuf ? rawBodyBuf.toString("utf8") : JSON.stringify(req.body);
+    const rawBody = rawBodyBuf
+      ? rawBodyBuf.toString("utf8")
+      : JSON.stringify(req.body);
 
     // Fail closed: the route is public (no Bearer), so the signature is the only
     // gate — a missing secret must reject, never accept unverified fulfillment.
@@ -42,14 +47,18 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         hasRawBody: !!rawBodyBuf,
         secretSet: !!RAZORPAY_WEBHOOK_SECRET,
       });
-      return res.status(401).json({ success: false, message: "Invalid signature." });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid signature." });
     }
 
     const event = req.body?.event as string;
     const payment = req.body?.payload?.payment?.entity;
     if (!event || !payment) {
       logger.warn("paymentWebhook invalid payload", { traceId, event });
-      return res.status(400).json({ success: false, message: "Invalid webhook payload." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid webhook payload." });
     }
 
     if (event !== "payment.captured" && event !== "order.paid") {
@@ -64,34 +73,64 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     // ── Ebook webhook fulfillment (ebook-order) ──────────────────────────────
     // Keyed by razorpayOrderId alone (no customer in the webhook payload). Same
     // idempotent fold-or-fresh as /verify.
-    const ebookFulfilled = await fulfillEbookWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    const ebookFulfilled = await fulfillEbookWebhookMysql(
+      razorpayOrderId,
+      razorpayPaymentId,
+    );
     if (ebookFulfilled) {
-      logger.info("paymentWebhook ebook activated (mysql)", { traceId, razorpayOrderId, orderId: ebookFulfilled._id });
-      return res.status(200).json({ success: true, message: "Ebook subscription activated." });
+      logger.info("paymentWebhook ebook activated (mysql)", {
+        traceId,
+        razorpayOrderId,
+        orderId: ebookFulfilled._id,
+      });
+      return res
+        .status(200)
+        .json({ success: true, message: "Ebook subscription activated." });
     }
 
-    // ── Book webhook fulfillment (book-order) ────────────────────────────────
-    // AWB allocated SQL-side in verifyBookOrderMysql's txn.
-    const bookFulfilled = await fulfillBookWebhookMysql(razorpayOrderId, razorpayPaymentId);
-    if (bookFulfilled) {
-      logger.info("paymentWebhook book verified (mysql)", { traceId, razorpayOrderId, orderId: bookFulfilled._id });
-      return res.status(200).json({ success: true, message: "Book order verified." });
-    }
+    // Book orders are NOT fulfilled here: the AWB is allocated only by the client's
+    // /verify. The legacy websankul-api writes the same ws_book_order/ws_book_tracking
+    // rows without an atomic claim, so a webhook-time AWB raced it and burned a second
+    // AWB per order (791 orphans from 2026-10-05). Book events fall through to the no-op.
 
     // ── Test-series webhook fulfillment (test-series-order) ───────────────────
-    const tsFulfilled = await tsOrderSql.fulfillWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    const tsFulfilled = await tsOrderSql.fulfillWebhookMysql(
+      razorpayOrderId,
+      razorpayPaymentId,
+    );
     if (tsFulfilled) {
-      logger.info("paymentWebhook test-series activated (mysql)", { traceId, razorpayOrderId, subscriptionId: tsFulfilled._id });
-      return res.status(200).json({ success: true, message: "Test series subscription activated." });
+      logger.info("paymentWebhook test-series activated (mysql)", {
+        traceId,
+        razorpayOrderId,
+        subscriptionId: tsFulfilled._id,
+      });
+      return res
+        .status(200)
+        .json({
+          success: true,
+          message: "Test series subscription activated.",
+        });
     }
 
     // ── Live-course webhook fulfillment (live-course-order) ───────────────────
     // Single-table SQL sub carries razorpayOrderId; fulfill (fold-or-fresh,
     // idempotent) keyed by order id.
-    const liveFulfilled = await fulfillLiveCourseWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    const liveFulfilled = await fulfillLiveCourseWebhookMysql(
+      razorpayOrderId,
+      razorpayPaymentId,
+    );
     if (liveFulfilled) {
-      logger.info("paymentWebhook live course activated (mysql)", { traceId, razorpayOrderId, subscriptionId: liveFulfilled._id });
-      return res.status(200).json({ success: true, message: "Live course subscription activated." });
+      logger.info("paymentWebhook live course activated (mysql)", {
+        traceId,
+        razorpayOrderId,
+        subscriptionId: liveFulfilled._id,
+      });
+      return res
+        .status(200)
+        .json({
+          success: true,
+          message: "Live course subscription activated.",
+        });
     }
 
     // Course/package subscription — matched by razorpayOrderId stored on payload.
@@ -99,10 +138,16 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     // relies on the client calling /orders/verify-payment with the razorpay ids after
     // checkout. We accept here but no-op.
     logger.info("paymentWebhook no match", { traceId, razorpayOrderId });
-    return res.status(200).json({ success: true, message: "No matching order — acknowledged." });
+    return res
+      .status(200)
+      .json({ success: true, message: "No matching order — acknowledged." });
   } catch (e: any) {
     // Always return 200 to webhooks — razorpay treats non-2xx as retry. We log instead.
-    logger.error("paymentWebhook failed", { traceId, error: getErrorMessage(e), stack: e?.stack });
+    logger.error("paymentWebhook failed", {
+      traceId,
+      error: getErrorMessage(e),
+      stack: e?.stack,
+    });
     return res.status(200).json({ success: false, message: e.message });
   }
 };

@@ -31,8 +31,6 @@ import type {
   MyOrderDto,
 } from "./book-order.types";
 
-
-
 export const parseBookOrderId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -74,19 +72,25 @@ export interface BookOrderPreview {
  * open across the external Razorpay call (mirrors the Mongo controller order).
  */
 export const previewBookOrderFromCartMysql = async (
-  customerId: number
+  customerId: number,
 ): Promise<
   | { ok: true; preview: BookOrderPreview }
-  | { ok: false; code: "EMPTY_CART" | "NO_SHIPPING" | "UNAVAILABLE" | "ZERO_AMOUNT" }
+  | {
+      ok: false;
+      code: "EMPTY_CART" | "NO_SHIPPING" | "UNAVAILABLE" | "ZERO_AMOUNT";
+    }
 > => {
   const cart = await repo.findActiveCart(customerId);
   const cartItems = cart?.bookCartItem ?? [];
   if (!cart || cartItems.length === 0) return { ok: false, code: "EMPTY_CART" };
   if (cart.shippingId == null) return { ok: false, code: "NO_SHIPPING" };
 
-  const bookIds = cartItems.map((ci) => ci.bookId).filter((b): b is number => b != null);
+  const bookIds = cartItems
+    .map((ci) => ci.bookId)
+    .filter((b): b is number => b != null);
   const books = await repo.findBooksByIds(bookIds);
-  if (books.length !== bookIds.length) return { ok: false, code: "UNAVAILABLE" };
+  if (books.length !== bookIds.length)
+    return { ok: false, code: "UNAVAILABLE" };
 
   const byId = new Map(books.map((b) => [b.id, b]));
   const freeShippingMin = await getFreeShippingMin();
@@ -102,7 +106,8 @@ export const previewBookOrderFromCartMysql = async (
     totalDiscountedPrice += (b.discounted_price ?? 0) * qty;
     rawShipping += (b.shipping_price ?? 0) * qty;
   }
-  const shippingWaived = freeShippingMin > 0 && totalDiscountedPrice >= freeShippingMin;
+  const shippingWaived =
+    freeShippingMin > 0 && totalDiscountedPrice >= freeShippingMin;
   const effectiveShipping = shippingWaived ? 0 : rawShipping;
   const amount = totalDiscountedPrice + effectiveShipping;
   if (amount <= 0) return { ok: false, code: "ZERO_AMOUNT" };
@@ -127,7 +132,12 @@ export const previewBookOrderFromCartMysql = async (
       shippingId: cart.shippingId,
       amount,
       items,
-      breakdown: { totalListPrice, totalDiscountedPrice, shipping: effectiveShipping, shippingWaived },
+      breakdown: {
+        totalListPrice,
+        totalDiscountedPrice,
+        shipping: effectiveShipping,
+        shippingWaived,
+      },
     },
   };
 };
@@ -167,7 +177,7 @@ export const writeBookOrderMysql = async (input: {
  * empty. Mirrors the Mongo listBooks cart read.
  */
 export const getActiveCartState = async (
-  customerId: number
+  customerId: number,
 ): Promise<{ cartId: string | null; qtyByBookId: Map<string, number> }> => {
   const cart = await repo.findActiveCartState(customerId);
   const qtyByBookId = new Map<string, number>();
@@ -183,7 +193,7 @@ export const getActiveCartState = async (
  * statuses). For the listing's `isPurchased` + the detail check.
  */
 export const getPurchasedBookIdSet = async (
-  customerId: number
+  customerId: number,
 ): Promise<Set<string>> => {
   const ids = await repo.findPurchasedBookIds(customerId);
   return new Set(ids.map(String));
@@ -193,7 +203,7 @@ export const getPurchasedBookIdSet = async (
 
 export const findBookOrderForVerify = async (
   razorpayOrderId: string,
-  customerId: number
+  customerId: number,
 ): Promise<BookOrderRow | null> => {
   const order = await repo.findOrderByRazorpay(razorpayOrderId, customerId);
   return order ? toBookOrderRow(order) : null;
@@ -209,10 +219,13 @@ export const findBookOrderForVerify = async (
  */
 export const verifyBookOrderMysql = async (
   order: BookOrderRow,
-  razorpayPaymentId: string
+  razorpayPaymentId: string,
 ): Promise<BookOrderDto> => {
   if (order.status !== "pending") {
-    const raw = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerId);
+    const raw = await repo.findOrderByRazorpay(
+      order.razorpayOrderId ?? "",
+      order.customerId,
+    );
     const items = await repo.findOrderItems(order.orderKey);
     if (raw) return toBookOrderDto(raw, items);
   }
@@ -228,26 +241,15 @@ export const verifyBookOrderMysql = async (
   if (!result) {
     // Claim matched 0 rows: a concurrent /verify or webhook fulfilled this order
     // first. Return the order it verified; no second AWB, no second shipment.
-    const raw = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerId);
-    if (!raw) throw new Error("book-order: order is not pending and cannot be re-read");
+    const raw = await repo.findOrderByRazorpay(
+      order.razorpayOrderId ?? "",
+      order.customerId,
+    );
+    if (!raw)
+      throw new Error("book-order: order is not pending and cannot be re-read");
     return toBookOrderDto(raw, items);
   }
   return toBookOrderDto(result.order, items);
-};
-
-/**
- * Webhook fulfillment (paymentWebhook) — keyed by razorpayOrderId ALONE (no
- * customer in the razorpay payload). Reuses verifyBookOrderMysql, which allocates
- * the AWB tracking row IN-TRANSACTION on the SQL side (no Mongo Counter needed).
- * Idempotent; null on miss → caller falls through to Mongo.
- */
-export const fulfillBookWebhookMysql = async (
-  razorpayOrderId: string,
-  razorpayPaymentId: string
-): Promise<BookOrderDto | null> => {
-  const order = await repo.findOrderByRazorpayOnly(razorpayOrderId);
-  if (!order) return null;
-  return verifyBookOrderMysql(toBookOrderRow(order), razorpayPaymentId);
 };
 
 // ── Shipment tracking (SQL) ──────────────────────────────────────────────────
@@ -257,7 +259,10 @@ export const fulfillBookWebhookMysql = async (
 // array). So those fields default to null/[]; the core (awb, to-address,
 // consignee, status, bookedAt) populate. Returns null if the order isn't the
 // customer's.
-export const getOrderTrackingMysql = async (orderId: number, customerId: number) => {
+export const getOrderTrackingMysql = async (
+  orderId: number,
+  customerId: number,
+) => {
   const order = await prisma.bookOrder.findFirst({
     where: { id: orderId, userId: customerId },
     include: { shipping: true, BookTracking: true },
@@ -266,14 +271,19 @@ export const getOrderTrackingMysql = async (orderId: number, customerId: number)
   const ship: any = order.shipping ?? {};
   const awb = order.trackingId != null ? Number(order.trackingId) : null;
   const trackStatus = order.BookTracking?.status ?? null;
-  const trackAt = order.BookTracking?.updatedAt ?? order.BookTracking?.createdAt ?? null;
+  const trackAt =
+    order.BookTracking?.updatedAt ?? order.BookTracking?.createdAt ?? null;
   return {
     orderId: String(order.id),
     receiptId: order.receiptId,
     awb,
     courier: null, // not stored on SQL (the AWB range drives buildTrackingUrl)
     from: { city: null, hub: null }, // no SQL book-settings origin
-    to: { city: ship.city ?? null, hub: ship.address ?? null, pincode: ship.pincode ?? null },
+    to: {
+      city: ship.city ?? null,
+      hub: ship.address ?? null,
+      pincode: ship.pincode ?? null,
+    },
     consignee: ship.name ?? null,
     consigneePhone: ship.phone != null ? String(ship.phone) : null,
     bookedAt: order.paidAt ?? order.createdAt ?? null,
@@ -282,7 +292,9 @@ export const getOrderTrackingMysql = async (orderId: number, customerId: number)
     shippedAt: null,
     deliveredAt: null,
     // Single tracking row → one history entry (keeps the UI timeline non-empty).
-    history: trackStatus ? [{ status: trackStatus, location: null, note: null, at: trackAt }] : [],
+    history: trackStatus
+      ? [{ status: trackStatus, location: null, note: null, at: trackAt }]
+      : [],
   };
 };
 
@@ -296,7 +308,7 @@ export const getOrderTrackingMysql = async (orderId: number, customerId: number)
  */
 export const listMyOrdersMysql = async (
   customerId: number,
-  opts: { status?: string; page: number; limit: number }
+  opts: { status?: string; page: number; limit: number },
 ): Promise<{ data: MyOrderDto[]; total: number }> => {
   const skip = (opts.page - 1) * opts.limit;
   const [orders, total] = await repo.findMyOrders({
@@ -312,7 +324,12 @@ export const listMyOrdersMysql = async (
     arr.push(it);
     byKey.set(it.order_id, arr);
   }
-  const data = orders.map((o) => toMyOrderListDto(o, resolveOrderLines(o.orderItems, byKey.get(o.receiptId) ?? [])));
+  const data = orders.map((o) =>
+    toMyOrderListDto(
+      o,
+      resolveOrderLines(o.orderItems, byKey.get(o.receiptId) ?? []),
+    ),
+  );
   return { data, total };
 };
 
@@ -323,22 +340,31 @@ export const listMyOrdersMysql = async (
  */
 export const getMyOrderByIdMysql = async (
   orderId: number,
-  customerId: number
+  customerId: number,
 ): Promise<MyOrderDto | null> => {
   const order = await repo.findMyOrderById(orderId, customerId);
   if (!order) return null;
-  const lines = resolveOrderLines(order.orderItems, await repo.findOrderItems(order.receiptId));
+  const lines = resolveOrderLines(
+    order.orderItems,
+    await repo.findOrderItems(order.receiptId),
+  );
   const bookIds = orderLineBookIds(lines);
   const books = bookIds.length ? await repo.findBookRefs(bookIds) : [];
   return toMyOrderDetailDto(order, lines, new Map(books.map((b) => [b.id, b])));
 };
 
 /** Live-tracking lookup: order status + AWB (BigInt→number). Null if not owned. */
-export const getOrderTrackingLiveMysql = async (orderId: number, customerId: number) => {
+export const getOrderTrackingLiveMysql = async (
+  orderId: number,
+  customerId: number,
+) => {
   const order = await prisma.bookOrder.findFirst({
     where: { id: orderId, userId: customerId },
     select: { status: true, trackingId: true },
   });
   if (!order) return null;
-  return { status: order.status, trackingId: order.trackingId != null ? Number(order.trackingId) : null };
+  return {
+    status: order.status,
+    trackingId: order.trackingId != null ? Number(order.trackingId) : null,
+  };
 };

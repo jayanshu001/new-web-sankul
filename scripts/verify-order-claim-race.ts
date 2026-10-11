@@ -20,7 +20,7 @@ import { verifyCourseOrderMysql, verifyPackageOrderMysql } from "../src/modules/
 import { toCourseOrderRow } from "../src/modules/commerce-order/commerce-order.transformer";
 import { verifyEbookOrderMysql, fulfillEbookWebhookMysql } from "../src/modules/ebook-order/ebook-order.service";
 import { toEbookOrderRow } from "../src/modules/ebook-order/ebook-order.transformer";
-import { verifyBookOrderMysql, fulfillBookWebhookMysql } from "../src/modules/book-order/book-order.service";
+import { verifyBookOrderMysql } from "../src/modules/book-order/book-order.service";
 import { toBookOrderRow } from "../src/modules/book-order/book-order.transformer";
 import { verifyLiveCourseOrderMysql, fulfillLiveCourseWebhookMysql } from "../src/modules/live-course-order/live-course-order.service";
 import * as ts from "../src/modules/test-series-order/test-series-order.service";
@@ -100,7 +100,8 @@ async function book() {
     data: { ...tpl, id: undefined, receiptId: key, status: "pending", trackingId: null, paidAt: null, gatewayOrderId: rzp("book"), gatewayPaymentId: null },
   });
   try {
-    await settle("book", [verifyBookOrderMysql(toBookOrderRow(o), pay("book")), fulfillBookWebhookMysql(rzp("book"), pay("book"))]);
+    // Books have no webhook fulfiller (AWB only at /verify); race two /verify calls (app retry).
+    await settle("book", [verifyBookOrderMysql(toBookOrderRow(o), pay("book")), verifyBookOrderMysql(toBookOrderRow(o), pay("book"))]);
     report("book", "AWB tracking row(s)", await prisma.bookTracking.count({ where: { orderId: key } }));
   } finally {
     await prisma.bookOrder.delete({ where: { id: o.id } });

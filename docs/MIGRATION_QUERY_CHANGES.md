@@ -15,6 +15,33 @@
 
 ---
 
+## 2026-10-11 — Book AWB allocated only at `/verify` (Razorpay webhook no longer fulfils books)
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (`/verify` shape and the admin report as before).
+
+- `paymentWebhook` (`src/client/webhook/webhook.controller.ts`) no longer fulfils book orders.
+  Book events fall through to the existing "No matching order — acknowledged." 200, the same
+  as course/package. `fulfillBookWebhookMysql` and the book repo's `findOrderByRazorpayOnly`
+  are removed. The `ws_book_tracking` AWB is now inserted only by the client's
+  `/payment/verify` (`verifyBookTx`, which still claims `pending → verified` atomically).
+- Why: since the 2026-10-05 `payment_capture: true` change, the webhook fires for every
+  payment. The legacy `websankul-api` is still live and writes the same `ws_book_order` /
+  `ws_book_tracking` rows without an atomic claim. When Node's webhook-time AWB landed in the
+  same second as legacy's write, each order got two AWBs. Legacy's AWB (tracking `status`
+  `pending`) overwrote `ws_book_order.tracking_id`, and Node's AWB (`status` `verified`) was
+  orphaned. Prod showed 791 orphans between 2026-10-05 and 2026-10-11, all 0–1 s apart,
+  against about 1 a month before.
+- Effect: Node allocates a book AWB only when its own app calls `/verify`. Legacy-app orders
+  are fulfilled only by legacy again, as before 2026-10-05. If a Node-app payment never
+  reaches `/verify`, the order stays `pending` in Node; legacy's webhook (still active)
+  fulfils it.
+- Existing orphans: no data change. `ws_book_order.tracking_id` (and therefore the admin
+  report) already points at the AWB that is in use.
+- Race check: `scripts/verify-order-claim-race.ts` now races two concurrent `/verify` calls
+  for books.
+
+---
+
 ## 2026-10-09 — Rank predictor: ex-serviceman board
 
 > **DDL / backfill:** none — reads the existing `ws_ocr_profiles.is_ex_serviceman`.

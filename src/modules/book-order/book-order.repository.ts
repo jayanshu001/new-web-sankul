@@ -32,11 +32,6 @@ export const bookOrderRepository = {
       where: { gatewayOrderId: razorpayOrderId, userId: customerId },
     }),
 
-  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
-  findOrderByRazorpayOnly: (razorpayOrderId: string) =>
-    prisma.bookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
-
-  /** Line items for an order (by VARCHAR business key) — for the DTO. */
   findOrderItems: (orderKey: string) =>
     prisma.bookOrderItem.findMany({ where: { order_id: orderKey } }),
 
@@ -113,7 +108,11 @@ export const bookOrderRepository = {
       where: { order_id: { in: orders.map((o) => o.receiptId) } },
       select: { bookId: true },
     });
-    return [...new Set(items.map((i) => i.bookId).filter((b): b is number => b != null))];
+    return [
+      ...new Set(
+        items.map((i) => i.bookId).filter((b): b is number => b != null),
+      ),
+    ];
   },
 
   // ── write: create the pending order + its item rows (ONE txn) ──────────────
