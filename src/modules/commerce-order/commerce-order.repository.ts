@@ -186,7 +186,8 @@ export const commerceOrderRepository = {
       // ships a NEW kit and gets its own dispatch row.
       const tracking = input.material.withMaterial
         ? await tx.packageCourseSubscriptionTracking.create({
-            data: { orderId: input.orderId, status: "pending" },
+            // No DB default on created_at/updated_at; purchase history reads both.
+            data: { orderId: input.orderId, status: "pending", created_at: input.now, updated_at: input.now },
           })
         : null;
       const sub = await tx.packageCourseSubscription.create({
@@ -360,7 +361,8 @@ export const commerceOrderRepository = {
       // with-material renewal ships a NEW kit, so it gets its own dispatch row.
       const tracking = input.material.withMaterial
         ? await tx.packageCourseSubscriptionTracking.create({
-            data: { orderId: input.orderId, status: "pending" },
+            // No DB default on created_at/updated_at; purchase history reads both.
+            data: { orderId: input.orderId, status: "pending", created_at: input.now, updated_at: input.now },
           })
         : null;
       const sub = await tx.packageCourseSubscription.create({

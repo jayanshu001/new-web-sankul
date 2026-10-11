@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-10-11 — Course/package kit dispatch row stamps `created_at`/`updated_at`
+
+> **DDL:** none. **Data:** none (existing NULL rows left as-is). **Response:** shape unchanged.
+
+- `commerce-order.repository.ts` (course and package fulfilment) now writes `created_at`/`updated_at`
+  on the `ws_package_course_subscription_tracking` insert, using the same `now` as the
+  subscription. The columns have no DB default, so Node-created kit rows had NULL timestamps,
+  and purchase history (`client-purchase-history.repository.ts`) reads both. The live-course
+  fulfilment already stamps them; this makes the course/package path match.
+- Audit, all tracking/AWB tables (prod, read-only, 2026-10-11):
+  - The duplicate-AWB race was **books only** (see the next entry).
+  - `ws_package_course_subscription_tracking` has no duplicate dispatch rows on live orders. The 5
+    rows on order `526141` belong to a deleted order with no subscription (test leftover).
+  - `ws_live_course_subscription_tracking` is empty.
+  - Ebook and test-series are digital and allocate no tracking rows.
+
+---
+
 ## 2026-10-11 — Book AWB allocated only at `/verify` (Razorpay webhook no longer fulfils books)
 
 > **DDL:** none. **Data:** none. **Response:** unchanged (`/verify` shape and the admin report as before).
