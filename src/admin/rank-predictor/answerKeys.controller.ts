@@ -16,7 +16,6 @@ import {
   extractResponseSheet,
   type OcrExtractionResult,
 } from "../../utils/ocrExtractionClient";
-import { answerKeyPdfKey, putRankPdf } from "../../utils/rankSheetStorage";
 import { success } from "../../utils/httpResponse";
 import {
   adminIdOf,
@@ -70,19 +69,13 @@ export const publishAnswerKey = asyncHandler(async (req: Request, res: Response)
     keys,
     marksCorrect: body.marksCorrect,
     marksWrong: body.marksWrong,
-    sourcePdfKey: null,
+    sourcePdf: req.file?.buffer ?? null,
     adminId: adminIdOf(req),
   });
 
-  let sourcePdfKey: string | null = null;
-  if (req.file) {
-    sourcePdfKey = answerKeyPdfKey(String(examId), key.version, series);
-    await putRankPdf(sourcePdfKey, req.file.buffer);
-  }
-
   return success(
     res,
-    toRankAnswerKeyDto({ ...key, sourcePdfKey }),
+    toRankAnswerKeyDto(key),
     rescoreMessage("Answer key published.", { rescored, skipped }),
     201
   );

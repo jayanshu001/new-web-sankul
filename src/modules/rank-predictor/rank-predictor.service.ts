@@ -9,6 +9,7 @@ import {
 } from "../../utils/ocrExtractionClient";
 import logger from "../../utils/logger";
 import {
+  answerKeyPdfKey,
   copyRankPdf,
   deleteRankPdf,
   deleteRankPdfKeys,
@@ -1748,18 +1749,28 @@ export const rankPredictorService = {
     }
 
     const version = await repo.nextAnswerKeyVersion(params.examId);
-    const key = await repo.publishAnswerKey(params.examId, series, {
-      exam: { connect: { id: params.examId } },
-      version,
-      isActive: true,
-      series,
-      keys: params.keys as never,
-      marksCorrect: params.marksCorrect,
-      marksWrong: params.marksWrong,
-      sourcePdfKey: params.sourcePdfKey,
-      uploadedBy: params.adminId,
-      createdAt: new Date(),
-    });
+    // Stored before the row, so the row points at it and deleting the paper finds it.
+    const sourcePdfKey = params.sourcePdf ? answerKeyPdfKey(String(params.examId), version, series) : null;
+    if (params.sourcePdf && sourcePdfKey) await putRankPdf(sourcePdfKey, params.sourcePdf);
+
+    let key;
+    try {
+      key = await repo.publishAnswerKey(params.examId, series, {
+        exam: { connect: { id: params.examId } },
+        version,
+        isActive: true,
+        series,
+        keys: params.keys as never,
+        marksCorrect: params.marksCorrect,
+        marksWrong: params.marksWrong,
+        sourcePdfKey,
+        uploadedBy: params.adminId,
+        createdAt: new Date(),
+      });
+    } catch (error) {
+      if (sourcePdfKey) await deleteRankPdf(sourcePdfKey);
+      throw error;
+    }
 
     await audit({
       action: AUDIT_ACTION.ANSWER_KEY_UPLOADED,

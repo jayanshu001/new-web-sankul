@@ -657,7 +657,8 @@ export interface AnswerKeyPublishInput {
   keys: AnswerKeyMap;
   marksCorrect: number;
   marksWrong: number;
-  sourcePdfKey: string | null;
+  /** The key's PDF, when it was uploaded as one; stored under the version it gets. */
+  sourcePdf: Buffer | null;
   adminId: number | null;
 }
 
