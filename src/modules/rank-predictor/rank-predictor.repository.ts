@@ -282,6 +282,25 @@ export const rankPredictorRepository = {
     return rows.map((row) => row.id);
   },
 
+  /** Refused sheets whose stored file has outlived its keeping time. Rides the (status, created_at) index. */
+  listExpiredFailedSheets: (before: Date, take: number) =>
+    prisma.ocrSubmission.findMany({
+      where: { status: SUBMISSION_STATUS.FAILED, sourcePdfKey: { not: null }, createdAt: { lt: before } },
+      select: { id: true, sourcePdfKey: true },
+      orderBy: { createdAt: "asc" },
+      take,
+    }),
+
+  clearSheetKeys: (ids: bigint[]) =>
+    prisma.ocrSubmission.updateMany({ where: { id: { in: ids } }, data: { sourcePdfKey: null } }),
+
+  findLatestAudit: (entityType: string, entityId: string, actions: string[]) =>
+    prisma.ocrAuditLog.findFirst({
+      where: { entityType, entityId, action: { in: actions } },
+      orderBy: { id: "desc" },
+      select: { metadata: true },
+    }),
+
   /** The student's latest sheet on a paper, as little as a status poll needs. */
   findLatestSubmissionStatus: (examId: bigint, customerId: number) =>
     prisma.ocrSubmission.findFirst({

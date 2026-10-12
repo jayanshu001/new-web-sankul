@@ -160,6 +160,7 @@ const startWorkers = async (): Promise<void> => {
     process: rankPredictorService.processQueuedSheet,
     giveUp: rankPredictorService.giveUpQueuedSheet,
     pending: rankPredictorService.pendingQueuedSheets,
+    purge: rankPredictorService.purgeFailedSheets,
   });
   bootMs("rank sheet scheduler", t1b);
 

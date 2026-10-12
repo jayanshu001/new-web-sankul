@@ -37,6 +37,10 @@ let queueEvents: QueueEvents | null = null;
 let worker: Worker<RankSheetJobData, RankSheetJobOutcome> | null = null;
 let connection: RedisType | null = null;
 let started = false;
+let purgeTimer: NodeJS.Timeout | null = null;
+
+/** How often the worker clears refused sheets past their keeping time. */
+const PURGE_EVERY_MS = 6 * 60 * 60 * 1000;
 
 // BullMQ needs dedicated connections with maxRetriesPerRequest: null.
 const buildConnection = (): RedisType =>
@@ -110,6 +114,8 @@ export const initRankSheetScheduler = async (handlers: {
   giveUp: (submissionId: bigint, error: Error) => Promise<void>;
   /** Submissions left in "processing" by a crash or a deploy, to queue again. */
   pending: () => Promise<bigint[]>;
+  /** Removes refused sheets' files past their keeping time; returns how many. */
+  purge: () => Promise<number>;
 }): Promise<void> => {
   if (started) return;
   started = true;
@@ -156,9 +162,24 @@ export const initRankSheetScheduler = async (handlers: {
     }
   }
   logger.info("BullMQ rank sheet scheduler started.", { concurrency: CONCURRENCY, requeued });
+
+  // Safe to run in several worker processes at once: a file already removed is skipped.
+  const purge = async (): Promise<void> => {
+    try {
+      const purged = await handlers.purge();
+      if (purged) logger.info("Rank sheet: removed refused sheets past their keeping time", { purged });
+    } catch (error) {
+      logger.error("Rank sheet: refused-sheet cleanup failed", { error: (error as Error).message });
+    }
+  };
+  void purge();
+  purgeTimer = setInterval(() => void purge(), PURGE_EVERY_MS);
+  purgeTimer.unref();
 };
 
 export const shutdownRankSheetScheduler = async (): Promise<void> => {
+  if (purgeTimer) clearInterval(purgeTimer);
+  purgeTimer = null;
   try {
     await worker?.close();
     await queueEvents?.close();

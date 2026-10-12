@@ -8,6 +8,7 @@ import {
 } from "../../modules/rank-predictor/rank-predictor.transformer";
 import {
   RANK_ERROR,
+  SUBMISSION_STATUS,
   isSubmissionStatus,
 } from "../../modules/rank-predictor/rank-predictor.types";
 import { correctionsSchema } from "../../modules/rank-predictor/rank-predictor.validation";
@@ -43,15 +44,20 @@ export const listSubmissions = asyncHandler(async (req: Request, res: Response) 
 
 export const getSubmission = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.getSubmission(bigIntParam(req, "id"), null);
-  const [customers, sourcePdfUrl] = await Promise.all([
+  const [customers, sourcePdfUrl, failureDetails] = await Promise.all([
     rankPredictorService.resolveCustomers([result.customer_id]),
     // Signed and short-lived, so the review modal can show the sheet inline.
     result.source_pdf_key ? getSignedRankPdfUrl(result.source_pdf_key) : null,
+    // A refused sheet: what it said, so the admin can see why without the logs.
+    result.submission.status === SUBMISSION_STATUS.FAILED
+      ? rankPredictorService.getFailureDetails(BigInt(result.submission._id))
+      : null,
   ]);
 
   return success(res, {
     ...result,
     source_pdf_url: sourcePdfUrl,
+    failure_details: failureDetails,
     customer: customers.get(result.customer_id) ?? null,
   });
 });

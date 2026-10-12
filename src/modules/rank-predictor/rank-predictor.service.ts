@@ -193,14 +193,18 @@ const assertSeriesAllowed = (allowedSeries: string[], series: string | null): vo
   }
 };
 
+type SubmissionUpdate = Parameters<typeof repo.updateSubmission>[1];
+
 const failSubmission = async (
   submissionId: bigint,
   customerId: number,
   failureCode: string,
   action: AuditAction,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  seen: SubmissionUpdate = {}
 ): Promise<void> => {
   await repo.updateSubmission(submissionId, {
+    ...seen,
     status: SUBMISSION_STATUS.FAILED,
     failureCode,
     updatedAt: new Date(),
@@ -219,6 +223,30 @@ const failSubmission = async (
 /** "YYYY-MM-DDTHH:MM" of the slot the sheet was sat in, or null when the sheet does not say. */
 const shiftKeyOf = (candidate: SheetCandidate | null | undefined): string | null =>
   candidate?.test_date && candidate.test_start ? `${candidate.test_date}T${candidate.test_start}` : null;
+
+/** What the reader made of a sheet it then refused, kept on the row for the admin who looks into it. */
+const seenOf = (extraction: OcrExtractionResult): SubmissionUpdate => ({
+  extractionKind: extraction.kind,
+  rollNumber: extraction.roll_number,
+  shiftKey: shiftKeyOf(extraction.candidate),
+  candidate: (extraction.candidate ?? undefined) as never,
+  candidateName: extraction.candidate?.name?.trim().slice(0, 255) || null,
+});
+
+/** Audit rows that record why a sheet was refused, with what the sheet said. */
+const FAILURE_ACTIONS: AuditAction[] = [
+  AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
+  AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
+  AUDIT_ACTION.SUBMISSION_EXAM_MISMATCH,
+];
+
+/**
+ * A refused sheet is kept this long for admins to look into, then its file is
+ * removed: it carries a roll number and a name. The row and its failure code stay.
+ */
+const FAILED_SHEET_RETENTION_DAYS = Number(process.env.RANK_FAILED_SHEET_RETENTION_DAYS) || 30;
+const PURGE_BATCH = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type FolderProfile = { casteCategory: string | null; gender: string | null } | null;
 
@@ -646,16 +674,19 @@ const readQueuedSheet = async (
   const customerId = submission.customerId;
   const sourcePdfKey = submission.sourcePdfKey;
 
-  /** A sheet that will never read: fail it and drop the stored copy. */
+  /**
+   * A sheet that will never read: fail it, so the student can upload again. The
+   * stored sheet is kept, with what the reader made of it, so an admin can open
+   * it and see why; purgeFailedSheets removes the file after its keeping time.
+   */
   const reject = async (
     code: string,
     action: AuditAction,
     metadata: Record<string, unknown>,
-    outcome: RankSheetJobOutcome
+    outcome: RankSheetJobOutcome,
+    seen: SubmissionUpdate = {}
   ): Promise<RankSheetJobOutcome> => {
-    await failSubmission(submission.id, customerId, code, action, metadata);
-    await deleteRankSheet(sourcePdfKey);
-    await repo.updateSubmission(submission.id, { sourcePdfKey: null, updatedAt: new Date() });
+    await failSubmission(submission.id, customerId, code, action, metadata, seen);
     return outcome;
   };
 
@@ -688,7 +719,8 @@ const readQueuedSheet = async (
       RANK_ERROR.QUESTION_COUNT_MISMATCH,
       AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
       { expected: exam.totalQuestions, detected: extraction.total_questions },
-      settled(422, "That sheet does not match this exam.", details)
+      settled(422, "That sheet does not match this exam.", details),
+      seenOf(extraction)
     );
   }
 
@@ -706,7 +738,8 @@ const readQueuedSheet = async (
       settled(422, "That sheet is from a different exam.", {
         error: RANK_ERROR.SHEET_EXAM_MISMATCH,
         ...mismatch,
-      })
+      }),
+      seenOf(extraction)
     );
   }
 
@@ -721,7 +754,8 @@ const readQueuedSheet = async (
         { code: RANK_ERROR.SHEET_ALREADY_SUBMITTED, roll_number: extraction.roll_number },
         settled(409, "That sheet has already been submitted by another student.", {
           error: RANK_ERROR.SHEET_ALREADY_SUBMITTED,
-        })
+        }),
+        seenOf(extraction)
       );
     }
   }
@@ -931,6 +965,31 @@ export const rankPredictorService = {
 
   /** Sheets a crash or a deploy left half-way, for the worker to queue again on boot. */
   pendingQueuedSheets: (): Promise<bigint[]> => repo.listPendingSheetSubmissionIds(),
+
+  /** Removes the files of refused sheets past FAILED_SHEET_RETENTION_DAYS; returns how many. */
+  purgeFailedSheets: async (): Promise<number> => {
+    const before = new Date(Date.now() - FAILED_SHEET_RETENTION_DAYS * DAY_MS);
+    let purged = 0;
+    for (;;) {
+      const batch = await repo.listExpiredFailedSheets(before, PURGE_BATCH);
+      if (!batch.length) break;
+      // deleteRankSheet never throws, so a file already gone cannot stall the run.
+      await Promise.all(batch.map((row) => deleteRankSheet(row.sourcePdfKey as string)));
+      await repo.clearSheetKeys(batch.map((row) => row.id));
+      purged += batch.length;
+      if (batch.length < PURGE_BATCH) break;
+    }
+    return purged;
+  },
+
+  /** What the sheet said when it was refused (question counts, printed date and title, roll number). */
+  getFailureDetails: async (submissionId: bigint): Promise<Record<string, unknown> | null> => {
+    const row = await repo.findLatestAudit(AUDIT_ENTITY.SUBMISSION, String(submissionId), FAILURE_ACTIONS);
+    const metadata = row?.metadata;
+    return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : null;
+  },
 
   createMarksSubmission: async (params: MarksSubmissionInput): Promise<RankSubmissionResultDto> => {
     const exam = await requireExam(params.examId);
