@@ -46,6 +46,7 @@ interface CandidateProfileRow {
   casteCategory: string | null;
   gender: string | null;
   isExServiceman: boolean | null;
+  dateOfBirth: Date | null;
 }
 
 const trimmedOrNull = (value: string | null | undefined): string | null =>
@@ -97,18 +98,36 @@ export const casteCategoryOf = (
 export const genderOf = (row: { gender: string | null } | null | undefined): Gender | null =>
   lowerOrNull(row?.gender) as Gender | null;
 
+const HALF_DAY_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * A `DATE` column as "YYYY-MM-DD". Prisma reads it as midnight UTC and the IST
+ * middleware (config/prisma) then moves it back 5:30 into the evening before, so
+ * it is read as the nearest midnight rather than sliced as it comes.
+ */
+export const dateOfBirthOf = (row: { dateOfBirth: Date | null } | null | undefined): string | null =>
+  row?.dateOfBirth ? new Date(row.dateOfBirth.getTime() + HALF_DAY_MS).toISOString().slice(0, 10) : null;
+
+/** The calendar date to store: midday UTC lands on that date whatever the IST middleware adds. */
+export const dateOfBirthValue = (isoDate: string): Date => new Date(`${isoDate}T12:00:00Z`);
+
 export const toRankCandidateProfileDto = (
   row: CandidateProfileRow | null
 ): RankCandidateProfileDto => {
   const casteCategory = casteCategoryOf(row);
   const gender = lowerOrNull(row?.gender) as Gender | null;
   const isExServiceman = row?.isExServiceman ?? null;
+  const dateOfBirth = dateOfBirthOf(row);
 
   return {
     caste_category: casteCategory,
     gender,
     is_ex_serviceman: isExServiceman,
-    is_complete: casteCategory !== null && gender !== null && isExServiceman !== null,
+    date_of_birth: dateOfBirth,
+    // Date of birth was added later; a profile without it is asked again, since
+    // it decides every tie on marks.
+    is_complete:
+      casteCategory !== null && gender !== null && isExServiceman !== null && dateOfBirth !== null,
   };
 };
 
@@ -282,23 +301,29 @@ export const toRankSubmissionDto = (row: OcrSubmission): RankSubmissionDto => ({
 export const scoredQuestionsOf = (row: Pick<OcrScore, "correct" | "wrong" | "unanswered">) =>
   row.correct + row.wrong + row.unanswered;
 
-export const toRankScoreDto = (row: OcrScore): RankScoreDto => ({
+export const toRankScoreDto = (row: OcrScore, maxMarks?: number): RankScoreDto => ({
   correct: row.correct,
   wrong: row.wrong,
   unanswered: row.unanswered,
   raw_score: Number(row.rawScore),
   total_questions: scoredQuestionsOf(row),
+  ...(maxMarks === undefined ? {} : { max_marks: maxMarks }),
 });
 
 export const toLeaderboardEntryDto = (
   row: LeaderboardRow,
-  viewerCustomerId: number | null
+  viewerCustomerId: number | null,
+  marks: { maxMarks: number; selfReported: boolean }
 ): RankLeaderboardEntryDto => ({
   rank: row.rank_position,
   name: displayNameFor(row.full_name, row.show_real_name),
   raw_score: row.raw_score,
   normalized_score: row.normalized_score,
   total_questions: row.total_questions,
+  max_marks: marks.maxMarks,
+  self_reported: marks.selfReported,
+  date_of_birth: row.date_of_birth,
+  caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
   submitted_at: row.submitted_at,
 });
@@ -311,6 +336,9 @@ export const toAdminLeaderboardEntryDto = (row: LeaderboardRow): RankAdminLeader
   raw_score: row.raw_score,
   normalized_score: row.normalized_score,
   total_questions: row.total_questions,
+  date_of_birth: row.date_of_birth,
+  caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
+  gender: genderOf({ gender: row.gender }),
   submitted_at: row.submitted_at,
 });
 

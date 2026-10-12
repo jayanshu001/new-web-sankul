@@ -78,6 +78,7 @@ export const RANK_ERROR = {
   ALREADY_SUBMITTED: "already_submitted",
   ANSWER_KEY_REQUIRED: "answer_key_required",
   CANCELLED_QUESTION_OUT_OF_RANGE: "cancelled_question_out_of_range",
+  CORRECTION_NOT_ALLOWED: "correction_not_allowed",
   EXAM_CODE_TAKEN: "exam_code_taken",
   EXAM_NOT_FOUND: "exam_not_found",
   EXTRACTION_UNCONFIGURED: "extraction_unconfigured",
@@ -159,6 +160,10 @@ export const RANK_BY = {
   SUBJECT: "subject",
   /** Boards that span shifts rank on SSC-style normalized marks instead of raw marks. */
   NORMALIZED: "normalized",
+  /** Male / female boards, alone and crossed with shift and category. */
+  GENDER: "gender",
+  /** A board of ex-servicemen, for students who said they are one. */
+  EX_SERVICEMAN: "ex_serviceman",
 } as const;
 
 export type RankBy = (typeof RANK_BY)[keyof typeof RANK_BY];
@@ -177,8 +182,15 @@ export type SubmissionMode = (typeof SUBMISSION_MODE)[keyof typeof SUBMISSION_MO
 
 export const SUBMISSION_MODES = Object.values(SUBMISSION_MODE) as [SubmissionMode, ...SubmissionMode[]];
 
-/** What a paper that predates `rank_by` shows: the category rank it always had. */
-export const LEGACY_RANK_BY: readonly RankBy[] = [RANK_BY.CATEGORY];
+/**
+ * What a paper that predates `rank_by` shows: the category rank it always had,
+ * and the gender and ex-servicemen boards, which were shown before they had a switch.
+ */
+export const LEGACY_RANK_BY: readonly RankBy[] = [RANK_BY.CATEGORY, RANK_BY.GENDER, RANK_BY.EX_SERVICEMAN];
+
+/** Youngest and oldest age a date of birth may give; anything outside is a typo. */
+export const MIN_CANDIDATE_AGE = 14;
+export const MAX_CANDIDATE_AGE = 80;
 
 export const OTHER_SUBJECT = "Other";
 export const MAX_SYLLABUS_SUBJECTS = 30;
@@ -371,6 +383,8 @@ export interface RankScoreDto {
   raw_score: number;
   /** Questions this score was marked out of — the paper's count less any cancelled. */
   total_questions: number;
+  /** Marks this score was out of, where the paper is known — see markScaleOf. */
+  max_marks?: number;
 }
 
 export interface RankAnswerReviewItemDto {
@@ -472,6 +486,8 @@ export interface RankSubjectStandingDto {
 export interface RankStandingDto {
   /** The viewer's own marks; `normalized_score` is null unless the paper normalizes across shifts. */
   raw_score: number | null;
+  /** What `raw_score` is out of; null with no score. */
+  max_marks: number | null;
   normalized_score: number | null;
   rank: number | null;
   percentile: number | null;
@@ -498,6 +514,10 @@ export interface RankStandingDto {
   overall_gender: RankPositionDto | null;
   shift_gender: RankPositionDto | null;
   category_gender: RankPositionDto | null;
+  /** The narrowest board: the viewer's shift, category and gender together. */
+  shift_category_gender: RankPositionDto | null;
+  /** The viewer's date of birth ("YYYY-MM-DD"), which breaks a tie on marks; null until given. */
+  date_of_birth: string | null;
   /** Standing among ex-servicemen; null unless the viewer's profile says they are one. */
   ex_serviceman: RankPositionDto | null;
   /** Standing within the viewer's own shift; null unless the paper ranks by shift and the sheet names one. */
@@ -515,6 +535,13 @@ export interface RankLeaderboardEntryDto {
   raw_score: number;
   normalized_score: number | null;
   total_questions: number;
+  /** Marks the entry is out of: what `raw_score` should be read against. */
+  max_marks: number;
+  /** Typed in by the student on a paper that also checks sheets, so not checked by us. */
+  self_reported: boolean;
+  /** "YYYY-MM-DD"; it is what orders two entries on the same marks. Null when not given. */
+  date_of_birth: string | null;
+  caste_category: CasteCategory | null;
   is_me: boolean;
   submitted_at: Date | null;
 }
@@ -535,6 +562,9 @@ export interface RankAdminLeaderboardEntryDto {
   raw_score: number;
   normalized_score: number | null;
   total_questions: number;
+  date_of_birth: string | null;
+  caste_category: CasteCategory | null;
+  gender: Gender | null;
   submitted_at: Date | null;
 }
 
@@ -574,12 +604,22 @@ export interface LeaderboardRow {
   submitted_at: Date | null;
   full_name: string | null;
   show_real_name: boolean;
+  /** `sheet` or `marks` — how the entry was handed in. */
+  entry_mode: string | null;
+  /** Set on a subject board, where the subject's own maximum is known per row. */
+  max_marks: number | null;
+  /** "YYYY-MM-DD", or null when the candidate has not given one. */
+  date_of_birth: string | null;
+  caste_category: string | null;
+  gender: string | null;
 }
 
 export interface RankCandidateProfileDto {
   caste_category: CasteCategory | null;
   gender: Gender | null;
   is_ex_serviceman: boolean | null;
+  /** "YYYY-MM-DD". Required for a complete profile: it breaks ties on marks. */
+  date_of_birth: string | null;
   is_complete: boolean;
 }
 
@@ -587,6 +627,8 @@ export interface CandidateProfileInput {
   casteCategory: CasteCategory;
   gender: Gender;
   isExServiceman: boolean;
+  /** "YYYY-MM-DD". */
+  dateOfBirth: string;
 }
 
 export interface ExamCreateInput {
@@ -659,6 +701,16 @@ export interface BoardScope {
   /** Only `true` narrows: the board of candidates who answered they are ex-servicemen. */
   exServiceman?: boolean | null;
   subject?: string | null;
+}
+
+/**
+ * Who a rank is worked out for, so a tie on marks can be broken the way merit
+ * lists do. `dateOfBirth` is "YYYY-MM-DD" or null; `scoreId` also places the
+ * viewer among the candidates they still tie with (same marks, same birthday).
+ */
+export interface RankViewer {
+  dateOfBirth: string | null;
+  scoreId?: bigint;
 }
 
 /** Per-shift linear map onto the common scale: normalized = scale × raw + offset. */

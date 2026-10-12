@@ -28,6 +28,7 @@ import {
   lowConfidencePct,
   normalizePaperSeries,
   percentileFor,
+  roundScore,
 } from "./rank-predictor.scoring";
 import { resolveSubjects, scoreWithSubjects } from "./rank-predictor.subjects";
 import {
@@ -35,6 +36,8 @@ import {
   answerMapOf,
   casteCategoryOf,
   displayNameFor,
+  dateOfBirthOf,
+  dateOfBirthValue,
   genderOf,
   examMarkingSchemeOf,
   keySourceOf,
@@ -53,6 +56,7 @@ import {
   toRankCandidateProfileDto,
   toRankCustomerDto,
   toRankExamDto,
+  scoredQuestionsOf,
   toRankScoreDto,
   toRankSubmissionDto,
   unknownRankCustomerDto,
@@ -100,6 +104,7 @@ import {
   type RankAdminLeaderboardEntryDto,
   type RankAnswerReviewDto,
   type RankCandidateProfileDto,
+  type RankViewer,
   type RankCustomerDto,
   type RankExamDeletionDto,
   type RankExamDto,
@@ -343,10 +348,20 @@ const normalizedOf = (
   return map ? map.scale * rawScore + map.offset : rawScore;
 };
 
+/** What a rank needs to know about the student beyond their marks: their date of birth, for ties. */
+const viewerOf = async (customerId: number): Promise<RankViewer> => ({
+  dateOfBirth: dateOfBirthOf(await repo.findCandidateProfile(customerId)),
+});
+
 /** The whole-paper board, on normalized marks when the paper normalizes. */
-const overallStanding = async (exam: ExamRow, rawScore: number, shiftKey: string | null) => {
+const overallStanding = async (
+  exam: ExamRow,
+  rawScore: number,
+  shiftKey: string | null,
+  viewer: RankViewer
+) => {
   const normalization = await normalizationFor(exam);
-  return repo.rankForExam(exam.id, normalizedOf(normalization, shiftKey, rawScore), {}, normalization);
+  return repo.rankForExam(exam.id, normalizedOf(normalization, shiftKey, rawScore), {}, normalization, viewer);
 };
 
 /** One page of a board. Shift and subject boards are within one sitting, so they stay raw. */
@@ -439,23 +454,49 @@ const resolveKey = async (
     : { missing: SUBMISSION_WARNING.NO_ACTIVE_ANSWER_KEY };
 };
 
-/**
- * What a typed-in total may reach: the syllabus marks when every subject has
- * them, otherwise one mark scheme over every question.
- */
-const maxMarksOf = async (exam: ExamRow): Promise<number> => {
+interface MarkScale {
+  /** The paper's marks when every syllabus subject sets them; they hold whatever is cancelled. */
+  syllabusMarks: number | null;
+  /** A correct answer's marks under the paper's scheme. */
+  perQuestion: number;
+  /** The whole paper's marks — what a typed-in total may reach. */
+  fullMarks: number;
+}
+
+/** How a paper's marks add up: the syllabus marks, or one mark scheme over every question. */
+const markScaleOf = async (exam: ExamRow): Promise<MarkScale> => {
   const syllabus = syllabusOf(exam);
-  if (syllabus.length && syllabus.every((subject) => subject.marks !== undefined)) {
-    return syllabus.reduce((sum, subject) => sum + (subject.marks as number), 0);
-  }
+  const syllabusMarks =
+    syllabus.length && syllabus.every((subject) => subject.marks !== undefined)
+      ? syllabus.reduce((sum, subject) => sum + (subject.marks as number), 0)
+      : null;
 
+  let perQuestion: number;
   if (keySourceOf(exam) !== KEY_SOURCE.ADMIN_KEY) {
-    return exam.totalQuestions * examMarkingSchemeOf(exam).marksCorrect;
+    perQuestion = examMarkingSchemeOf(exam).marksCorrect;
+  } else {
+    // The published key's marks are what sheets are scored on; until there is
+    // one, the paper's own marks (the key form's defaults) are the best guess.
+    const [latest] = await repo.listAnswerKeys(exam.id);
+    perQuestion = (latest ? markingSchemeOf(latest) : examMarkingSchemeOf(exam)).marksCorrect;
   }
 
-  const [latest] = await repo.listAnswerKeys(exam.id);
-  return exam.totalQuestions * (latest ? markingSchemeOf(latest).marksCorrect : 1);
+  return {
+    syllabusMarks,
+    perQuestion,
+    fullMarks: syllabusMarks ?? exam.totalQuestions * perQuestion,
+  };
 };
+
+const maxMarksOf = async (exam: ExamRow): Promise<number> => (await markScaleOf(exam)).fullMarks;
+
+/**
+ * What one score is out of. A marked sheet is out of the questions it was marked
+ * on (cancellations drop out) at the paper's rate; a typed total, which has no
+ * questions, is out of the whole paper.
+ */
+const outOf = (scale: MarkScale, scoredQuestions: number): number =>
+  scoredQuestions > 0 ? (scale.syllabusMarks ?? scoredQuestions * scale.perQuestion) : scale.fullMarks;
 
 /** A board the admin has not switched on is refused rather than silently served. */
 const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void => {
@@ -464,6 +505,8 @@ const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void 
     [Boolean(scope?.shiftKey), RANK_BY.SHIFT],
     [Boolean(scope?.casteCategory), RANK_BY.CATEGORY],
     [Boolean(scope?.subject), RANK_BY.SUBJECT],
+    [Boolean(scope?.gender), RANK_BY.GENDER],
+    [Boolean(scope?.exServiceman), RANK_BY.EX_SERVICEMAN],
   ];
 
   for (const [requested, breakdown] of wanted) {
@@ -897,7 +940,9 @@ export const rankPredictorService = {
     }
 
     const maxMarks = await maxMarksOf(exam);
-    if (params.marks > maxMarks || params.marks < -maxMarks) {
+    // Typed marks go on the stored grid too — see roundScore.
+    const marks = roundScore(params.marks);
+    if (marks > maxMarks || marks < -maxMarks) {
       throw new HttpError(422, `Marks must be between -${maxMarks} and ${maxMarks} for this paper.`, {
         error: RANK_ERROR.MARKS_OUT_OF_RANGE,
         max_marks: maxMarks,
@@ -946,14 +991,19 @@ export const rankPredictorService = {
         correct: 0,
         wrong: 0,
         unanswered: 0,
-        rawScore: params.marks,
+        rawScore: marks,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
-      { rawScore: params.marks, updatedAt: new Date() }
+      { rawScore: marks, updatedAt: new Date() }
     );
 
-    const { higher, candidates } = await overallStanding(exam, params.marks, params.shiftKey);
+    const { higher, candidates } = await overallStanding(
+      exam,
+      marks,
+      params.shiftKey,
+      await viewerOf(params.customerId)
+    );
     const rank = higher + 1;
     const percentile = percentileFor(rank, candidates);
     await repo.upsertRankSnapshot(score.id, exam.id, rank, candidates, percentile);
@@ -964,13 +1014,13 @@ export const rankPredictorService = {
       entityId: String(submission.id),
       actorType: ACTOR_TYPE.CUSTOMER,
       actorId: params.customerId,
-      metadata: { raw_score: params.marks, rank, total_candidates: candidates, entry_mode: "marks" },
+      metadata: { raw_score: marks, rank, total_candidates: candidates, entry_mode: "marks" },
     });
 
     return {
       submission_id: String(submission.id),
       status: SUBMISSION_STATUS.PROCESSED,
-      score: toRankScoreDto(score),
+      score: toRankScoreDto(score, maxMarks),
       rank,
       percentile,
       total_candidates: candidates,
@@ -1076,7 +1126,12 @@ export const rankPredictorService = {
       };
     }
 
-    const { higher, candidates } = await overallStanding(exam, result.rawScore, submission.shiftKey);
+    const { higher, candidates } = await overallStanding(
+      exam,
+      result.rawScore,
+      submission.shiftKey,
+      await viewerOf(submission.customerId)
+    );
     const rank = higher + 1;
     const percentile = percentileFor(rank, candidates);
 
@@ -1094,7 +1149,7 @@ export const rankPredictorService = {
     return {
       submission_id: String(submission.id),
       status: SUBMISSION_STATUS.PROCESSED,
-      score: toRankScoreDto(score),
+      score: toRankScoreDto(score, outOf(await markScaleOf(exam), scoredQuestionsOf(score))),
       rank,
       percentile,
       total_candidates: candidates,
@@ -1107,10 +1162,48 @@ export const rankPredictorService = {
     /** Only fills a shift the sheet did not print; what the sheet says wins. */
     shiftKey?: string | null;
     actorCustomerId: number | null;
+    /** The paper in the student's URL; the sheet has to be on it. */
+    examId?: bigint;
   }): Promise<RankSubmissionResultDto> => {
     const submission = await repo.findSubmissionById(params.submissionId);
-    if (!submission) {
+    if (!submission || (params.examId !== undefined && submission.examId !== params.examId)) {
       throw new HttpError(404, "Submission not found.", { error: RANK_ERROR.NOT_FOUND });
+    }
+
+    // A typed total has no answers; writing some would only be thrown away.
+    if (submission.entryMode === ENTRY_MODE.MARKS) {
+      throw new HttpError(409, "That entry was typed in as marks, so there are no answers to correct.", {
+        error: RANK_ERROR.NOT_SCORABLE,
+        status: submission.status,
+      });
+    }
+
+    // A student may only settle the answers the reader was unsure of, and only
+    // while the sheet waits on them. Without this, anyone could rewrite a scored
+    // sheet — the review shows them the key — and put themselves first. Staff
+    // (no customer id) keep the full correction.
+    if (params.actorCustomerId !== null) {
+      if (submission.status !== SUBMISSION_STATUS.NEEDS_REVIEW) {
+        throw new HttpError(409, "That sheet is not waiting for your review.", {
+          error: RANK_ERROR.NOT_SCORABLE,
+          status: submission.status,
+        });
+      }
+
+      // Re-sending an answer unchanged is allowed, so a client that posts the
+      // whole sheet back keeps working; only a change outside the flagged
+      // questions is refused.
+      const flagged = new Set(((submission.lowConfidenceQuestions ?? []) as number[]).map(String));
+      const current = answerMapOf(submission);
+      const outside = Object.entries(params.corrections)
+        .filter(([question, answer]) => !flagged.has(question) && (current[question] ?? null) !== answer)
+        .map(([question]) => Number(question));
+      if (outside.length) {
+        throw new HttpError(422, "Only the answers we could not read clearly can be corrected.", {
+          error: RANK_ERROR.CORRECTION_NOT_ALLOWED,
+          questions: outside,
+        });
+      }
     }
 
     await repo.updateSubmission(submission.id, {
@@ -1137,16 +1230,20 @@ export const rankPredictorService = {
     const [exam, score, profile] = await Promise.all([
       requireExam(examId),
       repo.findScoreForCustomer(examId, customerId),
-      repo.findProfile(customerId),
+      repo.findCandidateProfile(customerId),
     ]);
     const casteCategory: CasteCategory | null = casteCategoryOf(profile);
-    const gender = genderOf(profile);
-    const exServiceman = profile?.isExServiceman === true;
+    const dateOfBirth = dateOfBirthOf(profile);
     const enabled = rankByOf(exam);
+    // A board the paper does not show is not worked out at all.
+    const gender = genderOf(profile);
+    const genderOn = enabled.includes(RANK_BY.GENDER) && gender !== null;
+    const exServiceman = enabled.includes(RANK_BY.EX_SERVICEMAN) && profile?.isExServiceman === true;
 
     if (!score) {
       return {
         raw_score: null,
+        max_marks: null,
         normalized_score: null,
         rank: null,
         percentile: null,
@@ -1158,9 +1255,11 @@ export const rankPredictorService = {
         average_marks: null,
         category_average_marks: null,
         gender,
+        date_of_birth: dateOfBirth,
         overall_gender: null,
         shift_gender: null,
         category_gender: null,
+        shift_category_gender: null,
         ex_serviceman: null,
         shift: null,
         shift_category: null,
@@ -1175,12 +1274,16 @@ export const rankPredictorService = {
     // Boards that span shifts compare normalized marks; boards inside one shift stay raw.
     const normalization = await normalizationFor(exam);
     const normalized = normalizedOf(normalization, score.shiftKey, rawScore);
+    const viewer: RankViewer = { dateOfBirth };
     const across = (scope: BoardScope = {}) =>
-      repo.rankForExam(examId, normalized, scope, normalization);
+      repo.rankForExam(examId, normalized, scope, normalization, viewer);
+    const withinShift = (scope: BoardScope) =>
+      repo.rankForExam(examId, rawScore, { shiftKey, ...scope }, null, viewer);
 
     // Each standing is its own count over the same scores, so they are issued
     // together rather than one after another.
     const [
+      scale,
       overall,
       category,
       shift,
@@ -1188,18 +1291,20 @@ export const rankPredictorService = {
       overallGender,
       shiftGender,
       categoryGender,
+      shiftCategoryGender,
       exServicemanBoard,
       subjectRows,
     ] = await Promise.all([
-      across(),
+      markScaleOf(exam),
+      // The overall board also places the viewer among their ties, for the strip below.
+      repo.rankForExam(examId, normalized, {}, normalization, { ...viewer, scoreId: score.id }),
       categoryOn ? across({ casteCategory }) : null,
-      shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey }) : null,
-      shiftKey && categoryOn
-        ? repo.rankForExam(examId, rawScore, { shiftKey, casteCategory })
-        : null,
-      gender ? across({ gender }) : null,
-      gender && shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey, gender }) : null,
-      gender && categoryOn ? across({ casteCategory, gender }) : null,
+      shiftKey ? withinShift({}) : null,
+      shiftKey && categoryOn ? withinShift({ casteCategory }) : null,
+      genderOn ? across({ gender }) : null,
+      genderOn && shiftKey ? withinShift({ gender }) : null,
+      genderOn && categoryOn ? across({ casteCategory, gender }) : null,
+      genderOn && shiftKey && categoryOn ? withinShift({ casteCategory, gender }) : null,
       exServiceman ? across({ exServiceman }) : null,
       enabled.includes(RANK_BY.SUBJECT) ? repo.listSubjectScores(score.id) : null,
     ]);
@@ -1207,7 +1312,12 @@ export const rankPredictorService = {
     const subjects: RankSubjectStandingDto[] | null = subjectRows
       ? await Promise.all(
           subjectRows.map(async (row) => {
-            const standing = await repo.subjectRankForExam(examId, row.subject, Number(row.score));
+            const standing = await repo.subjectRankForExam(
+              examId,
+              row.subject,
+              Number(row.score),
+              dateOfBirth
+            );
             return {
               name: row.subject,
               score: Number(row.score),
@@ -1223,11 +1333,14 @@ export const rankPredictorService = {
       : null;
 
     const rank = overall.higher + 1;
-    const skip = Math.max(0, rank - 1 - NEARBY_RANK_RADIUS);
+    // Centred on the viewer's own row: with many on their mark, the first of the
+    // tie can sit further up than the strip reaches.
+    const skip = Math.max(0, overall.higher + overall.tiedBefore - NEARBY_RANK_RADIUS);
     const rows = await boardPage(exam, skip, NEARBY_RANK_RADIUS * 2 + 1);
 
     return {
       raw_score: rawScore,
+      max_marks: outOf(scale, scoredQuestionsOf(score)),
       normalized_score: normalization ? Math.round(normalized * 100) / 100 : null,
       rank,
       percentile: percentileFor(rank, overall.candidates),
@@ -1239,9 +1352,11 @@ export const rankPredictorService = {
       average_marks: overall.average,
       category_average_marks: category?.average ?? null,
       gender,
+      date_of_birth: dateOfBirth,
       overall_gender: overallGender ? positionOf(overallGender) : null,
       shift_gender: shiftGender ? positionOf(shiftGender) : null,
       category_gender: categoryGender ? positionOf(categoryGender) : null,
+      shift_category_gender: shiftCategoryGender ? positionOf(shiftCategoryGender) : null,
       ex_serviceman: exServicemanBoard ? positionOf(exServicemanBoard) : null,
       shift: shift && shiftKey ? { key: shiftKey, ...positionOf(shift) } : null,
       shift_category: shiftCategory ? positionOf(shiftCategory) : null,
@@ -1262,21 +1377,32 @@ export const rankPredictorService = {
     const exam = await requireExam(params.examId);
     assertBoardEnabled(exam, params.scope);
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, scale] = await Promise.all([
       boardPage(exam, (params.page - 1) * params.pageSize, params.pageSize, params.scope),
       params.scope?.subject
         ? repo.countSubjectCandidates(params.examId, params.scope.subject)
         : repo.countCandidates(params.examId, params.scope),
+      markScaleOf(exam),
     ]);
+    // On a marks-only paper every entry is typed, so flagging them says nothing.
+    const checksSheets = keySourceOf(exam) !== KEY_SOURCE.MARKS_ONLY;
 
     return {
-      entries: rows.map((row) => toLeaderboardEntryDto(row, params.viewerCustomerId)),
+      entries: rows.map((row) =>
+        toLeaderboardEntryDto(row, params.viewerCustomerId, {
+          maxMarks: row.max_marks ?? outOf(scale, row.total_questions),
+          selfReported: checksSheets && row.entry_mode === ENTRY_MODE.MARKS,
+        })
+      ),
       total,
     };
   },
 
   getMyRanks: async (customerId: number): Promise<RankMyExamDto[]> => {
-    const submissions = await repo.listMySubmissions(customerId);
+    const [submissions, viewer] = await Promise.all([
+      repo.listMySubmissions(customerId),
+      viewerOf(customerId),
+    ]);
 
     return Promise.all(
       submissions.map(async (submission) => {
@@ -1298,16 +1424,19 @@ export const rankPredictorService = {
         const { higher, candidates } = await overallStanding(
           submission.exam,
           Number(submission.score.rawScore),
-          submission.score.shiftKey
+          submission.score.shiftKey,
+          viewer
         );
         const rank = higher + 1;
+
+        const scale = await markScaleOf(submission.exam);
 
         return {
           exam,
           rank,
           percentile: percentileFor(rank, candidates),
           total_candidates: candidates,
-          score: toRankScoreDto(submission.score),
+          score: toRankScoreDto(submission.score, outOf(scale, scoredQuestionsOf(submission.score))),
           submitted_at: submission.createdAt,
           status,
         };
@@ -1383,7 +1512,7 @@ export const rankPredictorService = {
   },
 
   getCandidateProfile: async (customerId: number): Promise<RankCandidateProfileDto> =>
-    toRankCandidateProfileDto(await repo.findProfile(customerId)),
+    toRankCandidateProfileDto(await repo.findCandidateProfile(customerId)),
 
   saveCandidateProfile: async (
     customerId: number,
@@ -1394,6 +1523,7 @@ export const rankPredictorService = {
       casteCategory: input.casteCategory,
       gender: input.gender,
       isExServiceman: input.isExServiceman,
+      dateOfBirth: dateOfBirthValue(input.dateOfBirth),
     });
 
     await audit({
@@ -1406,6 +1536,7 @@ export const rankPredictorService = {
         caste_category: input.casteCategory,
         gender: input.gender,
         is_ex_serviceman: input.isExServiceman,
+        date_of_birth: input.dateOfBirth,
       },
     });
 

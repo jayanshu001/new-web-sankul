@@ -7,6 +7,7 @@ import {
   SUBMISSION_STATUS,
   type BoardScope,
   type LeaderboardRow,
+  type RankViewer,
   type ShiftNormalization,
   type ShiftStatsRow,
   type SubjectScoreRow,
@@ -21,15 +22,21 @@ const asNumber = (value: unknown): number => {
 
 const countOf = (rows: CountRow[] | undefined): number => asNumber(rows?.[0]?.c);
 
+const byProfile = (scope: BoardScope): boolean =>
+  Boolean(scope.casteCategory || scope.gender || scope.exServiceman);
+
 /**
  * The scores a board covers: the whole paper, narrowed by shift, caste
- * category, gender and/or ex-serviceman status. The profile join is inner and only present for a category or gender board — a
- * candidate with no category answered is in neither the numerator nor the
- * denominator there, though they still count towards the overall rank.
+ * category, gender and/or ex-serviceman status. The profile join is inner for a
+ * category or gender board — a candidate with no category answered is in neither
+ * the numerator nor the denominator there, though they still count towards the
+ * overall rank — and outer otherwise. The customer join supplies the date of
+ * birth (`cu.dob`) that breaks ties.
  */
 const scopedScores = (examId: bigint, scope: BoardScope = {}) => Prisma.sql`
   FROM ws_ocr_scores s
-  ${scope.casteCategory || scope.gender || scope.exServiceman ? Prisma.sql`JOIN ws_ocr_profiles p ON p.customer_id = s.customer_id` : Prisma.empty}
+  ${byProfile(scope) ? Prisma.sql`JOIN` : Prisma.sql`LEFT JOIN`} ws_ocr_profiles p ON p.customer_id = s.customer_id
+  LEFT JOIN ws_customer cu ON cu.id = s.customer_id
   WHERE s.exam_id = ${examId}
   ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
   ${scope.casteCategory ? Prisma.sql`AND p.caste_category = ${scope.casteCategory}` : Prisma.empty}
@@ -39,19 +46,43 @@ const scopedScores = (examId: bigint, scope: BoardScope = {}) => Prisma.sql`
 const countScores = (examId: bigint, scope?: BoardScope) =>
   prisma.$queryRaw<CountRow[]>`SELECT COUNT(*) c ${scopedScores(examId, scope)}`;
 
-/** The mark a board orders on: raw, or each shift's raw mapped onto the common scale. */
+/**
+ * The mark a board orders on: raw, or each shift's raw mapped onto the common
+ * scale. Normalized marks are rounded to the stored 4 places so that the board's
+ * RANK() and a viewer's own count (rankForExam) agree on what is a tie.
+ */
 const boardScore = (normalization?: ShiftNormalization | null) =>
   normalization?.size
-    ? Prisma.sql`CASE s.shift_key ${Prisma.join(
+    ? Prisma.sql`ROUND(CASE s.shift_key ${Prisma.join(
         [...normalization].map(
           ([key, { scale, offset }]) => Prisma.sql`WHEN ${key} THEN s.raw_score * ${scale} + ${offset}`
         ),
         " "
-      )} ELSE s.raw_score END`
+      )} ELSE s.raw_score END, 4)`
     : Prisma.sql`s.raw_score`;
 
-/** Normalized marks are floats; a gap smaller than this is a tie, not a lead. */
-const SCORE_EPSILON = 1e-6;
+/**
+ * Marks sit on a 0.0001 grid (see boardScore), so half a step apart is the
+ * narrowest real lead; anything closer is the same mark read through floats.
+ */
+const SCORE_EPSILON = 0.00005;
+
+/** A viewer's mark on the same grid as boardScore. */
+const onGrid = (score: number): number => Math.round(score * 10_000) / 10_000;
+
+/**
+ * Government merit lists break a tie on marks by age: the elder ranks higher.
+ * Every board orders on its mark, then date of birth earliest first; a candidate
+ * who has not given one sorts after everyone on the same mark who has. The date
+ * is the customer's own `ws_customer.dob` — the one their account profile edits.
+ */
+const tieOrder = (dob: Prisma.Sql) => Prisma.sql`${dob} IS NULL, ${dob} ASC`;
+
+/** Ahead of a viewer born on `dob` when on the same mark. */
+const elderThan = (dob: string | null, column: Prisma.Sql = Prisma.sql`cu.dob`) =>
+  dob === null ? Prisma.sql`${column} IS NOT NULL` : Prisma.sql`${column} < ${dob}`;
+
+const isoDate = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
 
 const toLeaderboardRow = (row: Record<string, unknown>): LeaderboardRow => ({
   customer_id: asNumber(row.customer_id),
@@ -63,6 +94,11 @@ const toLeaderboardRow = (row: Record<string, unknown>): LeaderboardRow => ({
   submitted_at: (row.submitted_at as Date | null) ?? null,
   full_name: (row.full_name as string | null) ?? null,
   show_real_name: Boolean(asNumber(row.show_real_name)),
+  entry_mode: (row.entry_mode as string | null) ?? null,
+  max_marks: row.max_marks == null ? null : asNumber(row.max_marks),
+  date_of_birth: isoDate(row.date_of_birth),
+  caste_category: (row.caste_category as string | null) ?? null,
+  gender: (row.gender as string | null) ?? null,
 });
 
 export const rankPredictorRepository = {
@@ -316,24 +352,39 @@ export const rankPredictorRepository = {
     }),
 
   /**
-   * How many candidates are on a board and how many of them beat `rawScore`.
-   * Rank is `higher + 1`, so ties share a rank and the next one skips. With a
-   * normalization, `score` is the viewer's normalized mark and the board (and its
-   * average) is read on that scale.
+   * How many candidates are on a board and how many of them rank above the
+   * viewer: a higher mark, or the same mark and an earlier date of birth (see
+   * tieOrder). Rank is `higher + 1`, so only the same mark AND the same birthday
+   * share a rank. With a normalization, `score` is the viewer's normalized mark
+   * and the board (and its average) is read on that scale.
+   *
+   * With `viewer.scoreId`, `tiedBefore` also counts the candidates still tied with
+   * the viewer that the board lists ahead of them (it breaks those on the score
+   * id), so `higher + tiedBefore` is the viewer's row on the board.
    */
   rankForExam: async (
     examId: bigint,
     score: number,
-    scope?: BoardScope,
-    normalization?: ShiftNormalization | null
-  ): Promise<{ higher: number; candidates: number; average: number | null }> => {
+    scope: BoardScope,
+    normalization: ShiftNormalization | null,
+    viewer: RankViewer
+  ): Promise<{ higher: number; candidates: number; average: number | null; tiedBefore: number }> => {
     const mark = boardScore(normalization);
-    // One pass over the board for all three numbers: a result page asks for up to
-    // seven boards, and three queries each would hold three pool connections.
-    const [row] = await prisma.$queryRaw<{ candidates: unknown; higher: unknown; average: unknown }[]>`
+    const viewerMark = onGrid(score);
+    const sameMark = Prisma.sql`ABS(${mark} - ${viewerMark}) <= ${SCORE_EPSILON}`;
+    // One pass over the board for all the numbers: a result page asks for up to
+    // eight boards, and a query each would hold a pool connection each.
+    const [row] = await prisma.$queryRaw<
+      { candidates: unknown; higher: unknown; average: unknown; tied_before: unknown }[]
+    >`
       SELECT COUNT(*) AS candidates,
-             COALESCE(SUM(${mark} > ${score + SCORE_EPSILON}), 0) AS higher,
-             AVG(${mark}) AS average
+             COALESCE(SUM(${mark} > ${viewerMark + SCORE_EPSILON} OR (${sameMark} AND ${elderThan(viewer.dateOfBirth)})), 0) AS higher,
+             AVG(${mark}) AS average,
+             ${
+               viewer.scoreId === undefined
+                 ? Prisma.sql`0`
+                 : Prisma.sql`COALESCE(SUM(${sameMark} AND cu.dob <=> ${viewer.dateOfBirth} AND s.id < ${viewer.scoreId}), 0)`
+             } AS tied_before
         ${scopedScores(examId, scope)}
     `;
     const mean = row?.average;
@@ -342,29 +393,30 @@ export const rankPredictorRepository = {
       candidates: row ? asNumber(row.candidates) : 0,
       higher: row ? asNumber(row.higher) : 0,
       average: mean == null ? null : Math.round(asNumber(mean) * 100) / 100,
+      tiedBefore: row ? asNumber(row.tied_before) : 0,
     };
   },
 
   countCandidates: async (examId: bigint, scope?: BoardScope): Promise<number> =>
     countOf(await countScores(examId, scope)),
 
-  /** The same standing inside one subject's board. */
+  /** The same standing inside one subject's board, ties broken the same way. */
   subjectRankForExam: async (
     examId: bigint,
     subject: string,
-    score: number
+    score: number,
+    dateOfBirth: string | null
   ): Promise<{ higher: number; candidates: number }> => {
-    const [candidates, higher] = await Promise.all([
-      prisma.$queryRaw<CountRow[]>`
-        SELECT COUNT(*) c FROM ws_ocr_subject_scores WHERE exam_id = ${examId} AND subject = ${subject}
-      `,
-      prisma.$queryRaw<CountRow[]>`
-        SELECT COUNT(*) c FROM ws_ocr_subject_scores
-         WHERE exam_id = ${examId} AND subject = ${subject} AND score > ${score}
-      `,
-    ]);
+    const [row] = await prisma.$queryRaw<{ candidates: unknown; higher: unknown }[]>`
+      SELECT COUNT(*) AS candidates,
+             COALESCE(SUM(ss.score > ${score} OR (ss.score = ${score} AND ${elderThan(dateOfBirth)})), 0) AS higher
+        FROM ws_ocr_subject_scores ss
+        JOIN ws_ocr_scores s    ON s.id = ss.score_id
+        LEFT JOIN ws_customer cu ON cu.id = s.customer_id
+       WHERE ss.exam_id = ${examId} AND ss.subject = ${subject}
+    `;
 
-    return { candidates: countOf(candidates), higher: countOf(higher) };
+    return { candidates: row ? asNumber(row.candidates) : 0, higher: row ? asNumber(row.higher) : 0 };
   },
 
   countSubjectCandidates: async (examId: bigint, subject: string): Promise<number> =>
@@ -486,41 +538,48 @@ export const rankPredictorRepository = {
     if (scope.subject) return rankPredictorRepository.subjectLeaderboardPage(examId, scope.subject, skip, take);
 
     const mark = boardScore(normalization);
-    const byProfile = Boolean(scope.casteCategory || scope.gender || scope.exServiceman);
+    const dob = Prisma.sql`fc.dob`;
     // Rank and page on the scores alone, then join names for just the page: the
-    // board is read on every refresh, and joining customers, submissions and
-    // profiles for every candidate before keeping twenty was most of its cost.
+    // board is read on every refresh, and joining customers and submissions for
+    // every candidate before keeping twenty was most of its cost. The customer is
+    // joined inside too because the order needs their date of birth.
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
       SELECT r.customer_id, r.raw_score, r.normalized_score, r.total_questions, r.rank_position,
              sub.created_at                AS submitted_at,
+             sub.entry_mode                AS entry_mode,
              c.full_name,
-             COALESCE(p.show_real_name, 0) AS show_real_name
+             COALESCE(p.show_real_name, 0) AS show_real_name,
+             DATE_FORMAT(c.dob, '%Y-%m-%d') AS date_of_birth,
+             p.caste_category,
+             p.gender
         FROM (
           SELECT s.id, s.customer_id, s.submission_id, s.raw_score,
                  ${normalization?.size ? mark : Prisma.sql`NULL`} AS normalized_score,
                  s.correct + s.wrong + s.unanswered   AS total_questions,
-                 RANK() OVER (ORDER BY ${mark} DESC) AS rank_position,
-                 ${mark} AS board_mark
+                 RANK() OVER (ORDER BY ${mark} DESC, ${tieOrder(dob)}) AS rank_position,
+                 ${mark} AS board_mark,
+                 fc.dob AS dob
             FROM ws_ocr_scores s
-            ${byProfile ? Prisma.sql`JOIN ws_ocr_profiles fp ON fp.customer_id = s.customer_id` : Prisma.empty}
+            ${byProfile(scope) ? Prisma.sql`JOIN` : Prisma.sql`LEFT JOIN`} ws_ocr_profiles fp ON fp.customer_id = s.customer_id
+            LEFT JOIN ws_customer fc ON fc.id = s.customer_id
            WHERE s.exam_id = ${examId}
            ${scope.shiftKey ? Prisma.sql`AND s.shift_key = ${scope.shiftKey}` : Prisma.empty}
            ${scope.casteCategory ? Prisma.sql`AND fp.caste_category = ${scope.casteCategory}` : Prisma.empty}
            ${scope.gender ? Prisma.sql`AND fp.gender = ${scope.gender}` : Prisma.empty}
            ${scope.exServiceman ? Prisma.sql`AND fp.is_ex_serviceman = 1` : Prisma.empty}
-           ORDER BY board_mark DESC, s.id ASC
+           ORDER BY ${mark} DESC, ${tieOrder(dob)}, s.id ASC
            LIMIT ${take} OFFSET ${skip}
         ) r
         JOIN ws_ocr_submissions sub ON sub.id = r.submission_id
         LEFT JOIN ws_customer c     ON c.id = r.customer_id
         LEFT JOIN ws_ocr_profiles p ON p.customer_id = r.customer_id
-       ORDER BY r.board_mark DESC, r.id ASC
+       ORDER BY r.board_mark DESC, ${tieOrder(Prisma.sql`r.dob`)}, r.id ASC
     `;
 
     return rows.map(toLeaderboardRow);
   },
 
-  /** One subject's board, ranked on the subject score. `raw_score` carries that score. */
+  /** One subject's board, ranked on the subject score then age. `raw_score` carries that score. */
   subjectLeaderboardPage: async (
     examId: bigint,
     subject: string,
@@ -532,17 +591,22 @@ export const rankPredictorRepository = {
              ss.score AS raw_score,
              NULL     AS normalized_score,
              ss.correct + ss.wrong + ss.unanswered AS total_questions,
-             RANK() OVER (ORDER BY ss.score DESC) AS rank_position,
+             RANK() OVER (ORDER BY ss.score DESC, ${tieOrder(Prisma.sql`c.dob`)}) AS rank_position,
+             ss.max_marks                  AS max_marks,
              sub.created_at                AS submitted_at,
+             sub.entry_mode                AS entry_mode,
              c.full_name,
-             COALESCE(p.show_real_name, 0) AS show_real_name
+             COALESCE(p.show_real_name, 0) AS show_real_name,
+             DATE_FORMAT(c.dob, '%Y-%m-%d') AS date_of_birth,
+             p.caste_category,
+             p.gender
         FROM ws_ocr_subject_scores ss
         JOIN ws_ocr_scores s        ON s.id = ss.score_id
         JOIN ws_ocr_submissions sub ON sub.id = s.submission_id
         LEFT JOIN ws_customer c     ON c.id = s.customer_id
         LEFT JOIN ws_ocr_profiles p ON p.customer_id = s.customer_id
        WHERE ss.exam_id = ${examId} AND ss.subject = ${subject}
-       ORDER BY ss.score DESC, s.id ASC
+       ORDER BY ss.score DESC, ${tieOrder(Prisma.sql`c.dob`)}, s.id ASC
        LIMIT ${take} OFFSET ${skip}
     `;
 
@@ -559,6 +623,20 @@ export const rankPredictorRepository = {
 
   findProfile: (customerId: number) => prisma.ocrProfile.findUnique({ where: { customerId } }),
 
+  /** The rank profile with the customer's own date of birth (`ws_customer.dob`) beside it. */
+  findCandidateProfile: async (customerId: number) => {
+    const [profile, customer] = await Promise.all([
+      prisma.ocrProfile.findUnique({ where: { customerId } }),
+      prisma.customer.findUnique({ where: { id: customerId }, select: { birthDate: true } }),
+    ]);
+    return {
+      casteCategory: profile?.casteCategory ?? null,
+      gender: profile?.gender ?? null,
+      isExServiceman: profile?.isExServiceman ?? null,
+      dateOfBirth: customer?.birthDate ?? null,
+    };
+  },
+
   upsertProfile: (customerId: number, showRealName: boolean) =>
     prisma.ocrProfile.upsert({
       where: { customerId },
@@ -568,13 +646,23 @@ export const rankPredictorRepository = {
 
   upsertCandidateProfile: (
     customerId: number,
-    data: { casteCategory: string; gender: string; isExServiceman: boolean }
+    { dateOfBirth, ...data }: { casteCategory: string; gender: string; isExServiceman: boolean; dateOfBirth: Date }
   ) =>
-    prisma.ocrProfile.upsert({
-      where: { customerId },
-      create: { customerId, ...data, createdAt: new Date(), updatedAt: new Date() },
-      update: { ...data, updatedAt: new Date() },
-    }),
+    // The date of birth is the customer's own, so the account profile shows the same one.
+    prisma
+      .$transaction([
+        prisma.customer.update({
+          where: { id: customerId },
+          data: { birthDate: dateOfBirth },
+          select: { birthDate: true },
+        }),
+        prisma.ocrProfile.upsert({
+          where: { customerId },
+          create: { customerId, ...data, createdAt: new Date(), updatedAt: new Date() },
+          update: { ...data, updatedAt: new Date() },
+        }),
+      ])
+      .then(([customer, profile]) => ({ ...profile, dateOfBirth: customer.birthDate })),
 
   deleteProfile: (customerId: number) => prisma.ocrProfile.deleteMany({ where: { customerId } }),
 

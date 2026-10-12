@@ -10,6 +10,8 @@ import {
   MAX_SYLLABUS_SUBJECTS,
   RANK_BY_VALUES,
   MAX_TOTAL_QUESTIONS,
+  MAX_CANDIDATE_AGE,
+  MIN_CANDIDATE_AGE,
   SUBMISSION_MODES,
   SUBMISSION_STATUSES,
   type SubmissionStatus,
@@ -18,6 +20,7 @@ import {
 const SERIES_LETTER = /^[A-Z]$/;
 const SHIFT_KEY = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const QUESTION_NUMBER = /^\d+$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const positiveIntId = z.coerce.number().int().positive();
 
@@ -218,7 +221,34 @@ export const submissionListQuerySchema = z.object({
 
 export const leaderboardPrivacySchema = z.object({ showRealName: z.coerce.boolean() });
 
+/** "YYYY-MM-DD" as a calendar date, `years` before today (UTC). */
+const isoYearsAgo = (years: number): string => {
+  const today = new Date();
+  today.setUTCFullYear(today.getUTCFullYear() - years);
+  return today.toISOString().slice(0, 10);
+};
+
+/**
+ * Kept as "YYYY-MM-DD" text: it is a calendar date, and a Date would bring a
+ * timezone that can move it a day. Rejects dates that do not exist (2001-02-30)
+ * and ages no exam candidate has.
+ */
+const dateOfBirthSchema = z
+  .string()
+  .trim()
+  .regex(ISO_DATE, "Date of birth must look like 2001-03-25.")
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
+  }, {
+    message: "That date does not exist.",
+  })
+  .refine((value) => value <= isoYearsAgo(MIN_CANDIDATE_AGE) && value >= isoYearsAgo(MAX_CANDIDATE_AGE), {
+    message: `Date of birth must make you between ${MIN_CANDIDATE_AGE} and ${MAX_CANDIDATE_AGE} years old.`,
+  });
+
 export const candidateProfileSchema = z.object({
+  dateOfBirth: dateOfBirthSchema,
   casteCategory: z.enum(CASTE_CATEGORIES),
   gender: z.enum(GENDERS),
   isExServiceman: z.union([

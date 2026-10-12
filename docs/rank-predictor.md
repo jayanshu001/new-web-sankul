@@ -243,20 +243,40 @@ by being granted the first. Grant it explicitly per role. It replaces
 
 ---
 
-### 3.8 The three questions on a student's first visit
+### 3.8 The four questions on a student's first visit
 
-Before a student can use the Score & Rank Checker at all, they answer three
+Before a student can use the Score & Rank Checker at all, they answer four
 questions in a dialog they cannot dismiss:
 
-1. **Caste category** — Open / SEBC / EWS / SC / ST
-2. **Gender** — Male / Female
-3. **Ex-servicemen** — Yes / No
+1. **Date of birth** — breaks ties on marks (below)
+2. **Caste category** — Open / SEBC / EWS / SC / ST
+3. **Gender** — Male / Female
+4. **Ex-servicemen** — Yes / No
+
+**Ties on marks go to the elder candidate**, as on government merit lists. Every
+board (overall, gender, category, shift and their combinations, subject boards)
+orders on marks, then date of birth earliest first; only the same marks AND the
+same birthday share a rank. A student with no date of birth on file sorts after
+everyone on the same marks who has one. Date of birth was added after the other
+three, so a profile without it counts as incomplete and the dialog asks again
+(with the earlier answers filled in). It is the customer's own
+`ws_customer.dob` (Prisma `Customer.birthDate`) — the same date the account
+profile and admin customer screen edit, so there is one date of birth per
+student and no new column. A student who already filled it in on their account
+profile finds it pre-filled in the dialog.
+
+The boards a student can see are switched per paper in `rank_by`: `category`,
+`gender`, `shift` (and `ex_serviceman`, `subject`, `normalized`). With category,
+gender and shift all on, a student has up to eight ranks: Overall, Gender,
+Category, Gender + Category, Shift, Shift + Gender, Shift + Category and
+Shift + Gender + Category.
 
 There is no skip and no close button. The point of the gate is a complete set of
 answers, and a skippable version collects them from nobody. It appears once: the
 answers are saved on the student's own `ws_ocr_profiles` row
-(`caste_category`, `gender`, `is_ex_serviceman`), so it never reappears on any
-device, and a student who already has all three on file never sees it.
+(`caste_category`, `gender`, `is_ex_serviceman`) and their `ws_customer.dob`, so it
+never reappears on any device, and a student who already has all four on file
+never sees it.
 
 It is deliberately **not** shown to logged-out visitors. Browsing papers and
 reading a leaderboard stays open to everyone — there is no row to save
@@ -268,8 +288,9 @@ back out of the database. If the profile read fails, the dialog stays up. The
 cost of a bad minute on that endpoint is a student seeing the dialog again — not
 an unanswered profile being waved through.
 
-**Where the answers are stored, and why it is not where they belong.** These
-three facts describe the person, not the attempt, so `ws_customer` was the right
+**Where the answers are stored, and why it is not where they belong.** Date of
+birth already had a column on `ws_customer` (`dob`), so it is written there. The
+other three facts describe the person, not the attempt, so `ws_customer` was the right
 home and `gender` already lived there. InnoDB would not have it: that table
 carries a FULLTEXT index, which rules out both `INSTANT` and `INPLACE ADD
 COLUMN` and leaves only a `COPY` rebuild that blocks writes on a table the

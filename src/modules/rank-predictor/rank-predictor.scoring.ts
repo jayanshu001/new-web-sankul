@@ -85,6 +85,13 @@ export const scoreSubmission = (
   return result;
 };
 
+/**
+ * Marks as they are stored — `raw_score` is DECIMAL(10, 4). A mark ranked before
+ * it is stored has to be on the same grid, or a sheet whose rescaled subjects
+ * give a recurring decimal is ranked against a value nobody else can tie with.
+ */
+export const roundScore = (value: number): number => Math.round(value * 10_000) / 10_000;
+
 export const percentileFor = (rank: number, total: number): number => {
   if (total <= 0 || rank <= 0) return 0;
   if (total === 1) return 100;
