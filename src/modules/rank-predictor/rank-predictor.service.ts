@@ -392,16 +392,10 @@ const assertSubmissionModesFor = (keySource: KeySource, modes: SubmissionMode[])
 };
 
 /**
- * A marks_only paper has no sheet to read a slot off, so students pick from the
- * admin's list — which therefore has to exist. A cancelled question has to be on the paper.
+ * No shifts is fine on any paper — a single-session exam has none, and students
+ * typing marks then pick nothing. A cancelled question has to be on the paper.
  */
-const assertShiftsFor = (keySource: KeySource, shifts: PaperShift[], totalQuestions: number): void => {
-  if (keySource === KEY_SOURCE.MARKS_ONLY && !shifts.length) {
-    throw new HttpError(422, "Add at least one shift: a marks-only paper ranks students by the shift they pick.", {
-      error: RANK_ERROR.SHIFTS_REQUIRED,
-    });
-  }
-
+const assertShiftsFor = (shifts: PaperShift[], totalQuestions: number): void => {
   const outside = shifts.flatMap((shift) =>
     shift.cancelled_questions.filter((question) => question > totalQuestions)
   );
@@ -1573,7 +1567,7 @@ export const rankPredictorService = {
       });
     }
 
-    assertShiftsFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.paperShifts ?? [], input.totalQuestions);
+    assertShiftsFor(input.paperShifts ?? [], input.totalQuestions);
     assertSubmissionModesFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.submissionModes ?? [...SUBMISSION_MODES]);
 
     const exam = await repo.createExam({
@@ -1616,11 +1610,7 @@ export const rankPredictorService = {
     adminId: number | null
   ): Promise<RankExamDto> => {
     const exam = await requireExam(examId);
-    assertShiftsFor(
-      input.keySource ?? keySourceOf(exam),
-      input.paperShifts ?? paperShiftsOf(exam),
-      input.totalQuestions ?? exam.totalQuestions
-    );
+    assertShiftsFor(input.paperShifts ?? paperShiftsOf(exam), input.totalQuestions ?? exam.totalQuestions);
     assertSubmissionModesFor(
       input.keySource ?? keySourceOf(exam),
       input.submissionModes ?? submissionModesOf(exam)
