@@ -31,6 +31,7 @@ import {
   percentileFor,
   roundScore,
 } from "./rank-predictor.scoring";
+import { paperMismatchOf } from "./rank-predictor.paper-match";
 import { resolveSubjects, scoreWithSubjects } from "./rank-predictor.subjects";
 import {
   answerKeyMapOf,
@@ -688,6 +689,24 @@ const readQueuedSheet = async (
       AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
       { expected: exam.totalQuestions, detected: extraction.total_questions },
       settled(422, "That sheet does not match this exam.", details)
+    );
+  }
+
+  // Two papers with the same question count both accept each other's sheets
+  // above; what the sheet prints about its sitting tells them apart.
+  const mismatch = paperMismatchOf(
+    { name: exam.name, code: exam.code, examDate: exam.examDate, shifts: paperShiftsOf(exam) },
+    extraction.candidate
+  );
+  if (mismatch) {
+    return reject(
+      RANK_ERROR.SHEET_EXAM_MISMATCH,
+      AUDIT_ACTION.SUBMISSION_EXAM_MISMATCH,
+      { ...mismatch },
+      settled(422, "That sheet is from a different exam.", {
+        error: RANK_ERROR.SHEET_EXAM_MISMATCH,
+        ...mismatch,
+      })
     );
   }
 

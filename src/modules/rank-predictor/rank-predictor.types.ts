@@ -63,6 +63,7 @@ export const AUDIT_ACTION = {
   SUBMISSION_EXTRACTED: "submission_extracted",
   SUBMISSION_EXTRACTION_FAILED: "submission_extraction_failed",
   SUBMISSION_QUESTION_COUNT_MISMATCH: "submission_question_count_mismatch",
+  SUBMISSION_EXAM_MISMATCH: "submission_exam_mismatch",
   EXAM_RESCORED: "exam_rescored",
   SUBMISSION_SCORED: "submission_scored",
   SUBMISSION_SCORE_CLEARED: "submission_score_cleared",
@@ -94,6 +95,8 @@ export const RANK_ERROR = {
   RANK_BREAKDOWN_DISABLED: "rank_breakdown_disabled",
   REVIEW_UNAVAILABLE: "review_unavailable",
   SHEET_ALREADY_SUBMITTED: "sheet_already_submitted",
+  /** The sheet prints a date or title from another exam than the paper it was sent to. */
+  SHEET_EXAM_MISMATCH: "sheet_exam_mismatch",
   SHEET_NOT_ACCEPTED: "sheet_not_accepted",
   SHEET_URL_INVALID: "sheet_url_invalid",
   SHEET_URL_UNREACHABLE: "sheet_url_unreachable",
