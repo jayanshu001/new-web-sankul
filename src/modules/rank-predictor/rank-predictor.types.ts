@@ -542,6 +542,7 @@ export interface RankLeaderboardEntryDto {
   /** "YYYY-MM-DD"; it is what orders two entries on the same marks. Null when not given. */
   date_of_birth: string | null;
   caste_category: CasteCategory | null;
+  gender: Gender | null;
   is_me: boolean;
   submitted_at: Date | null;
 }

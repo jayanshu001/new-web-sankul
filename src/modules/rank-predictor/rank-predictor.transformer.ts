@@ -324,6 +324,7 @@ export const toLeaderboardEntryDto = (
   self_reported: marks.selfReported,
   date_of_birth: row.date_of_birth,
   caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
+  gender: genderOf({ gender: row.gender }),
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
   submitted_at: row.submitted_at,
 });
