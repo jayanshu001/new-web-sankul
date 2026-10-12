@@ -322,7 +322,9 @@ export const toLeaderboardEntryDto = (
   total_questions: row.total_questions,
   max_marks: marks.maxMarks,
   self_reported: marks.selfReported,
-  date_of_birth: row.date_of_birth,
+  // A date of birth goes out with the name: a student who hides one hides both.
+  // The board still orders on it; staff see it on the admin board.
+  date_of_birth: row.show_real_name ? row.date_of_birth : null,
   caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
   gender: genderOf({ gender: row.gender }),
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
