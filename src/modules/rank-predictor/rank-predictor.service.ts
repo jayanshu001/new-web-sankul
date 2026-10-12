@@ -923,15 +923,18 @@ export const rankPredictorService = {
     const allowedSeries = parsePaperSeries(exam.paperSeries);
     assertSeriesAllowed(allowedSeries, params.series);
 
-    // A marks_only paper is ranked by the slot its admin set up, so the slot is
-    // required and must be one of them; elsewhere it is needed only for a shift rank.
+    // A marks_only paper is ranked by the slots its admin set up, so one of them
+    // is required — when it has any: a paper with none was one sitting, and the
+    // student has nothing to pick from. Elsewhere a slot is needed only for a
+    // shift rank, and can be typed in.
     const isMarksOnly = keySourceOf(exam) === KEY_SOURCE.MARKS_ONLY;
-    if ((isMarksOnly || rankByOf(exam).includes(RANK_BY.SHIFT)) && !params.shiftKey) {
+    const configuredShifts = paperShiftsOf(exam).map((shift) => shift.key);
+    const needsShift = isMarksOnly ? configuredShifts.length > 0 : rankByOf(exam).includes(RANK_BY.SHIFT);
+    if (needsShift && !params.shiftKey) {
       throw new HttpError(422, "Please pick the shift you sat.", {
         error: RANK_ERROR.SHIFT_REQUIRED,
       });
     }
-    const configuredShifts = paperShiftsOf(exam).map((shift) => shift.key);
     if (isMarksOnly && configuredShifts.length && !configuredShifts.includes(params.shiftKey as string)) {
       throw new HttpError(422, "Please pick one of the shifts listed for this paper.", {
         error: RANK_ERROR.SHIFT_NOT_LISTED,
