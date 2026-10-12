@@ -31,6 +31,7 @@ import {
   saveCandidateProfile,
   setLeaderboardPrivacy,
 } from "./rank-predictor.controller";
+import { getMySuggestions } from "./suggestions.controller";
 
 const router = Router();
 
@@ -88,6 +89,11 @@ router.get(
   "/papers/:examId/review/me",
   validate({ params: examIdParamSchema }),
   getMyAnswerReview
+);
+router.get(
+  "/papers/:examId/suggestions/me",
+  validate({ params: examIdParamSchema }),
+  getMySuggestions
 );
 
 router.get("/me/ranks", getMyRanks);

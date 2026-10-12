@@ -15,6 +15,21 @@
 
 ---
 
+## 2026-10-12 — Rank predictor score-based suggestions (`ws_ocr_suggestions`)
+
+> **DDL:** `docs/migration/schema-changes/2026-10-12_ocr_suggestions.sql` — new table, additive,
+> apply by name. **Data:** none. **Response:** existing shapes unchanged; new endpoints only.
+
+- New table `ws_ocr_suggestions` (FK `exam_id` → `ws_ocr_exams` `ON DELETE CASCADE`, index
+  `(exam_id, is_active, sort_order)`), Prisma model `OcrSuggestion` + back-relation on `OcrExam`.
+- Reads: list by `exam_id` ordered `sort_order, id`; the student read adds `is_active = 1` and a
+  point lookup on `ws_ocr_scores` by the existing unique `(exam_id, customer_id)`. The band match
+  runs in the service, over a paper's handful of rows.
+- Paper delete (`deleteExamCascade`) is unchanged: the FK removes the paper's suggestions.
+- See `docs/rank-predictor.md` §3.11.
+
+---
+
 ## 2026-10-11 — Course/package kit dispatch row stamps `created_at`/`updated_at`
 
 > **DDL:** none. **Data:** none (existing NULL rows left as-is). **Response:** shape unchanged.

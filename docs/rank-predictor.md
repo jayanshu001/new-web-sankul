@@ -436,6 +436,39 @@ The student site reads the type, so a marks-only paper shows only the *Enter mar
 
 **Normalization** (`rank_by` includes `normalized`) maps each shift linearly onto the whole field so that its top mean and its mean + SD match the field's. With many small shifts the top reference is the best 1% of the shift but never fewer than 5 people, and a shift under 30 candidates keeps its raw marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
 
+### 3.11 Score-based suggestions
+
+Added 2026-10-12. **Papers → click the paper → Suggestions tab.** Each row is shown
+under a student's result when their **raw marks** fall in its band:
+
+```
+(min_marks IS NULL OR raw_score >= min_marks) AND (max_marks IS NULL OR raw_score < max_marks)
+```
+
+Min is inclusive, max exclusive, so *70 – 95* and *95+* never both match a 95. Empty
+bounds mean "no minimum" / "no maximum"; a row with neither shows to every scored
+student. Several rows may match; they show in `sort_order`.
+
+| Kind | Stores | The card comes from |
+|---|---|---|
+| `product` | `product_type` (`package` — smart and planner alike — `course`, `live_course`, `book`, `ebook`) + `product_id` | the store catalog, live (title, cover, price, route) |
+| `link` | `url` (https only), `title`, `image` (**required**, uploaded to `uploads/rank-suggestions`), optional `cta_label` | the row itself |
+
+Both take an optional `description`, shown on the card. Table `ws_ocr_suggestions`
+(`docs/migration/schema-changes/2026-10-12_ocr_suggestions.sql`), FK to `ws_ocr_exams`
+`ON DELETE CASCADE`, so deleting a paper removes them.
+
+- Admin: `GET|POST /admin/rank-predictor/papers/:examId/suggestions`,
+  `PUT|DELETE /admin/rank-predictor/suggestions/:id`. POST/PUT are multipart (`image`
+  file, or the existing URL in the `image` text field); PUT replaces the whole row.
+  Gated by `rank-predictor.papers.view` / `.edit` — no new permission module.
+- Student: `GET /client/rank-predictor/papers/:examId/suggestions/me` (auth) →
+  `{ score, suggestions }`, only active rows matching the caller's own score. No score
+  yet → `{ score: null, suggestions: [] }`; inactive paper → `404`.
+
+Code: `src/modules/rank-suggestions/`, `src/admin/rank-predictor/suggestions.controller.ts`,
+`src/client/rank-predictor/suggestions.controller.ts`.
+
 ## 4. Where the student's answers meet the key
 
 One pure function, no database and no IO, so it can be read on its own — which

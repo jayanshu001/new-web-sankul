@@ -58,6 +58,7 @@ export const UPLOAD_FOLDERS = {
   offlineCities: "uploads/websankul_static/offline_cities",
   offlineBanners: "uploads/websankul_static/offline_banners",
   audioNotes: "uploads/customer/audio-notes", // + /<customerId>
+  rankSuggestions: "uploads/rank-suggestions", // link-suggestion cover images, public
   rankSheets: "uploads/rank-sheets", // + /<exam>/<shift>/<category>/<gender>/ — read response sheets, private
 
   // Fallback when a route forgot `uploadTo(...)` — keeps the old behaviour.

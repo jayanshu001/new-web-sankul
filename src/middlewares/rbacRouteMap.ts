@@ -613,6 +613,11 @@ R("GET", "/rank-predictor/papers/:examId/answer-keys", ...view("rank-predictor.a
 R("POST", "/rank-predictor/papers/:examId/answer-keys", "rank-predictor.answer-keys.create");
 R("PATCH", "/rank-predictor/answer-keys/:id/status", "rank-predictor.answer-keys.toggle-status");
 R("GET", "/rank-predictor/papers/:examId/leaderboard", ...view("rank-predictor.papers"));
+// Score-based suggestions are part of setting a paper up, so they ride on the
+// paper's own keys rather than a module of their own.
+R("GET", "/rank-predictor/papers/:examId/suggestions", ...view("rank-predictor.papers"));
+R("POST", "/rank-predictor/papers/:examId/suggestions", "rank-predictor.papers.edit");
+R("PUT|DELETE", "/rank-predictor/suggestions/:id", "rank-predictor.papers.edit");
 crud("/rank-predictor/papers", "rank-predictor.papers");
 
 R("GET", "/rank-predictor/submissions", ...view("rank-predictor.submissions"));

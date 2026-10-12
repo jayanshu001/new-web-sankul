@@ -3133,9 +3133,39 @@ model OcrExam {
 
   answerKeys  OcrAnswerKey[]
   submissions OcrSubmission[]
+  suggestions OcrSuggestion[]
 
   @@index([isActive, examDate], map: "idx_ocr_exams_active_date")
   @@map("ws_ocr_exams")
+}
+
+/// What to suggest to a student next, by the marks they scored on the paper.
+/// Applies when min_marks <= raw_score < max_marks (either bound may be null).
+model OcrSuggestion {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  examId      BigInt    @map("exam_id") @db.UnsignedBigInt
+  /// "product" (a store product) or "link" (any https page).
+  kind        String    @db.VarChar(16)
+  /// "package" | "course" | "live_course" | "book" | "ebook"; null for a link.
+  productType String?   @map("product_type") @db.VarChar(16)
+  productId   BigInt?   @map("product_id") @db.UnsignedBigInt
+  url         String?   @db.VarChar(2048)
+  title       String?   @db.VarChar(255)
+  /// A link's cover image (public URL). A product's comes from the catalog.
+  image       String?   @db.VarChar(1000)
+  description String?   @db.VarChar(500)
+  ctaLabel    String?   @map("cta_label") @db.VarChar(60)
+  minMarks    Decimal?  @map("min_marks") @db.Decimal(10, 4)
+  maxMarks    Decimal?  @map("max_marks") @db.Decimal(10, 4)
+  sortOrder   Int       @default(0) @map("sort_order")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime? @map("created_at") @db.Timestamp(0)
+  updatedAt   DateTime? @map("updated_at") @db.Timestamp(0)
+
+  exam OcrExam @relation(fields: [examId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ocr_suggestions_exam")
+
+  @@index([examId, isActive, sortOrder], map: "idx_ocr_suggestions_exam")
+  @@map("ws_ocr_suggestions")
 }
 
 model OcrAnswerKey {
