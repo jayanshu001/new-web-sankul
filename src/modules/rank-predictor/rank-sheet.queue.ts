@@ -69,11 +69,23 @@ const ensureEvents = (): QueueEvents => {
 /** BullMQ refuses a purely numeric custom id, so the submission id is prefixed. */
 const jobIdFor = (submissionId: bigint | string): string => `sheet-${submissionId}`;
 
-/** Idempotent: the same submission is never queued twice. */
+/** States in which a sheet's earlier job is over and its id may be reused. */
+const FINISHED_STATES = new Set(["completed", "failed"]);
+
+/**
+ * Idempotent: the same submission is never queued twice while it waits or is
+ * read. A finished job keeps its id until removeOnComplete/removeOnFail clear it,
+ * and BullMQ silently drops an add under an id it still holds — so a sheet read
+ * again (an admin's re-read) would sit in "processing" for good. Its finished
+ * job is removed first.
+ */
 export const enqueueRankSheet = async (
   submissionId: bigint | string
-): Promise<Job<RankSheetJobData, RankSheetJobOutcome>> =>
-  ensureProducer().add(
+): Promise<Job<RankSheetJobData, RankSheetJobOutcome>> => {
+  const producer = ensureProducer();
+  const previous = await producer.getJob(jobIdFor(submissionId));
+  if (previous && FINISHED_STATES.has(await previous.getState())) await previous.remove();
+  return producer.add(
     "read",
     { submissionId: String(submissionId) },
     {
@@ -84,6 +96,7 @@ export const enqueueRankSheet = async (
       removeOnFail: { count: 5000, age: 7 * 24 * 60 * 60 },
     }
   );
+};
 
 /**
  * The outcome if the sheet is read within `waitMs`, else null — the student is

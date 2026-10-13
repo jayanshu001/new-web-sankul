@@ -265,15 +265,18 @@ export const rankPredictorRepository = {
 
   /**
    * Sheets stored but not yet read — what a crash or a deploy leaves behind.
-   * Bounded to the last day: anything older was already settled as failed.
+   * Bounded to the last day: anything older was already settled as failed. A
+   * sheet an admin sent to be read again was uploaded earlier, so the day counts
+   * from its last change as well as its upload.
    */
   listPendingSheetSubmissionIds: async (): Promise<bigint[]> => {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const rows = await prisma.ocrSubmission.findMany({
       where: {
         status: SUBMISSION_STATUS.PROCESSING,
         entryMode: ENTRY_MODE.SHEET,
         sourcePdfKey: { not: null },
-        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        OR: [{ createdAt: { gte: since } }, { updatedAt: { gte: since } }],
       },
       select: { id: true },
       orderBy: { createdAt: "asc" },
