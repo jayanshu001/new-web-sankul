@@ -321,6 +321,15 @@ export const rankPredictorRepository = {
   updateSubmission: (id: bigint, data: Prisma.OcrSubmissionUpdateInput) =>
     prisma.ocrSubmission.update({ where: { id }, data }),
 
+  /** Puts a refused sheet back in the reader's hands; false when it was no longer refused. */
+  reopenFailedSubmission: async (id: bigint): Promise<boolean> => {
+    const { count } = await prisma.ocrSubmission.updateMany({
+      where: { id, status: SUBMISSION_STATUS.FAILED },
+      data: { status: SUBMISSION_STATUS.PROCESSING, failureCode: null, updatedAt: new Date() },
+    });
+    return count === 1;
+  },
+
   deleteSubmission: (id: bigint) => prisma.ocrSubmission.delete({ where: { id } }),
 
   listSubmissions: (where: Prisma.OcrSubmissionWhereInput, skip: number, take: number) =>

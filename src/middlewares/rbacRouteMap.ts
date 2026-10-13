@@ -625,6 +625,7 @@ R("GET", "/rank-predictor/submissions/:id", ...view("rank-predictor.submissions"
 R("GET", "/rank-predictor/submissions/:id/file", ...view("rank-predictor.submissions"));
 R("PUT", "/rank-predictor/submissions/:id/answers", "rank-predictor.submissions.edit");
 R("POST", "/rank-predictor/submissions/:id/rescore", "rank-predictor.submissions.edit");
+R("POST", "/rank-predictor/submissions/:id/reread", "rank-predictor.submissions.edit");
 R("DELETE", "/rank-predictor/submissions/:id", "rank-predictor.submissions.delete");
 
 // ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────

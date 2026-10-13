@@ -815,6 +815,45 @@ const readQueuedSheet = async (
   return { ok: true, result: await rankPredictorService.scoreAndPublish(submission.id, customerId) };
 };
 
+/**
+ * Queues a stored sheet and waits a short while for its result, as an upload
+ * does. Waiting holds the request, and the sheet in its memory, open; in a rush
+ * the sheet would not be reached within the wait anyway, so answer "queued" at
+ * once and let the request go.
+ */
+const readSheetSoon = async (
+  submissionId: bigint,
+  inline?: { pdf: Buffer; html?: Buffer }
+): Promise<RankSubmissionResultDto> => {
+  let outcome: RankSheetJobOutcome | null;
+  try {
+    const job = await enqueueRankSheet(submissionId);
+    const backlog = await rankSheetBacklog();
+    outcome =
+      backlog <= OCR_SERVICE.UPLOAD_WAIT_MAX_BACKLOG
+        ? await waitForRankSheet(job, OCR_SERVICE.UPLOAD_WAIT_MS)
+        : null;
+  } catch (error) {
+    // Queue unavailable (Redis down): read it here rather than lose the sheet.
+    logger.warn("Rank sheet queue unavailable, reading inline", {
+      submissionId: String(submissionId),
+      error: (error as Error).message,
+    });
+    outcome = await readQueuedSheet(submissionId, inline);
+  }
+
+  if (!outcome) {
+    return {
+      submission_id: String(submissionId),
+      status: SUBMISSION_STATUS.PROCESSING,
+      score: null,
+      warning: SUBMISSION_WARNING.QUEUED,
+    };
+  }
+  if (!outcome.ok) throw new HttpError(outcome.status, outcome.message, outcome.details);
+  return outcome.result;
+};
+
 export const rankPredictorService = {
   listExams: async (params: ExamListParams): Promise<Paged<RankExamDto>> => {
     const where = {
@@ -914,36 +953,56 @@ export const rankPredictorService = {
     if (params.sheetHtml) await putRankHtml(sourcePdfKey, params.sheetHtml);
     await repo.updateSubmission(submission.id, { sourcePdfKey, updatedAt: new Date() });
 
-    let outcome: RankSheetJobOutcome | null;
-    try {
-      const job = await enqueueRankSheet(submission.id);
-      // Waiting holds this request, and the sheet in its memory, open. In a rush
-      // the sheet would not be reached within the wait anyway, so answer "queued"
-      // at once and let the request go.
-      const backlog = await rankSheetBacklog();
-      outcome =
-        backlog <= OCR_SERVICE.UPLOAD_WAIT_MAX_BACKLOG
-          ? await waitForRankSheet(job, OCR_SERVICE.UPLOAD_WAIT_MS)
-          : null;
-    } catch (error) {
-      // Queue unavailable (Redis down): read it here rather than lose the upload.
-      logger.warn("Rank sheet queue unavailable, reading inline", {
-        submissionId: String(submission.id),
-        error: (error as Error).message,
+    return readSheetSoon(submission.id, { pdf: params.fileBuffer, html: params.sheetHtml });
+  },
+
+  /**
+   * One click from an admin: reads a refused sheet again from the copy the
+   * student uploaded, through the same checks as an upload — for when the
+   * reader has since been fixed. Refused while the student has another sheet in
+   * for the paper, so no one is counted twice.
+   */
+  rereadSubmission: async (submissionId: bigint, adminId: number | null): Promise<RankSubmissionResultDto> => {
+    const submission = await requireSubmission(submissionId);
+
+    if (submission.status !== SUBMISSION_STATUS.FAILED || submission.entryMode === ENTRY_MODE.MARKS) {
+      throw new HttpError(409, "Only a refused sheet can be read again.", {
+        error: RANK_ERROR.NOT_REREADABLE,
+        status: submission.status,
       });
-      outcome = await readQueuedSheet(submission.id, { pdf: params.fileBuffer, html: params.sheetHtml });
+    }
+    if (!submission.sourcePdfKey) {
+      throw new HttpError(410, "That sheet is no longer stored, so the student needs to upload it again.", {
+        error: RANK_ERROR.FILE_REQUIRED,
+      });
     }
 
-    if (!outcome) {
-      return {
-        submission_id: String(submission.id),
-        status: SUBMISSION_STATUS.PROCESSING,
-        score: null,
-        warning: SUBMISSION_WARNING.QUEUED,
-      };
+    const active = await repo.findActiveSubmission(submission.examId, submission.customerId);
+    if (active) {
+      throw new HttpError(409, "The student has already sent another sheet for this paper.", {
+        error: RANK_ERROR.ALREADY_SUBMITTED,
+        submission_id: String(active.id),
+        submitted_at: active.createdAt,
+      });
     }
-    if (!outcome.ok) throw new HttpError(outcome.status, outcome.message, outcome.details);
-    return outcome.result;
+
+    // Conditional, so two admins pressing at once queue the sheet once.
+    if (!(await repo.reopenFailedSubmission(submission.id))) {
+      throw new HttpError(409, "That sheet is already being read again.", {
+        error: RANK_ERROR.NOT_REREADABLE,
+      });
+    }
+
+    await audit({
+      action: AUDIT_ACTION.SUBMISSION_REREAD,
+      entityType: AUDIT_ENTITY.SUBMISSION,
+      entityId: String(submission.id),
+      actorType: ACTOR_TYPE.ADMIN,
+      actorId: adminId,
+      metadata: { previous_failure: submission.failureCode },
+    });
+
+    return readSheetSoon(submission.id);
   },
 
   /** The worker's half of an upload — see readQueuedSheet. */

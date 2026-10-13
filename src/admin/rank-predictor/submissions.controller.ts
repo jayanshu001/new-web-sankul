@@ -97,6 +97,17 @@ export const deleteSubmission = asyncHandler(async (req: Request, res: Response)
   );
 });
 
+/** Reads a refused sheet again from the copy the student uploaded. */
+export const rereadSubmission = asyncHandler(async (req: Request, res: Response) => {
+  const result = await rankPredictorService.rereadSubmission(bigIntParam(req, "id"), adminIdOf(req));
+
+  return success(
+    res,
+    result,
+    result.status === SUBMISSION_STATUS.PROCESSING ? "Sheet queued to be read again." : "Sheet read again."
+  );
+});
+
 export const rescoreSubmission = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.rescoreSubmission(bigIntParam(req, "id"));
 

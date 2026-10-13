@@ -69,6 +69,8 @@ export const AUDIT_ACTION = {
   SUBMISSION_SCORE_CLEARED: "submission_score_cleared",
   SUBMISSION_CONFIRMED: "submission_confirmed",
   SUBMISSION_DELETED: "submission_deleted",
+  /** An admin sent a refused sheet to be read again. */
+  SUBMISSION_REREAD: "submission_reread",
   CANDIDATE_PROFILE_SAVED: "candidate_profile.save",
   CANDIDATE_PROFILE_FORGOTTEN: "candidate_profile.forget",
 } as const;
@@ -89,6 +91,8 @@ export const RANK_ERROR = {
   IS_ACTIVE_REQUIRED: "is_active_required",
   MARKS_OUT_OF_RANGE: "marks_out_of_range",
   NOT_FOUND: "not_found",
+  /** Only a refused sheet, not already being read again, can be sent to the reader again. */
+  NOT_REREADABLE: "not_rereadable",
   NOT_SCORABLE: "not_scorable",
   NOT_SCORED: "not_scored",
   QUESTION_COUNT_MISMATCH: "question_count_mismatch",
