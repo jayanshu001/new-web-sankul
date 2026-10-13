@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-10-13 — Client video-category pagination: drop per-row counts + per-page scope walk
+
+> **DDL:** none. **Data:** none. **Response:** byte-identical (old vs new full JSON diffed over
+> 40 real parents × 3 pages + search, and 15 leaf categories).
+
+- `GET /client/video-categories/:id/children` (`catalog-video.getVideoCategoryChildren`):
+  per-child `ws_video` `COUNT` (one query per row, up to 500) → ONE `groupBy(vcategory_id)` over
+  the page (`countActiveVideosByCategories`). Child ids from `ws_video_category_relation` are now
+  resolved once for page + total (`listActiveChildrenPage`, replaces `listActiveChildren` /
+  `countActiveChildren`); parent lookup runs in parallel. `childCountsByParent` folds the
+  active-child check into the edge query (`childVideoCategory: { is: { status: true } }`) — one
+  round-trip instead of two. Avg 483ms → 207ms measured off-DC.
+- `GET /client/video-categories/:id/videos`: `scopesForCategory` (ancestor CTE + container
+  lookups) moved out of the page-keyed cache into its own `…:${catId}:scopes` key (same
+  `CacheEntity.Video`, same 60s TTL → same invalidation), so paging no longer re-walks the DAG.
+  `entitledScopeFor` now runs in parallel with progress/notes.
+
 ## 2026-10-12 — Rank predictor score-based suggestions (`ws_ocr_suggestions`)
 
 > **DDL:** `docs/migration/schema-changes/2026-10-12_ocr_suggestions.sql` — new table, additive,

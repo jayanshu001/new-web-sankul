@@ -79,15 +79,21 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     // CacheEntity.Video (not a bespoke tag) so admin video writes — which already
     // call autoFlushGroup(CacheEntity.Video) — invalidate this too; see
     // libs/cache.ts's invalidateEntity, wired into middlewares/autoFlush.ts.
-    const [{ rows, total }, scopes] = await cache.aside({
-      key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
-      ttlSeconds: 60,
-      load: () =>
-        Promise.all([
-          cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
-          cvSql.scopesForCategory(catId),
-        ]),
-    });
+    // Scopes are keyed per CATEGORY, not per page: the DAG walk behind them is the
+    // slow part (~3 sequential round-trips) and never changes with page/search, so
+    // paging used to recompute it on every new page.
+    const [{ rows, total }, scopes] = await Promise.all([
+      cache.aside({
+        key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
+        ttlSeconds: 60,
+        load: () => cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
+      }),
+      cache.aside({
+        key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:scopes`),
+        ttlSeconds: 60,
+        load: () => cvSql.scopesForCategory(catId),
+      }),
+    ]);
     // Representative owning container for the response `scope` field (course→live→package
     // priority; back-compat with the old single-scope shape).
     const scope = scopes[0] ?? null;
@@ -95,16 +101,15 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const videoIds = rows.map((v) => v.id);
     // Progress + saved-note presence for this page, both keyed on (customer, video).
-    const [progMap, notedVideoIds] = uid != null
-      ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds)])
-      : [new Map<number, any>(), new Set<number>()];
-
     // Entitlement gate: paid videos only get a (playable) media token when the caller
     // holds an active subscription for ANY of this category's owning containers (a video
     // can belong to multiple packages — a buyer of any one is entitled). The token is
     // scoped to the container they actually own so /media/resolve's re-check passes.
     // Unpurchased paid rows get `mediaToken: null`. Free rows get a free token.
-    const entitledScope = await cvSql.entitledScopeFor(uid, scopes);
+    // Independent of progress/notes, so all three run in one parallel hop.
+    const [progMap, notedVideoIds, entitledScope] = uid != null
+      ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds), cvSql.entitledScopeFor(uid, scopes)])
+      : [new Map<number, any>(), new Set<number>(), null];
     const entitled = entitledScope != null;
 
     const list = rows.map((v) => {

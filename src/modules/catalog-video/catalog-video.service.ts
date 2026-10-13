@@ -88,29 +88,29 @@ export const getVideoCategoryChildren = async (
   search?: string,
   paging?: { skip?: number; take?: number }
 ): Promise<{ parent: VideoCategoryDto; list: { category: VideoCategoryDto & { count: number; havingChildDirectory: boolean } }[]; total: number } | null> => {
-  const parentRow = await repo.findCategoryByIdAny(parentId);
+  const searchOpt = search?.trim() || undefined;
+  const [parentRow, { rows: children, total }] = await Promise.all([
+    repo.findCategoryByIdAny(parentId),
+    repo.listActiveChildrenPage(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
+  ]);
   if (!parentRow) return null;
 
-  const searchOpt = search?.trim() || undefined;
-  const [children, total] = await Promise.all([
-    repo.listActiveChildren(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
-    repo.countActiveChildren(parentId, { search: searchOpt }),
-  ]);
   const childIds = children.map((c) => c.id);
+  // One groupBy for the whole page — was one COUNT per child row (up to 500).
   const [videoCounts, childCountRows] = await Promise.all([
-    Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
+    repo.countActiveVideosByCategories(childIds),
     repo.childCountsByParent(childIds),
   ]);
   // child-folder count per category (0 when a leaf).
   const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
-  const list = children.map((c, i) => {
+  const list = children.map((c) => {
     const folders = childFolderCount.get(c.id) ?? 0;
     const havingChildDirectory = folders > 0;
     // Match the catalog contract: a directory node reports its child-folder count;
     // a leaf reports its own video count. (Its videos live in the sub-folders, so a
     // folder's direct video count is 0 — reporting that was the confusing bit.)
-    const count = havingChildDirectory ? folders : videoCounts[i];
+    const count = havingChildDirectory ? folders : (videoCounts.get(c.id) ?? 0);
     return { category: { ...toVideoCategoryDto(c), count, havingChildDirectory } };
   });
   return { parent: toVideoCategoryDto(parentRow), list, total };
