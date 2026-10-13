@@ -8,6 +8,15 @@
  *   yarn cache:flush --scope=aside --yes  # only the cache-aside keyspace
  *   yarn cache:flush --prefix=GET:/api/v1/admin/ebook --yes   # narrow slice
  *   yarn cache:flush --self-test          # verify the safety guard, no Redis needed
+ *   yarn cache:clear                      # = --yes, keyspace from NODE_ENV (else "dev")
+ *   yarn cache:clear:prod                 # = --env=production --yes (run ON the prod box)
+ *   yarn cache:clear:staging              # = --env=staging --yes
+ *
+ * Redis host/port/password come from `.env` (REDIS_HOST / REDIS_PORT /
+ * REDIS_PASSWORD via src/config/redis.ts) — nothing is passed on the CLI.
+ * `--env` exists because NODE_ENV is set by PM2 (ecosystem.config.cjs), NOT by
+ * `.env`: in a plain shell on the server it is unset, so the keys would be read as
+ * `dev:*` and a "successful" flush would delete 0 of the app's `production:*` keys.
  *
  * WHY THIS EXISTS
  * There are TWO cache keyspaces, and the admin endpoint only clears one:
@@ -118,8 +127,17 @@ const main = async () => {
   const apply = has("--yes");
   const scope = (val("scope") ?? "all") as "all" | "route" | "aside";
   const narrow = val("prefix");
+  const envFlag = val("env");
+  if (envFlag !== undefined) {
+    if (!/^[a-z]+$/.test(envFlag)) {
+      console.error(`REFUSED — invalid --env "${envFlag}" (expected e.g. production | staging | development)`);
+      process.exit(1);
+    }
+    // Must be set BEFORE the imports below: both cache prefixes read NODE_ENV at import time.
+    process.env.NODE_ENV = envFlag;
+  }
 
-  // Imported AFTER dotenv so the Redis client reads a populated env.
+  // Imported AFTER dotenv (and --env) so the Redis client and prefixes read a populated env.
   const { redisClient } = await import("../src/config/redis");
   const { ROUTE_CACHE_PREFIX } = await import("../src/middlewares/cacheRoute");
 
@@ -143,7 +161,18 @@ const main = async () => {
   }
 
   console.log(`env=${ENV}  scope=${scope}  mode=${apply ? "DELETE" : "DRY RUN"}`);
-  console.log(`redis=${process.env.REDIS_HOST ?? "127.0.0.1"}:${process.env.REDIS_PORT ?? 6379}\n`);
+  // The client's resolved options (config/redis.ts defaults applied), never the password itself.
+  const { host, port, password } = redisClient.options;
+  console.log(`redis=${host}:${port}  auth=${password ? "password (from .env)" : "none"}\n`);
+
+  try {
+    await redisClient.ping();
+  } catch (err) {
+    console.error(`Cannot reach Redis at ${host}:${port} — ${(err as Error).message}`);
+    console.error("Check REDIS_HOST / REDIS_PORT / REDIS_PASSWORD in .env.");
+    redisClient.disconnect();
+    process.exit(1);
+  }
 
   let grand = 0;
   for (const target of targets) {
