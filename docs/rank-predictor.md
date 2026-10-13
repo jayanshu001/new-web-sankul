@@ -265,6 +265,11 @@ profile and admin customer screen edit, so there is one date of birth per
 student and no new column. A student who already filled it in on their account
 profile finds it pre-filled in the dialog.
 
+A date of birth is personal, so the student site never shows anyone else's: a
+client leaderboard row carries `date_of_birth` only on the viewer's own row
+(`is_me`), null on every other (`toLeaderboardEntryDto`). Staff see everyone's on
+the admin board.
+
 The boards a student can see are switched per paper in `rank_by`: `category`,
 `gender`, `shift` (and `ex_serviceman`, `subject`, `normalized`). With category,
 gender and shift all on, a student has up to eight ranks: Overall, Gender,

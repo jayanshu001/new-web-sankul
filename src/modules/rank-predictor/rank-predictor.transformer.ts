@@ -314,22 +314,25 @@ export const toLeaderboardEntryDto = (
   row: LeaderboardRow,
   viewerCustomerId: number | null,
   marks: { maxMarks: number; selfReported: boolean }
-): RankLeaderboardEntryDto => ({
-  rank: row.rank_position,
-  name: displayNameFor(row.full_name, row.show_real_name),
-  raw_score: row.raw_score,
-  normalized_score: row.normalized_score,
-  total_questions: row.total_questions,
-  max_marks: marks.maxMarks,
-  self_reported: marks.selfReported,
-  // A date of birth goes out with the name: a student who hides one hides both.
-  // The board still orders on it; staff see it on the admin board.
-  date_of_birth: row.show_real_name ? row.date_of_birth : null,
-  caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
-  gender: genderOf({ gender: row.gender }),
-  is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
-  submitted_at: row.submitted_at,
-});
+): RankLeaderboardEntryDto => {
+  const isMe = viewerCustomerId !== null && row.customer_id === viewerCustomerId;
+  return {
+    rank: row.rank_position,
+    name: displayNameFor(row.full_name, row.show_real_name),
+    raw_score: row.raw_score,
+    normalized_score: row.normalized_score,
+    total_questions: row.total_questions,
+    max_marks: marks.maxMarks,
+    self_reported: marks.selfReported,
+    // A date of birth is personal: only the viewer's own row carries it, never
+    // anyone else's. The board still orders on it; staff see it on the admin board.
+    date_of_birth: isMe ? row.date_of_birth : null,
+    caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
+    gender: genderOf({ gender: row.gender }),
+    is_me: isMe,
+    submitted_at: row.submitted_at,
+  };
+};
 
 export const toAdminLeaderboardEntryDto = (row: LeaderboardRow): RankAdminLeaderboardEntryDto => ({
   rank: row.rank_position,

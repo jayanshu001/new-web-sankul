@@ -542,7 +542,10 @@ export interface RankLeaderboardEntryDto {
   max_marks: number;
   /** Typed in by the student on a paper that also checks sheets, so not checked by us. */
   self_reported: boolean;
-  /** "YYYY-MM-DD"; it is what orders two entries on the same marks. Null when not given. */
+  /**
+   * "YYYY-MM-DD"; it is what orders two entries on the same marks. Only the
+   * viewer's own row carries it (`is_me`); null on everyone else's and when not given.
+   */
   date_of_birth: string | null;
   caste_category: CasteCategory | null;
   gender: Gender | null;
