@@ -212,18 +212,17 @@ export const SKIP_OPTION = 5;
 export const CANCELLED_QUESTION = "*";
 export const NEARBY_RANK_RADIUS = 3;
 /**
- * A shift smaller than this is too thin to normalize; its marks are used as they are.
- * Papers can have dozens of shifts and only some candidates upload, so a shift needs
- * enough people before its spread means anything.
+ * How much a shift's own numbers are trusted: a shift of n sheets moves n / (n + this)
+ * of the way to its full adjustment. Papers can have dozens of shifts with a handful
+ * of uploads each, so a thin shift is adjusted only a little instead of not at all —
+ * every shift is on the same scale, and one with 30 sheets moves halfway.
  */
-export const NORMALIZATION_MIN_SHIFT_CANDIDATES = 30;
+export const NORMALIZATION_SHRINK_CANDIDATES = 30;
 /**
- * The "top" of a shift is its best 1%, but never fewer than this many people: the
- * classic top-0.1% of a few hundred uploads is a single candidate, and one lucky
- * or typed-in score would then move the whole shift.
+ * The furthest one shift's marks may be stretched (or, as its inverse, squeezed).
+ * Real shifts differ in spread by far less; past this is a lopsided set of uploads.
  */
-export const NORMALIZATION_TOP_SHARE = 0.01;
-export const NORMALIZATION_MIN_TOP_COUNT = 5;
+export const NORMALIZATION_MAX_SCALE = 1.5;
 export const MASKED_NAME_FALLBACK = "***";
 export const CUSTOMER_HANDLE_PREFIX = "ws_";
 export const PRISMA_UNIQUE_VIOLATION = "P2002";
@@ -720,17 +719,19 @@ export interface RankViewer {
   scoreId?: bigint;
 }
 
-/** Per-shift linear map onto the common scale: normalized = scale × raw + offset. */
-export type ShiftNormalization = Map<string, { scale: number; offset: number }>;
+/**
+ * Per-shift linear map onto the common scale: normalized = min(scale × raw + offset, max),
+ * where `max` is the paper's full marks.
+ */
+export type ShiftNormalization = Map<string, { scale: number; offset: number; max: number }>;
 
-/** A shift's (or, with `shift_key` null, the whole field's) spread, as normalization reads it. */
+/** A shift's spread, as normalization reads it. */
 export interface ShiftStatsRow {
-  shift_key: string | null;
+  shift_key: string;
   candidates: number;
-  /** Mean + standard deviation. */
-  mean_plus_sd: number;
-  /** Mean of the top 0.1% (at least one candidate). */
-  top_mean: number;
+  mean: number;
+  /** Population standard deviation. */
+  sd: number;
 }
 
 export interface LeaderboardParams {

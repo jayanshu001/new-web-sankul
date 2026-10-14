@@ -2,8 +2,6 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import {
   ENTRY_MODE,
-  NORMALIZATION_MIN_TOP_COUNT,
-  NORMALIZATION_TOP_SHARE,
   SUBMISSION_STATUS,
   type BoardScope,
   type LeaderboardRow,
@@ -48,14 +46,16 @@ const countScores = (examId: bigint, scope?: BoardScope) =>
 
 /**
  * The mark a board orders on: raw, or each shift's raw mapped onto the common
- * scale. Normalized marks are rounded to the stored 4 places so that the board's
- * RANK() and a viewer's own count (rankForExam) agree on what is a tie.
+ * scale and capped at the paper's full marks. Normalized marks are rounded to the
+ * stored 4 places so that the board's RANK() and a viewer's own count
+ * (rankForExam) agree on what is a tie.
  */
 const boardScore = (normalization?: ShiftNormalization | null) =>
   normalization?.size
     ? Prisma.sql`ROUND(CASE s.shift_key ${Prisma.join(
         [...normalization].map(
-          ([key, { scale, offset }]) => Prisma.sql`WHEN ${key} THEN s.raw_score * ${scale} + ${offset}`
+          ([key, { scale, offset, max }]) =>
+            Prisma.sql`WHEN ${key} THEN LEAST(s.raw_score * ${scale} + ${offset}, ${max})`
         ),
         " "
       )} ELSE s.raw_score END, 4)`
@@ -479,40 +479,24 @@ export const rankPredictorRepository = {
   listSubjectScores: (scoreId: bigint) =>
     prisma.ocrSubjectScore.findMany({ where: { scoreId }, orderBy: { position: "asc" } }),
 
-  /**
-   * Each shift's spread plus one row (`shift_key` null) for everyone who has a
-   * shift — the inputs of the normalization formula.
-   */
+  /** Each shift's spread — the inputs of the normalization formula. */
   shiftStats: async (examId: bigint): Promise<ShiftStatsRow[]> => {
     // Only marked sheets count: a typed-in total is self-reported, and letting it
     // set a shift's scale would let anyone move everyone else's normalized marks.
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-      WITH ranked AS (
-        SELECT s.shift_key, s.raw_score,
-               ROW_NUMBER() OVER (PARTITION BY s.shift_key ORDER BY s.raw_score DESC) AS shift_pos,
-               COUNT(*)     OVER (PARTITION BY s.shift_key)                           AS shift_n,
-               ROW_NUMBER() OVER (ORDER BY s.raw_score DESC)                          AS all_pos,
-               COUNT(*)     OVER ()                                                   AS all_n
-          FROM ws_ocr_scores s
-          JOIN ws_ocr_submissions sub ON sub.id = s.submission_id
-         WHERE s.exam_id = ${examId} AND s.shift_key IS NOT NULL AND sub.entry_mode = ${ENTRY_MODE.SHEET}
-      )
-      SELECT shift_key, COUNT(*) AS candidates,
-             AVG(raw_score) + STDDEV_POP(raw_score) AS mean_plus_sd,
-             AVG(CASE WHEN shift_pos <= GREATEST(CEIL(shift_n * ${NORMALIZATION_TOP_SHARE}), ${NORMALIZATION_MIN_TOP_COUNT}) THEN raw_score END) AS top_mean
-        FROM ranked GROUP BY shift_key
-      UNION ALL
-      SELECT NULL, COUNT(*),
-             AVG(raw_score) + STDDEV_POP(raw_score),
-             AVG(CASE WHEN all_pos <= GREATEST(CEIL(all_n * ${NORMALIZATION_TOP_SHARE}), ${NORMALIZATION_MIN_TOP_COUNT}) THEN raw_score END)
-        FROM ranked
+      SELECT s.shift_key, COUNT(*) AS candidates,
+             AVG(s.raw_score) AS mean, STDDEV_POP(s.raw_score) AS sd
+        FROM ws_ocr_scores s
+        JOIN ws_ocr_submissions sub ON sub.id = s.submission_id
+       WHERE s.exam_id = ${examId} AND s.shift_key IS NOT NULL AND sub.entry_mode = ${ENTRY_MODE.SHEET}
+       GROUP BY s.shift_key
     `;
 
     return rows.map((row) => ({
-      shift_key: (row.shift_key as string | null) ?? null,
+      shift_key: row.shift_key as string,
       candidates: asNumber(row.candidates),
-      mean_plus_sd: asNumber(row.mean_plus_sd),
-      top_mean: asNumber(row.top_mean),
+      mean: asNumber(row.mean),
+      sd: asNumber(row.sd),
     }));
   },
 

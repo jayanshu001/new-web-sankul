@@ -70,7 +70,8 @@ import {
   ENTRY_MODE,
   KEY_SOURCE,
   NEARBY_RANK_RADIUS,
-  NORMALIZATION_MIN_SHIFT_CANDIDATES,
+  NORMALIZATION_MAX_SCALE,
+  NORMALIZATION_SHRINK_CANDIDATES,
   RANK_BY,
   PRISMA_UNIQUE_VIOLATION,
   RANK_ERROR,
@@ -114,6 +115,7 @@ import {
   type RankMyExamDto,
   type RankStandingDto,
   type ShiftNormalization,
+  type ShiftStatsRow,
   type RankSubmissionDeletionDto,
   type RankSubmissionResultDto,
   type RescoreOutcome,
@@ -316,12 +318,6 @@ const positionOf = (board: {
 });
 
 /**
- * SSC-style normalization: each shift's marks are mapped linearly so that its
- * top-share mean (NORMALIZATION_TOP_SHARE, 1%, at least five) and its mean + SD
- * land on the whole field's. Null when the paper
- * does not normalize, has fewer than two shifts, or no shift is big enough.
- */
-/**
  * The shift statistics are a window over every score of the paper, and they move
  * by a hair per sheet. Every upload and every result view needs them, so they are
  * held for a short while per paper (and shared by concurrent callers) instead of
@@ -347,35 +343,53 @@ const normalizationFor = async (exam: ExamRow): Promise<ShiftNormalization | nul
   return value;
 };
 
+/**
+ * Each shift is mapped linearly so that its mean and SD land on the common scale:
+ * the candidate-weighted mean of the shift means, and the pooled within-shift SD.
+ * A shift of n marked sheets moves only n / (n + NORMALIZATION_SHRINK_CANDIDATES)
+ * of the way there, so a shift with a handful of uploads is barely moved while every
+ * shift still sits on the same scale. Null when the paper does not normalize or has
+ * fewer than two shifts with sheets; a shift seen only on typed-in totals keeps its
+ * raw marks, as a fully shrunk shift would.
+ *
+ * (SSC's own formula leans on the top 0.1% of each shift — one candidate out of a
+ * few dozen uploads — and stretched shifts here ×3, past full marks.)
+ */
 const computeNormalization = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
-  const rows = await repo.shiftStats(exam.id);
-  const field = rows.find((row) => row.shift_key === null);
-  const shifts = rows.filter((row) => row.shift_key !== null);
-  const fieldSpread = field ? field.top_mean - field.mean_plus_sd : 0;
-  if (!field || shifts.length < 2 || fieldSpread <= 0) return null;
+  const [shifts, scale] = await Promise.all([repo.shiftStats(exam.id), markScaleOf(exam)]);
+  if (shifts.length < 2) return null;
+
+  const candidates = shifts.reduce((sum, shift) => sum + shift.candidates, 0);
+  const weighted = (pick: (shift: ShiftStatsRow) => number) =>
+    shifts.reduce((sum, shift) => sum + pick(shift) * shift.candidates, 0) / candidates;
+  const commonMean = weighted((shift) => shift.mean);
+  const commonSd = Math.sqrt(weighted((shift) => shift.sd ** 2));
 
   const normalization: ShiftNormalization = new Map();
   for (const shift of shifts) {
-    const spread = shift.top_mean - shift.mean_plus_sd;
-    if (shift.candidates < NORMALIZATION_MIN_SHIFT_CANDIDATES || spread <= 0) continue;
-    const scale = fieldSpread / spread;
-    normalization.set(shift.shift_key as string, {
-      scale,
-      offset: field.mean_plus_sd - scale * shift.mean_plus_sd,
+    const trust = shift.candidates / (shift.candidates + NORMALIZATION_SHRINK_CANDIDATES);
+    const stretch = shift.sd > 0 && commonSd > 0 ? commonSd / shift.sd : 1;
+    const shrunk = 1 + trust * (stretch - 1);
+    const bounded = Math.min(Math.max(shrunk, 1 / NORMALIZATION_MAX_SCALE), NORMALIZATION_MAX_SCALE);
+    const mean = shift.mean + trust * (commonMean - shift.mean);
+    normalization.set(shift.shift_key, {
+      scale: bounded,
+      offset: mean - bounded * shift.mean,
+      max: scale.fullMarks,
     });
   }
 
-  return normalization.size ? normalization : null;
+  return normalization;
 };
 
-/** A raw mark on the common scale; a shift the normalization leaves out keeps its raw mark. */
+/** A raw mark on the common scale, capped at full marks; without a normalization it is the raw mark. */
 const normalizedOf = (
   normalization: ShiftNormalization | null,
   shiftKey: string | null,
   rawScore: number
 ): number => {
   const map = shiftKey ? normalization?.get(shiftKey) : undefined;
-  return map ? map.scale * rawScore + map.offset : rawScore;
+  return map ? Math.min(map.scale * rawScore + map.offset, map.max) : rawScore;
 };
 
 /** What a rank needs to know about the student beyond their marks: their date of birth, for ties. */

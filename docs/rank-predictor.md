@@ -377,13 +377,16 @@ by name (§7 — not `yarn db:migrate`). It is additive: new nullable columns, o
 papers fall back to admin keys.
 
 **Normalised marks across shifts (`rank_by` += `"normalized"`).** No DDL; computed per
-request. SSC formula: for shift *i*, `normalised = (Mgt − Mgq) / (Mti − Miq) × (raw − Miq) + Mgq`,
-where `Mti`/`Mgt` = mean of the top 0.1% (min one candidate) of the shift / of everyone with
-a shift, and `Miq`/`Mgq` = mean + population SD of the same. Boards that span shifts
+request. Each shift is mapped linearly so its mean and SD land on the common scale — the
+candidate-weighted mean of the shift means and the pooled within-shift SD — shrunk towards raw
+by `n / (n + 30)` for a shift of `n` marked sheets, its stretch bounded to ×0.67–×1.5, and capped
+at full marks. Every shift with sheets is normalized; a thin one only moves a little. (SSC's
+top-0.1% formula was dropped: on a few dozen uploads per shift it stretched shifts ×3, past full
+marks.) Boards that span shifts
 (overall, category, gender, their combinations, `nearby`, the unfiltered leaderboards and
 the rank snapshot) order on normalised marks and their `average_marks` is the normalised
-mean; boards inside one shift and subject boards stay raw. A shift under 10 candidates, a
-paper with fewer than two shifts, or a degenerate spread falls back to raw marks. Entries
+mean; boards inside one shift and subject boards stay raw. A paper with fewer than two
+shifts with marked sheets falls back to raw marks. Entries
 gain `normalized_score` (null when not normalising); standing gains `raw_score` and
 `normalized_score`. Leaderboards also take `gender`.
 
@@ -459,7 +462,7 @@ The student site reads the type, so a marks-only paper shows only the *Enter mar
 
 **Shifts are never configured.** Each is read off the sheets (`YYYY-MM-DDTHH:MM`), so papers with different dates, or 40-50 shifts, need no setup. A student who types marks on a shift-ranked paper picks a shift already seen, or enters its date and time.
 
-**Normalization** (`rank_by` includes `normalized`) maps each shift linearly onto the whole field so that its top mean and its mean + SD match the field's. With many small shifts the top reference is the best 1% of the shift but never fewer than 5 people, and a shift under 30 candidates keeps its raw marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
+**Normalization** (`rank_by` includes `normalized`) maps each shift linearly so its mean and SD match the average shift's (pooled SD). A shift of n marked sheets moves only n / (n + 30) of the way, so a shift with a handful of uploads barely moves, and no shift is stretched past ×1.5. Normalized marks never exceed full marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
 
 ### 3.11 Score-based suggestions
 
