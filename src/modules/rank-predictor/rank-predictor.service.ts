@@ -70,8 +70,6 @@ import {
   ENTRY_MODE,
   KEY_SOURCE,
   NEARBY_RANK_RADIUS,
-  NORMALIZATION_MAX_SCALE,
-  NORMALIZATION_SHRINK_CANDIDATES,
   RANK_BY,
   PRISMA_UNIQUE_VIOLATION,
   RANK_ERROR,
@@ -114,8 +112,6 @@ import {
   type RankLeaderboardEntryDto,
   type RankMyExamDto,
   type RankStandingDto,
-  type ShiftNormalization,
-  type ShiftStatsRow,
   type RankSubmissionDeletionDto,
   type RankSubmissionResultDto,
   type RescoreOutcome,
@@ -317,106 +313,18 @@ const positionOf = (board: {
   average_marks: board.average,
 });
 
-/**
- * The shift statistics are a window over every score of the paper, and they move
- * by a hair per sheet. Every upload and every result view needs them, so they are
- * held for a short while per paper (and shared by concurrent callers) instead of
- * being recomputed thousands of times in an exam-day rush.
- */
-const NORMALIZATION_TTL_MS = 60_000;
-const normalizationCache = new Map<string, { at: number; value: Promise<ShiftNormalization | null> }>();
-
-const forgetNormalization = (): void => normalizationCache.clear();
-
-const normalizationFor = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
-  if (!rankByOf(exam).includes(RANK_BY.NORMALIZED)) return null;
-
-  const key = String(exam.id);
-  const cached = normalizationCache.get(key);
-  if (cached && Date.now() - cached.at < NORMALIZATION_TTL_MS) return cached.value;
-
-  const value = computeNormalization(exam).catch((error) => {
-    normalizationCache.delete(key);
-    throw error;
-  });
-  normalizationCache.set(key, { at: Date.now(), value });
-  return value;
-};
-
-/**
- * Each shift is mapped linearly so that its mean and SD land on the common scale:
- * the candidate-weighted mean of the shift means, and the pooled within-shift SD.
- * A shift of n marked sheets moves only n / (n + NORMALIZATION_SHRINK_CANDIDATES)
- * of the way there, so a shift with a handful of uploads is barely moved while every
- * shift still sits on the same scale. Null when the paper does not normalize or has
- * fewer than two shifts with sheets; a shift seen only on typed-in totals keeps its
- * raw marks, as a fully shrunk shift would.
- *
- * (SSC's own formula leans on the top 0.1% of each shift — one candidate out of a
- * few dozen uploads — and stretched shifts here ×3, past full marks.)
- */
-const computeNormalization = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
-  const [shifts, scale] = await Promise.all([repo.shiftStats(exam.id), markScaleOf(exam)]);
-  if (shifts.length < 2) return null;
-
-  const candidates = shifts.reduce((sum, shift) => sum + shift.candidates, 0);
-  const weighted = (pick: (shift: ShiftStatsRow) => number) =>
-    shifts.reduce((sum, shift) => sum + pick(shift) * shift.candidates, 0) / candidates;
-  const commonMean = weighted((shift) => shift.mean);
-  const commonSd = Math.sqrt(weighted((shift) => shift.sd ** 2));
-
-  const normalization: ShiftNormalization = new Map();
-  for (const shift of shifts) {
-    const trust = shift.candidates / (shift.candidates + NORMALIZATION_SHRINK_CANDIDATES);
-    const stretch = shift.sd > 0 && commonSd > 0 ? commonSd / shift.sd : 1;
-    const shrunk = 1 + trust * (stretch - 1);
-    const bounded = Math.min(Math.max(shrunk, 1 / NORMALIZATION_MAX_SCALE), NORMALIZATION_MAX_SCALE);
-    const mean = shift.mean + trust * (commonMean - shift.mean);
-    normalization.set(shift.shift_key, {
-      scale: bounded,
-      offset: mean - bounded * shift.mean,
-      max: scale.fullMarks,
-    });
-  }
-
-  return normalization;
-};
-
-/** A raw mark on the common scale, capped at full marks; without a normalization it is the raw mark. */
-const normalizedOf = (
-  normalization: ShiftNormalization | null,
-  shiftKey: string | null,
-  rawScore: number
-): number => {
-  const map = shiftKey ? normalization?.get(shiftKey) : undefined;
-  return map ? Math.min(map.scale * rawScore + map.offset, map.max) : rawScore;
-};
-
 /** What a rank needs to know about the student beyond their marks: their date of birth, for ties. */
 const viewerOf = async (customerId: number): Promise<RankViewer> => ({
   dateOfBirth: dateOfBirthOf(await repo.findCandidateProfile(customerId)),
 });
 
-/** The whole-paper board, on normalized marks when the paper normalizes. */
-const overallStanding = async (
-  exam: ExamRow,
-  rawScore: number,
-  shiftKey: string | null,
-  viewer: RankViewer
-) => {
-  const normalization = await normalizationFor(exam);
-  return repo.rankForExam(exam.id, normalizedOf(normalization, shiftKey, rawScore), {}, normalization, viewer);
-};
+/** The whole-paper board. */
+const overallStanding = (exam: ExamRow, rawScore: number, viewer: RankViewer) =>
+  repo.rankForExam(exam.id, rawScore, {}, viewer);
 
-/** One page of a board. Shift and subject boards are within one sitting, so they stay raw. */
-const boardPage = async (exam: ExamRow, skip: number, take: number, scope: BoardScope = {}) =>
-  repo.leaderboardPage(
-    exam.id,
-    skip,
-    take,
-    scope,
-    scope.shiftKey || scope.subject ? null : await normalizationFor(exam)
-  );
+/** One page of a board. */
+const boardPage = (exam: ExamRow, skip: number, take: number, scope: BoardScope = {}) =>
+  repo.leaderboardPage(exam.id, skip, take, scope);
 
 /** Only the cancellations move a score; adding or renaming an empty slot does not. */
 const cancellationsOf = (shifts: PaperShift[]): Record<string, number[]> =>
@@ -593,7 +501,6 @@ const rescoreMany = async (submissionIds: bigint[]): Promise<RescoreOutcome> => 
   };
 
   await Promise.all(Array.from({ length: Math.min(RESCORE_CONCURRENCY, submissionIds.length) }, lane));
-  forgetNormalization();
   return { rescored, skipped };
 };
 
@@ -1150,7 +1057,6 @@ export const rankPredictorService = {
     const { higher, candidates } = await overallStanding(
       exam,
       marks,
-      params.shiftKey,
       await viewerOf(params.customerId)
     );
     const rank = higher + 1;
@@ -1278,7 +1184,6 @@ export const rankPredictorService = {
     const { higher, candidates } = await overallStanding(
       exam,
       result.rawScore,
-      submission.shiftKey,
       await viewerOf(submission.customerId)
     );
     const rank = higher + 1;
@@ -1393,7 +1298,6 @@ export const rankPredictorService = {
       return {
         raw_score: null,
         max_marks: null,
-        normalized_score: null,
         rank: null,
         percentile: null,
         total_candidates: await repo.countCandidates(examId),
@@ -1420,14 +1324,10 @@ export const rankPredictorService = {
     const rawScore = Number(score.rawScore);
     const shiftKey = enabled.includes(RANK_BY.SHIFT) ? score.shiftKey : null;
     const categoryOn = enabled.includes(RANK_BY.CATEGORY) && casteCategory !== null;
-    // Boards that span shifts compare normalized marks; boards inside one shift stay raw.
-    const normalization = await normalizationFor(exam);
-    const normalized = normalizedOf(normalization, score.shiftKey, rawScore);
     const viewer: RankViewer = { dateOfBirth };
-    const across = (scope: BoardScope = {}) =>
-      repo.rankForExam(examId, normalized, scope, normalization, viewer);
+    const across = (scope: BoardScope = {}) => repo.rankForExam(examId, rawScore, scope, viewer);
     const withinShift = (scope: BoardScope) =>
-      repo.rankForExam(examId, rawScore, { shiftKey, ...scope }, null, viewer);
+      repo.rankForExam(examId, rawScore, { shiftKey, ...scope }, viewer);
 
     // Each standing is its own count over the same scores, so they are issued
     // together rather than one after another.
@@ -1446,7 +1346,7 @@ export const rankPredictorService = {
     ] = await Promise.all([
       markScaleOf(exam),
       // The overall board also places the viewer among their ties, for the strip below.
-      repo.rankForExam(examId, normalized, {}, normalization, { ...viewer, scoreId: score.id }),
+      repo.rankForExam(examId, rawScore, {}, { ...viewer, scoreId: score.id }),
       categoryOn ? across({ casteCategory }) : null,
       shiftKey ? withinShift({}) : null,
       shiftKey && categoryOn ? withinShift({ casteCategory }) : null,
@@ -1490,7 +1390,6 @@ export const rankPredictorService = {
     return {
       raw_score: rawScore,
       max_marks: outOf(scale, scoredQuestionsOf(score)),
-      normalized_score: normalization ? Math.round(normalized * 100) / 100 : null,
       rank,
       percentile: percentileFor(rank, overall.candidates),
       total_candidates: overall.candidates,
@@ -1514,7 +1413,6 @@ export const rankPredictorService = {
         rank: row.rank_position,
         name: displayNameFor(row.full_name, row.show_real_name),
         raw_score: row.raw_score,
-        normalized_score: row.normalized_score,
         is_me: row.customer_id === customerId,
       })),
     };
@@ -1573,7 +1471,6 @@ export const rankPredictorService = {
         const { higher, candidates } = await overallStanding(
           submission.exam,
           Number(submission.score.rawScore),
-          submission.score.shiftKey,
           viewer
         );
         const rank = higher + 1;

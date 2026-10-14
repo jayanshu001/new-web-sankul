@@ -6,8 +6,6 @@ import {
   type BoardScope,
   type LeaderboardRow,
   type RankViewer,
-  type ShiftNormalization,
-  type ShiftStatsRow,
   type SubjectScoreRow,
 } from "./rank-predictor.types";
 
@@ -44,30 +42,16 @@ const scopedScores = (examId: bigint, scope: BoardScope = {}) => Prisma.sql`
 const countScores = (examId: bigint, scope?: BoardScope) =>
   prisma.$queryRaw<CountRow[]>`SELECT COUNT(*) c ${scopedScores(examId, scope)}`;
 
-/**
- * The mark a board orders on: raw, or each shift's raw mapped onto the common
- * scale and capped at the paper's full marks. Normalized marks are rounded to the
- * stored 4 places so that the board's RANK() and a viewer's own count
- * (rankForExam) agree on what is a tie.
- */
-const boardScore = (normalization?: ShiftNormalization | null) =>
-  normalization?.size
-    ? Prisma.sql`ROUND(CASE s.shift_key ${Prisma.join(
-        [...normalization].map(
-          ([key, { scale, offset, max }]) =>
-            Prisma.sql`WHEN ${key} THEN LEAST(s.raw_score * ${scale} + ${offset}, ${max})`
-        ),
-        " "
-      )} ELSE s.raw_score END, 4)`
-    : Prisma.sql`s.raw_score`;
+/** The mark every board orders on. */
+const BOARD_MARK = Prisma.sql`s.raw_score`;
 
 /**
- * Marks sit on a 0.0001 grid (see boardScore), so half a step apart is the
- * narrowest real lead; anything closer is the same mark read through floats.
+ * Marks are stored on a 0.0001 grid, so half a step apart is the narrowest
+ * real lead; anything closer is the same mark read through floats.
  */
 const SCORE_EPSILON = 0.00005;
 
-/** A viewer's mark on the same grid as boardScore. */
+/** A viewer's mark on the same grid as the stored marks. */
 const onGrid = (score: number): number => Math.round(score * 10_000) / 10_000;
 
 /**
@@ -87,8 +71,6 @@ const isoDate = (value: unknown): string | null => (typeof value === "string" &&
 const toLeaderboardRow = (row: Record<string, unknown>): LeaderboardRow => ({
   customer_id: asNumber(row.customer_id),
   raw_score: asNumber(row.raw_score),
-  normalized_score:
-    row.normalized_score == null ? null : Math.round(asNumber(row.normalized_score) * 100) / 100,
   total_questions: asNumber(row.total_questions),
   rank_position: asNumber(row.rank_position),
   submitted_at: (row.submitted_at as Date | null) ?? null,
@@ -386,8 +368,7 @@ export const rankPredictorRepository = {
    * How many candidates are on a board and how many of them rank above the
    * viewer: a higher mark, or the same mark and an earlier date of birth (see
    * tieOrder). Rank is `higher + 1`, so only the same mark AND the same birthday
-   * share a rank. With a normalization, `score` is the viewer's normalized mark
-   * and the board (and its average) is read on that scale.
+   * share a rank.
    *
    * With `viewer.scoreId`, `tiedBefore` also counts the candidates still tied with
    * the viewer that the board lists ahead of them (it breaks those on the score
@@ -397,10 +378,9 @@ export const rankPredictorRepository = {
     examId: bigint,
     score: number,
     scope: BoardScope,
-    normalization: ShiftNormalization | null,
     viewer: RankViewer
   ): Promise<{ higher: number; candidates: number; average: number | null; tiedBefore: number }> => {
-    const mark = boardScore(normalization);
+    const mark = BOARD_MARK;
     const viewerMark = onGrid(score);
     const sameMark = Prisma.sql`ABS(${mark} - ${viewerMark}) <= ${SCORE_EPSILON}`;
     // One pass over the board for all the numbers: a result page asks for up to
@@ -479,27 +459,6 @@ export const rankPredictorRepository = {
   listSubjectScores: (scoreId: bigint) =>
     prisma.ocrSubjectScore.findMany({ where: { scoreId }, orderBy: { position: "asc" } }),
 
-  /** Each shift's spread — the inputs of the normalization formula. */
-  shiftStats: async (examId: bigint): Promise<ShiftStatsRow[]> => {
-    // Only marked sheets count: a typed-in total is self-reported, and letting it
-    // set a shift's scale would let anyone move everyone else's normalized marks.
-    const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-      SELECT s.shift_key, COUNT(*) AS candidates,
-             AVG(s.raw_score) AS mean, STDDEV_POP(s.raw_score) AS sd
-        FROM ws_ocr_scores s
-        JOIN ws_ocr_submissions sub ON sub.id = s.submission_id
-       WHERE s.exam_id = ${examId} AND s.shift_key IS NOT NULL AND sub.entry_mode = ${ENTRY_MODE.SHEET}
-       GROUP BY s.shift_key
-    `;
-
-    return rows.map((row) => ({
-      shift_key: row.shift_key as string,
-      candidates: asNumber(row.candidates),
-      mean: asNumber(row.mean),
-      sd: asNumber(row.sd),
-    }));
-  },
-
   /** The slots people actually sat, read off their scored sheets. */
   listShifts: async (examId: bigint): Promise<{ key: string; candidates: number }[]> => {
     const rows = await prisma.ocrScore.groupBy({
@@ -547,19 +506,18 @@ export const rankPredictorRepository = {
     examId: bigint,
     skip: number,
     take: number,
-    scope: BoardScope = {},
-    normalization?: ShiftNormalization | null
+    scope: BoardScope = {}
   ): Promise<LeaderboardRow[]> => {
     if (scope.subject) return rankPredictorRepository.subjectLeaderboardPage(examId, scope.subject, skip, take);
 
-    const mark = boardScore(normalization);
+    const mark = BOARD_MARK;
     const dob = Prisma.sql`fc.dob`;
     // Rank and page on the scores alone, then join names for just the page: the
     // board is read on every refresh, and joining customers and submissions for
     // every candidate before keeping twenty was most of its cost. The customer is
     // joined inside too because the order needs their date of birth.
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-      SELECT r.customer_id, r.raw_score, r.normalized_score, r.total_questions, r.rank_position,
+      SELECT r.customer_id, r.raw_score, r.total_questions, r.rank_position,
              sub.created_at                AS submitted_at,
              sub.entry_mode                AS entry_mode,
              c.full_name,
@@ -569,7 +527,6 @@ export const rankPredictorRepository = {
              p.gender
         FROM (
           SELECT s.id, s.customer_id, s.submission_id, s.raw_score,
-                 ${normalization?.size ? mark : Prisma.sql`NULL`} AS normalized_score,
                  s.correct + s.wrong + s.unanswered   AS total_questions,
                  RANK() OVER (ORDER BY ${mark} DESC, ${tieOrder(dob)}) AS rank_position,
                  ${mark} AS board_mark,
@@ -604,7 +561,6 @@ export const rankPredictorRepository = {
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
       SELECT s.customer_id,
              ss.score AS raw_score,
-             NULL     AS normalized_score,
              ss.correct + ss.wrong + ss.unanswered AS total_questions,
              RANK() OVER (ORDER BY ss.score DESC, ${tieOrder(Prisma.sql`c.dob`)}) AS rank_position,
              ss.max_marks                  AS max_marks,

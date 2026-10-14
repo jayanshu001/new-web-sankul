@@ -270,7 +270,7 @@ A date of birth is personal, so a client leaderboard row has no
 board still orders ties on it, and staff see everyone's on the admin board.
 
 The boards a student can see are switched per paper in `rank_by`: `category`,
-`gender`, `shift` (and `ex_serviceman`, `subject`, `normalized`). With category,
+`gender`, `shift` (and `ex_serviceman`, `subject`). With category,
 gender and shift all on, a student has up to eight ranks: Overall, Gender,
 Category, Gender + Category, Shift, Shift + Gender, Shift + Category and
 Shift + Gender + Category.
@@ -376,23 +376,14 @@ by name (§7 — not `yarn db:migrate`). It is additive: new nullable columns, o
 `questions` from `/extract`; against an older one the new fields are simply absent and
 papers fall back to admin keys.
 
-**Normalised marks across shifts (`rank_by` += `"normalized"`).** No DDL; computed per
-request. Each shift is mapped linearly so its mean and SD land on the common scale — the
-candidate-weighted mean of the shift means and the pooled within-shift SD — shrunk towards raw
-by `n / (n + 30)` for a shift of `n` marked sheets, its stretch bounded to ×0.67–×1.5, and capped
-at full marks. Every shift with sheets is normalized; a thin one only moves a little. (SSC's
-top-0.1% formula was dropped: on a few dozen uploads per shift it stretched shifts ×3, past full
-marks.) Boards that span shifts
-(overall, category, gender, their combinations, `nearby`, the unfiltered leaderboards and
-the rank snapshot) order on normalised marks and their `average_marks` is the normalised
-mean; boards inside one shift and subject boards stay raw. A paper with fewer than two
-shifts with marked sheets falls back to raw marks. Entries
-gain `normalized_score` (null when not normalising); standing gains `raw_score` and
-`normalized_score`. Leaderboards also take `gender`.
+**Normalised marks across shifts — removed 2026-10-14.** `rank_by` no longer accepts
+`"normalized"` (a stored one is ignored), and entries, `nearby` and the standing no longer carry
+`normalized_score`. Every board orders on raw marks. Normalizing a few dozen self-selected uploads
+per shift stretched some shifts past full marks (a raw 126 of 150 showed as 166.27).
 
 **Ex-serviceman board.** No DDL; reads `ws_ocr_profiles.is_ex_serviceman`. Standing gains
 `ex_serviceman` (position), filled only when the viewer's profile says ex-serviceman, else
-`null`. It spans shifts, so it orders on normalised marks like the overall board. Not gated by
+`null`. It spans shifts, like the overall board. Not gated by
 `rank_by`, like the gender boards. Leaderboards also take `exServiceman=true`.
 
 ---
@@ -445,7 +436,7 @@ questions × marks-per-correct). Such an entry is never re-marked (key publish, 
 and admin rescore all skip it; `scoreAndPublish` refuses it with `409 not_scorable`) and has no
 answer review (`404 review_unavailable`). The marks are self-reported and unverified.
 
-### 3.10 Exam types and normalizing many shifts
+### 3.10 Exam types and many shifts
 
 **A paper's type is its `key_source`, set under Edit Paper → Scoring & ranking.** Everything else is optional.
 
@@ -462,7 +453,7 @@ The student site reads the type, so a marks-only paper shows only the *Enter mar
 
 **Shifts are never configured.** Each is read off the sheets (`YYYY-MM-DDTHH:MM`), so papers with different dates, or 40-50 shifts, need no setup. A student who types marks on a shift-ranked paper picks a shift already seen, or enters its date and time.
 
-**Normalization** (`rank_by` includes `normalized`) maps each shift linearly so its mean and SD match the average shift's (pooled SD). A shift of n marked sheets moves only n / (n + 30) of the way, so a shift with a handful of uploads barely moves, and no shift is stretched past ×1.5. Normalized marks never exceed full marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
+There is no normalization across shifts: every board that spans shifts ranks on raw marks.
 
 ### 3.11 Score-based suggestions
 

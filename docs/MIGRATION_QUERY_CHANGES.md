@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-10-14 — Rank predictor: shift normalisation removed
+
+> **DDL:** none. **Data:** `rank_by` rows still holding `"normalized"` need no backfill —
+> `rankByOf` ignores unknown values; saving a paper writes the cleaned list. **Query:**
+> `shiftStats` and the 60 s normalisation cache are gone; `rankForExam` / `leaderboardPage`
+> always compare, order and average on `s.raw_score` (no per-shift `CASE`). **Validation:**
+> `rank_by` rejects `"normalized"` (`422`) — ship the admin build without the checkbox
+> together. **Response (removal):** `normalized_score` dropped from the standing, `nearby`,
+> client leaderboard entries and admin leaderboard rows. Why: normalising a few dozen
+> self-selected uploads per shift put marks past full marks (raw 126/150 → 166.27).
+> Docs: `docs/rank-predictor.md`, `docs/client/RANK_STANDING.md`.
+
 ## 2026-10-13 — Client video-category pagination: drop per-row counts + per-page scope walk
 
 > **DDL:** none. **Data:** none. **Response:** byte-identical (old vs new full JSON diffed over

@@ -165,8 +165,6 @@ export const RANK_BY = {
   SHIFT: "shift",
   CATEGORY: "category",
   SUBJECT: "subject",
-  /** Boards that span shifts rank on SSC-style normalized marks instead of raw marks. */
-  NORMALIZED: "normalized",
   /** Male / female boards, alone and crossed with shift and category. */
   GENDER: "gender",
   /** A board of ex-servicemen, for students who said they are one. */
@@ -211,18 +209,6 @@ export const SKIP_OPTION = 5;
  */
 export const CANCELLED_QUESTION = "*";
 export const NEARBY_RANK_RADIUS = 3;
-/**
- * How much a shift's own numbers are trusted: a shift of n sheets moves n / (n + this)
- * of the way to its full adjustment. Papers can have dozens of shifts with a handful
- * of uploads each, so a thin shift is adjusted only a little instead of not at all —
- * every shift is on the same scale, and one with 30 sheets moves halfway.
- */
-export const NORMALIZATION_SHRINK_CANDIDATES = 30;
-/**
- * The furthest one shift's marks may be stretched (or, as its inverse, squeezed).
- * Real shifts differ in spread by far less; past this is a lopsided set of uploads.
- */
-export const NORMALIZATION_MAX_SCALE = 1.5;
 export const MASKED_NAME_FALLBACK = "***";
 export const CUSTOMER_HANDLE_PREFIX = "ws_";
 export const PRISMA_UNIQUE_VIOLATION = "P2002";
@@ -465,8 +451,6 @@ export interface RankNeighbourDto {
   rank: number;
   name: string;
   raw_score: number;
-  /** What the board is ordered on when the paper normalizes across shifts; null otherwise. */
-  normalized_score: number | null;
   is_me: boolean;
 }
 
@@ -490,11 +474,10 @@ export interface RankSubjectStandingDto {
 }
 
 export interface RankStandingDto {
-  /** The viewer's own marks; `normalized_score` is null unless the paper normalizes across shifts. */
+  /** The viewer's own marks. */
   raw_score: number | null;
   /** What `raw_score` is out of; null with no score. */
   max_marks: number | null;
-  normalized_score: number | null;
   rank: number | null;
   percentile: number | null;
   total_candidates: number;
@@ -539,7 +522,6 @@ export interface RankLeaderboardEntryDto {
   rank: number;
   name: string;
   raw_score: number;
-  normalized_score: number | null;
   total_questions: number;
   /** Marks the entry is out of: what `raw_score` should be read against. */
   max_marks: number;
@@ -565,7 +547,6 @@ export interface RankAdminLeaderboardEntryDto {
   name: string;
   shows_real_name: boolean;
   raw_score: number;
-  normalized_score: number | null;
   total_questions: number;
   date_of_birth: string | null;
   caste_category: CasteCategory | null;
@@ -603,7 +584,6 @@ export interface RankSubmissionDeletionDto {
 export interface LeaderboardRow {
   customer_id: number;
   raw_score: number;
-  normalized_score: number | null;
   total_questions: number;
   rank_position: number;
   submitted_at: Date | null;
@@ -717,21 +697,6 @@ export interface BoardScope {
 export interface RankViewer {
   dateOfBirth: string | null;
   scoreId?: bigint;
-}
-
-/**
- * Per-shift linear map onto the common scale: normalized = min(scale × raw + offset, max),
- * where `max` is the paper's full marks.
- */
-export type ShiftNormalization = Map<string, { scale: number; offset: number; max: number }>;
-
-/** A shift's spread, as normalization reads it. */
-export interface ShiftStatsRow {
-  shift_key: string;
-  candidates: number;
-  mean: number;
-  /** Population standard deviation. */
-  sd: number;
 }
 
 export interface LeaderboardParams {
