@@ -215,6 +215,7 @@ export const confirmSubmission = asyncHandler(async (req: Request, res: Response
     corrections,
     shiftKey: shift ?? null,
     actorCustomerId: customerId,
+    examId: examIdOf(req),
   });
 
   return success(res, result, "Answers confirmed.");

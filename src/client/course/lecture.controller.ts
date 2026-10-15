@@ -70,7 +70,12 @@ export const getLectureHandler = async (req: Request, res: Response) => {
       subscribed = n != null && (await lecSql.hasActiveCourseSub(cid, n));
     } else if (type === "package" && packageId) {
       const n = lecSql.parseLecId(packageId);
-      subscribed = n != null && (await lecSql.hasActivePackageSub(cid, n));
+      // Membership BEFORE entitlement: without it ANY active package minted a token for
+      // ANY paid video (expired buyers kept playing via another package they hold).
+      if (n == null || !(await lecSql.videoBelongsToPackage(v.videoCategoryId, n))) {
+        return failure(res, "Lecture does not belong to this package", 403);
+      }
+      subscribed = await lecSql.hasActivePackageSub(cid, n);
     }
     if (!subscribed) return failure(res, "Active subscription required to access this lecture", 403);
 

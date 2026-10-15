@@ -8,6 +8,7 @@ import {
   setTrackingSchema,
   addTrackingEventSchema,
   updateSettingsSchema,
+  setTrackingCounterSchema,
 } from "./book.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -425,6 +426,41 @@ export const updateSettings = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error.issues) { logger.warn("updateSettings validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
     logger.error("updateSettings failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── Tracking ID counter (ws_book_tracking AUTO_INCREMENT) ────────────────────
+
+export const getTrackingCounter = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getTrackingCounter invoked", { traceId, path: req.originalUrl });
+
+  try {
+    const data = await adminBook.getTrackingCounter();
+    return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    logger.error("getTrackingCounter failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const setTrackingCounter = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("setTrackingCounter invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
+  try {
+    const { nextTrackingId } = setTrackingCounterSchema.parse(req.body);
+    const result = await adminBook.setTrackingCounter(nextTrackingId);
+    if ("error" in result) {
+      logger.warn("setTrackingCounter rejected", { traceId, nextTrackingId, reason: result.error });
+      return res.status(400).json({ success: false, message: result.error });
+    }
+    logger.info("setTrackingCounter success", { traceId, nextTrackingId, userId: req.user?.id });
+    return res.status(200).json({ success: true, data: result.data });
+  } catch (error: any) {
+    if (error.issues) { logger.warn("setTrackingCounter validation failed", { traceId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("setTrackingCounter failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -46,15 +46,15 @@ export const getVideoCategoryChildren = async (
   search?: string,
   paging?: { skip?: number; take?: number }
 ): Promise<{ parent: VideoCategoryDto; list: { category: VideoCategoryDto & { count: number; havingChildDirectory: boolean } }[]; total: number } | null> => {
-  const parentRow = await repo.findCategoryByIdAny(parentId);
+  const searchOpt = search?.trim() || undefined;
+  const [parentRow, { rows: children, total }] = await Promise.all([
+    repo.findCategoryByIdAny(parentId),
+    repo.listActiveChildrenPage(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
+  ]);
   if (!parentRow) return null;
 
-  const searchOpt = search?.trim() || undefined;
-  const [children, total] = await Promise.all([
-    repo.listActiveChildren(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
-    repo.countActiveChildren(parentId, { search: searchOpt }),
-  ]);
   const childIds = children.map((c) => c.id);
+  // One groupBy for the whole page — was one COUNT per child row (up to 500).
   const [videoCounts, childCountRows] = await Promise.all([
     repo.countActiveVideosByCategories(childIds),
     repo.childCountsByParent(childIds),

@@ -1,5 +1,6 @@
 // Rank predictor: sheet OCR, scoring, ranks, leaderboards and admin exam/key logic.
 import { isDeepStrictEqual } from "node:util";
+import type { Prisma } from "@prisma/client";
 import { OCR_SERVICE } from "../../config/ocrService";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../../utils/ocrExtractionClient";
 import logger from "../../utils/logger";
 import {
+  answerKeyPdfKey,
   copyRankPdf,
   deleteRankPdf,
   deleteRankPdfKeys,
@@ -29,13 +31,17 @@ import {
   lowConfidencePct,
   normalizePaperSeries,
   percentileFor,
+  roundScore,
 } from "./rank-predictor.scoring";
+import { paperMismatchOf } from "./rank-predictor.paper-match";
 import { resolveSubjects, scoreWithSubjects } from "./rank-predictor.subjects";
 import {
   answerKeyMapOf,
   answerMapOf,
   casteCategoryOf,
   displayNameFor,
+  dateOfBirthOf,
+  dateOfBirthValue,
   genderOf,
   examMarkingSchemeOf,
   keySourceOf,
@@ -54,6 +60,7 @@ import {
   toRankCandidateProfileDto,
   toRankCustomerDto,
   toRankExamDto,
+  scoredQuestionsOf,
   toRankScoreDto,
   toRankSubmissionDto,
   unknownRankCustomerDto,
@@ -65,7 +72,6 @@ import {
   ENTRY_MODE,
   KEY_SOURCE,
   NEARBY_RANK_RADIUS,
-  NORMALIZATION_MIN_SHIFT_CANDIDATES,
   RANK_BY,
   PRISMA_UNIQUE_VIOLATION,
   RANK_ERROR,
@@ -101,13 +107,13 @@ import {
   type RankAdminLeaderboardEntryDto,
   type RankAnswerReviewDto,
   type RankCandidateProfileDto,
+  type RankViewer,
   type RankCustomerDto,
   type RankExamDeletionDto,
   type RankExamDto,
   type RankLeaderboardEntryDto,
   type RankMyExamDto,
   type RankStandingDto,
-  type ShiftNormalization,
   type RankSubmissionDeletionDto,
   type RankSubmissionResultDto,
   type RescoreOutcome,
@@ -188,14 +194,18 @@ const assertSeriesAllowed = (allowedSeries: string[], series: string | null): vo
   }
 };
 
+type SubmissionUpdate = Parameters<typeof repo.updateSubmission>[1];
+
 const failSubmission = async (
   submissionId: bigint,
   customerId: number,
   failureCode: string,
   action: AuditAction,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  seen: SubmissionUpdate = {}
 ): Promise<void> => {
   await repo.updateSubmission(submissionId, {
+    ...seen,
     status: SUBMISSION_STATUS.FAILED,
     failureCode,
     updatedAt: new Date(),
@@ -214,6 +224,30 @@ const failSubmission = async (
 /** "YYYY-MM-DDTHH:MM" of the slot the sheet was sat in, or null when the sheet does not say. */
 const shiftKeyOf = (candidate: SheetCandidate | null | undefined): string | null =>
   candidate?.test_date && candidate.test_start ? `${candidate.test_date}T${candidate.test_start}` : null;
+
+/** What the reader made of a sheet it then refused, kept on the row for the admin who looks into it. */
+const seenOf = (extraction: OcrExtractionResult): SubmissionUpdate => ({
+  extractionKind: extraction.kind,
+  rollNumber: extraction.roll_number,
+  shiftKey: shiftKeyOf(extraction.candidate),
+  candidate: (extraction.candidate ?? undefined) as never,
+  candidateName: extraction.candidate?.name?.trim().slice(0, 255) || null,
+});
+
+/** Audit rows that record why a sheet was refused, with what the sheet said. */
+const FAILURE_ACTIONS: AuditAction[] = [
+  AUDIT_ACTION.SUBMISSION_EXTRACTION_FAILED,
+  AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
+  AUDIT_ACTION.SUBMISSION_EXAM_MISMATCH,
+];
+
+/**
+ * A refused sheet is kept this long for admins to look into, then its file is
+ * removed: it carries a roll number and a name. The row and its failure code stay.
+ */
+const FAILED_SHEET_RETENTION_DAYS = Number(process.env.RANK_FAILED_SHEET_RETENTION_DAYS) || 30;
+const PURGE_BATCH = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type FolderProfile = { casteCategory: string | null; gender: string | null } | null;
 
@@ -282,84 +316,35 @@ const positionOf = (board: {
   average_marks: board.average,
 });
 
+/** What a rank needs to know about the student beyond their marks: their date of birth, for ties. */
+const viewerOf = async (customerId: number): Promise<RankViewer> => ({
+  dateOfBirth: dateOfBirthOf(await repo.findCandidateProfile(customerId)),
+});
+
+/** The whole-paper board. */
+const overallStanding = (exam: ExamRow, rawScore: number, viewer: RankViewer) =>
+  repo.rankForExam(exam.id, rawScore, {}, viewer);
+
+/** One page of a board. */
 /**
- * SSC-style normalization: each shift's marks are mapped linearly so that its
- * top-share mean (NORMALIZATION_TOP_SHARE, 1%, at least five) and its mean + SD
- * land on the whole field's. Null when the paper
- * does not normalize, has fewer than two shifts, or no shift is big enough.
+ * Finds a sheet the way the admin list names its student: their name, phone or
+ * email, their `ws_<id>` handle, the roll number, or the name the sheet prints.
  */
-/**
- * The shift statistics are a window over every score of the paper, and they move
- * by a hair per sheet. Every upload and every result view needs them, so they are
- * held for a short while per paper (and shared by concurrent callers) instead of
- * being recomputed thousands of times in an exam-day rush.
- */
-const NORMALIZATION_TTL_MS = 60_000;
-const normalizationCache = new Map<string, { at: number; value: Promise<ShiftNormalization | null> }>();
+const submissionSearchOr = async (search: string): Promise<Prisma.OcrSubmissionWhereInput[]> => {
+  const customerIds = await repo.findSubmittingCustomerIds(search);
+  // Capped at nine digits so the id always fits the INT column.
+  const handle = /^ws_(\d{1,9})$/i.exec(search);
+  if (handle) customerIds.push(Number(handle[1]));
 
-const forgetNormalization = (): void => normalizationCache.clear();
-
-const normalizationFor = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
-  if (!rankByOf(exam).includes(RANK_BY.NORMALIZED)) return null;
-
-  const key = String(exam.id);
-  const cached = normalizationCache.get(key);
-  if (cached && Date.now() - cached.at < NORMALIZATION_TTL_MS) return cached.value;
-
-  const value = computeNormalization(exam).catch((error) => {
-    normalizationCache.delete(key);
-    throw error;
-  });
-  normalizationCache.set(key, { at: Date.now(), value });
-  return value;
+  return [
+    { rollNumber: { contains: search } },
+    { candidateName: { contains: search } },
+    ...(customerIds.length ? [{ customerId: { in: customerIds } }] : []),
+  ];
 };
 
-const computeNormalization = async (exam: ExamRow): Promise<ShiftNormalization | null> => {
-  const rows = await repo.shiftStats(exam.id);
-  const field = rows.find((row) => row.shift_key === null);
-  const shifts = rows.filter((row) => row.shift_key !== null);
-  const fieldSpread = field ? field.top_mean - field.mean_plus_sd : 0;
-  if (!field || shifts.length < 2 || fieldSpread <= 0) return null;
-
-  const normalization: ShiftNormalization = new Map();
-  for (const shift of shifts) {
-    const spread = shift.top_mean - shift.mean_plus_sd;
-    if (shift.candidates < NORMALIZATION_MIN_SHIFT_CANDIDATES || spread <= 0) continue;
-    const scale = fieldSpread / spread;
-    normalization.set(shift.shift_key as string, {
-      scale,
-      offset: field.mean_plus_sd - scale * shift.mean_plus_sd,
-    });
-  }
-
-  return normalization.size ? normalization : null;
-};
-
-/** A raw mark on the common scale; a shift the normalization leaves out keeps its raw mark. */
-const normalizedOf = (
-  normalization: ShiftNormalization | null,
-  shiftKey: string | null,
-  rawScore: number
-): number => {
-  const map = shiftKey ? normalization?.get(shiftKey) : undefined;
-  return map ? map.scale * rawScore + map.offset : rawScore;
-};
-
-/** The whole-paper board, on normalized marks when the paper normalizes. */
-const overallStanding = async (exam: ExamRow, rawScore: number, shiftKey: string | null) => {
-  const normalization = await normalizationFor(exam);
-  return repo.rankForExam(exam.id, normalizedOf(normalization, shiftKey, rawScore), {}, normalization);
-};
-
-/** One page of a board. Shift and subject boards are within one sitting, so they stay raw. */
-const boardPage = async (exam: ExamRow, skip: number, take: number, scope: BoardScope = {}) =>
-  repo.leaderboardPage(
-    exam.id,
-    skip,
-    take,
-    scope,
-    scope.shiftKey || scope.subject ? null : await normalizationFor(exam)
-  );
+const boardPage = (exam: ExamRow, skip: number, take: number, scope: BoardScope = {}) =>
+  repo.leaderboardPage(exam.id, skip, take, scope);
 
 /** Only the cancellations move a score; adding or renaming an empty slot does not. */
 const cancellationsOf = (shifts: PaperShift[]): Record<string, number[]> =>
@@ -379,16 +364,10 @@ const assertSubmissionModesFor = (keySource: KeySource, modes: SubmissionMode[])
 };
 
 /**
- * A marks_only paper has no sheet to read a slot off, so students pick from the
- * admin's list — which therefore has to exist. A cancelled question has to be on the paper.
+ * No shifts is fine on any paper — a single-session exam has none, and students
+ * typing marks then pick nothing. A cancelled question has to be on the paper.
  */
-const assertShiftsFor = (keySource: KeySource, shifts: PaperShift[], totalQuestions: number): void => {
-  if (keySource === KEY_SOURCE.MARKS_ONLY && !shifts.length) {
-    throw new HttpError(422, "Add at least one shift: a marks-only paper ranks students by the shift they pick.", {
-      error: RANK_ERROR.SHIFTS_REQUIRED,
-    });
-  }
-
+const assertShiftsFor = (shifts: PaperShift[], totalQuestions: number): void => {
   const outside = shifts.flatMap((shift) =>
     shift.cancelled_questions.filter((question) => question > totalQuestions)
   );
@@ -441,23 +420,49 @@ const resolveKey = async (
     : { missing: SUBMISSION_WARNING.NO_ACTIVE_ANSWER_KEY };
 };
 
-/**
- * What a typed-in total may reach: the syllabus marks when every subject has
- * them, otherwise one mark scheme over every question.
- */
-const maxMarksOf = async (exam: ExamRow): Promise<number> => {
+interface MarkScale {
+  /** The paper's marks when every syllabus subject sets them; they hold whatever is cancelled. */
+  syllabusMarks: number | null;
+  /** A correct answer's marks under the paper's scheme. */
+  perQuestion: number;
+  /** The whole paper's marks — what a typed-in total may reach. */
+  fullMarks: number;
+}
+
+/** How a paper's marks add up: the syllabus marks, or one mark scheme over every question. */
+const markScaleOf = async (exam: ExamRow): Promise<MarkScale> => {
   const syllabus = syllabusOf(exam);
-  if (syllabus.length && syllabus.every((subject) => subject.marks !== undefined)) {
-    return syllabus.reduce((sum, subject) => sum + (subject.marks as number), 0);
-  }
+  const syllabusMarks =
+    syllabus.length && syllabus.every((subject) => subject.marks !== undefined)
+      ? syllabus.reduce((sum, subject) => sum + (subject.marks as number), 0)
+      : null;
 
+  let perQuestion: number;
   if (keySourceOf(exam) !== KEY_SOURCE.ADMIN_KEY) {
-    return exam.totalQuestions * examMarkingSchemeOf(exam).marksCorrect;
+    perQuestion = examMarkingSchemeOf(exam).marksCorrect;
+  } else {
+    // The published key's marks are what sheets are scored on; until there is
+    // one, the paper's own marks (the key form's defaults) are the best guess.
+    const [latest] = await repo.listAnswerKeys(exam.id);
+    perQuestion = (latest ? markingSchemeOf(latest) : examMarkingSchemeOf(exam)).marksCorrect;
   }
 
-  const [latest] = await repo.listAnswerKeys(exam.id);
-  return exam.totalQuestions * (latest ? markingSchemeOf(latest).marksCorrect : 1);
+  return {
+    syllabusMarks,
+    perQuestion,
+    fullMarks: syllabusMarks ?? exam.totalQuestions * perQuestion,
+  };
 };
+
+const maxMarksOf = async (exam: ExamRow): Promise<number> => (await markScaleOf(exam)).fullMarks;
+
+/**
+ * What one score is out of. A marked sheet is out of the questions it was marked
+ * on (cancellations drop out) at the paper's rate; a typed total, which has no
+ * questions, is out of the whole paper.
+ */
+const outOf = (scale: MarkScale, scoredQuestions: number): number =>
+  scoredQuestions > 0 ? (scale.syllabusMarks ?? scoredQuestions * scale.perQuestion) : scale.fullMarks;
 
 /** A board the admin has not switched on is refused rather than silently served. */
 const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void => {
@@ -466,6 +471,8 @@ const assertBoardEnabled = (exam: ExamRow, scope: BoardScope | undefined): void 
     [Boolean(scope?.shiftKey), RANK_BY.SHIFT],
     [Boolean(scope?.casteCategory), RANK_BY.CATEGORY],
     [Boolean(scope?.subject), RANK_BY.SUBJECT],
+    [Boolean(scope?.gender), RANK_BY.GENDER],
+    [Boolean(scope?.exServiceman), RANK_BY.EX_SERVICEMAN],
   ];
 
   for (const [requested, breakdown] of wanted) {
@@ -514,7 +521,6 @@ const rescoreMany = async (submissionIds: bigint[]): Promise<RescoreOutcome> => 
   };
 
   await Promise.all(Array.from({ length: Math.min(RESCORE_CONCURRENCY, submissionIds.length) }, lane));
-  forgetNormalization();
   return { rescored, skipped };
 };
 
@@ -609,16 +615,19 @@ const readQueuedSheet = async (
   const customerId = submission.customerId;
   const sourcePdfKey = submission.sourcePdfKey;
 
-  /** A sheet that will never read: fail it and drop the stored copy. */
+  /**
+   * A sheet that will never read: fail it, so the student can upload again. The
+   * stored sheet is kept, with what the reader made of it, so an admin can open
+   * it and see why; purgeFailedSheets removes the file after its keeping time.
+   */
   const reject = async (
     code: string,
     action: AuditAction,
     metadata: Record<string, unknown>,
-    outcome: RankSheetJobOutcome
+    outcome: RankSheetJobOutcome,
+    seen: SubmissionUpdate = {}
   ): Promise<RankSheetJobOutcome> => {
-    await failSubmission(submission.id, customerId, code, action, metadata);
-    await deleteRankSheet(sourcePdfKey);
-    await repo.updateSubmission(submission.id, { sourcePdfKey: null, updatedAt: new Date() });
+    await failSubmission(submission.id, customerId, code, action, metadata, seen);
     return outcome;
   };
 
@@ -651,7 +660,27 @@ const readQueuedSheet = async (
       RANK_ERROR.QUESTION_COUNT_MISMATCH,
       AUDIT_ACTION.SUBMISSION_QUESTION_COUNT_MISMATCH,
       { expected: exam.totalQuestions, detected: extraction.total_questions },
-      settled(422, "That sheet does not match this exam.", details)
+      settled(422, "That sheet does not match this exam.", details),
+      seenOf(extraction)
+    );
+  }
+
+  // Two papers with the same question count both accept each other's sheets
+  // above; what the sheet prints about its sitting tells them apart.
+  const mismatch = paperMismatchOf(
+    { name: exam.name, code: exam.code, examDate: exam.examDate, shifts: paperShiftsOf(exam) },
+    extraction.candidate
+  );
+  if (mismatch) {
+    return reject(
+      RANK_ERROR.SHEET_EXAM_MISMATCH,
+      AUDIT_ACTION.SUBMISSION_EXAM_MISMATCH,
+      { ...mismatch },
+      settled(422, "That sheet is from a different exam.", {
+        error: RANK_ERROR.SHEET_EXAM_MISMATCH,
+        ...mismatch,
+      }),
+      seenOf(extraction)
     );
   }
 
@@ -666,7 +695,8 @@ const readQueuedSheet = async (
         { code: RANK_ERROR.SHEET_ALREADY_SUBMITTED, roll_number: extraction.roll_number },
         settled(409, "That sheet has already been submitted by another student.", {
           error: RANK_ERROR.SHEET_ALREADY_SUBMITTED,
-        })
+        }),
+        seenOf(extraction)
       );
     }
   }
@@ -724,6 +754,45 @@ const readQueuedSheet = async (
   }
 
   return { ok: true, result: await rankPredictorService.scoreAndPublish(submission.id, customerId) };
+};
+
+/**
+ * Queues a stored sheet and waits a short while for its result, as an upload
+ * does. Waiting holds the request, and the sheet in its memory, open; in a rush
+ * the sheet would not be reached within the wait anyway, so answer "queued" at
+ * once and let the request go.
+ */
+const readSheetSoon = async (
+  submissionId: bigint,
+  inline?: { pdf: Buffer; html?: Buffer }
+): Promise<RankSubmissionResultDto> => {
+  let outcome: RankSheetJobOutcome | null;
+  try {
+    const job = await enqueueRankSheet(submissionId);
+    const backlog = await rankSheetBacklog();
+    outcome =
+      backlog <= OCR_SERVICE.UPLOAD_WAIT_MAX_BACKLOG
+        ? await waitForRankSheet(job, OCR_SERVICE.UPLOAD_WAIT_MS)
+        : null;
+  } catch (error) {
+    // Queue unavailable (Redis down): read it here rather than lose the sheet.
+    logger.warn("Rank sheet queue unavailable, reading inline", {
+      submissionId: String(submissionId),
+      error: (error as Error).message,
+    });
+    outcome = await readQueuedSheet(submissionId, inline);
+  }
+
+  if (!outcome) {
+    return {
+      submission_id: String(submissionId),
+      status: SUBMISSION_STATUS.PROCESSING,
+      score: null,
+      warning: SUBMISSION_WARNING.QUEUED,
+    };
+  }
+  if (!outcome.ok) throw new HttpError(outcome.status, outcome.message, outcome.details);
+  return outcome.result;
 };
 
 export const rankPredictorService = {
@@ -825,36 +894,56 @@ export const rankPredictorService = {
     if (params.sheetHtml) await putRankHtml(sourcePdfKey, params.sheetHtml);
     await repo.updateSubmission(submission.id, { sourcePdfKey, updatedAt: new Date() });
 
-    let outcome: RankSheetJobOutcome | null;
-    try {
-      const job = await enqueueRankSheet(submission.id);
-      // Waiting holds this request, and the sheet in its memory, open. In a rush
-      // the sheet would not be reached within the wait anyway, so answer "queued"
-      // at once and let the request go.
-      const backlog = await rankSheetBacklog();
-      outcome =
-        backlog <= OCR_SERVICE.UPLOAD_WAIT_MAX_BACKLOG
-          ? await waitForRankSheet(job, OCR_SERVICE.UPLOAD_WAIT_MS)
-          : null;
-    } catch (error) {
-      // Queue unavailable (Redis down): read it here rather than lose the upload.
-      logger.warn("Rank sheet queue unavailable, reading inline", {
-        submissionId: String(submission.id),
-        error: (error as Error).message,
+    return readSheetSoon(submission.id, { pdf: params.fileBuffer, html: params.sheetHtml });
+  },
+
+  /**
+   * One click from an admin: reads a refused sheet again from the copy the
+   * student uploaded, through the same checks as an upload — for when the
+   * reader has since been fixed. Refused while the student has another sheet in
+   * for the paper, so no one is counted twice.
+   */
+  rereadSubmission: async (submissionId: bigint, adminId: number | null): Promise<RankSubmissionResultDto> => {
+    const submission = await requireSubmission(submissionId);
+
+    if (submission.status !== SUBMISSION_STATUS.FAILED || submission.entryMode === ENTRY_MODE.MARKS) {
+      throw new HttpError(409, "Only a refused sheet can be read again.", {
+        error: RANK_ERROR.NOT_REREADABLE,
+        status: submission.status,
       });
-      outcome = await readQueuedSheet(submission.id, { pdf: params.fileBuffer, html: params.sheetHtml });
+    }
+    if (!submission.sourcePdfKey) {
+      throw new HttpError(410, "That sheet is no longer stored, so the student needs to upload it again.", {
+        error: RANK_ERROR.FILE_REQUIRED,
+      });
     }
 
-    if (!outcome) {
-      return {
-        submission_id: String(submission.id),
-        status: SUBMISSION_STATUS.PROCESSING,
-        score: null,
-        warning: SUBMISSION_WARNING.QUEUED,
-      };
+    const active = await repo.findActiveSubmission(submission.examId, submission.customerId);
+    if (active) {
+      throw new HttpError(409, "The student has already sent another sheet for this paper.", {
+        error: RANK_ERROR.ALREADY_SUBMITTED,
+        submission_id: String(active.id),
+        submitted_at: active.createdAt,
+      });
     }
-    if (!outcome.ok) throw new HttpError(outcome.status, outcome.message, outcome.details);
-    return outcome.result;
+
+    // Conditional, so two admins pressing at once queue the sheet once.
+    if (!(await repo.reopenFailedSubmission(submission.id))) {
+      throw new HttpError(409, "That sheet is already being read again.", {
+        error: RANK_ERROR.NOT_REREADABLE,
+      });
+    }
+
+    await audit({
+      action: AUDIT_ACTION.SUBMISSION_REREAD,
+      entityType: AUDIT_ENTITY.SUBMISSION,
+      entityId: String(submission.id),
+      actorType: ACTOR_TYPE.ADMIN,
+      actorId: adminId,
+      metadata: { previous_failure: submission.failureCode },
+    });
+
+    return readSheetSoon(submission.id);
   },
 
   /** The worker's half of an upload — see readQueuedSheet. */
@@ -877,20 +966,48 @@ export const rankPredictorService = {
   /** Sheets a crash or a deploy left half-way, for the worker to queue again on boot. */
   pendingQueuedSheets: (): Promise<bigint[]> => repo.listPendingSheetSubmissionIds(),
 
+  /** Removes the files of refused sheets past FAILED_SHEET_RETENTION_DAYS; returns how many. */
+  purgeFailedSheets: async (): Promise<number> => {
+    const before = new Date(Date.now() - FAILED_SHEET_RETENTION_DAYS * DAY_MS);
+    let purged = 0;
+    for (;;) {
+      const batch = await repo.listExpiredFailedSheets(before, PURGE_BATCH);
+      if (!batch.length) break;
+      // deleteRankSheet never throws, so a file already gone cannot stall the run.
+      await Promise.all(batch.map((row) => deleteRankSheet(row.sourcePdfKey as string)));
+      await repo.clearSheetKeys(batch.map((row) => row.id));
+      purged += batch.length;
+      if (batch.length < PURGE_BATCH) break;
+    }
+    return purged;
+  },
+
+  /** What the sheet said when it was refused (question counts, printed date and title, roll number). */
+  getFailureDetails: async (submissionId: bigint): Promise<Record<string, unknown> | null> => {
+    const row = await repo.findLatestAudit(AUDIT_ENTITY.SUBMISSION, String(submissionId), FAILURE_ACTIONS);
+    const metadata = row?.metadata;
+    return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : null;
+  },
+
   createMarksSubmission: async (params: MarksSubmissionInput): Promise<RankSubmissionResultDto> => {
     const exam = await requireExam(params.examId);
     const allowedSeries = parsePaperSeries(exam.paperSeries);
     assertSeriesAllowed(allowedSeries, params.series);
 
-    // A marks_only paper is ranked by the slot its admin set up, so the slot is
-    // required and must be one of them; elsewhere it is needed only for a shift rank.
+    // A marks_only paper is ranked by the slots its admin set up, so one of them
+    // is required — when it has any: a paper with none was one sitting, and the
+    // student has nothing to pick from. Elsewhere a slot is needed only for a
+    // shift rank, and can be typed in.
     const isMarksOnly = keySourceOf(exam) === KEY_SOURCE.MARKS_ONLY;
-    if ((isMarksOnly || rankByOf(exam).includes(RANK_BY.SHIFT)) && !params.shiftKey) {
+    const configuredShifts = paperShiftsOf(exam).map((shift) => shift.key);
+    const needsShift = isMarksOnly ? configuredShifts.length > 0 : rankByOf(exam).includes(RANK_BY.SHIFT);
+    if (needsShift && !params.shiftKey) {
       throw new HttpError(422, "Please pick the shift you sat.", {
         error: RANK_ERROR.SHIFT_REQUIRED,
       });
     }
-    const configuredShifts = paperShiftsOf(exam).map((shift) => shift.key);
     if (isMarksOnly && configuredShifts.length && !configuredShifts.includes(params.shiftKey as string)) {
       throw new HttpError(422, "Please pick one of the shifts listed for this paper.", {
         error: RANK_ERROR.SHIFT_NOT_LISTED,
@@ -899,7 +1016,9 @@ export const rankPredictorService = {
     }
 
     const maxMarks = await maxMarksOf(exam);
-    if (params.marks > maxMarks || params.marks < -maxMarks) {
+    // Typed marks go on the stored grid too — see roundScore.
+    const marks = roundScore(params.marks);
+    if (marks > maxMarks || marks < -maxMarks) {
       throw new HttpError(422, `Marks must be between -${maxMarks} and ${maxMarks} for this paper.`, {
         error: RANK_ERROR.MARKS_OUT_OF_RANGE,
         max_marks: maxMarks,
@@ -948,14 +1067,18 @@ export const rankPredictorService = {
         correct: 0,
         wrong: 0,
         unanswered: 0,
-        rawScore: params.marks,
+        rawScore: marks,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
-      { rawScore: params.marks, updatedAt: new Date() }
+      { rawScore: marks, updatedAt: new Date() }
     );
 
-    const { higher, candidates } = await overallStanding(exam, params.marks, params.shiftKey);
+    const { higher, candidates } = await overallStanding(
+      exam,
+      marks,
+      await viewerOf(params.customerId)
+    );
     const rank = higher + 1;
     const percentile = percentileFor(rank, candidates);
     await repo.upsertRankSnapshot(score.id, exam.id, rank, candidates, percentile);
@@ -966,13 +1089,13 @@ export const rankPredictorService = {
       entityId: String(submission.id),
       actorType: ACTOR_TYPE.CUSTOMER,
       actorId: params.customerId,
-      metadata: { raw_score: params.marks, rank, total_candidates: candidates, entry_mode: "marks" },
+      metadata: { raw_score: marks, rank, total_candidates: candidates, entry_mode: "marks" },
     });
 
     return {
       submission_id: String(submission.id),
       status: SUBMISSION_STATUS.PROCESSED,
-      score: toRankScoreDto(score),
+      score: toRankScoreDto(score, maxMarks),
       rank,
       percentile,
       total_candidates: candidates,
@@ -1078,7 +1201,11 @@ export const rankPredictorService = {
       };
     }
 
-    const { higher, candidates } = await overallStanding(exam, result.rawScore, submission.shiftKey);
+    const { higher, candidates } = await overallStanding(
+      exam,
+      result.rawScore,
+      await viewerOf(submission.customerId)
+    );
     const rank = higher + 1;
     const percentile = percentileFor(rank, candidates);
 
@@ -1096,7 +1223,7 @@ export const rankPredictorService = {
     return {
       submission_id: String(submission.id),
       status: SUBMISSION_STATUS.PROCESSED,
-      score: toRankScoreDto(score),
+      score: toRankScoreDto(score, outOf(await markScaleOf(exam), scoredQuestionsOf(score))),
       rank,
       percentile,
       total_candidates: candidates,
@@ -1110,10 +1237,48 @@ export const rankPredictorService = {
     /** Only fills a shift the sheet did not print; what the sheet says wins. */
     shiftKey?: string | null;
     actorCustomerId: number | null;
+    /** The paper in the student's URL; the sheet has to be on it. */
+    examId?: bigint;
   }): Promise<RankSubmissionResultDto> => {
     const submission = await repo.findSubmissionById(params.submissionId);
-    if (!submission) {
+    if (!submission || (params.examId !== undefined && submission.examId !== params.examId)) {
       throw new HttpError(404, "Submission not found.", { error: RANK_ERROR.NOT_FOUND });
+    }
+
+    // A typed total has no answers; writing some would only be thrown away.
+    if (submission.entryMode === ENTRY_MODE.MARKS) {
+      throw new HttpError(409, "That entry was typed in as marks, so there are no answers to correct.", {
+        error: RANK_ERROR.NOT_SCORABLE,
+        status: submission.status,
+      });
+    }
+
+    // A student may only settle the answers the reader was unsure of, and only
+    // while the sheet waits on them. Without this, anyone could rewrite a scored
+    // sheet — the review shows them the key — and put themselves first. Staff
+    // (no customer id) keep the full correction.
+    if (params.actorCustomerId !== null) {
+      if (submission.status !== SUBMISSION_STATUS.NEEDS_REVIEW) {
+        throw new HttpError(409, "That sheet is not waiting for your review.", {
+          error: RANK_ERROR.NOT_SCORABLE,
+          status: submission.status,
+        });
+      }
+
+      // Re-sending an answer unchanged is allowed, so a client that posts the
+      // whole sheet back keeps working; only a change outside the flagged
+      // questions is refused.
+      const flagged = new Set(((submission.lowConfidenceQuestions ?? []) as number[]).map(String));
+      const current = answerMapOf(submission);
+      const outside = Object.entries(params.corrections)
+        .filter(([question, answer]) => !flagged.has(question) && (current[question] ?? null) !== answer)
+        .map(([question]) => Number(question));
+      if (outside.length) {
+        throw new HttpError(422, "Only the answers we could not read clearly can be corrected.", {
+          error: RANK_ERROR.CORRECTION_NOT_ALLOWED,
+          questions: outside,
+        });
+      }
     }
 
     await repo.updateSubmission(submission.id, {
@@ -1141,17 +1306,20 @@ export const rankPredictorService = {
     const [exam, score, profile] = await Promise.all([
       requireExam(examId),
       repo.findScoreForCustomer(examId, customerId),
-      repo.findProfile(customerId),
+      repo.findCandidateProfile(customerId),
     ]);
     const casteCategory: CasteCategory | null = casteCategoryOf(profile);
-    const gender = genderOf(profile);
-    const exServiceman = profile?.isExServiceman === true;
+    const dateOfBirth = dateOfBirthOf(profile);
     const enabled = rankByOf(exam);
+    // A board the paper does not show is not worked out at all.
+    const gender = genderOf(profile);
+    const genderOn = enabled.includes(RANK_BY.GENDER) && gender !== null;
+    const exServiceman = enabled.includes(RANK_BY.EX_SERVICEMAN) && profile?.isExServiceman === true;
 
     if (!score) {
       return {
         raw_score: null,
-        normalized_score: null,
+        max_marks: null,
         rank: null,
         percentile: null,
         total_candidates: await repo.countCandidates(examId),
@@ -1162,9 +1330,11 @@ export const rankPredictorService = {
         average_marks: null,
         category_average_marks: null,
         gender,
+        date_of_birth: dateOfBirth,
         overall_gender: null,
         shift_gender: null,
         category_gender: null,
+        shift_category_gender: null,
         ex_serviceman: null,
         shift: null,
         shift_category: null,
@@ -1176,15 +1346,15 @@ export const rankPredictorService = {
     const rawScore = Number(score.rawScore);
     const shiftKey = enabled.includes(RANK_BY.SHIFT) ? score.shiftKey : null;
     const categoryOn = enabled.includes(RANK_BY.CATEGORY) && casteCategory !== null;
-    // Boards that span shifts compare normalized marks; boards inside one shift stay raw.
-    const normalization = await normalizationFor(exam);
-    const normalized = normalizedOf(normalization, score.shiftKey, rawScore);
-    const across = (scope: BoardScope = {}) =>
-      repo.rankForExam(examId, normalized, scope, normalization);
+    const viewer: RankViewer = { dateOfBirth };
+    const across = (scope: BoardScope = {}) => repo.rankForExam(examId, rawScore, scope, viewer);
+    const withinShift = (scope: BoardScope) =>
+      repo.rankForExam(examId, rawScore, { shiftKey, ...scope }, viewer);
 
     // Each standing is its own count over the same scores, so they are issued
     // together rather than one after another.
     const [
+      scale,
       overall,
       category,
       shift,
@@ -1192,18 +1362,20 @@ export const rankPredictorService = {
       overallGender,
       shiftGender,
       categoryGender,
+      shiftCategoryGender,
       exServicemanBoard,
       subjectRows,
     ] = await Promise.all([
-      across(),
+      markScaleOf(exam),
+      // The overall board also places the viewer among their ties, for the strip below.
+      repo.rankForExam(examId, rawScore, {}, { ...viewer, scoreId: score.id }),
       categoryOn ? across({ casteCategory }) : null,
-      shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey }) : null,
-      shiftKey && categoryOn
-        ? repo.rankForExam(examId, rawScore, { shiftKey, casteCategory })
-        : null,
-      gender ? across({ gender }) : null,
-      gender && shiftKey ? repo.rankForExam(examId, rawScore, { shiftKey, gender }) : null,
-      gender && categoryOn ? across({ casteCategory, gender }) : null,
+      shiftKey ? withinShift({}) : null,
+      shiftKey && categoryOn ? withinShift({ casteCategory }) : null,
+      genderOn ? across({ gender }) : null,
+      genderOn && shiftKey ? withinShift({ gender }) : null,
+      genderOn && categoryOn ? across({ casteCategory, gender }) : null,
+      genderOn && shiftKey && categoryOn ? withinShift({ casteCategory, gender }) : null,
       exServiceman ? across({ exServiceman }) : null,
       enabled.includes(RANK_BY.SUBJECT) ? repo.listSubjectScores(score.id) : null,
     ]);
@@ -1211,7 +1383,12 @@ export const rankPredictorService = {
     const subjects: RankSubjectStandingDto[] | null = subjectRows
       ? await Promise.all(
           subjectRows.map(async (row) => {
-            const standing = await repo.subjectRankForExam(examId, row.subject, Number(row.score));
+            const standing = await repo.subjectRankForExam(
+              examId,
+              row.subject,
+              Number(row.score),
+              dateOfBirth
+            );
             return {
               name: row.subject,
               score: Number(row.score),
@@ -1227,12 +1404,14 @@ export const rankPredictorService = {
       : null;
 
     const rank = overall.higher + 1;
-    const skip = Math.max(0, rank - 1 - NEARBY_RANK_RADIUS);
+    // Centred on the viewer's own row: with many on their mark, the first of the
+    // tie can sit further up than the strip reaches.
+    const skip = Math.max(0, overall.higher + overall.tiedBefore - NEARBY_RANK_RADIUS);
     const rows = await boardPage(exam, skip, NEARBY_RANK_RADIUS * 2 + 1);
 
     return {
       raw_score: rawScore,
-      normalized_score: normalization ? Math.round(normalized * 100) / 100 : null,
+      max_marks: outOf(scale, scoredQuestionsOf(score)),
       rank,
       percentile: percentileFor(rank, overall.candidates),
       total_candidates: overall.candidates,
@@ -1243,9 +1422,11 @@ export const rankPredictorService = {
       average_marks: overall.average,
       category_average_marks: category?.average ?? null,
       gender,
+      date_of_birth: dateOfBirth,
       overall_gender: overallGender ? positionOf(overallGender) : null,
       shift_gender: shiftGender ? positionOf(shiftGender) : null,
       category_gender: categoryGender ? positionOf(categoryGender) : null,
+      shift_category_gender: shiftCategoryGender ? positionOf(shiftCategoryGender) : null,
       ex_serviceman: exServicemanBoard ? positionOf(exServicemanBoard) : null,
       shift: shift && shiftKey ? { key: shiftKey, ...positionOf(shift) } : null,
       shift_category: shiftCategory ? positionOf(shiftCategory) : null,
@@ -1254,7 +1435,6 @@ export const rankPredictorService = {
         rank: row.rank_position,
         name: displayNameFor(row.full_name, row.show_real_name),
         raw_score: row.raw_score,
-        normalized_score: row.normalized_score,
         is_me: row.customer_id === customerId,
       })),
     };
@@ -1266,21 +1446,32 @@ export const rankPredictorService = {
     const exam = await requireExam(params.examId);
     assertBoardEnabled(exam, params.scope);
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, scale] = await Promise.all([
       boardPage(exam, (params.page - 1) * params.pageSize, params.pageSize, params.scope),
       params.scope?.subject
         ? repo.countSubjectCandidates(params.examId, params.scope.subject)
         : repo.countCandidates(params.examId, params.scope),
+      markScaleOf(exam),
     ]);
+    // On a marks-only paper every entry is typed, so flagging them says nothing.
+    const checksSheets = keySourceOf(exam) !== KEY_SOURCE.MARKS_ONLY;
 
     return {
-      entries: rows.map((row) => toLeaderboardEntryDto(row, params.viewerCustomerId)),
+      entries: rows.map((row) =>
+        toLeaderboardEntryDto(row, params.viewerCustomerId, {
+          maxMarks: row.max_marks ?? outOf(scale, row.total_questions),
+          selfReported: checksSheets && row.entry_mode === ENTRY_MODE.MARKS,
+        })
+      ),
       total,
     };
   },
 
   getMyRanks: async (customerId: number): Promise<RankMyExamDto[]> => {
-    const submissions = await repo.listMySubmissions(customerId);
+    const [submissions, viewer] = await Promise.all([
+      repo.listMySubmissions(customerId),
+      viewerOf(customerId),
+    ]);
 
     return Promise.all(
       submissions.map(async (submission) => {
@@ -1302,16 +1493,18 @@ export const rankPredictorService = {
         const { higher, candidates } = await overallStanding(
           submission.exam,
           Number(submission.score.rawScore),
-          submission.score.shiftKey
+          viewer
         );
         const rank = higher + 1;
+
+        const scale = await markScaleOf(submission.exam);
 
         return {
           exam,
           rank,
           percentile: percentileFor(rank, candidates),
           total_candidates: candidates,
-          score: toRankScoreDto(submission.score),
+          score: toRankScoreDto(submission.score, outOf(scale, scoredQuestionsOf(submission.score))),
           submitted_at: submission.createdAt,
           status,
         };
@@ -1387,7 +1580,7 @@ export const rankPredictorService = {
   },
 
   getCandidateProfile: async (customerId: number): Promise<RankCandidateProfileDto> =>
-    toRankCandidateProfileDto(await repo.findProfile(customerId)),
+    toRankCandidateProfileDto(await repo.findCandidateProfile(customerId)),
 
   saveCandidateProfile: async (
     customerId: number,
@@ -1398,6 +1591,7 @@ export const rankPredictorService = {
       casteCategory: input.casteCategory,
       gender: input.gender,
       isExServiceman: input.isExServiceman,
+      dateOfBirth: dateOfBirthValue(input.dateOfBirth),
     });
 
     await audit({
@@ -1410,6 +1604,7 @@ export const rankPredictorService = {
         caste_category: input.casteCategory,
         gender: input.gender,
         is_ex_serviceman: input.isExServiceman,
+        date_of_birth: input.dateOfBirth,
       },
     });
 
@@ -1443,7 +1638,7 @@ export const rankPredictorService = {
       });
     }
 
-    assertShiftsFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.paperShifts ?? [], input.totalQuestions);
+    assertShiftsFor(input.paperShifts ?? [], input.totalQuestions);
     assertSubmissionModesFor(input.keySource ?? KEY_SOURCE.ADMIN_KEY, input.submissionModes ?? [...SUBMISSION_MODES]);
 
     const exam = await repo.createExam({
@@ -1487,11 +1682,7 @@ export const rankPredictorService = {
     adminId: number | null
   ): Promise<RankExamDto> => {
     const exam = await requireExam(examId);
-    assertShiftsFor(
-      input.keySource ?? keySourceOf(exam),
-      input.paperShifts ?? paperShiftsOf(exam),
-      input.totalQuestions ?? exam.totalQuestions
-    );
+    assertShiftsFor(input.paperShifts ?? paperShiftsOf(exam), input.totalQuestions ?? exam.totalQuestions);
     assertSubmissionModesFor(
       input.keySource ?? keySourceOf(exam),
       input.submissionModes ?? submissionModesOf(exam)
@@ -1631,18 +1822,28 @@ export const rankPredictorService = {
     }
 
     const version = await repo.nextAnswerKeyVersion(params.examId);
-    const key = await repo.publishAnswerKey(params.examId, series, {
-      exam: { connect: { id: params.examId } },
-      version,
-      isActive: true,
-      series,
-      keys: params.keys as never,
-      marksCorrect: params.marksCorrect,
-      marksWrong: params.marksWrong,
-      sourcePdfKey: params.sourcePdfKey,
-      uploadedBy: params.adminId,
-      createdAt: new Date(),
-    });
+    // Stored before the row, so the row points at it and deleting the paper finds it.
+    const sourcePdfKey = params.sourcePdf ? answerKeyPdfKey(String(params.examId), version, series) : null;
+    if (params.sourcePdf && sourcePdfKey) await putRankPdf(sourcePdfKey, params.sourcePdf);
+
+    let key;
+    try {
+      key = await repo.publishAnswerKey(params.examId, series, {
+        exam: { connect: { id: params.examId } },
+        version,
+        isActive: true,
+        series,
+        keys: params.keys as never,
+        marksCorrect: params.marksCorrect,
+        marksWrong: params.marksWrong,
+        sourcePdfKey,
+        uploadedBy: params.adminId,
+        createdAt: new Date(),
+      });
+    } catch (error) {
+      if (sourcePdfKey) await deleteRankPdf(sourcePdfKey);
+      throw error;
+    }
 
     await audit({
       action: AUDIT_ACTION.ANSWER_KEY_UPLOADED,
@@ -1683,6 +1884,7 @@ export const rankPredictorService = {
     const where = {
       ...(params.status ? { status: params.status } : {}),
       ...(params.examId ? { examId: params.examId } : {}),
+      ...(params.search ? { OR: await submissionSearchOr(params.search) } : {}),
     };
 
     const [rows, total] = await repo.listSubmissions(

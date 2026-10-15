@@ -25,6 +25,8 @@ import {
   addOrderTrackingEvent,
   getSettings,
   updateSettings,
+  getTrackingCounter,
+  setTrackingCounter,
 } from "./book.controller";
 
 const router = Router();
@@ -60,6 +62,9 @@ router.get("/orders/list", getOrders);
 // never captured as an :id.
 router.get("/orders/export/csv", exportOrdersCsv);
 router.get("/orders/export/excel", exportOrdersExcel);
+// Registered BEFORE `/orders/:id` so "tracking-counter" is never captured as an :id.
+router.get("/orders/tracking-counter", getTrackingCounter);
+router.put("/orders/tracking-counter", setTrackingCounter);
 router.get("/orders/:id", getOrderById);
 router.patch("/orders/:id/status", updateOrderStatus);
 router.patch("/orders/:id/tracking", setOrderTracking);

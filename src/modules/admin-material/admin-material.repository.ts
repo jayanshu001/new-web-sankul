@@ -93,9 +93,10 @@ export const adminMaterialRepository = {
     // Recency is the contract on admin lists — see utils/listOrdering.
     prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; isPaid?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
-  // Same recency contract as listMaterials.
+  // Only consumer is the category detail page's Materials tab, which drag-reorders
+  // its rows — a true sequence (utils/listOrdering exception), so order_by ASC.
   materialsForCategory: (categoryId: number, skip: number, take: number, search?: string) =>
-    prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ created_at: "desc" }, { id: "desc" }], skip, take }),
+    prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ order_by: "asc" }, { id: "asc" }], skip, take }),
 
   findMaterialById: (id: number) => prisma.material.findUnique({ where: { id }, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   findMaterialBare: (id: number) => prisma.material.findUnique({ where: { id } }),
@@ -233,11 +234,14 @@ function slugify(input: string): string {
 
 export { ROOT };
 
-// Recency is the contract (utils/listOrdering): "order" and the no-sort default both
-// mean newest-first; `dir` is ignored for them on purpose.
+// RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
+// both mean newest-first; `dir` is ignored for them on purpose.
+// "sequence" is the true-sequence exception: the category detail page's
+// Sub-Categories tab lists children by order_by so drag-reordering is visible.
 function catOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): Prisma.MaterialCategoryOrderByWithRelationInput[] {
   if (sortBy === "title" || sortBy === "name") return [{ name: dir }, { id: "desc" }];
   if (sortBy === "createdAt") return [{ created_at: dir }, { id: "desc" }];
+  if (sortBy === "sequence") return [{ order_by: dir }, { id: "asc" }];
   return [{ created_at: "desc" }, { id: "desc" }];
 }
 

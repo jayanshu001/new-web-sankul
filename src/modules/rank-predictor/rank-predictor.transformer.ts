@@ -47,6 +47,7 @@ interface CandidateProfileRow {
   casteCategory: string | null;
   gender: string | null;
   isExServiceman: boolean | null;
+  dateOfBirth: Date | null;
 }
 
 const trimmedOrNull = (value: string | null | undefined): string | null =>
@@ -99,18 +100,36 @@ export const casteCategoryOf = (
 export const genderOf = (row: { gender: string | null } | null | undefined): Gender | null =>
   lowerOrNull(row?.gender) as Gender | null;
 
+const HALF_DAY_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * A `DATE` column as "YYYY-MM-DD". Prisma reads it as midnight UTC and the IST
+ * middleware (config/prisma) then moves it back 5:30 into the evening before, so
+ * it is read as the nearest midnight rather than sliced as it comes.
+ */
+export const dateOfBirthOf = (row: { dateOfBirth: Date | null } | null | undefined): string | null =>
+  row?.dateOfBirth ? new Date(row.dateOfBirth.getTime() + HALF_DAY_MS).toISOString().slice(0, 10) : null;
+
+/** The calendar date to store: midday UTC lands on that date whatever the IST middleware adds. */
+export const dateOfBirthValue = (isoDate: string): Date => new Date(`${isoDate}T12:00:00Z`);
+
 export const toRankCandidateProfileDto = (
   row: CandidateProfileRow | null
 ): RankCandidateProfileDto => {
   const casteCategory = casteCategoryOf(row);
   const gender = lowerOrNull(row?.gender) as Gender | null;
   const isExServiceman = row?.isExServiceman ?? null;
+  const dateOfBirth = dateOfBirthOf(row);
 
   return {
     caste_category: casteCategory,
     gender,
     is_ex_serviceman: isExServiceman,
-    is_complete: casteCategory !== null && gender !== null && isExServiceman !== null,
+    date_of_birth: dateOfBirth,
+    // Date of birth was added later; a profile without it is asked again, since
+    // it decides every tie on marks.
+    is_complete:
+      casteCategory !== null && gender !== null && isExServiceman !== null && dateOfBirth !== null,
   };
 };
 
@@ -170,11 +189,24 @@ export const examMarkingSchemeOf = (row: Pick<OcrExam, "marksCorrect" | "marksWr
 export const questionMetaOf = (row: Pick<OcrSubmission, "questionMeta">): SheetQuestion[] =>
   Array.isArray(row.questionMeta) ? (row.questionMeta as unknown as SheetQuestion[]) : [];
 
-/** The correct answers the student's own sheet printed, or null when it printed none. */
+/** The options one sheet question ticks correct; empty when it ticks none. */
+const ticksOf = (question: SheetQuestion): number[] => {
+  if (question.correct_options?.length) return question.correct_options;
+  return question.correct_option === null || question.correct_option === undefined
+    ? []
+    : [question.correct_option];
+};
+
+/**
+ * The correct answers the student's own sheet printed, or null when it printed
+ * none. A question ticked twice takes either option ("A & B"), so choosing a
+ * ticked option scores, any other is wrong, and leaving it is a skip.
+ */
 export const sheetKeyMapOf = (row: Pick<OcrSubmission, "questionMeta">): AnswerKeyMap | null => {
   const entries = questionMetaOf(row)
-    .filter((question) => question.correct_option !== null && question.correct_option !== undefined)
-    .map((question) => [String(question.question), question.correct_option as number] as const);
+    .map((question) => [String(question.question), ticksOf(question)] as const)
+    .filter(([, ticks]) => ticks.length > 0)
+    .map(([question, ticks]) => [question, ticks.length === 1 ? ticks[0] : ticks] as const);
 
   return entries.length ? Object.fromEntries(entries) : null;
 };
@@ -271,23 +303,30 @@ export const toRankSubmissionDto = (row: OcrSubmission): RankSubmissionDto => ({
 export const scoredQuestionsOf = (row: Pick<OcrScore, "correct" | "wrong" | "unanswered">) =>
   row.correct + row.wrong + row.unanswered;
 
-export const toRankScoreDto = (row: OcrScore): RankScoreDto => ({
+export const toRankScoreDto = (row: OcrScore, maxMarks?: number): RankScoreDto => ({
   correct: row.correct,
   wrong: row.wrong,
   unanswered: row.unanswered,
   raw_score: Number(row.rawScore),
   total_questions: scoredQuestionsOf(row),
+  ...(maxMarks === undefined ? {} : { max_marks: maxMarks }),
 });
 
 export const toLeaderboardEntryDto = (
   row: LeaderboardRow,
-  viewerCustomerId: number | null
+  viewerCustomerId: number | null,
+  marks: { maxMarks: number; selfReported: boolean }
 ): RankLeaderboardEntryDto => ({
   rank: row.rank_position,
   name: displayNameFor(row.full_name, row.show_real_name),
   raw_score: row.raw_score,
-  normalized_score: row.normalized_score,
   total_questions: row.total_questions,
+  max_marks: marks.maxMarks,
+  self_reported: marks.selfReported,
+  // No date of birth: it is personal, so no leaderboard row carries one — not even
+  // the viewer's own. The board still orders on it; staff see it on the admin board.
+  caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
+  gender: genderOf({ gender: row.gender }),
   is_me: viewerCustomerId !== null && row.customer_id === viewerCustomerId,
   submitted_at: row.submitted_at,
 });
@@ -298,8 +337,10 @@ export const toAdminLeaderboardEntryDto = (row: LeaderboardRow): RankAdminLeader
   name: trimmedOrNull(row.full_name) ?? handleFor(row.customer_id),
   shows_real_name: row.show_real_name,
   raw_score: row.raw_score,
-  normalized_score: row.normalized_score,
   total_questions: row.total_questions,
+  date_of_birth: row.date_of_birth,
+  caste_category: casteCategoryOf({ casteCategory: row.caste_category }),
+  gender: genderOf({ gender: row.gender }),
   submitted_at: row.submitted_at,
 });
 

@@ -20,10 +20,6 @@ export const bookOrderRepository = {
       where: { gatewayOrderId: razorpayOrderId, userId: customerId },
     }),
 
-  /** Webhook context: the payload carries no customer. */
-  findOrderByRazorpayOnly: (razorpayOrderId: string) =>
-    prisma.bookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
-
   findOrderItems: (orderKey: string) =>
     prisma.bookOrderItem.findMany({ where: { order_id: orderKey } }),
 
@@ -86,7 +82,11 @@ export const bookOrderRepository = {
       where: { order_id: { in: orders.map((o) => o.receiptId) } },
       select: { bookId: true },
     });
-    return [...new Set(items.map((i) => i.bookId).filter((b): b is number => b != null))];
+    return [
+      ...new Set(
+        items.map((i) => i.bookId).filter((b): b is number => b != null),
+      ),
+    ];
   },
 
   createPendingOrder: (input: {
@@ -151,10 +151,17 @@ export const bookOrderRepository = {
     shippingId: number | null;
   }) =>
     prisma.$transaction(async (tx) => {
-      // Claim first: only a still-pending order flips. The loser of a concurrent
-      // /verify + webhook matches 0 rows and stops before the AWB insert (a
-      // rolled-back insert would still burn an AUTO_INCREMENT value), so the parcel
-      // ships once.
+      // Claim FIRST, before the AWB insert: only a still-pending order flips. The
+      // loser of a concurrent /verify + webhook matches 0 rows and stops here, so
+      // it never allocates a second AWB (a rolled-back insert would still burn the
+      // AUTO_INCREMENT value) and the parcel ships once.
+      // Lock the row first: updateMany alone did NOT serialize /verify vs the
+      // webhook — both claimed and both inserted an AWB (prod, 2026-10-05+). A
+      // locking read always sees the latest committed status, so the loser
+      // blocks here until the winner commits, then sees "verified" and stops.
+      const [locked] = await tx.$queryRaw<{ status: string }[]>`
+        SELECT status FROM ws_book_order WHERE id = ${input.orderId} FOR UPDATE`;
+      if (locked?.status !== "pending") return null;
       const claim = await tx.bookOrder.updateMany({
         where: { id: input.orderId, status: "pending" },
         data: {

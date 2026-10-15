@@ -23,7 +23,7 @@ const CODE = "cce-prelims-2026-example";
 const TOTAL = 200;
 const SCHEME = { marksCorrect: 1, marksWrong: 0.25 };
 const SHIFTS = ["2026-10-04T09:00", "2026-10-04T12:30", "2026-10-04T16:00"];
-/** The afternoon paper is set harder, so normalization has something to correct. */
+/** The afternoon paper is set harder, so the shift boards differ. */
 const SHIFT_DIFFICULTY = [0, -0.12, 0.05];
 const CATEGORIES = ["open", "sebc", "ews", "sc", "st"];
 const GENDERS = ["male", "female"];
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
       marksCorrect: SCHEME.marksCorrect,
       marksWrong: SCHEME.marksWrong,
       syllabus: SYLLABUS as never,
-      rankBy: ["shift", "category", "subject", "normalized"] as never,
+      rankBy: ["shift", "category", "subject"] as never,
       isActive: true,
       createdAt: now,
       updatedAt: now,
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
     scored.push({ scoreId: score.id, rawScore: result.rawScore });
   }
 
-  // Snapshot on raw marks; the live standing reads normalized marks.
+  // Snapshot on raw marks, as the live standing reads them.
   for (const { scoreId, rawScore } of scored) {
     const rank = scored.filter((other) => other.rawScore > rawScore).length + 1;
     await prisma.ocrRank.create({

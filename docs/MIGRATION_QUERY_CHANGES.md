@@ -15,6 +15,156 @@
 
 ---
 
+## 2026-10-15 — `/client/courses/lecture?type=package`: check package membership
+
+> **DDL:** none. **Data:** none. **Response:** success shape unchanged. New 403
+> `"Lecture does not belong to this package"` (mirrors the `type=course` string).
+
+- `type=course` already ran `videoBelongsToCourse` (`reachableCategoryIds("course")`).
+  `type=package` only ran `hasActivePackageSub`, so any active package minted a token for any
+  paid video. Expired buyers kept playing through another package while the heartbeat
+  (`reportContainerProgress`, which DOES check reachability) returned 403.
+- Added `client-lecture.videoBelongsToPackage` (`reachableCategoryIds("package")`, the same set
+  the heartbeat uses). It runs for paid videos only, before the subscription check. Free
+  videos are unchanged.
+
+## 2026-10-15 — Response `scope` = the container the customer owns (heartbeat 403 fix)
+
+> **DDL:** none. **Data:** none. **Response:** category endpoints have the same keys, but the `scope` VALUE may now
+> differ. The notes lists gain an additive `lecture.scope`.
+
+- Video 27986 / category 2711 is owned by course 99 AND package 183. Customer 471985 holds
+  only package 183. Playback worked: `entitledScopeFor` scoped the token to package 183. But
+  `listVideosByCategory` / `getVideoByCategory` returned `scope: scopes[0]` (course 99), the
+  app sent it as the heartbeat scope, and `reportContainerProgress` returned
+  `403 "No active subscription for this lecture."`
+- Both endpoints now return `scope = entitledScope ?? scopes[0]`. `entitledScopeFor` walks the
+  scopes in order, so the value only changes when the first owning container is not owned.
+- `buildLectureRefSql` (notes + audio-notes lists) adds `scope` with the same rule:
+  `scopesForCategory` + `entitledScopeFor`. That is one ancestor walk plus one sub query per
+  list call. Live branch: `{ kind: "liveCourse", id }` from the session link.
+
+## 2026-10-15 — Lecture notes: recorded-video gate mirrors the live-course lecture player
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).
+
+- Still saw `403 "Active subscription required to take notes."` after the entry below.
+  `resolveVideoScopes` only finds a live course through `ws_live_course.video_category_id`.
+  It ignores the `ws_video_category.live_course_id` folder tag, which is how
+  `getLiveCourseLecture` (`clientLectureVideoInCourse`) decides membership.
+  `entitledScopeFor` also requires `end_at > now`, while `hasAccessToAnyLiveCourse` accepts
+  `end_at IS NULL` (lifetime).
+- `authorizeRecorded` adds a third step, run only after both earlier checks miss: read the
+  video's own folder `live_course_id`, then `hasAccessToAnyLiveCourse(customer, [it])`. That
+  is the same predicate the live-course player uses. Shared `resolveVideoScopes` is NOT
+  changed because it also gates category-player playback.
+
+## 2026-10-15 — Lecture notes: recorded-video gate accepts any product that reaches the video
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).
+
+- `client-lecture-note.authorizeRecorded` (text + audio notes: create / list / update /
+  delete) used to require an active `ws_package_course_subscription` row for the ONE course
+  `resolveVideoCourseId` picks (`findFirst`). Package rows have `course_id = NULL`, videos can
+  sit under several courses, and live-course recordings belong to a live course — so a
+  customer who could PLAY the video (scope-based gate) got `403 "Active subscription required
+  to take notes."` (seen on customer 636984 after an admin extend on a different product).
+- The direct-course check stays as the fast path. On a miss it reuses the category player's
+  gate: `scopesForCategory` (`resolveVideoScopes` — ONE ancestor walk up from the video's
+  category + indexed owner lookups) → `entitledScopeFor` (one sub query filtered to those
+  owners, `status = 1 AND end_at > now`). Cost is fixed per call — it does NOT scale with how
+  many subscriptions the customer has. Free videos and paid videos with no owning course are
+  unchanged.
+
+## 2026-10-14 — Rank predictor: shift normalisation removed
+
+> **DDL:** none. **Data:** `rank_by` rows still holding `"normalized"` need no backfill —
+> `rankByOf` ignores unknown values; saving a paper writes the cleaned list. **Query:**
+> `shiftStats` and the 60 s normalisation cache are gone; `rankForExam` / `leaderboardPage`
+> always compare, order and average on `s.raw_score` (no per-shift `CASE`). **Validation:**
+> `rank_by` rejects `"normalized"` (`422`) — ship the admin build without the checkbox
+> together. **Response (removal):** `normalized_score` dropped from the standing, `nearby`,
+> client leaderboard entries and admin leaderboard rows. Why: normalising a few dozen
+> self-selected uploads per shift put marks past full marks (raw 126/150 → 166.27).
+> Docs: `docs/rank-predictor.md`, `docs/client/RANK_STANDING.md`.
+
+## 2026-10-13 — Client video-category pagination: drop per-row counts + per-page scope walk
+
+> **DDL:** none. **Data:** none. **Response:** byte-identical (old vs new full JSON diffed over
+> 40 real parents × 3 pages + search, and 15 leaf categories).
+
+- `GET /client/video-categories/:id/children` (`catalog-video.getVideoCategoryChildren`):
+  per-child `ws_video` `COUNT` (one query per row, up to 500) → ONE `groupBy(vcategory_id)` over
+  the page (`countActiveVideosByCategories`). Child ids from `ws_video_category_relation` are now
+  resolved once for page + total (`listActiveChildrenPage`, replaces `listActiveChildren` /
+  `countActiveChildren`); parent lookup runs in parallel. `childCountsByParent` folds the
+  active-child check into the edge query (`childVideoCategory: { is: { status: true } }`) — one
+  round-trip instead of two. Avg 483ms → 207ms measured off-DC.
+- `GET /client/video-categories/:id/videos`: `scopesForCategory` (ancestor CTE + container
+  lookups) moved out of the page-keyed cache into its own `…:${catId}:scopes` key (same
+  `CacheEntity.Video`, same 60s TTL → same invalidation), so paging no longer re-walks the DAG.
+  `entitledScopeFor` now runs in parallel with progress/notes.
+
+## 2026-10-12 — Rank predictor score-based suggestions (`ws_ocr_suggestions`)
+
+> **DDL:** `docs/migration/schema-changes/2026-10-12_ocr_suggestions.sql` — new table, additive,
+> apply by name. **Data:** none. **Response:** existing shapes unchanged; new endpoints only.
+
+- New table `ws_ocr_suggestions` (FK `exam_id` → `ws_ocr_exams` `ON DELETE CASCADE`, index
+  `(exam_id, is_active, sort_order)`), Prisma model `OcrSuggestion` + back-relation on `OcrExam`.
+- Reads: list by `exam_id` ordered `sort_order, id`; the student read adds `is_active = 1` and a
+  point lookup on `ws_ocr_scores` by the existing unique `(exam_id, customer_id)`. The band match
+  runs in the service, over a paper's handful of rows.
+- Paper delete (`deleteExamCascade`) is unchanged: the FK removes the paper's suggestions.
+- See `docs/rank-predictor.md` §3.11.
+
+---
+
+## 2026-10-11 — Course/package kit dispatch row stamps `created_at`/`updated_at`
+
+> **DDL:** none. **Data:** none (existing NULL rows left as-is). **Response:** shape unchanged.
+
+- `commerce-order.repository.ts` (course and package fulfilment) now writes `created_at`/`updated_at`
+  on the `ws_package_course_subscription_tracking` insert, using the same `now` as the
+  subscription. The columns have no DB default, so Node-created kit rows had NULL timestamps,
+  and purchase history (`client-purchase-history.repository.ts`) reads both. The live-course
+  fulfilment already stamps them; this makes the course/package path match.
+- Audit, all tracking/AWB tables (prod, read-only, 2026-10-11):
+  - The duplicate-AWB race was **books only** (see the next entry).
+  - `ws_package_course_subscription_tracking` has no duplicate dispatch rows on live orders. The 5
+    rows on order `526141` belong to a deleted order with no subscription (test leftover).
+  - `ws_live_course_subscription_tracking` is empty.
+  - Ebook and test-series are digital and allocate no tracking rows.
+
+---
+
+## 2026-10-11 — Book AWB allocated only at `/verify` (Razorpay webhook no longer fulfils books)
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (`/verify` shape and the admin report as before).
+
+- `paymentWebhook` (`src/client/webhook/webhook.controller.ts`) no longer fulfils book orders.
+  Book events fall through to the existing "No matching order — acknowledged." 200, the same
+  as course/package. `fulfillBookWebhookMysql` and the book repo's `findOrderByRazorpayOnly`
+  are removed. The `ws_book_tracking` AWB is now inserted only by the client's
+  `/payment/verify` (`verifyBookTx`, which still claims `pending → verified` atomically).
+- Why: since the 2026-10-05 `payment_capture: true` change, the webhook fires for every
+  payment. The legacy `websankul-api` is still live and writes the same `ws_book_order` /
+  `ws_book_tracking` rows without an atomic claim. When Node's webhook-time AWB landed in the
+  same second as legacy's write, each order got two AWBs. Legacy's AWB (tracking `status`
+  `pending`) overwrote `ws_book_order.tracking_id`, and Node's AWB (`status` `verified`) was
+  orphaned. Prod showed 791 orphans between 2026-10-05 and 2026-10-11, all 0–1 s apart,
+  against about 1 a month before.
+- Effect: Node allocates a book AWB only when its own app calls `/verify`. Legacy-app orders
+  are fulfilled only by legacy again, as before 2026-10-05. If a Node-app payment never
+  reaches `/verify`, the order stays `pending` in Node; legacy's webhook (still active)
+  fulfils it.
+- Existing orphans: no data change. `ws_book_order.tracking_id` (and therefore the admin
+  report) already points at the AWB that is in use.
+- Race check: `scripts/verify-order-claim-race.ts` now races two concurrent `/verify` calls
+  for books.
+
+---
+
 ## 2026-10-09 — Rank predictor: ex-serviceman board
 
 > **DDL / backfill:** none — reads the existing `ws_ocr_profiles.is_ex_serviceman`.

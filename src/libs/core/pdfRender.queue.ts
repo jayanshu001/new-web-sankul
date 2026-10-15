@@ -6,7 +6,7 @@
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import logger from "../../utils/logger";
-import { renderPdfLocally } from "./pdfBrowser";
+import { renderPdfLocally, type PdfRenderOptions } from "./pdfBrowser";
 
 const QUEUE_NAME = "pdf-render";
 const REDIS_HOST = process.env.REDIS_HOST || "localhost";
@@ -19,7 +19,7 @@ const WAIT_MS = 30_000;
 const WORKER_CONCURRENCY = 3;
 const WORKER_CHECK_TTL_MS = 10_000;
 
-type PdfJob = { html: string };
+type PdfJob = { html: string; offline?: boolean };
 
 let connection: RedisType | null = null;
 let queue: Queue<PdfJob, string> | null = null;
@@ -48,19 +48,19 @@ const workerAlive = async (q: Queue<PdfJob, string>): Promise<boolean> => {
   return alive;
 };
 
-export async function renderPdfFromHtml(html: string): Promise<Buffer> {
-  if (RENDERS_IN_THIS_PROCESS) return renderPdfLocally(html);
+export async function renderPdfFromHtml(html: string, opts: PdfRenderOptions = {}): Promise<Buffer> {
+  if (RENDERS_IN_THIS_PROCESS) return renderPdfLocally(html, opts);
   let job: Job<PdfJob, string>;
   let jobEvents: QueueEvents;
   try {
     const { queue: q, events: e } = ensureProducer();
-    if (!(await workerAlive(q))) return renderPdfLocally(html);
-    job = await q.add("render", { html }, { removeOnComplete: { age: 60 }, removeOnFail: { age: 3600 } });
+    if (!(await workerAlive(q))) return renderPdfLocally(html, opts);
+    job = await q.add("render", { html, offline: opts.offline }, { removeOnComplete: { age: 60 }, removeOnFail: { age: 3600 } });
     jobEvents = e;
   } catch (err) {
     // Redis/queue trouble must never cost a receipt: render here, as before PERF10.
     logger.warn("pdf-render enqueue failed; rendering locally", { error: (err as Error).message });
-    return renderPdfLocally(html);
+    return renderPdfLocally(html, opts);
   }
   try {
     return Buffer.from(await job.waitUntilFinished(jobEvents, WAIT_MS), "base64");
@@ -69,7 +69,7 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
     // A render error is final (local would fail the same way); only a wait timeout falls back.
     if (!/timed out/i.test(msg)) throw err;
     logger.warn("pdf-render wait timed out; rendering locally", { jobId: job.id });
-    return renderPdfLocally(html);
+    return renderPdfLocally(html, opts);
   }
 }
 
@@ -78,7 +78,7 @@ export async function initPdfRenderScheduler(): Promise<void> {
   if (worker) return;
   worker = new Worker<PdfJob, string>(
     QUEUE_NAME,
-    async (job) => (await renderPdfLocally(job.data.html)).toString("base64"),
+    async (job) => (await renderPdfLocally(job.data.html, { offline: job.data.offline })).toString("base64"),
     { connection: buildConnection(), concurrency: WORKER_CONCURRENCY }
   );
   worker.on("failed", (job, err) => logger.error("pdf-render job failed", { jobId: job?.id, error: err.message }));

@@ -243,20 +243,44 @@ by being granted the first. Grant it explicitly per role. It replaces
 
 ---
 
-### 3.8 The three questions on a student's first visit
+### 3.8 The four questions on a student's first visit
 
-Before a student can use the Score & Rank Checker at all, they answer three
+Before a student can use the Score & Rank Checker at all, they answer four
 questions in a dialog they cannot dismiss:
 
-1. **Caste category** — Open / SEBC / EWS / SC / ST
-2. **Gender** — Male / Female
-3. **Ex-servicemen** — Yes / No
+1. **Date of birth** — breaks ties on marks (below)
+2. **Caste category** — Open / SEBC / EWS / SC / ST
+3. **Gender** — Male / Female
+4. **Ex-servicemen** — Yes / No
+
+**Ties on marks go to the elder candidate**, as on government merit lists. Every
+board (overall, gender, category, shift and their combinations, subject boards)
+orders on marks, then date of birth earliest first; only the same marks AND the
+same birthday share a rank. A student with no date of birth on file sorts after
+everyone on the same marks who has one. Date of birth was added after the other
+three, so a profile without it counts as incomplete and the dialog asks again
+(with the earlier answers filled in). It is the customer's own
+`ws_customer.dob` (Prisma `Customer.birthDate`) — the same date the account
+profile and admin customer screen edit, so there is one date of birth per
+student and no new column. A student who already filled it in on their account
+profile finds it pre-filled in the dialog.
+
+A date of birth is personal, so a client leaderboard row has no
+`date_of_birth` at all — not even the viewer's own (`toLeaderboardEntryDto`). The
+board still orders ties on it, and staff see everyone's on the admin board.
+
+The boards a student can see are switched per paper in `rank_by`: `category`,
+`gender`, `shift` (and `ex_serviceman`, `subject`). With category,
+gender and shift all on, a student has up to eight ranks: Overall, Gender,
+Category, Gender + Category, Shift, Shift + Gender, Shift + Category and
+Shift + Gender + Category.
 
 There is no skip and no close button. The point of the gate is a complete set of
 answers, and a skippable version collects them from nobody. It appears once: the
 answers are saved on the student's own `ws_ocr_profiles` row
-(`caste_category`, `gender`, `is_ex_serviceman`), so it never reappears on any
-device, and a student who already has all three on file never sees it.
+(`caste_category`, `gender`, `is_ex_serviceman`) and their `ws_customer.dob`, so it
+never reappears on any device, and a student who already has all four on file
+never sees it.
 
 It is deliberately **not** shown to logged-out visitors. Browsing papers and
 reading a leaderboard stays open to everyone — there is no row to save
@@ -268,8 +292,9 @@ back out of the database. If the profile read fails, the dialog stays up. The
 cost of a bad minute on that endpoint is a student seeing the dialog again — not
 an unanswered profile being waved through.
 
-**Where the answers are stored, and why it is not where they belong.** These
-three facts describe the person, not the attempt, so `ws_customer` was the right
+**Where the answers are stored, and why it is not where they belong.** Date of
+birth already had a column on `ws_customer` (`dob`), so it is written there. The
+other three facts describe the person, not the attempt, so `ws_customer` was the right
 home and `gender` already lived there. InnoDB would not have it: that table
 carries a FULLTEXT index, which rules out both `INSTANT` and `INPLACE ADD
 COLUMN` and leaves only a `COPY` rebuild that blocks writes on a table the
@@ -351,20 +376,14 @@ by name (§7 — not `yarn db:migrate`). It is additive: new nullable columns, o
 `questions` from `/extract`; against an older one the new fields are simply absent and
 papers fall back to admin keys.
 
-**Normalised marks across shifts (`rank_by` += `"normalized"`).** No DDL; computed per
-request. SSC formula: for shift *i*, `normalised = (Mgt − Mgq) / (Mti − Miq) × (raw − Miq) + Mgq`,
-where `Mti`/`Mgt` = mean of the top 0.1% (min one candidate) of the shift / of everyone with
-a shift, and `Miq`/`Mgq` = mean + population SD of the same. Boards that span shifts
-(overall, category, gender, their combinations, `nearby`, the unfiltered leaderboards and
-the rank snapshot) order on normalised marks and their `average_marks` is the normalised
-mean; boards inside one shift and subject boards stay raw. A shift under 10 candidates, a
-paper with fewer than two shifts, or a degenerate spread falls back to raw marks. Entries
-gain `normalized_score` (null when not normalising); standing gains `raw_score` and
-`normalized_score`. Leaderboards also take `gender`.
+**Normalised marks across shifts — removed 2026-10-14.** `rank_by` no longer accepts
+`"normalized"` (a stored one is ignored), and entries, `nearby` and the standing no longer carry
+`normalized_score`. Every board orders on raw marks. Normalizing a few dozen self-selected uploads
+per shift stretched some shifts past full marks (a raw 126 of 150 showed as 166.27).
 
 **Ex-serviceman board.** No DDL; reads `ws_ocr_profiles.is_ex_serviceman`. Standing gains
 `ex_serviceman` (position), filled only when the viewer's profile says ex-serviceman, else
-`null`. It spans shifts, so it orders on normalised marks like the overall board. Not gated by
+`null`. It spans shifts, like the overall board. Not gated by
 `rank_by`, like the gender boards. Leaderboards also take `exServiceman=true`.
 
 ---
@@ -390,7 +409,9 @@ markup. The page is stored beside the sheet's PDF as `<submissionId>.html`
 came in as a PDF has none and is read as before. The page is also printed to PDF with
 `renderPdfFromHtml(html, { offline: true })` — page scripts off and every request except
 inline `data:` aborted, so the page can never make the server fetch anything — and that PDF
-is the `source_pdf_key` students and admins view and the organised folders copy. Deleting a
+is the `source_pdf_key` students and admins view and the organised folders copy (admin
+`GET /admin/rank-predictor/submissions/:id` also returns it as `source_pdf_url`, signed for
+`RANK_SHEET_URL_TTL_SECONDS`, which the review modal embeds). Deleting a
 sheet (rejection, admin delete, exam delete) removes both (`deleteRankSheet`). The same
 applies to a Digialm `.html` uploaded as `file`. **Deploy the OCR service first:** an older
 reader answers `415 unsupported_media_type` to the page.
@@ -415,7 +436,7 @@ questions × marks-per-correct). Such an entry is never re-marked (key publish, 
 and admin rescore all skip it; `scoreAndPublish` refuses it with `409 not_scorable`) and has no
 answer review (`404 review_unavailable`). The marks are self-reported and unverified.
 
-### 3.10 Exam types and normalizing many shifts
+### 3.10 Exam types and many shifts
 
 **A paper's type is its `key_source`, set under Edit Paper → Scoring & ranking.** Everything else is optional.
 
@@ -432,7 +453,40 @@ The student site reads the type, so a marks-only paper shows only the *Enter mar
 
 **Shifts are never configured.** Each is read off the sheets (`YYYY-MM-DDTHH:MM`), so papers with different dates, or 40-50 shifts, need no setup. A student who types marks on a shift-ranked paper picks a shift already seen, or enters its date and time.
 
-**Normalization** (`rank_by` includes `normalized`) maps each shift linearly onto the whole field so that its top mean and its mean + SD match the field's. With many small shifts the top reference is the best 1% of the shift but never fewer than 5 people, and a shift under 30 candidates keeps its raw marks. Typed-in marks never feed it. It is an estimate from self-selected uploads, so it firms up as more candidates upload.
+There is no normalization across shifts: every board that spans shifts ranks on raw marks.
+
+### 3.11 Score-based suggestions
+
+Added 2026-10-12. **Papers → click the paper → Suggestions tab.** Each row is shown
+under a student's result when their **raw marks** fall in its band:
+
+```
+(min_marks IS NULL OR raw_score >= min_marks) AND (max_marks IS NULL OR raw_score < max_marks)
+```
+
+Min is inclusive, max exclusive, so *70 – 95* and *95+* never both match a 95. Empty
+bounds mean "no minimum" / "no maximum"; a row with neither shows to every scored
+student. Several rows may match; they show in `sort_order`.
+
+| Kind | Stores | The card comes from |
+|---|---|---|
+| `product` | `product_type` (`package` — smart and planner alike — `course`, `live_course`, `book`, `ebook`) + `product_id` | the store catalog, live (title, cover, price, route) |
+| `link` | `url` (https only), `title`, `image` (**required**, uploaded to `uploads/rank-suggestions`), optional `cta_label` | the row itself |
+
+Both take an optional `description`, shown on the card. Table `ws_ocr_suggestions`
+(`docs/migration/schema-changes/2026-10-12_ocr_suggestions.sql`), FK to `ws_ocr_exams`
+`ON DELETE CASCADE`, so deleting a paper removes them.
+
+- Admin: `GET|POST /admin/rank-predictor/papers/:examId/suggestions`,
+  `PUT|DELETE /admin/rank-predictor/suggestions/:id`. POST/PUT are multipart (`image`
+  file, or the existing URL in the `image` text field); PUT replaces the whole row.
+  Gated by `rank-predictor.papers.view` / `.edit` — no new permission module.
+- Student: `GET /client/rank-predictor/papers/:examId/suggestions/me` (auth) →
+  `{ score, suggestions }`, only active rows matching the caller's own score. No score
+  yet → `{ score: null, suggestions: [] }`; inactive paper → `404`.
+
+Code: `src/modules/rank-suggestions/`, `src/admin/rank-predictor/suggestions.controller.ts`,
+`src/client/rank-predictor/suggestions.controller.ts`.
 
 ## 4. Where the student's answers meet the key
 

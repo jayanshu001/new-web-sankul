@@ -22,6 +22,11 @@ export interface LectureRef {
   // Set when the lecture lives under a live-course folder; the FE then opens the live
   // player instead of the category rail, which 403s for live recordings.
   liveCourseId: string | null;
+  // Container to open the player / send heartbeats with: the one the customer OWNS
+  // (course / package / liveCourse), else the first owning container. Same shape as
+  // the category player's `scope`. `courseId` above is the topology owner and may be
+  // a course the customer never bought.
+  scope: { kind: "course" | "package" | "liveCourse"; id: string } | null;
   resume: {
     positionSec: number;
     durationSec: number;

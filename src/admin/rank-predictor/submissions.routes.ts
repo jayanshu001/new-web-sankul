@@ -6,6 +6,7 @@ import {
   getSubmission,
   getSubmissionFile,
   listSubmissions,
+  rereadSubmission,
   rescoreSubmission,
 } from "./submissions.controller";
 
@@ -16,6 +17,7 @@ router.get("/:id", getSubmission);
 router.get("/:id/file", getSubmissionFile);
 router.put("/:id/answers", correctAnswers);
 router.post("/:id/rescore", rescoreSubmission);
+router.post("/:id/reread", rereadSubmission);
 router.delete("/:id", deleteSubmission);
 
 export default router;

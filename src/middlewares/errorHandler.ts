@@ -10,6 +10,8 @@ import {
   SERVICE_UNAVAILABLE_RETRY_SECONDS,
 } from "../utils/dbAvailability";
 import { sanitizeClientMessage } from "../utils/errorSanitizer";
+import { ZodError } from "zod";
+import { formatZodError } from "../utils/httpResponse";
 
 export interface AppError extends Error {
   statusCode?: number;
@@ -66,7 +68,18 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   const dbUnavailable =
     !Number.isInteger(appErr.statusCode) && isDatabaseUnavailableError(appErr);
 
-  const statusCode = dbUnavailable
+  // A ZodError reaching here is bad input, not a crash: ~200 controllers call
+  // `schema.parse(req.body)` inline instead of the `validate()` middleware, and
+  // without this branch every one of those answered 500 "Internal Server Error"
+  // (+ an alert email) for e.g. an over-long SEO field. Answer 422 with the same
+  // `field -> message` map `validate()` sends; `message` names the first field,
+  // since the admin panel only displays `message`.
+  const zod = err instanceof ZodError ? formatZodError(err) : null;
+  const zodField = zod ? Object.keys(zod.errors)[0] : undefined;
+
+  const statusCode = zod
+    ? 422
+    : dbUnavailable
     ? 503
     : Number.isInteger(appErr.statusCode)
       ? (appErr.statusCode as number)
@@ -77,7 +90,11 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   // to "Internal Server Error"; 4xx wording passes through untouched.
   const rawMessage = appErr.message ?? "Internal Server Error";
 
-  const clientMessage = dbUnavailable
+  const clientMessage = zod
+    ? zodField && zodField !== "_"
+      ? `${zodField}: ${zod.errors[zodField]}`
+      : zod.message
+    : dbUnavailable
     ? SERVICE_UNAVAILABLE_MESSAGE
     : sanitizeClientMessage(rawMessage, statusCode);
 
@@ -123,7 +140,7 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
       code: statusCode,
       data: dbUnavailable ? { reason: "SERVICE_UNAVAILABLE" } : clientErrorData,
       message: clientMessage,
-      messages: {},
+      messages: zod?.errors ?? {},
     });
   }
 

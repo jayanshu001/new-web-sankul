@@ -631,12 +631,18 @@ export const buildLectureRefSql = async (input:
     });
     if (!video) return null;
     const { resolveVideoCourseId } = await import("../catalog-category-tree/category-tree.service");
-    const [courseId, rows] = await Promise.all([
+    const { scopesForCategory, entitledScopeFor } = await import("../client-category-video/client-category-video.service");
+    const [courseId, scopes, rows] = await Promise.all([
       resolveVideoCourseId(video.videoCategoryId),
+      video.videoCategoryId ? scopesForCategory(video.videoCategoryId) : Promise.resolve([]),
       prisma.lectureProgress.findMany({ where: { customerId: input.customerId, videoId: input.videoId }, select: { positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } }),
     ]);
     const p = collapseRows(rows);
     const liveCourseId = video.VideoCategory?.liveCourseId ?? null;
+    // Owned container first — `courseId` is the topology owner, which the customer may
+    // not have bought (they hold it via a package) → heartbeat 403 on that scope.
+    const scope = (await entitledScopeFor(input.customerId, scopes)) ?? scopes[0]
+      ?? (liveCourseId ? { kind: "liveCourse" as const, id: String(liveCourseId) } : null);
     return {
       kind: "recorded", videoId: String(video.id), liveSessionId: null,
       title: video.title ?? null, topic: video.topic ?? null,
@@ -644,6 +650,7 @@ export const buildLectureRefSql = async (input:
       videoCategoryId: video.videoCategoryId ? String(video.videoCategoryId) : null,
       courseId: courseId ? String(courseId) : null,
       liveCourseId: liveCourseId ? String(liveCourseId) : null,
+      scope,
       resume: { positionSec: p?.positionSec ?? 0, durationSec: p?.durationSec ?? 0, completed: !!p?.completed, lastWatchedAt: p?.lastWatchedAt ?? null },
     };
   }
@@ -656,6 +663,7 @@ export const buildLectureRefSql = async (input:
     kind: "live", videoId: null, liveSessionId: String(session.id),
     title: session.title ?? null, topic: session.subject ?? null, lessonTitle: null, videoCategoryId: null, courseId: null,
     liveCourseId: link?.liveCourseId != null ? String(link.liveCourseId) : null,
+    scope: link?.liveCourseId != null ? { kind: "liveCourse", id: String(link.liveCourseId) } : null,
     resume: { positionSec: p?.positionSec ?? 0, durationSec: p?.durationSec ?? 0, completed: !!p?.completed, lastWatchedAt: p?.lastWatchedAt ?? null },
   };
 };

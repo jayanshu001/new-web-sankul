@@ -34,7 +34,10 @@
     "push:all": "git push gitlab migration:dhruv-dev && git push origin migration",
     "postman:routes": "tsx scripts/dump-routes.ts",
     "postman:sync": "tsx scripts/dump-routes.ts && python3 scripts/reconcile-postman.py",
-    "cache:flush": "tsx scripts/flush-cache.ts"
+    "cache:flush": "tsx scripts/flush-cache.ts",
+    "cache:clear": "tsx scripts/flush-cache.ts --yes",
+    "cache:clear:staging": "tsx scripts/flush-cache.ts --env=staging --yes",
+    "cache:clear:prod": "tsx scripts/flush-cache.ts --env=production --yes"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1020.0",

@@ -64,13 +64,25 @@ function releasePageSlot(): void {
   if (next) next();
 }
 
+export type PdfRenderOptions = { offline?: boolean };
+
 // Renders on the shared browser, at most MAX_CONCURRENT_PAGES at a time.
-export async function renderPdfLocally(html: string): Promise<Buffer> {
+// `offline` is for HTML we did not write (a candidate's response sheet): scripts are
+// off and every request except inline `data:` is aborted, so the page can never make
+// the server fetch anything.
+export async function renderPdfLocally(html: string, { offline = false }: PdfRenderOptions = {}): Promise<Buffer> {
   await acquirePageSlot();
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
     try {
+      if (offline) {
+        await page.setJavaScriptEnabled(false);
+        await page.setRequestInterception(true);
+        page.on("request", (request) =>
+          request.url().startsWith("data:") ? request.continue() : request.abort()
+        );
+      }
       await page.setContent(html, { waitUntil: "load" });
       // Wait for web fonts so the PDF never rasterises with a fallback font lacking
       // Gujarati/Hindi glyphs; capped at 5s so a slow font CDN can't hang the render.

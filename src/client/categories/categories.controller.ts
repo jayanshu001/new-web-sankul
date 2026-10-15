@@ -71,34 +71,48 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const typeQ = String(req.query.type ?? "").toLowerCase();
     const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
 
-    // The full response is never route-cached (it embeds per-user progress/notes and
-    // a customer-bound mediaToken), but the video list + owning-scope lookup is pure
-    // catalog data, so only that slice is cached. Tagged CacheEntity.Video so admin
-    // video writes (autoFlushGroup) invalidate it too.
-    const [{ rows, total }, scopes] = await cache.aside({
-      key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
-      ttlSeconds: CACHE_TTL.CATALOG_SHARED,
-      load: () =>
-        Promise.all([
-          cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
-          cvSql.scopesForCategory(catId),
-        ]),
-    });
-    // Representative owning container for the response `scope` field
-    // (course → live → package priority).
-    const scope = scopes[0] ?? null;
-
+    // The full response is deliberately NEVER route-cached (see categories.routes.ts)
+    // because it embeds live per-user progress/notes + a short-lived customer-bound
+    // mediaToken. But the video LIST + owning-scope lookup below is pure catalog data
+    // — identical for every caller of this category/page/filter — so cache just that
+    // slice with a short cache-aside TTL. The per-user overlay (progress, notes,
+    // entitlement, token) below is always computed fresh, every request. Tagged
+    // CacheEntity.Video (not a bespoke tag) so admin video writes — which already
+    // call autoFlushGroup(CacheEntity.Video) — invalidate this too; see
+    // libs/cache.ts's invalidateEntity, wired into middlewares/autoFlush.ts.
+    // Scopes are keyed per CATEGORY, not per page: the DAG walk behind them is the
+    // slow part (~3 sequential round-trips) and never changes with page/search, so
+    // paging used to recompute it on every new page.
+    const [{ rows, total }, scopes] = await Promise.all([
+      cache.aside({
+        key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:${cache.hashFilter({ search, priceType, skip, limitNum })}`),
+        ttlSeconds: CACHE_TTL.CATALOG_SHARED,
+        load: () => cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
+      }),
+      cache.aside({
+        key: cache.key(CacheDomain.Client, CacheEntity.Video, `${catId}:scopes`),
+        ttlSeconds: CACHE_TTL.CATALOG_SHARED,
+        load: () => cvSql.scopesForCategory(catId),
+      }),
+    ]);
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const videoIds = rows.map((v) => v.id);
-    const [progMap, notedVideoIds] = uid != null
-      ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds)])
-      : [new Map<number, any>(), new Set<number>()];
-
-    // Paid videos get a playable token only when the caller holds an active subscription
-    // for ANY owning container (a video can belong to several packages). The token is
-    // scoped to the container they own so /media/resolve's re-check passes.
-    const entitledScope = await cvSql.entitledScopeFor(uid, scopes);
+    // Progress + saved-note presence for this page, both keyed on (customer, video).
+    // Entitlement gate: paid videos only get a (playable) media token when the caller
+    // holds an active subscription for ANY of this category's owning containers (a video
+    // can belong to multiple packages — a buyer of any one is entitled). The token is
+    // scoped to the container they actually own so /media/resolve's re-check passes.
+    // Unpurchased paid rows get `mediaToken: null`. Free rows get a free token.
+    // Independent of progress/notes, so all three run in one parallel hop.
+    const [progMap, notedVideoIds, entitledScope] = uid != null
+      ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds), cvSql.entitledScopeFor(uid, scopes)])
+      : [new Map<number, any>(), new Set<number>(), null];
     const entitled = entitledScope != null;
+    // Response `scope` = the container the caller OWNS when they own one (the FE sends it
+    // back as the heartbeat scope — the first owning container may be a course they never
+    // bought → "No active subscription for this lecture."), else the representative
+    // owning container (course→live→package priority; back-compat single-scope shape).
+    const scope = entitledScope ?? scopes[0] ?? null;
 
     const list = rows.map((v) => {
       const isPaid = v.priceType === "paid";
@@ -150,7 +164,9 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
     }
 
-    const sc = scopes[0] ?? null;
+    // No inline media — mint a media token the client resolves at /media/resolve.
+    // Owned container first (heartbeat scope must be one the caller holds), else representative.
+    const sc = entitledScope ?? scopes[0] ?? null;
     const mediaToken = v.priceType === "paid"
       ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(entitledScope), cust: uid })
       : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });

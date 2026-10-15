@@ -204,6 +204,9 @@ R("GET", "/books/settings", "cms.free-delivery.view");
 R("PUT", "/books/settings", "cms.free-delivery.edit");
 R("GET", "/books/orders/export/:format", ...view("books.orders"));
 R("GET", "/books/orders/list", ...view("books.orders"));
+// Changing the next AWB is a write on shared courier state → books.edit, not the view-only report key.
+R("GET", "/books/orders/tracking-counter", ...view("books.orders"));
+R("PUT", "/books/orders/tracking-counter", "books.edit");
 R("GET", "/books/orders/:id", ...view("books.orders"));
 R("PATCH", "/books/orders/:id/status", "books.edit");
 R("PATCH", "/books/orders/:id/tracking", "books.edit");
@@ -514,6 +517,11 @@ R("GET", "/rank-predictor/papers/:examId/answer-keys", ...view("rank-predictor.a
 R("POST", "/rank-predictor/papers/:examId/answer-keys", "rank-predictor.answer-keys.create");
 R("PATCH", "/rank-predictor/answer-keys/:id/status", "rank-predictor.answer-keys.toggle-status");
 R("GET", "/rank-predictor/papers/:examId/leaderboard", ...view("rank-predictor.papers"));
+// Score-based suggestions are part of setting a paper up, so they ride on the
+// paper's own keys rather than a module of their own.
+R("GET", "/rank-predictor/papers/:examId/suggestions", ...view("rank-predictor.papers"));
+R("POST", "/rank-predictor/papers/:examId/suggestions", "rank-predictor.papers.edit");
+R("PUT|DELETE", "/rank-predictor/suggestions/:id", "rank-predictor.papers.edit");
 crud("/rank-predictor/papers", "rank-predictor.papers");
 
 R("GET", "/rank-predictor/submissions", ...view("rank-predictor.submissions"));
@@ -521,6 +529,7 @@ R("GET", "/rank-predictor/submissions/:id", ...view("rank-predictor.submissions"
 R("GET", "/rank-predictor/submissions/:id/file", ...view("rank-predictor.submissions"));
 R("PUT", "/rank-predictor/submissions/:id/answers", "rank-predictor.submissions.edit");
 R("POST", "/rank-predictor/submissions/:id/rescore", "rank-predictor.submissions.edit");
+R("POST", "/rank-predictor/submissions/:id/reread", "rank-predictor.submissions.edit");
 R("DELETE", "/rank-predictor/submissions/:id", "rank-predictor.submissions.delete");
 
 // /uploads (presigned upload helper) is intentionally unmapped.

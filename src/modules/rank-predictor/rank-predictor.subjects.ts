@@ -1,4 +1,4 @@
-import { buildAnswerReview, acceptedOptionsOf } from "./rank-predictor.scoring";
+import { buildAnswerReview, acceptedOptionsOf, roundScore } from "./rank-predictor.scoring";
 import {
   ANSWER_VERDICT,
   OTHER_SUBJECT,
@@ -179,6 +179,9 @@ export const scoreWithSubjects = (
     if (row) row.score += marks;
   }
 
-  total.subjects = [...rows.values()];
+  // Rounded to what is stored, so the rank given with this result is the one
+  // every later read of the stored score gives.
+  total.rawScore = roundScore(total.rawScore);
+  total.subjects = [...rows.values()].map((row) => ({ ...row, score: roundScore(row.score) }));
   return total;
 };

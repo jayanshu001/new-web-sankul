@@ -9,6 +9,7 @@ import {
 } from "../../modules/rank-predictor/rank-predictor.transformer";
 import {
   RANK_ERROR,
+  SUBMISSION_STATUS,
   isSubmissionStatus,
 } from "../../modules/rank-predictor/rank-predictor.types";
 import { correctionsSchema } from "../../modules/rank-predictor/rank-predictor.validation";
@@ -18,12 +19,13 @@ import { success } from "../../utils/httpResponse";
 import { adminIdOf, bigIntParam } from "./rank-predictor.helpers";
 
 export const listSubmissions = asyncHandler(async (req: Request, res: Response) => {
-  const { page, limit } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
+  const { page, limit, search } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
   const status = isSubmissionStatus(req.query.status) ? req.query.status : undefined;
 
   const { rows, total } = await rankPredictorService.listSubmissions({
     status,
     examId: req.query.examId ? BigInt(String(req.query.examId)) : undefined,
+    search,
     page,
     limit,
   });
@@ -44,9 +46,22 @@ export const listSubmissions = asyncHandler(async (req: Request, res: Response) 
 
 export const getSubmission = asyncHandler(async (req: Request, res: Response) => {
   const result = await rankPredictorService.getSubmission(bigIntParam(req, "id"), null);
-  const customers = await rankPredictorService.resolveCustomers([result.customer_id]);
+  const [customers, sourcePdfUrl, failureDetails] = await Promise.all([
+    rankPredictorService.resolveCustomers([result.customer_id]),
+    // Signed and short-lived, so the review modal can show the sheet inline.
+    result.source_pdf_key ? getSignedRankPdfUrl(result.source_pdf_key) : null,
+    // A refused sheet: what it said, so the admin can see why without the logs.
+    result.submission.status === SUBMISSION_STATUS.FAILED
+      ? rankPredictorService.getFailureDetails(BigInt(result.submission._id))
+      : null,
+  ]);
 
-  return success(res, { ...result, customer: customers.get(result.customer_id) ?? null });
+  return success(res, {
+    ...result,
+    source_pdf_url: sourcePdfUrl,
+    failure_details: failureDetails,
+    customer: customers.get(result.customer_id) ?? null,
+  });
 });
 
 // Redirect to a signed URL for the uploaded response sheet.
@@ -83,6 +98,17 @@ export const deleteSubmission = asyncHandler(async (req: Request, res: Response)
     result.score_removed
       ? "Submission deleted. The published score was removed and the student can upload again."
       : "Submission deleted. The student can upload again."
+  );
+});
+
+/** Reads a refused sheet again from the copy the student uploaded. */
+export const rereadSubmission = asyncHandler(async (req: Request, res: Response) => {
+  const result = await rankPredictorService.rereadSubmission(bigIntParam(req, "id"), adminIdOf(req));
+
+  return success(
+    res,
+    result,
+    result.status === SUBMISSION_STATUS.PROCESSING ? "Sheet queued to be read again." : "Sheet read again."
   );
 });
 

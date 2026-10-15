@@ -37,6 +37,10 @@ let queueEvents: QueueEvents | null = null;
 let worker: Worker<RankSheetJobData, RankSheetJobOutcome> | null = null;
 let connection: RedisType | null = null;
 let started = false;
+let purgeTimer: NodeJS.Timeout | null = null;
+
+/** How often the worker clears refused sheets past their keeping time. */
+const PURGE_EVERY_MS = 6 * 60 * 60 * 1000;
 
 // BullMQ needs dedicated connections with maxRetriesPerRequest: null.
 const buildConnection = (): RedisType =>
@@ -65,11 +69,23 @@ const ensureEvents = (): QueueEvents => {
 /** BullMQ refuses a purely numeric custom id, so the submission id is prefixed. */
 const jobIdFor = (submissionId: bigint | string): string => `sheet-${submissionId}`;
 
-/** Idempotent: the same submission is never queued twice. */
+/** States in which a sheet's earlier job is over and its id may be reused. */
+const FINISHED_STATES = new Set(["completed", "failed"]);
+
+/**
+ * Idempotent: the same submission is never queued twice while it waits or is
+ * read. A finished job keeps its id until removeOnComplete/removeOnFail clear it,
+ * and BullMQ silently drops an add under an id it still holds — so a sheet read
+ * again (an admin's re-read) would sit in "processing" for good. Its finished
+ * job is removed first.
+ */
 export const enqueueRankSheet = async (
   submissionId: bigint | string
-): Promise<Job<RankSheetJobData, RankSheetJobOutcome>> =>
-  ensureProducer().add(
+): Promise<Job<RankSheetJobData, RankSheetJobOutcome>> => {
+  const producer = ensureProducer();
+  const previous = await producer.getJob(jobIdFor(submissionId));
+  if (previous && FINISHED_STATES.has(await previous.getState())) await previous.remove();
+  return producer.add(
     "read",
     { submissionId: String(submissionId) },
     {
@@ -80,6 +96,7 @@ export const enqueueRankSheet = async (
       removeOnFail: { count: 5000, age: 7 * 24 * 60 * 60 },
     }
   );
+};
 
 /**
  * The outcome if the sheet is read within `waitMs`, else null — the student is
@@ -110,6 +127,8 @@ export const initRankSheetScheduler = async (handlers: {
   giveUp: (submissionId: bigint, error: Error) => Promise<void>;
   /** Submissions left in "processing" by a crash or a deploy, to queue again. */
   pending: () => Promise<bigint[]>;
+  /** Removes refused sheets' files past their keeping time; returns how many. */
+  purge: () => Promise<number>;
 }): Promise<void> => {
   if (started) return;
   started = true;
@@ -156,9 +175,24 @@ export const initRankSheetScheduler = async (handlers: {
     }
   }
   logger.info("BullMQ rank sheet scheduler started.", { concurrency: CONCURRENCY, requeued });
+
+  // Safe to run in several worker processes at once: a file already removed is skipped.
+  const purge = async (): Promise<void> => {
+    try {
+      const purged = await handlers.purge();
+      if (purged) logger.info("Rank sheet: removed refused sheets past their keeping time", { purged });
+    } catch (error) {
+      logger.error("Rank sheet: refused-sheet cleanup failed", { error: (error as Error).message });
+    }
+  };
+  void purge();
+  purgeTimer = setInterval(() => void purge(), PURGE_EVERY_MS);
+  purgeTimer.unref();
 };
 
 export const shutdownRankSheetScheduler = async (): Promise<void> => {
+  if (purgeTimer) clearInterval(purgeTimer);
+  purgeTimer = null;
   try {
     await worker?.close();
     await queueEvents?.close();
