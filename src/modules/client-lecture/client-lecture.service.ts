@@ -34,6 +34,14 @@ export const videoBelongsToCourse = async (videoCategoryId: number | null, cours
   return reachable.has(videoCategoryId);
 };
 
+/** Package twin of videoBelongsToCourse — same reachable set the progress heartbeat checks. */
+export const videoBelongsToPackage = async (videoCategoryId: number | null, packageId: number): Promise<boolean> => {
+  if (videoCategoryId == null) return false;
+  const { reachableCategoryIds } = await import("../catalog-category-tree/category-tree.service");
+  const reachable = await reachableCategoryIds("package", packageId);
+  return reachable.has(videoCategoryId);
+};
+
 export const hasActiveCourseSub = async (customerId: number, courseId: number): Promise<boolean> => {
   const now = new Date();
   const sub = await prisma.packageCourseSubscription.findFirst({

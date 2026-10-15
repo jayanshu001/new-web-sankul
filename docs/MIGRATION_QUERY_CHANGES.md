@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-10-15 — `/client/courses/lecture?type=package`: check package membership
+
+> **DDL:** none. **Data:** none. **Response:** success shape unchanged. New 403
+> `"Lecture does not belong to this package"` (mirrors the `type=course` string).
+
+- `type=course` already ran `videoBelongsToCourse` (`reachableCategoryIds("course")`).
+  `type=package` only ran `hasActivePackageSub`, so any active package minted a token for any
+  paid video. Expired buyers kept playing through another package while the heartbeat
+  (`reportContainerProgress`, which DOES check reachability) returned 403.
+- Added `client-lecture.videoBelongsToPackage` (`reachableCategoryIds("package")`, the same set
+  the heartbeat uses). It runs for paid videos only, before the subscription check. Free
+  videos are unchanged.
+
 ## 2026-10-15 — Response `scope` = the container the customer owns (heartbeat 403 fix)
 
 > **DDL:** none. **Data:** none. **Response:** category endpoints have the same keys, but the `scope` VALUE may now
