@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-10-15 — `GET /client/lecture-notes/saved-materials`: hide lectures with no active subscription
+
+> **DDL:** none. **Data:** none. **Response:** shape unchanged (`items[]` + `pagination`);
+> rows for expired entitlements are omitted. Notes are NOT deleted.
+
+- Bug: an expired course/package buyer still saw every lecture under Home → Notes and the app
+  opened the player with a hardcoded `isPurchased: true`. The list never checked `endAt`.
+- `client-lecture-note.savedMaterials` now runs the SAME gate the note-list endpoints already
+  run per lecture group — `authorizeRecorded` (free → keep; paid → active course / package /
+  live-course sub via `entitledScopeFor` + `hasAccessToAnyLiveCourse`) and `authorizeLive`
+  (active `LiveCourseSubscription` on a linked live course) — and drops rows that fail.
+  Free lectures INSIDE a course follow the course sub too (`authorizeRecorded(..., { freeNeedsSub: true })`,
+  listing only; note create/list still allow free). Standalone free lectures (no owning course) stay.
+  Filter runs before `search` + paging, so `total` reflects visible rows.
+- Rows return automatically on renewal (new subscription row with `endAt > now`).
+- Cost: a few queries per lecture group, in parallel. `ponytail:` batch if groups grow past hundreds.
+- Media/lecture token endpoints already rejected expired subscriptions (403
+  `Active subscription required…`); no change there.
+
 ## 2026-10-15 — `/client/courses/lecture?type=package`: check package membership
 
 > **DDL:** none. **Data:** none. **Response:** success shape unchanged. New 403

@@ -19,7 +19,10 @@ type Guard<T> = T | { error: string; status: number };
 
 export const authorizeRecorded = async (
   customerId: number,
-  videoId: number
+  videoId: number,
+  // freeNeedsSub: a free lecture that sits inside a course is gated like a paid one
+  // (saved-materials listing hides it once the course sub expires). Standalone free stays open.
+  opts: { freeNeedsSub?: boolean } = {}
 ): Promise<Guard<{ courseId: number | null }>> => {
   const video = await prisma.video.findFirst({ where: { id: videoId }, select: { status: true, priceType: true, videoCategoryId: true } });
   if (!video || !video.status) return { error: "Lecture not found.", status: 404 };
@@ -27,7 +30,7 @@ export const authorizeRecorded = async (
   const { resolveVideoCourseId } = await import("../catalog-category-tree/category-tree.service");
   const courseId = await resolveVideoCourseId(video.videoCategoryId);
 
-  if (video.priceType === "free") return { courseId: courseId ?? null };
+  if (video.priceType === "free" && !opts.freeNeedsSub) return { courseId: courseId ?? null };
 
   if (courseId) {
     const sub = await prisma.packageCourseSubscription.findFirst({
@@ -239,10 +242,24 @@ export const savedMaterials = async (
     ...[...live.entries()].map(([id, b]) => ({ kind: "live" as const, videoId: null as string | null, liveSessionId: String(id), title: sTitle.get(id) ?? null, textNotesCount: b.textNotesCount, voiceNotesCount: b.voiceNotesCount, lastNoteAt: b.lastNoteAt })),
   ].filter((r) => r.title !== null && r.title !== "").sort((a, b) => b.lastNoteAt.getTime() - a.lastNoteAt.getTime());
 
+  // Expired entitlement → row hidden, notes kept (it returns on renewal). Same gate the
+  // note list endpoints run, plus free lectures inside a course follow the course sub.
+  // ponytail: one guard per lecture group (a few queries each); batch if groups grow past hundreds.
+  const visible = (
+    await Promise.all(
+      items.map(async (r) => {
+        const g = r.kind === "recorded"
+          ? await authorizeRecorded(customerId, Number(r.videoId), { freeNeedsSub: true })
+          : await authorizeLive(customerId, Number(r.liveSessionId));
+        return "error" in g ? null : r;
+      })
+    )
+  ).filter((r): r is (typeof items)[number] => r !== null);
+
   // `search` filters the grouped list by lecture title before paging.
   const filtered = opts.search
-    ? items.filter((r) => matchesAllTokens(opts.search, [r.title]))
-    : items;
+    ? visible.filter((r) => matchesAllTokens(opts.search, [r.title]))
+    : visible;
   const total = filtered.length;
   const skip = opts.skip ?? 0;
   const limit = opts.limit ?? 20;
