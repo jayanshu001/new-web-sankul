@@ -15,6 +15,21 @@
 
 ---
 
+## 2026-10-15 — Lecture notes: recorded-video gate mirrors the live-course lecture player
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).
+
+- Still saw `403 "Active subscription required to take notes."` after the entry below.
+  `resolveVideoScopes` only finds a live course through `ws_live_course.video_category_id`.
+  It ignores the `ws_video_category.live_course_id` folder tag, which is how
+  `getLiveCourseLecture` (`clientLectureVideoInCourse`) decides membership.
+  `entitledScopeFor` also requires `end_at > now`, while `hasAccessToAnyLiveCourse` accepts
+  `end_at IS NULL` (lifetime).
+- `authorizeRecorded` adds a third step, run only after both earlier checks miss: read the
+  video's own folder `live_course_id`, then `hasAccessToAnyLiveCourse(customer, [it])`. That
+  is the same predicate the live-course player uses. Shared `resolveVideoScopes` is NOT
+  changed because it also gates category-player playback.
+
 ## 2026-10-15 — Lecture notes: recorded-video gate accepts any product that reaches the video
 
 > **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).

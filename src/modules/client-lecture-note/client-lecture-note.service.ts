@@ -49,7 +49,16 @@ export const authorizeRecorded = async (
       const { scopesForCategory, entitledScopeFor } = await import("../client-category-video/client-category-video.service");
       const scopes = video.videoCategoryId ? await scopesForCategory(video.videoCategoryId) : [];
       if (!(await entitledScopeFor(customerId, scopes))) {
-        return { error: "Active subscription required to take notes.", status: 403 };
+        // Live-course recordings play via getLiveCourseLecture: the video's OWN folder is
+        // tagged ws_video_category.live_course_id and hasAccessToAnyLiveCourse also accepts
+        // lifetime (end_at NULL) subs. resolveVideoScopes sees neither — mirror that gate.
+        const folder = video.videoCategoryId
+          ? await prisma.videoCategory.findFirst({ where: { id: video.videoCategoryId }, select: { liveCourseId: true } })
+          : null;
+        const { hasAccessToAnyLiveCourse } = await import("../admin-live-course/admin-live-course.service");
+        if (!folder?.liveCourseId || !(await hasAccessToAnyLiveCourse(customerId, [folder.liveCourseId]))) {
+          return { error: "Active subscription required to take notes.", status: 403 };
+        }
       }
     }
     return { courseId };
