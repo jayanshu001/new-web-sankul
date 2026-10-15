@@ -154,8 +154,6 @@ export type BookOrderStatus =
 /** Book orders that count as bought (paid and not cancelled/failed). */
 export const PAID_BOOK_ORDER_STATUSES: BookOrderStatus[] = [
   BookOrderStatus.VERIFIED,
-  BookOrderStatus.SHIPPED,
-  BookOrderStatus.DELIVERED,
 ];
 
 export const BookCourier = {
