@@ -18,12 +18,13 @@ import { success } from "../../utils/httpResponse";
 import { adminIdOf, bigIntParam } from "./rank-predictor.helpers";
 
 export const listSubmissions = asyncHandler(async (req: Request, res: Response) => {
-  const { page, limit } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
+  const { page, limit, search } = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 });
   const status = isSubmissionStatus(req.query.status) ? req.query.status : undefined;
 
   const { rows, total } = await rankPredictorService.listSubmissions({
     status,
     examId: req.query.examId ? BigInt(String(req.query.examId)) : undefined,
+    search,
     page,
     limit,
   });

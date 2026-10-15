@@ -592,6 +592,18 @@ export const rankPredictorRepository = {
           select: { id: true, fullName: true, phoneNumber: true, emailAddress: true },
         }),
 
+  /** Customers who sent a sheet and whose name, phone or email contains `search`. */
+  findSubmittingCustomerIds: async (search: string): Promise<number[]> => {
+    const like = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+    const rows = await prisma.$queryRaw<{ customer_id: unknown }[]>`
+      SELECT DISTINCT s.customer_id
+        FROM ws_ocr_submissions s
+        JOIN ws_customer c ON c.id = s.customer_id
+       WHERE c.full_name LIKE ${like} OR c.phone LIKE ${like} OR c.email_address LIKE ${like}
+    `;
+    return rows.map((row) => asNumber(row.customer_id));
+  },
+
   findProfile: (customerId: number) => prisma.ocrProfile.findUnique({ where: { customerId } }),
 
   /** The rank profile with the customer's own date of birth (`ws_customer.dob`) beside it. */

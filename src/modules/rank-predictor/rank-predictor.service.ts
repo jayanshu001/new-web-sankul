@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Prisma } from "@prisma/client";
 import { OCR_SERVICE } from "../../config/ocrService";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
@@ -323,6 +324,23 @@ const overallStanding = (exam: ExamRow, rawScore: number, viewer: RankViewer) =>
   repo.rankForExam(exam.id, rawScore, {}, viewer);
 
 /** One page of a board. */
+/**
+ * Finds a sheet the way the admin list names its student: their name, phone or
+ * email, their `ws_<id>` handle, the roll number, or the name the sheet prints.
+ */
+const submissionSearchOr = async (search: string): Promise<Prisma.OcrSubmissionWhereInput[]> => {
+  const customerIds = await repo.findSubmittingCustomerIds(search);
+  // Capped at nine digits so the id always fits the INT column.
+  const handle = /^ws_(\d{1,9})$/i.exec(search);
+  if (handle) customerIds.push(Number(handle[1]));
+
+  return [
+    { rollNumber: { contains: search } },
+    { candidateName: { contains: search } },
+    ...(customerIds.length ? [{ customerId: { in: customerIds } }] : []),
+  ];
+};
+
 const boardPage = (exam: ExamRow, skip: number, take: number, scope: BoardScope = {}) =>
   repo.leaderboardPage(exam.id, skip, take, scope);
 
@@ -1858,6 +1876,7 @@ export const rankPredictorService = {
     const where = {
       ...(params.status ? { status: params.status } : {}),
       ...(params.examId ? { examId: params.examId } : {}),
+      ...(params.search ? { OR: await submissionSearchOr(params.search) } : {}),
     };
 
     const [rows, total] = await repo.listSubmissions(

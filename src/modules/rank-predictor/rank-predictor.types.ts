@@ -675,6 +675,7 @@ export interface ExamListParams {
 export interface SubmissionListParams {
   status?: SubmissionStatus;
   examId?: bigint;
+  search?: string;
   page: number;
   limit: number;
 }
