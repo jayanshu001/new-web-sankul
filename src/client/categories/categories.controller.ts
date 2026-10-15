@@ -94,10 +94,6 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
         load: () => cvSql.scopesForCategory(catId),
       }),
     ]);
-    // Representative owning container for the response `scope` field (course→live→package
-    // priority; back-compat with the old single-scope shape).
-    const scope = scopes[0] ?? null;
-
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const videoIds = rows.map((v) => v.id);
     // Progress + saved-note presence for this page, both keyed on (customer, video).
@@ -111,6 +107,11 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds), cvSql.entitledScopeFor(uid, scopes)])
       : [new Map<number, any>(), new Set<number>(), null];
     const entitled = entitledScope != null;
+    // Response `scope` = the container the caller OWNS when they own one (the FE sends it
+    // back as the heartbeat scope — the first owning container may be a course they never
+    // bought → "No active subscription for this lecture."), else the representative
+    // owning container (course→live→package priority; back-compat single-scope shape).
+    const scope = entitledScope ?? scopes[0] ?? null;
 
     const list = rows.map((v) => {
       const isPaid = v.priceType === "paid";
@@ -169,7 +170,8 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     }
 
     // No inline media — mint a media token the client resolves at /media/resolve.
-    const sc = scopes[0] ?? null; // representative scope for the response shape
+    // Owned container first (heartbeat scope must be one the caller holds), else representative.
+    const sc = entitledScope ?? scopes[0] ?? null;
     const mediaToken = v.priceType === "paid"
       ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(entitledScope), cust: uid })
       : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });

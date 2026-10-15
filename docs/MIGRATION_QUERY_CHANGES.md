@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-10-15 — Response `scope` = the container the customer owns (heartbeat 403 fix)
+
+> **DDL:** none. **Data:** none. **Response:** category endpoints have the same keys, but the `scope` VALUE may now
+> differ. The notes lists gain an additive `lecture.scope`.
+
+- Video 27986 / category 2711 is owned by course 99 AND package 183. Customer 471985 holds
+  only package 183. Playback worked: `entitledScopeFor` scoped the token to package 183. But
+  `listVideosByCategory` / `getVideoByCategory` returned `scope: scopes[0]` (course 99), the
+  app sent it as the heartbeat scope, and `reportContainerProgress` returned
+  `403 "No active subscription for this lecture."`
+- Both endpoints now return `scope = entitledScope ?? scopes[0]`. `entitledScopeFor` walks the
+  scopes in order, so the value only changes when the first owning container is not owned.
+- `buildLectureRefSql` (notes + audio-notes lists) adds `scope` with the same rule:
+  `scopesForCategory` + `entitledScopeFor`. That is one ancestor walk plus one sub query per
+  list call. Live branch: `{ kind: "liveCourse", id }` from the session link.
+
 ## 2026-10-15 — Lecture notes: recorded-video gate mirrors the live-course lecture player
 
 > **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).

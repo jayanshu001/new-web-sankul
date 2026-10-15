@@ -32,6 +32,11 @@ export interface LectureRef {
   // opens the live player (getLiveLectureAPI) when this is set, skipping the
   // category rail that 403s for live recordings.
   liveCourseId: string | null;
+  // Container to open the player / send heartbeats with: the one the customer OWNS
+  // (course / package / liveCourse), else the first owning container. Same shape as
+  // the category player's `scope`. `courseId` above is the topology owner and may be
+  // a course the customer never bought.
+  scope: { kind: "course" | "package" | "liveCourse"; id: string } | null;
   resume: {
     // Last watched position + the duration the player has observed, both from
     // the customer's LectureProgress row for this lecture.
