@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-10-15 — Lecture notes: recorded-video gate accepts any product that reaches the video
+
+> **DDL:** none. **Data:** none. **Response:** unchanged (same envelope, same 403 string).
+
+- `client-lecture-note.authorizeRecorded` (text + audio notes: create / list / update /
+  delete) used to require an active `ws_package_course_subscription` row for the ONE course
+  `resolveVideoCourseId` picks (`findFirst`). Package rows have `course_id = NULL`, videos can
+  sit under several courses, and live-course recordings belong to a live course — so a
+  customer who could PLAY the video (scope-based gate) got `403 "Active subscription required
+  to take notes."` (seen on customer 636984 after an admin extend on a different product).
+- The direct-course check stays as the fast path. On a miss it reuses the category player's
+  gate: `scopesForCategory` (`resolveVideoScopes` — ONE ancestor walk up from the video's
+  category + indexed owner lookups) → `entitledScopeFor` (one sub query filtered to those
+  owners, `status = 1 AND end_at > now`). Cost is fixed per call — it does NOT scale with how
+  many subscriptions the customer has. Free videos and paid videos with no owning course are
+  unchanged.
+
 ## 2026-10-14 — Rank predictor: shift normalisation removed
 
 > **DDL:** none. **Data:** `rank_by` rows still holding `"normalized"` need no backfill —

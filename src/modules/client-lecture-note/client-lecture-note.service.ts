@@ -41,7 +41,17 @@ export const authorizeRecorded = async (
     const sub = await prisma.packageCourseSubscription.findFirst({
       where: { customerId, courseId, status: true, endAt: { gt: new Date() } }, select: { id: true },
     });
-    if (!sub) return { error: "Active subscription required to take notes.", status: 403 };
+    // resolveVideoCourseId picks ONE owning course, but the same video can be played
+    // from a package, another course or a live course that owns it. Fall back to the
+    // category player's gate (every owning container → does the customer own any) so
+    // notes follow playback instead of 403-ing an entitled user.
+    if (!sub) {
+      const { scopesForCategory, entitledScopeFor } = await import("../client-category-video/client-category-video.service");
+      const scopes = video.videoCategoryId ? await scopesForCategory(video.videoCategoryId) : [];
+      if (!(await entitledScopeFor(customerId, scopes))) {
+        return { error: "Active subscription required to take notes.", status: 403 };
+      }
+    }
     return { courseId };
   }
   return { courseId: null };
